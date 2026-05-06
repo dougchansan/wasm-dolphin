@@ -1,0 +1,10 @@
+node_modules/
+build/
+.omx/
+vendor/dolphin/
+cores/dolphin/dolphin.js
+cores/dolphin/dolphin.wasm
+cores/dolphin/dolphin-upstream.js
+cores/dolphin/dolphin-upstream.wasm
+cores/dolphin/*.data
+*.log

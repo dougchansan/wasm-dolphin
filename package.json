@@ -1,0 +1,20 @@
+{
+  "name": "wasm-dolphin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "check:deps": "node tools/check-deps.mjs",
+    "fetch:dolphin": "node tools/fetch-dolphin.mjs",
+    "patch:upstream": "node tools/patch-upstream-wasm.mjs",
+    "configure:upstream": "node tools/configure-upstream-wasm.mjs",
+    "build:upstream:discio": "node tools/build-upstream-target.mjs discio",
+    "build:upstream:bridge": "node tools/build-upstream-target.mjs dolphin_web_discio",
+    "build:upstream:core": "node tools/build-upstream-target.mjs core",
+    "build:upstream:full-core": "node tools/build-upstream-target.mjs dolphin_web_core",
+    "build:core": "node tools/build-native-core.mjs",
+    "check": "node --check src/app.js && node --check src/audio.js && node --check src/core-host.js && node --check src/dol.js && node --check src/dolphin-adapter.js && node --check src/input.js && node --check src/upstream-discio-worker.js && node --check src/upstream-main-thread-adapter.js && node --check src/upstream-worker-adapter.js && node --check src/upstream-worker-protocol.js && node --check src/wasm/demo-core.js && node --check tools/build-native-core.mjs && node --check tools/build-upstream-target.mjs && node --check tools/check-deps.mjs && node --check tools/configure-upstream-wasm.mjs && node --check tools/fetch-dolphin.mjs && node --check tools/patch-upstream-wasm.mjs && node --check tools/serve.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

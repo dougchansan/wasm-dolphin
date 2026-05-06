@@ -1,0 +1,920 @@
+// Copyright 2026
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "dolphin_web_discio.cpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+
+#include "Common/CommonPaths.h"
+#include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
+#include "Common/HookableEvent.h"
+#include "Common/Logging/LogManager.h"
+#include "Common/MsgHandler.h"
+#include "Common/WindowSystemInfo.h"
+
+#include "Core/Boot/Boot.h"
+#include "Core/BootManager.h"
+#include "Core/Config/GraphicsSettings.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/ConfigLoaders/BaseConfigLoader.h"
+#include "Core/ConfigManager.h"
+#include "Core/Core.h"
+#include "Core/CoreTiming.h"
+#include "Core/HW/GBAPad.h"
+#include "Core/HW/EXI/EXI_Device.h"
+#include "Core/HW/GCKeyboard.h"
+#include "Core/HW/GCPad.h"
+#include "Core/HW/SystemTimers.h"
+#include "Core/Host.h"
+#include "Core/PowerPC/PowerPC.h"
+#include "Core/System.h"
+
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
+
+#include "VideoCommon/Statistics.h"
+#include "VideoCommon/VideoBackendBase.h"
+#include "VideoCommon/VideoConfig.h"
+
+extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-variable-declarations"
+#endif
+EM_JS(int, DolphinWeb_RunWasmJitSmokeImpl, (int value), {
+  if (!Module._dolphinWasmJitSmoke) {
+    const bytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+      0x03, 0x02, 0x01, 0x00,
+      0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00,
+      0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x41, 0x2a, 0x6a, 0x0b
+    ]);
+    Module._dolphinWasmJitSmoke =
+        new WebAssembly.Instance(new WebAssembly.Module(bytes), {}).exports.f;
+  }
+  return Module._dolphinWasmJitSmoke(value) | 0;
+});
+
+EM_JS(int, DolphinWeb_RunGeneratedWasmI32, (const unsigned char* bytes_ptr, int bytes_len, int value), {
+  const bytes = Module.HEAPU8.slice(bytes_ptr, bytes_ptr + bytes_len);
+  const fn = new WebAssembly.Instance(new WebAssembly.Module(bytes), {}).exports.f;
+  return fn(value) | 0;
+});
+
+EM_JS(void, DolphinWeb_RunGeneratedWasmVoidI32,
+      (const unsigned char* bytes_ptr, int bytes_len, int value), {
+  const bytes = Module.HEAPU8.slice(bytes_ptr, bytes_ptr + bytes_len);
+  const fn = new WebAssembly.Instance(new WebAssembly.Module(bytes), {env: {memory: wasmMemory}})
+                 .exports.f;
+  fn(value);
+});
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#else
+int DolphinWeb_RunWasmJitSmokeImpl(int value)
+{
+  return value + 42;
+}
+
+int DolphinWeb_RunGeneratedWasmI32(const unsigned char*, int, int value)
+{
+  return value;
+}
+
+void DolphinWeb_RunGeneratedWasmVoidI32(const unsigned char*, int, int)
+{
+}
+#endif
+
+namespace
+{
+void EmitU32Leb(std::vector<std::uint8_t>& bytes, std::uint32_t value)
+{
+  do
+  {
+    std::uint8_t byte = value & 0x7f;
+    value >>= 7;
+    if (value != 0)
+      byte |= 0x80;
+    bytes.push_back(byte);
+  } while (value != 0);
+}
+
+void EmitI32Leb(std::vector<std::uint8_t>& bytes, std::int32_t value)
+{
+  bool more = true;
+  while (more)
+  {
+    std::uint8_t byte = value & 0x7f;
+    value >>= 7;
+    const bool sign_bit = (byte & 0x40) != 0;
+    if ((value == 0 && !sign_bit) || (value == -1 && sign_bit))
+      more = false;
+    else
+      byte |= 0x80;
+    bytes.push_back(byte);
+  }
+}
+
+void EmitSection(std::vector<std::uint8_t>& bytes, std::uint8_t id,
+                 const std::vector<std::uint8_t>& content)
+{
+  bytes.push_back(id);
+  EmitU32Leb(bytes, static_cast<std::uint32_t>(content.size()));
+  bytes.insert(bytes.end(), content.begin(), content.end());
+}
+
+std::vector<std::uint8_t> BuildI32AddImmediateModule(std::int32_t immediate)
+{
+  std::vector<std::uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+
+  EmitSection(bytes, 1, {0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f});
+  EmitSection(bytes, 3, {0x01, 0x00});
+  EmitSection(bytes, 7, {0x01, 0x01, 0x66, 0x00, 0x00});
+
+  std::vector<std::uint8_t> body = {0x00, 0x20, 0x00, 0x41};
+  EmitI32Leb(body, immediate);
+  body.push_back(0x6a);
+  body.push_back(0x0b);
+
+  std::vector<std::uint8_t> code;
+  code.push_back(0x01);
+  EmitU32Leb(code, static_cast<std::uint32_t>(body.size()));
+  code.insert(code.end(), body.begin(), body.end());
+  EmitSection(bytes, 10, code);
+
+  return bytes;
+}
+
+std::vector<std::uint8_t> BuildStateAddImmediateModule(std::uint32_t dest_offset,
+                                                       std::uint32_t source_offset,
+                                                       std::int32_t immediate)
+{
+  std::vector<std::uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+
+  EmitSection(bytes, 1, {0x01, 0x60, 0x01, 0x7f, 0x00});
+
+  std::vector<std::uint8_t> imports;
+  imports.push_back(0x01);
+  imports.push_back(0x03);
+  imports.insert(imports.end(), {'e', 'n', 'v'});
+  imports.push_back(0x06);
+  imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
+  imports.push_back(0x02);
+  imports.push_back(0x03);
+  EmitU32Leb(imports, 16384);
+  EmitU32Leb(imports, 16384);
+  EmitSection(bytes, 2, imports);
+
+  EmitSection(bytes, 3, {0x01, 0x00});
+  EmitSection(bytes, 7, {0x01, 0x01, 0x66, 0x00, 0x00});
+
+  std::vector<std::uint8_t> body = {0x00, 0x20, 0x00, 0x20, 0x00, 0x28, 0x02};
+  EmitU32Leb(body, source_offset);
+  body.push_back(0x41);
+  EmitI32Leb(body, immediate);
+  body.push_back(0x6a);
+  body.push_back(0x36);
+  body.push_back(0x02);
+  EmitU32Leb(body, dest_offset);
+  body.push_back(0x0b);
+
+  std::vector<std::uint8_t> code;
+  code.push_back(0x01);
+  EmitU32Leb(code, static_cast<std::uint32_t>(body.size()));
+  code.insert(code.end(), body.begin(), body.end());
+  EmitSection(bytes, 10, code);
+
+  return bytes;
+}
+
+struct PpcWasmStateLayout
+{
+  std::uint32_t pc_offset;
+  std::uint32_t npc_offset;
+  std::uint32_t gpr_offset;
+  std::uint32_t downcount_offset;
+};
+
+void EmitLocalGet(std::vector<std::uint8_t>& body, std::uint32_t index)
+{
+  body.push_back(0x20);
+  EmitU32Leb(body, index);
+}
+
+void EmitI32Const(std::vector<std::uint8_t>& body, std::uint32_t value)
+{
+  body.push_back(0x41);
+  EmitI32Leb(body, static_cast<std::int32_t>(value));
+}
+
+void EmitStateLoadU32(std::vector<std::uint8_t>& body, std::uint32_t offset)
+{
+  EmitLocalGet(body, 0);
+  body.push_back(0x28);
+  body.push_back(0x02);
+  EmitU32Leb(body, offset);
+}
+
+void EmitStateStoreU32Prefix(std::vector<std::uint8_t>& body, std::uint32_t offset)
+{
+  EmitLocalGet(body, 0);
+  (void)offset;
+}
+
+void EmitStateStoreU32Suffix(std::vector<std::uint8_t>& body, std::uint32_t offset)
+{
+  body.push_back(0x36);
+  body.push_back(0x02);
+  EmitU32Leb(body, offset);
+}
+
+std::uint32_t GprOffset(const PpcWasmStateLayout& layout, std::uint32_t index)
+{
+  return layout.gpr_offset + index * sizeof(std::uint32_t);
+}
+
+void EmitGprOrZero(std::vector<std::uint8_t>& body, const PpcWasmStateLayout& layout,
+                   std::uint32_t index)
+{
+  if (index == 0)
+    EmitI32Const(body, 0);
+  else
+    EmitStateLoadU32(body, GprOffset(layout, index));
+}
+
+bool EmitPpcIntegerInstruction(std::vector<std::uint8_t>& body,
+                               const PpcWasmStateLayout& layout, UGeckoInstruction inst)
+{
+  switch (inst.OPCD)
+  {
+  case 14:  // addi
+    EmitStateStoreU32Prefix(body, GprOffset(layout, inst.RD));
+    EmitGprOrZero(body, layout, inst.RA);
+    EmitI32Const(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(inst.SIMM_16)));
+    body.push_back(0x6a);
+    EmitStateStoreU32Suffix(body, GprOffset(layout, inst.RD));
+    return true;
+
+  case 15:  // addis
+  {
+    const auto immediate =
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(inst.SIMM_16) * 65536);
+    EmitStateStoreU32Prefix(body, GprOffset(layout, inst.RD));
+    EmitGprOrZero(body, layout, inst.RA);
+    EmitI32Const(body, immediate);
+    body.push_back(0x6a);
+    EmitStateStoreU32Suffix(body, GprOffset(layout, inst.RD));
+    return true;
+  }
+
+  case 24:  // ori
+    EmitStateStoreU32Prefix(body, GprOffset(layout, inst.RA));
+    EmitStateLoadU32(body, GprOffset(layout, inst.RS));
+    EmitI32Const(body, inst.UIMM);
+    body.push_back(0x72);
+    EmitStateStoreU32Suffix(body, GprOffset(layout, inst.RA));
+    return true;
+
+  case 25:  // oris
+    EmitStateStoreU32Prefix(body, GprOffset(layout, inst.RA));
+    EmitStateLoadU32(body, GprOffset(layout, inst.RS));
+    EmitI32Const(body, inst.UIMM << 16);
+    body.push_back(0x72);
+    EmitStateStoreU32Suffix(body, GprOffset(layout, inst.RA));
+    return true;
+
+  case 31:
+    if (inst.SUBOP10 != 444 || inst.Rc)
+      return false;
+    EmitStateStoreU32Prefix(body, GprOffset(layout, inst.RA));
+    EmitStateLoadU32(body, GprOffset(layout, inst.RS));
+    EmitStateLoadU32(body, GprOffset(layout, inst.RB));
+    body.push_back(0x72);
+    EmitStateStoreU32Suffix(body, GprOffset(layout, inst.RA));
+    return true;
+
+  default:
+    return false;
+  }
+}
+
+std::vector<std::uint8_t> BuildPpcIntegerBlockModule(std::span<const UGeckoInstruction> instructions,
+                                                     const PpcWasmStateLayout& layout,
+                                                     std::uint32_t next_pc,
+                                                     std::uint32_t downcount)
+{
+  std::vector<std::uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+
+  EmitSection(bytes, 1, {0x01, 0x60, 0x01, 0x7f, 0x00});
+
+  std::vector<std::uint8_t> imports;
+  imports.push_back(0x01);
+  imports.push_back(0x03);
+  imports.insert(imports.end(), {'e', 'n', 'v'});
+  imports.push_back(0x06);
+  imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
+  imports.push_back(0x02);
+  imports.push_back(0x03);
+  EmitU32Leb(imports, 16384);
+  EmitU32Leb(imports, 16384);
+  EmitSection(bytes, 2, imports);
+
+  EmitSection(bytes, 3, {0x01, 0x00});
+  EmitSection(bytes, 7, {0x01, 0x01, 0x66, 0x00, 0x00});
+
+  std::vector<std::uint8_t> body = {0x00};
+  for (const UGeckoInstruction inst : instructions)
+  {
+    if (!EmitPpcIntegerInstruction(body, layout, inst))
+      return {};
+  }
+
+  EmitStateStoreU32Prefix(body, layout.pc_offset);
+  EmitI32Const(body, next_pc);
+  EmitStateStoreU32Suffix(body, layout.pc_offset);
+
+  EmitStateStoreU32Prefix(body, layout.npc_offset);
+  EmitI32Const(body, next_pc);
+  EmitStateStoreU32Suffix(body, layout.npc_offset);
+
+  EmitStateStoreU32Prefix(body, layout.downcount_offset);
+  EmitStateLoadU32(body, layout.downcount_offset);
+  EmitI32Const(body, downcount);
+  body.push_back(0x6b);
+  EmitStateStoreU32Suffix(body, layout.downcount_offset);
+
+  body.push_back(0x0b);
+
+  std::vector<std::uint8_t> code;
+  code.push_back(0x01);
+  EmitU32Leb(code, static_cast<std::uint32_t>(body.size()));
+  code.insert(code.end(), body.begin(), body.end());
+  EmitSection(bytes, 10, code);
+
+  return bytes;
+}
+
+PpcWasmStateLayout GetPpcStateLayout(PowerPC::PowerPCState& state)
+{
+  const auto base = reinterpret_cast<std::uintptr_t>(&state);
+  return {
+      static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&state.pc) - base),
+      static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&state.npc) - base),
+      static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(state.gpr) - base),
+      static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&state.downcount) - base),
+  };
+}
+
+UGeckoInstruction EncodeDForm(std::uint32_t opcd, std::uint32_t rd_or_rs, std::uint32_t ra,
+                              std::uint16_t immediate)
+{
+  return UGeckoInstruction{(opcd << 26) | (rd_or_rs << 21) | (ra << 16) | immediate};
+}
+
+UGeckoInstruction EncodeXForm(std::uint32_t opcd, std::uint32_t rs, std::uint32_t ra,
+                              std::uint32_t rb, std::uint32_t xo, bool rc = false)
+{
+  return UGeckoInstruction{(opcd << 26) | (rs << 21) | (ra << 16) | (rb << 11) | (xo << 1) |
+                           (rc ? 1u : 0u)};
+}
+}  // namespace
+
+namespace UICommon
+{
+Common::EventHook AddFlushUnsavedDataCallback(std::function<void()> callback)
+{
+  return {};
+}
+
+std::string FormatSize(u64 bytes, int decimals)
+{
+  return std::to_string(bytes) + " B";
+}
+}  // namespace UICommon
+
+namespace
+{
+bool s_runtime_initialized = false;
+std::string s_core_status = "Not initialized";
+std::string s_core_title;
+std::string s_video_backend = "Software Renderer";
+PowerPC::CPUCore s_cpu_core = PowerPC::CPUCore::CachedInterpreter;
+bool s_cpu_thread = false;
+float s_cpu_overclock = 1.0f;
+float s_emulation_speed = 1.0f;
+
+bool BrowserMsgHandler(const char* caption, const char* text, bool yes_no, Common::MsgType style)
+{
+  (void)yes_no;
+  (void)style;
+  s_core_status = std::string(caption ? caption : "Alert") + ": " + (text ? text : "");
+#ifdef __EMSCRIPTEN__
+  EM_ASM(
+      {
+        const message = UTF8ToString($0);
+        if (typeof postMessage === 'function')
+          postMessage({type: 'status', message});
+        if (typeof console !== 'undefined')
+          console.error(message);
+      },
+      s_core_status.c_str());
+#endif
+  return true;
+}
+
+const char* StateName(Core::State state)
+{
+  switch (state)
+  {
+  case Core::State::Uninitialized:
+    return "Uninitialized";
+  case Core::State::Paused:
+    return "Paused";
+  case Core::State::Running:
+    return "Running";
+  case Core::State::Stopping:
+    return "Stopping";
+  case Core::State::Starting:
+    return "Starting";
+  }
+  return "Unknown";
+}
+
+void CreateDirectoryIfNeeded(const std::string& path)
+{
+  if (!path.empty())
+    File::CreateFullPath(path);
+}
+
+void EnsureRuntime()
+{
+  if (s_runtime_initialized)
+    return;
+
+  File::SetUserPath(D_USER_IDX, "/dolphin-user");
+  CreateDirectoryIfNeeded(File::GetUserPath(D_USER_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_CONFIG_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_GCUSER_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_CACHE_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_SHADERS_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_STATESAVES_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_DUMP_IDX));
+
+  Config::Init();
+  Config::AddLayer(ConfigLoaders::GenerateBaseConfigLoader());
+  SConfig::Init();
+  g_Config.Init();
+  Common::Log::LogManager::Init();
+  Common::RegisterMsgAlertHandler(&BrowserMsgHandler);
+  Statistics::Init();
+
+  Config::SetBase(Config::MAIN_GFX_BACKEND, s_video_backend);
+  Config::SetBase(Config::GFX_PREFER_GLES, s_video_backend == "OGL");
+  Config::SetBase(Config::MAIN_CPU_CORE, s_cpu_core);
+  Config::SetBase(Config::MAIN_CPU_THREAD, s_cpu_thread);
+  Config::SetBase(Config::MAIN_SKIP_IPL, true);
+  Config::SetBase(Config::MAIN_DSP_HLE, true);
+  Config::SetBase(Config::MAIN_DSP_THREAD, false);
+  Config::SetBase(Config::MAIN_FAST_DISC_SPEED, true);
+  Config::SetBase(Config::MAIN_EMULATION_SPEED, s_emulation_speed);
+  Config::SetBase(Config::MAIN_OVERCLOCK_ENABLE, true);
+  Config::SetBase(Config::MAIN_OVERCLOCK, s_cpu_overclock);
+  Config::SetBase(Config::MAIN_PRECISION_FRAME_TIMING, false);
+  Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, false);
+  Config::SetBase(Config::MAIN_SMOOTH_EARLY_PRESENTATION, true);
+  Config::SetBase(Config::MAIN_SYNC_ON_SKIP_IDLE, false);
+  Config::SetBase(Config::MAIN_ACCURATE_FMADDS, false);
+  Config::SetBase(Config::MAIN_ENABLE_CHEATS, false);
+  Config::SetBase(Config::MAIN_OSD_MESSAGES, false);
+  Config::SetBase(Config::MAIN_SLOT_A, ExpansionInterface::EXIDeviceType::MemoryCardFolder);
+  Config::SetBase(Config::MAIN_SLOT_B, ExpansionInterface::EXIDeviceType::None);
+  Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
+  Config::SetBase(Config::MAIN_AUDIO_MUTED, true);
+  Config::SetBase(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, s_video_backend == "OGL");
+  Config::SetBase(Config::GFX_HACK_COPY_EFB_SCALED, false);
+  Config::SetBase(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::Synchronous);
+  Config::SetBase(Config::GFX_SHADER_COMPILER_THREADS, 0);
+  Config::SetBase(Config::GFX_SHADER_PRECOMPILER_THREADS, 0);
+  VideoBackendBase::ActivateBackend(s_video_backend);
+
+  if (!g_controller_interface.IsInit())
+  {
+    WindowSystemInfo wsi;
+    wsi.type = WindowSystemType::Headless;
+    g_controller_interface.Initialize(wsi);
+  }
+
+  Pad::Initialize();
+  Pad::InitializeGBA();
+  Keyboard::Initialize();
+
+  s_runtime_initialized = true;
+  s_core_status = "Runtime initialized";
+}
+}  // namespace
+
+std::vector<std::string> Host_GetPreferredLocales()
+{
+  return {"en"};
+}
+
+bool Host_UIBlocksControllerState()
+{
+  return false;
+}
+
+bool Host_RendererHasFocus()
+{
+  return true;
+}
+
+bool Host_RendererHasFullFocus()
+{
+  return true;
+}
+
+bool Host_RendererIsFullscreen()
+{
+  return false;
+}
+
+bool Host_TASInputHasFocus()
+{
+  return false;
+}
+
+void Host_Message(HostMessageID id)
+{
+  if (id == HostMessageID::WMUserStop)
+  {
+    s_core_status = "Core requested stop";
+    Core::Stop(Core::System::GetInstance());
+  }
+}
+
+void Host_PPCSymbolsChanged()
+{
+}
+
+void Host_PPCBreakpointsChanged()
+{
+}
+
+void Host_RequestRenderWindowSize(int width, int height)
+{
+}
+
+void Host_UpdateDisasmDialog()
+{
+}
+
+void Host_JitCacheInvalidation()
+{
+}
+
+void Host_JitProfileDataWiped()
+{
+}
+
+void Host_UpdateTitle(const std::string& title)
+{
+  s_core_title = title;
+}
+
+void Host_YieldToUI()
+{
+}
+
+void Host_TitleChanged()
+{
+}
+
+void Host_UpdateDiscordClientID(const std::string& client_id)
+{
+}
+
+bool Host_UpdateDiscordPresenceRaw(const std::string& details, const std::string& state,
+                                   const std::string& large_image_key,
+                                   const std::string& large_image_text,
+                                   const std::string& small_image_key,
+                                   const std::string& small_image_text,
+                                   const std::int64_t start_timestamp,
+                                   const std::int64_t end_timestamp, const int party_size,
+                                   const int party_max)
+{
+  return false;
+}
+
+std::unique_ptr<GBAHostInterface> Host_CreateGBAHost(std::weak_ptr<HW::GBA::Core> core)
+{
+  return nullptr;
+}
+
+extern "C"
+{
+int CoreInit()
+{
+  EnsureRuntime();
+  return 1;
+}
+
+int SetVideoBackend(const char* backend)
+{
+  if (!backend || s_runtime_initialized)
+    return 0;
+
+  const std::string requested = backend;
+  if (requested == "OGL" || requested == "OpenGL" || requested == "OpenGL ES")
+  {
+    s_video_backend = "OGL";
+    return 1;
+  }
+  if (requested == "Software Renderer" || requested == "Software")
+  {
+    s_video_backend = "Software Renderer";
+    return 1;
+  }
+  if (requested == "Null")
+  {
+    s_video_backend = "Null";
+    return 1;
+  }
+
+  return 0;
+}
+
+int SetCpuThread(int enabled)
+{
+  if (s_runtime_initialized)
+    return 0;
+
+  s_cpu_thread = enabled != 0;
+  return 1;
+}
+
+int SetCpuCore(const char* core)
+{
+  if (!core || s_runtime_initialized)
+    return 0;
+
+  const std::string requested = core;
+  if (requested == "interpreter" || requested == "Interpreter")
+  {
+    s_cpu_core = PowerPC::CPUCore::Interpreter;
+    return 1;
+  }
+  if (requested == "cached" || requested == "cached-interpreter" ||
+      requested == "CachedInterpreter")
+  {
+    s_cpu_core = PowerPC::CPUCore::CachedInterpreter;
+    return 1;
+  }
+
+  return 0;
+}
+
+int SetCpuOverclock(float factor)
+{
+  if (s_runtime_initialized || factor < 0.01f || factor > 5.0f)
+    return 0;
+
+  s_cpu_overclock = factor;
+  return 1;
+}
+
+int SetEmulationSpeed(float factor)
+{
+  if (s_runtime_initialized || factor < 0.0f || factor > 5.0f)
+    return 0;
+
+  s_emulation_speed = factor;
+  return 1;
+}
+
+int SetFastSoftwareRaster(int mode)
+{
+  DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 2 ? 2 : mode);
+  return 1;
+}
+
+int BootDisc(const char* path)
+{
+  if (!path)
+  {
+    s_core_status = "Boot path was null";
+    return 0;
+  }
+
+  EnsureRuntime();
+
+  if (Core::IsRunningOrStarting(Core::System::GetInstance()))
+    Core::Stop(Core::System::GetInstance());
+
+  auto boot = BootParameters::GenerateFromFile(std::string(path));
+  if (!boot)
+  {
+    s_core_status = "BootParameters::GenerateFromFile rejected disc";
+    return 0;
+  }
+
+  WindowSystemInfo wsi;
+  wsi.type = WindowSystemType::Headless;
+  VideoBackendBase::ActivateBackend(s_video_backend);
+
+  const bool booted = BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi);
+  s_core_status = booted ? "Boot submitted to Dolphin core" : "BootManager::BootCore failed";
+  return booted ? 1 : 0;
+}
+
+void StopCore()
+{
+  if (s_runtime_initialized)
+    Core::Stop(Core::System::GetInstance());
+  s_core_status = "Stopped";
+}
+
+void PumpHostJobs()
+{
+  if (s_runtime_initialized)
+    Core::HostDispatchJobs(Core::System::GetInstance());
+}
+
+int GetCoreState()
+{
+  if (!s_runtime_initialized)
+    return static_cast<int>(Core::State::Uninitialized);
+  return static_cast<int>(Core::GetState(Core::System::GetInstance()));
+}
+
+const char* GetCoreStateName()
+{
+  if (!s_runtime_initialized)
+    return "Uninitialized";
+  return StateName(Core::GetState(Core::System::GetInstance()));
+}
+
+const char* GetCoreStatus()
+{
+  return s_core_status.c_str();
+}
+
+const char* GetCoreTitle()
+{
+  return s_core_title.c_str();
+}
+
+std::uint32_t GetCoreTicksLow()
+{
+  if (!s_runtime_initialized)
+    return 0;
+  return static_cast<std::uint32_t>(Core::System::GetInstance().GetCoreTiming().GetTicks());
+}
+
+std::uint32_t GetCoreTicksHigh()
+{
+  if (!s_runtime_initialized)
+    return 0;
+  return static_cast<std::uint32_t>(Core::System::GetInstance().GetCoreTiming().GetTicks() >> 32);
+}
+
+std::uint32_t GetCoreTicksPerSecond()
+{
+  if (!s_runtime_initialized)
+    return 486000000u;
+  return Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond();
+}
+
+std::uint32_t GetPPCPC()
+{
+  if (!s_runtime_initialized)
+    return 0;
+  return Core::System::GetInstance().GetPPCState().pc;
+}
+
+const char* GetCPUCoreName()
+{
+  if (!s_runtime_initialized)
+    return "Not booted";
+  return s_cpu_core == PowerPC::CPUCore::Interpreter ? "Interpreter" : "Cached Interpreter";
+}
+
+int RunWasmJitSmoke(int value)
+{
+  return DolphinWeb_RunWasmJitSmokeImpl(value);
+}
+
+int RunPpcWasmAddiSmoke(int value, int immediate)
+{
+  const std::vector<std::uint8_t> bytes = BuildI32AddImmediateModule(immediate);
+#ifdef __EMSCRIPTEN__
+  return DolphinWeb_RunGeneratedWasmI32(bytes.data(), static_cast<int>(bytes.size()), value);
+#else
+  return value + immediate;
+#endif
+}
+
+int RunPpcWasmStateAddiSmoke(int value, int immediate)
+{
+  std::array<std::uint32_t, 32> gpr{};
+  gpr[3] = static_cast<std::uint32_t>(value);
+
+  constexpr std::uint32_t source_offset = 3 * sizeof(std::uint32_t);
+  constexpr std::uint32_t dest_offset = 4 * sizeof(std::uint32_t);
+  const std::vector<std::uint8_t> bytes =
+      BuildStateAddImmediateModule(dest_offset, source_offset, immediate);
+
+#ifdef __EMSCRIPTEN__
+  DolphinWeb_RunGeneratedWasmVoidI32(
+      bytes.data(), static_cast<int>(bytes.size()),
+      static_cast<int>(reinterpret_cast<std::uintptr_t>(gpr.data())));
+#else
+  gpr[4] = gpr[3] + static_cast<std::uint32_t>(immediate);
+#endif
+
+  return static_cast<int>(gpr[4]);
+}
+
+int RunPpcWasmDolphinStateAddiSmoke(int value, int immediate)
+{
+  EnsureRuntime();
+
+  auto& ppc_state = Core::System::GetInstance().GetPPCState();
+  ppc_state.gpr[3] = static_cast<std::uint32_t>(value);
+  ppc_state.gpr[4] = 0;
+
+  constexpr std::uint32_t source_offset = 3 * sizeof(std::uint32_t);
+  constexpr std::uint32_t dest_offset = 4 * sizeof(std::uint32_t);
+  const std::vector<std::uint8_t> bytes =
+      BuildStateAddImmediateModule(dest_offset, source_offset, immediate);
+
+#ifdef __EMSCRIPTEN__
+  DolphinWeb_RunGeneratedWasmVoidI32(
+      bytes.data(), static_cast<int>(bytes.size()),
+      static_cast<int>(reinterpret_cast<std::uintptr_t>(ppc_state.gpr)));
+#else
+  ppc_state.gpr[4] = ppc_state.gpr[3] + static_cast<std::uint32_t>(immediate);
+#endif
+
+  return static_cast<int>(ppc_state.gpr[4]);
+}
+
+int RunPpcWasmIntegerBlockSmoke()
+{
+  EnsureRuntime();
+
+  auto& ppc_state = Core::System::GetInstance().GetPPCState();
+  ppc_state.pc = 0x80003100;
+  ppc_state.npc = 0;
+  ppc_state.downcount = 100;
+  for (std::uint32_t& gpr : ppc_state.gpr)
+    gpr = 0;
+
+  const std::array<UGeckoInstruction, 4> instructions = {
+      EncodeDForm(15, 3, 0, 0x1234),    // lis r3, 0x1234
+      EncodeDForm(24, 3, 3, 0x5678),    // ori r3, r3, 0x5678
+      EncodeDForm(14, 4, 3, 0xfff0),    // addi r4, r3, -0x10
+      EncodeXForm(31, 4, 5, 4, 444),    // mr r5, r4
+  };
+  constexpr std::uint32_t next_pc = 0x80003110;
+  constexpr std::uint32_t downcount = 4;
+
+  const PpcWasmStateLayout layout = GetPpcStateLayout(ppc_state);
+  const std::vector<std::uint8_t> bytes =
+      BuildPpcIntegerBlockModule(instructions, layout, next_pc, downcount);
+  if (bytes.empty())
+    return 0;
+
+#ifdef __EMSCRIPTEN__
+  DolphinWeb_RunGeneratedWasmVoidI32(
+      bytes.data(), static_cast<int>(bytes.size()),
+      static_cast<int>(reinterpret_cast<std::uintptr_t>(&ppc_state)));
+#else
+  ppc_state.gpr[3] = 0x12345678;
+  ppc_state.gpr[4] = 0x12345668;
+  ppc_state.gpr[5] = ppc_state.gpr[4];
+  ppc_state.pc = next_pc;
+  ppc_state.npc = next_pc;
+  ppc_state.downcount -= downcount;
+#endif
+
+  return ppc_state.gpr[3] == 0x12345678 && ppc_state.gpr[4] == 0x12345668 &&
+                 ppc_state.gpr[5] == 0x12345668 && ppc_state.pc == next_pc &&
+                 ppc_state.npc == next_pc && ppc_state.downcount == 96 ?
+             1 :
+             0;
+}
+}

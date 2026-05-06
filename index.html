@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>wasm-dolphin</title>
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <div>
+            <h1>wasm-dolphin</h1>
+            <p id="coreLabel">WebAssembly host</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span class="status-pill" id="statusPill">Booting</span>
+          <button class="icon-button" id="fullscreenButton" type="button" title="Fullscreen" aria-label="Fullscreen">[]</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="play-area" aria-label="Emulator">
+          <div class="screen-frame" id="dropZone">
+            <canvas id="screen" width="640" height="480" aria-label="Emulator screen"></canvas>
+            <div class="drop-badge" id="dropBadge">Drop disc</div>
+          </div>
+
+          <div class="transport" aria-label="Playback controls">
+            <button id="runButton" type="button">Pause</button>
+            <button id="resetButton" type="button">Reset</button>
+            <button id="muteButton" type="button">Muted</button>
+            <button id="saveButton" type="button">Save</button>
+            <button id="loadButton" type="button">Load</button>
+            <label class="file-button">
+              Open
+              <input id="romInput" type="file" accept=".iso,.gcm,.rvz,.wbfs,.wad,.dol,.elf">
+            </label>
+          </div>
+
+          <div class="touch-controls" aria-label="Touch controls">
+            <div class="touch-dpad">
+              <button data-touch-button="D_UP" aria-label="D-pad up">Up</button>
+              <button data-touch-button="D_LEFT" aria-label="D-pad left">Left</button>
+              <button data-touch-button="D_RIGHT" aria-label="D-pad right">Right</button>
+              <button data-touch-button="D_DOWN" aria-label="D-pad down">Down</button>
+            </div>
+            <div class="touch-face">
+              <button data-touch-button="B" aria-label="B">B</button>
+              <button data-touch-button="A" aria-label="A">A</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-panel" aria-label="Emulator status">
+          <section class="panel-block">
+            <div class="section-heading">
+              <h2>Game</h2>
+              <span id="gameSize">No file</span>
+            </div>
+            <p class="game-title" id="gameTitle">Demo scene</p>
+            <p class="muted" id="mountNote">Demo WASM core active</p>
+          </section>
+
+          <section class="panel-block">
+            <div class="section-heading">
+              <h2>Boot</h2>
+              <span id="bootStatus">No disc</span>
+            </div>
+            <div class="metric-row">
+              <span>Apploader</span>
+              <strong id="bootApploader">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>Boot DOL</span>
+              <strong id="bootDol">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>FST</span>
+              <strong id="bootFst">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>Image</span>
+              <strong id="bootImage">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>Entry</span>
+              <strong id="bootEntry">-</strong>
+            </div>
+            <p class="muted compact" id="bootBlocker">No boot attempt</p>
+            <div class="root-entry-list" id="rootEntryList" aria-label="Disc root entries"></div>
+          </section>
+
+          <section class="panel-block">
+            <div class="section-heading">
+              <h2>Core</h2>
+              <span id="coreMode">Demo</span>
+            </div>
+            <div class="metric-row">
+              <span>Frame</span>
+              <strong id="frameCounter">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>Present FPS</span>
+              <strong id="fpsCounter">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>Visual FPS</span>
+              <strong id="visualFpsCounter">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>UI FPS</span>
+              <strong id="uiFpsCounter">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>Core FPS</span>
+              <strong id="coreFpsCounter">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>Game Speed</span>
+              <strong id="gameSpeedCounter">0%</strong>
+            </div>
+            <div class="metric-row">
+              <span>Frame Gap</span>
+              <strong id="presentationGapCounter">0 ms</strong>
+            </div>
+            <div class="metric-row">
+              <span>Ticks</span>
+              <strong id="coreTicks">0</strong>
+            </div>
+            <div class="metric-row">
+              <span>PPC PC</span>
+              <strong id="ppcPc">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>CPU</span>
+              <strong id="cpuCoreName">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>WASM JIT exp</span>
+              <strong id="ppcWasmJit">0 / 0</strong>
+            </div>
+            <div class="metric-row">
+              <span>WASM Helper</span>
+              <strong id="ppcWasmHelperStats">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>Frame Profile</span>
+              <strong id="frameProfileStats">-</strong>
+            </div>
+            <div class="metric-row">
+              <span>Adapter</span>
+              <strong id="adapterStatus">Fallback</strong>
+            </div>
+          </section>
+
+          <section class="panel-block">
+            <div class="section-heading">
+              <h2>Input</h2>
+              <span id="inputSource">Keyboard</span>
+            </div>
+            <div class="control-grid" id="controlGrid"></div>
+          </section>
+
+          <section class="panel-block">
+            <div class="section-heading">
+              <h2>Core Slot</h2>
+              <span>cores/dolphin</span>
+            </div>
+            <p class="muted compact">Emscripten Dolphin bundles load from <code>cores/dolphin</code>.</p>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
