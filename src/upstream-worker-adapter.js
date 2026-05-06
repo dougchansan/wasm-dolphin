@@ -29,7 +29,7 @@ export class UpstreamWorkerAdapter {
     ppcProfile = false,
     cpuOverclock = 1,
     emulationSpeed = 1,
-    presentationScale = 0.5,
+    presentationScale = 1,
     presentationQueueSize = 8,
     presenterBackend = "webgl",
     oglProxyMode = "proxy",

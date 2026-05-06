@@ -17,7 +17,7 @@ export class UpstreamMainThreadAdapter {
     ppcProfile = false,
     cpuOverclock = 1,
     emulationSpeed = 1,
-    presentationScale = 0.5,
+    presentationScale = 1,
     oglTestClear = false,
     fastSoftwareRaster = 0
   } = {}) {

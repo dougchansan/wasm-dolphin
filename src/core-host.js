@@ -626,7 +626,7 @@ function requestedPresentationScale() {
   if (Number.isFinite(requested) && requested >= 0.25 && requested <= 1) {
     return requested;
   }
-  return 0.5;
+  return 1;
 }
 
 function requestedPresentationQueueSize() {

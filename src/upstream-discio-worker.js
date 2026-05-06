@@ -183,7 +183,7 @@ async function loadCore({
   ppcProfile = false,
   cpuOverclock = 1,
   emulationSpeed = 1,
-  presentationScale = 0.5,
+  presentationScale = 1,
   presentationQueueSize = DEFAULT_PRESENTATION_QUEUE,
   presenterBackend = "webgl",
   oglProxyMode = "proxy",
