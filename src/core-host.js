@@ -624,13 +624,12 @@ function requestedPpcWasmJit(videoBackend) {
   if (params.get("wasmjit") === "0") {
     return false;
   }
-  if (
-    videoBackend === "OGL" &&
-    params.get("forcejit") !== "1" &&
-    params.get("unsafejitwarmup") !== "1"
-  ) {
-    return false;
-  }
+  // OGL used to gate the JIT request entirely behind forcejit=1, but that left
+  // the 5000-frame OGL warmup floor + post-engage disable guard unused. Allow
+  // OGL to request the JIT so the same staged-warmup + auto-disable safety
+  // applies as on the software path. The reverse-Z and duplicate-XFB fixes in
+  // patch 0005 fixed the GL_INVALID_OPERATION storm that motivated the
+  // original lockout.
   return true;
 }
 

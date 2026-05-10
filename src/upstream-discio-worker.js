@@ -89,8 +89,8 @@ const MIN_PRESENTATION_QUEUE = 2;
 const MAX_PRESENTATION_QUEUE = 12;
 const VISUAL_HASH_SAMPLE_STRIDE_BYTES = 256;
 const DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES = 3600;
-const WASM_JIT_MIN_STABLE_PRESENTATION_FPS = 55;
-const WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS = 24;
+const WASM_JIT_MIN_STABLE_PRESENTATION_FPS = 25;
+const WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS = 80;
 const WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE = 240;
 const WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS = 25;
 const WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS = 40;
@@ -898,14 +898,11 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
-  if (
-    !ppcWasmJitForce &&
-    presentationFps > 0 &&
-    (presentationFps < WASM_JIT_MIN_STABLE_PRESENTATION_FPS ||
-      presentationP95IntervalMs > WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS)
-  ) {
-    return;
-  }
+  // Engage after warmup regardless of momentary presentation rate. Single-
+  // window samples drop to 0 during multi-second core stalls and would
+  // indefinitely block engage even when long-term throughput is healthy. The
+  // post-engage guard (maybeDisablePpcWasmJit, ACTIVE_* thresholds) handles
+  // catastrophic regression.
 
   api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
