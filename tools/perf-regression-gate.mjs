@@ -19,7 +19,10 @@ const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
 const scenarios = selectedScenarios();
 const inputScript = parseInputScript(
   process.env.INPUT_SCRIPT ||
-    "down:12:x,up:13:x,down:80:Enter,up:81:Enter,down:120:Enter,up:121:Enter,down:135:KeyS,up:136:KeyS,down:140:x,up:141:x,down:155:x,up:156:x,down:170:x,up:171:x"
+    // Drives Melee from boot through the save dialog, attract cutscene, title
+    // skip, main menu, 1P mode, Regular Match -> reaches the character select
+    // screen by ~t=200s. Each X press = GameCube A; Enter = Start.
+    "down:8:x,up:9:x,down:30:Enter,up:31:Enter,down:50:Enter,up:51:Enter,down:75:Enter,up:76:Enter,down:100:x,up:101:x,down:120:x,up:121:x,down:140:x,up:141:x,down:160:x,up:161:x,down:180:x,up:181:x,down:200:x,up:201:x"
 );
 
 if (!existsSync(romPath)) {
