@@ -10,6 +10,7 @@ const SAVE_KEY = "wasm-dolphin.demo-state.0";
 const VISIBLE_SAMPLE_WIDTH = 96;
 const VISIBLE_SAMPLE_HEIGHT = 72;
 const VISIBLE_SAMPLE_INTERVAL_MS = 250;
+const SAFE_JIT_WARMUP_FRAMES = 5000;
 
 export class EmulatorHost {
   constructor({ canvas, onFrame = () => {}, onStatus = () => {}, onMode = () => {} }) {
@@ -24,6 +25,7 @@ export class EmulatorHost {
     this.cpuThread = requestedCpuThread(this.videoBackend);
     this.cpuCore = requestedCpuCore();
     this.ppcWasmJit = requestedPpcWasmJit(this.videoBackend);
+    this.ppcWasmJitTier = requestedPpcWasmJitTier();
     this.ppcWasmJitForce = requestedPpcWasmJitForce();
     this.ppcWasmJitWarmupFrames = requestedPpcWasmJitWarmupFrames(this.videoBackend);
     this.ppcProfile = requestedPpcProfile();
@@ -32,9 +34,12 @@ export class EmulatorHost {
     this.presentationScale = requestedPresentationScale();
     this.presentationQueueSize = requestedPresentationQueueSize();
     this.presenterBackend = requestedPresenterBackend();
+    this.presentationPacing = requestedPresentationPacing(this.videoBackend);
     this.oglProxyMode = requestedOglProxyMode();
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
+    this.collectMetrics = requestedCollectMetrics();
+    this.visibleSamplerEnabled = requestedVisibleSampler();
     this.usesMainThreadOgl =
       this.coreKind === "upstream" && this.videoBackend === "OGL" && this.oglProxyMode === "main";
     this.usesAdapterCanvas =
@@ -75,6 +80,7 @@ export class EmulatorHost {
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,
             ppcWasmJit: this.ppcWasmJit,
+            ppcWasmJitTier: this.ppcWasmJitTier,
             ppcWasmJitForce: this.ppcWasmJitForce,
             ppcWasmJitWarmupFrames: this.ppcWasmJitWarmupFrames,
             ppcProfile: this.ppcProfile,
@@ -92,6 +98,7 @@ export class EmulatorHost {
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,
             ppcWasmJit: this.ppcWasmJit,
+            ppcWasmJitTier: this.ppcWasmJitTier,
             ppcWasmJitForce: this.ppcWasmJitForce,
             ppcWasmJitWarmupFrames: this.ppcWasmJitWarmupFrames,
             ppcProfile: this.ppcProfile,
@@ -100,9 +107,11 @@ export class EmulatorHost {
             presentationScale: this.presentationScale,
             presentationQueueSize: this.presentationQueueSize,
             presenterBackend: this.presenterBackend,
+            presentationPacing: this.presentationPacing,
             oglProxyMode: this.oglProxyMode,
             oglTestClear: this.oglTestClear,
-            fastSoftwareRaster: this.fastSoftwareRaster
+            fastSoftwareRaster: this.fastSoftwareRaster,
+            collectMetrics: this.collectMetrics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";
@@ -131,6 +140,8 @@ export class EmulatorHost {
     this.lastCoreTicksForSpeed = 0;
     this.lastPresentedFrameForFps = 0;
     this.buttonMask = 0;
+    this.adapterStatsPollMs = this.canvasOwnedByAdapter ? 250 : 0;
+    this.lastAdapterStatsPollAt = 0;
     this.animationId = 0;
     this.game = {
       name: "Demo scene",
@@ -216,6 +227,7 @@ export class EmulatorHost {
     }
 
     this.running = true;
+    this.lastAdapterStatsPollAt = 0;
     this.adapter.start();
     this.lastFpsTime = performance.now();
     this.loop();
@@ -293,6 +305,34 @@ export class EmulatorHost {
     this.onStatus("Demo save slot loaded");
   }
 
+  mixAudio(frames = 1024) {
+    if (this.mode !== "dolphin") {
+      return Promise.resolve({
+        available: false,
+        frames: 0,
+        channels: 2,
+        sampleRate: 48000,
+        samples: null,
+        stats: "audio:demo"
+      });
+    }
+
+    return this.adapter.mixAudio?.(frames) ?? Promise.resolve({
+      available: false,
+      frames: 0,
+      channels: 2,
+      sampleRate: 48000,
+      samples: null,
+      stats: "audio:unavailable"
+    });
+  }
+
+  setAudioMuted(muted) {
+    if (this.mode === "dolphin") {
+      this.adapter.setAudioMuted?.(muted);
+    }
+  }
+
   loop = () => {
     if (!this.running) {
       return;
@@ -333,10 +373,17 @@ export class EmulatorHost {
   }
 
   renderDolphin() {
-    this.adapter.runFrame();
     if (this.canvasOwnedByAdapter) {
+      if (this.adapterStatsPollMs > 0) {
+        const now = performance.now();
+        if (now - this.lastAdapterStatsPollAt >= this.adapterStatsPollMs) {
+          this.lastAdapterStatsPollAt = now;
+          this.adapter.pollFrame?.();
+        }
+      }
       return;
     }
+    this.adapter.runFrame();
 
     const rgba = this.adapter.readFrameRgba();
     if (!rgba || !this.frameContext || !this.context || !this.frameCanvas) {
@@ -410,13 +457,21 @@ export class EmulatorHost {
       presentationMaxIntervalMs: this.mode === "dolphin" ? this.adapter.presentationMaxIntervalMs : 0,
       presentationLongFrameCount:
         this.mode === "dolphin" ? this.adapter.presentationLongFrameCount : 0,
+      presentationFrameLag: this.mode === "dolphin" ? this.adapter.presentationFrameLag : 0,
+      presentationQueueAgeMs: this.mode === "dolphin" ? this.adapter.presentationQueueAgeMs : 0,
       visualChangeFps:
         this.mode === "dolphin"
-          ? this.visibleSampleContext && !this.visibleSampleError
+          ? this.visibleSamplerEnabled &&
+            this.visibleSampleContext &&
+            !this.visibleSampleError &&
+            !this.canvasOwnedByAdapter
             ? this.visibleChangeFps
             : this.adapter.visualChangeFps
           : this.fps,
       visualFrameHash: this.mode === "dolphin" ? this.visibleFrameHash || this.adapter.visualFrameHash : 0,
+      visualSampleSource:
+        this.mode === "dolphin" ? this.adapter.visualSampleSource ?? "none" : "demo",
+      oglGlError: this.mode === "dolphin" ? this.adapter.oglGlError ?? 0 : 0,
       visibleSampleError: this.mode === "dolphin" ? this.visibleSampleError : "",
       presentedFrame,
       coreTicks: this.mode === "dolphin" ? this.adapter.coreTicks : 0,
@@ -466,6 +521,7 @@ export class EmulatorHost {
   sampleVisibleFrame(now) {
     if (
       this.mode !== "dolphin" ||
+      !this.visibleSamplerEnabled ||
       !this.visibleSampleContext ||
       now - this.lastVisibleSampleAt < VISIBLE_SAMPLE_INTERVAL_MS
     ) {
@@ -530,7 +586,7 @@ function hashVisibleSample(bytes) {
 }
 
 function requestedCoreKind() {
-  return new URLSearchParams(window.location.search).get("core") === "upstream" ? "upstream" : "native";
+  return new URLSearchParams(window.location.search).get("core") === "native" ? "native" : "upstream";
 }
 
 function requestedVideoBackend() {
@@ -552,7 +608,10 @@ function requestedCpuThread(videoBackend) {
   if (requested === "dual") {
     return true;
   }
-  return videoBackend === "OGL";
+  if (requested === "auto") {
+    return videoBackend === "OGL";
+  }
+  return true;
 }
 
 function requestedCpuCore() {
@@ -562,10 +621,22 @@ function requestedCpuCore() {
 
 function requestedPpcWasmJit(videoBackend) {
   const params = new URLSearchParams(window.location.search);
-  if (params.get("wasmjit") !== "1") {
+  if (params.get("wasmjit") === "0") {
     return false;
   }
-  return videoBackend !== "OGL" || params.get("forcejit") === "1";
+  if (
+    videoBackend === "OGL" &&
+    params.get("forcejit") !== "1" &&
+    params.get("unsafejitwarmup") !== "1"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function requestedPpcWasmJitTier() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("jittier") === "mixed" || params.get("wasmjit") === "2" ? "mixed" : "guarded";
 }
 
 function requestedPpcWasmJitForce() {
@@ -575,15 +646,28 @@ function requestedPpcWasmJitForce() {
 function requestedPpcWasmJitWarmupFrames(videoBackend) {
   const params = new URLSearchParams(window.location.search);
   const forceJit = params.get("forcejit") === "1";
-  if (videoBackend === "OGL" && !forceJit) {
-    return 60000;
-  }
-
+  const unsafeWarmup = params.get("unsafejitwarmup") === "1";
+  // OGL safety minimum: on OpenGL backends, we enforce a minimum warmup of 5000 stable video
+  // frames before JIT activation to prevent GPU driver instability from blocking the compile
+  // burst. This floor applies regardless of jitwarmup URL param to protect OGL presentation
+  // stability. Use forcejit=1 to override; use unsafejitwarmup=1 to disable both the floor and
+  // the normal staged-warmup threshold (not recommended for stability-sensitive workloads).
+  const oglSafetyActive = videoBackend === "OGL" && !forceJit && !unsafeWarmup;
+  const minimumWarmup = oglSafetyActive ? SAFE_JIT_WARMUP_FRAMES : 0;
   const requested = Number.parseInt(params.get("jitwarmup") || "", 10);
+  let effective;
   if (Number.isFinite(requested) && requested >= 0 && requested <= 60000) {
-    return requested;
+    effective = Math.max(minimumWarmup, requested);
+    if (oglSafetyActive && requested < minimumWarmup) {
+      console.log(
+        `[wasm-dolphin] OGL safety floor raised jitwarmup from ${requested} to ${minimumWarmup}. ` +
+          `Use forcejit=1 or unsafejitwarmup=1 to bypass.`
+      );
+    }
+  } else {
+    effective = forceJit ? Math.max(minimumWarmup, 700) : Math.max(minimumWarmup, 3600);
   }
-  return forceJit ? 1700 : 3600;
+  return effective;
 }
 
 function requestedPpcProfile() {
@@ -645,7 +729,18 @@ function requestedPresenterBackend() {
   if (requested === "2d" || requested === "canvas") {
     return "2d";
   }
-  return "webgl";
+  if (requested === "webgl") {
+    return "webgl";
+  }
+  return "webgpu";
+}
+
+function requestedPresentationPacing(videoBackend = "Software Renderer") {
+  const requested = new URLSearchParams(window.location.search).get("pacing");
+  if (videoBackend === "OGL") {
+    return requested === "smooth" ? "smooth" : "direct";
+  }
+  return requested === "direct" ? "direct" : "smooth";
 }
 
 function requestedOglProxyMode() {
@@ -656,7 +751,10 @@ function requestedOglProxyMode() {
   if (requested === "readback" || requested === "bridge") {
     return "readback";
   }
-  return requested === "worker" || requested === "offscreen" ? "worker" : "proxy";
+  if (requested === "proxy" || requested === "compat") {
+    return "proxy";
+  }
+  return "worker";
 }
 
 function requestedOglTestClear() {
@@ -664,6 +762,14 @@ function requestedOglTestClear() {
 }
 
 function requestedFastSoftwareRaster() {
-  const requested = Number.parseInt(new URLSearchParams(window.location.search).get("fastsw") || "0", 10);
-  return Number.isFinite(requested) ? Math.min(2, Math.max(0, requested)) : 0;
+  const requested = Number.parseInt(new URLSearchParams(window.location.search).get("fastsw") || "1", 10);
+  return Number.isFinite(requested) ? Math.min(2, Math.max(0, requested)) : 1;
+}
+
+function requestedVisibleSampler() {
+  return new URLSearchParams(window.location.search).get("mainsample") === "1";
+}
+
+function requestedCollectMetrics() {
+  return new URLSearchParams(window.location.search).get("metrics") === "1";
 }

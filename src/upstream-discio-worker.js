@@ -29,6 +29,9 @@ let presentationLongFrameCount = 0;
 let visualChangeFps = 0;
 let visualFrameHash = 0;
 let lastVisualFrameHash = 0;
+let lastOglSwapCount = 0;
+let oglGlError = 0;
+let visualSampleSource = "none";
 let visualChangesSincePresentationFps = 0;
 let framesSincePresentationFps = 0;
 let loopsSincePresentationFps = 0;
@@ -52,6 +55,7 @@ let ppcWasmJitForce = false;
 let ppcWasmJitActive = false;
 let ppcWasmJitDisabledForSession = false;
 let ppcWasmJitEnabledAtFrame = 0;
+let ppcWasmJitTier = "guarded";
 let ppcWasmJitWarmupFrames = 3600;
 let pacedPresentationActive = false;
 let nextPacedPresentationTime = 0;
@@ -62,6 +66,7 @@ let presentationQueueLimit = 8;
 let presentationQueueTarget = 4;
 let pacedPresentationPrimed = false;
 let pacedPresentationStartedAt = 0;
+let presentationPacingMode = "smooth";
 let presentationUnderrunCount = 0;
 let presentationDroppedFrameCount = 0;
 let presentationUnderrunsSinceFps = 0;
@@ -87,8 +92,10 @@ const DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES = 3600;
 const WASM_JIT_MIN_STABLE_PRESENTATION_FPS = 55;
 const WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS = 24;
 const WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE = 240;
-const WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS = 50;
-const WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS = 30;
+const WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS = 25;
+const WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS = 40;
+const WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS = 5000;
+const WASM_JIT_POST_ACTIVATION_GRACE_FRAMES = 300;
 
 self.addEventListener("message", async (event) => {
   const { id, type, payload = {} } = event.data ?? {};
@@ -116,12 +123,14 @@ async function handleMessage(type, payload) {
         cpuCore: payload.cpuCore,
         ppcWasmJit: payload.ppcWasmJit,
         ppcWasmJitForce: payload.ppcWasmJitForce,
+        ppcWasmJitTier: payload.ppcWasmJitTier,
         ppcWasmJitWarmupFrames: payload.ppcWasmJitWarmupFrames,
         ppcProfile: payload.ppcProfile,
         cpuOverclock: payload.cpuOverclock,
         emulationSpeed: payload.emulationSpeed,
         presentationScale: payload.presentationScale,
         presentationQueueSize: payload.presentationQueueSize,
+        presentationPacing: payload.presentationPacing,
         presenterBackend: payload.presenterBackend,
         oglProxyMode: payload.oglProxyMode,
         oglTestClear: payload.oglTestClear,
@@ -179,12 +188,14 @@ async function loadCore({
   cpuCore = "cached",
   ppcWasmJit = false,
   ppcWasmJitForce: requestedPpcWasmJitForce = false,
+  ppcWasmJitTier: requestedPpcWasmJitTier = "guarded",
   ppcWasmJitWarmupFrames: requestedPpcWasmJitWarmupFrames = DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES,
   ppcProfile = false,
   cpuOverclock = 1,
   emulationSpeed = 1,
   presentationScale = 1,
   presentationQueueSize = DEFAULT_PRESENTATION_QUEUE,
+  presentationPacing = "smooth",
   presenterBackend = "webgl",
   oglProxyMode = "proxy",
   oglTestClear = false,
@@ -252,6 +263,7 @@ async function loadCore({
   ppcWasmJitActive = false;
   ppcWasmJitDisabledForSession = false;
   ppcWasmJitEnabledAtFrame = 0;
+  ppcWasmJitTier = requestedPpcWasmJitTier === "mixed" ? "mixed" : "guarded";
   ppcWasmJitWarmupFrames = normalizePpcWasmJitWarmupFrames(requestedPpcWasmJitWarmupFrames);
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
@@ -260,6 +272,7 @@ async function loadCore({
   api.setPresentationScale?.(Number(presentationScale));
   api.setFastSoftwareRaster?.(Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0)));
   configurePresentationQueue(presentationQueueSize);
+  presentationPacingMode = presentationPacing === "direct" ? "direct" : "smooth";
   api.coreInit?.();
   startPresentationLoop();
 
@@ -469,6 +482,9 @@ function resetPresentationBuffer() {
   visualChangeFps = 0;
   visualFrameHash = 0;
   lastVisualFrameHash = 0;
+  lastOglSwapCount = 0;
+  oglGlError = 0;
+  visualSampleSource = "none";
   visualChangesSincePresentationFps = 0;
   framesSincePresentationFps = 0;
   intervalSumSincePresentationFps = 0;
@@ -668,7 +684,28 @@ function framePayload() {
   const ppcProfileStats = api.getPpcProfileStats?.();
   const videoStats = api.getVideoStats?.();
   if (renderBackend === "ogl") {
-    recordVisualFrameHash(parseVideoFrameHash(videoStats));
+    // The videoStats `hash:` field is computed in DolphinWeb_OnXfb /
+    // DolphinWeb_OnGlBackbuffer, not in DolphinWeb_OnOglSwap. For the OGL
+    // path, OnXfb is bypassed (the GL backend draws straight to the canvas)
+    // so the hash field is frozen on a stale snapshot from before OGL took
+    // over. The OGL swap count, however, increments once per
+    // DolphinWeb_OnOglSwap and is the only authoritative measure of frames
+    // actually committed to the WebGL canvas. Prefer real pixel-readback
+    // when available, otherwise count OGL swaps explicitly.
+    const oglStats = parseOglSwapStats(videoStats);
+    if (oglStats.readbackRgba) {
+      recordVisualFrameHash(oglStats.readbackRgba);
+      visualSampleSource = "ogl-readback";
+    } else if (oglStats.swap > 0) {
+      recordOglSwapDelta(oglStats.swap);
+      visualSampleSource = "ogl-swap";
+    } else {
+      recordVisualFrameHash(parseVideoFrameHash(videoStats));
+      visualSampleSource = "xfb-hash";
+    }
+    oglGlError = oglStats.glError;
+  } else {
+    visualSampleSource = "xfb-hash";
   }
   let frameBuffer = null;
   let transfer = [];
@@ -695,7 +732,7 @@ function framePayload() {
       ppcWasmHelperStats,
       videoStats,
       ppcProfileStats,
-      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame}`
+      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource}`
     ),
     frameProfileStats,
     presentedFrame,
@@ -707,6 +744,8 @@ function framePayload() {
     presentationLongFrameCount,
     visualChangeFps,
     visualFrameHash,
+    visualSampleSource,
+    oglGlError,
     frameBuffer,
     transfer
   };
@@ -735,7 +774,9 @@ function schedulePresentationLoop() {
   if (coreBoot.accepted && renderBackend === "ogl") {
     scheduleOglPresentationPoll();
   } else if (coreBoot.accepted && frameSignalHeap) {
-    startPacedPresentation();
+    if (presentationPacingMode !== "direct") {
+      startPacedPresentation();
+    }
     scheduleFrameSignalWait();
   } else if (presentationChannel) {
     presentationChannel.port2.postMessage(0);
@@ -819,6 +860,13 @@ function runPresentationLoop() {
       addProfileTime("api", performance.now() - apiStartedAt);
       maybeEnablePpcWasmJit(coreFrame);
       if (coreBoot.accepted && frameSignalHeap && renderBackend === "ogl") {
+        // OGL bypasses XFB, so api.getFrame() doesn't increment per visible frame.
+        // Use the OGL swap count (incremented in DolphinWeb_OnOglSwap) as the
+        // present-deduplication key so each new GL swap registers as a new frame.
+        const oglSwap = parseOglSwapStats(api.getVideoStats?.()).swap >>> 0;
+        const oglFrameKey = oglSwap > 0 ? oglSwap : coreFrame;
+        presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
+      } else if (coreBoot.accepted && frameSignalHeap && presentationPacingMode === "direct") {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
       } else if (coreBoot.accepted && frameSignalHeap) {
         captureFrameForPacedPresentation(width, height, pointer, width * height * 4, coreFrame);
@@ -852,7 +900,6 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
 
   if (
     !ppcWasmJitForce &&
-    renderBackend !== "ogl" &&
     presentationFps > 0 &&
     (presentationFps < WASM_JIT_MIN_STABLE_PRESENTATION_FPS ||
       presentationP95IntervalMs > WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS)
@@ -860,7 +907,7 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
-  api.setPpcWasmJitEnabled(1);
+  api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
   ppcWasmJitEnabledAtFrame = coreFrame >>> 0;
   postStatus(`Experimental WASM JIT enabled after ${coreFrame} stable video frames`);
@@ -871,7 +918,23 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
-  if (((coreFrame >>> 0) - ppcWasmJitEnabledAtFrame) < WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE) {
+  const framesSinceActivation = (coreFrame >>> 0) - ppcWasmJitEnabledAtFrame;
+
+  // Detect multi-second post-activation stalls even during the grace period.
+  // A stall exceeding WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS (5s) means the
+  // compile burst blocked presentation long enough to produce a visible freeze.
+  if (presentationMaxIntervalMs > WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS) {
+    api.setPpcWasmJitEnabled(0);
+    ppcWasmJitActive = false;
+    ppcWasmJitDisabledForSession = true;
+    postStatus(
+      `Experimental WASM JIT disabled after post-activation stall ` +
+        `(max_interval:${presentationMaxIntervalMs}ms at frame ${coreFrame})`
+    );
+    return;
+  }
+
+  if (framesSinceActivation < WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE) {
     return;
   }
 
@@ -907,6 +970,41 @@ function parseVideoFrameHash(videoStats) {
 
   const parsed = Number.parseInt(match[1], 16);
   return Number.isFinite(parsed) ? parsed >>> 0 : 0;
+}
+
+function parseOglSwapStats(videoStats) {
+  const text = String(videoStats || "");
+  const swap = Number.parseInt(/\bogl_swap:(\d+)/i.exec(text)?.[1] || "", 10);
+  const size = /\bbb:(\d+)x(\d+)/i.exec(text);
+  const readbackRgba = Number.parseInt(/\brb:0x([0-9a-f]+)/i.exec(text)?.[1] || "", 16);
+  // glerr is captured by GLContextEmscripten::Swap() right before
+  // emscripten_webgl_commit_frame(). It surfaces any GL error left pending in
+  // the queue at swap time; on the OGL path the error originates inside the
+  // upstream Dolphin OGL backend's draw pipeline (not our presenter glue), so
+  // 0x502 (GL_INVALID_OPERATION) is reported but not auto-cleared here.
+  const glError = Number.parseInt(/\bglerr:0x([0-9a-f]+)/i.exec(text)?.[1] || "", 16);
+
+  return {
+    swap: Number.isFinite(swap) ? swap >>> 0 : 0,
+    width: size ? Math.max(0, Number.parseInt(size[1], 10) || 0) : 0,
+    height: size ? Math.max(0, Number.parseInt(size[2], 10) || 0) : 0,
+    readbackRgba: Number.isFinite(readbackRgba) ? readbackRgba >>> 0 : 0,
+    glError: Number.isFinite(glError) ? glError >>> 0 : 0
+  };
+}
+
+function recordOglSwapDelta(swapCount) {
+  const current = swapCount >>> 0;
+  if (!current) {
+    return;
+  }
+
+  if (lastOglSwapCount > 0 && current > lastOglSwapCount) {
+    visualChangesSincePresentationFps += current - lastOglSwapCount;
+  }
+  visualFrameHash = current;
+  lastVisualFrameHash = current;
+  lastOglSwapCount = current;
 }
 
 function captureFrameForPacedPresentation(width, height, pointer, length, coreFrame) {

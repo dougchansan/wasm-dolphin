@@ -9,9 +9,16 @@ import {
   resolveKeyboardButton,
   updatePressedSet
 } from "./input.js";
+import {
+  buildPlayablePresetHref,
+  buildSettingsHref,
+  describeSettings,
+  readSettingsFromSearch
+} from "./settings.js";
 
 const elements = {
   adapterStatus: document.querySelector("#adapterStatus"),
+  audioStatus: document.querySelector("#audioStatus"),
   bootApploader: document.querySelector("#bootApploader"),
   bootBlocker: document.querySelector("#bootBlocker"),
   bootDol: document.querySelector("#bootDol"),
@@ -22,6 +29,8 @@ const elements = {
   controlGrid: document.querySelector("#controlGrid"),
   coreLabel: document.querySelector("#coreLabel"),
   coreMode: document.querySelector("#coreMode"),
+  debugPanel: document.querySelector("#debugPanel"),
+  debugToggle: document.querySelector("#debugToggle"),
   dropBadge: document.querySelector("#dropBadge"),
   dropZone: document.querySelector("#dropZone"),
   frameCounter: document.querySelector("#frameCounter"),
@@ -32,6 +41,7 @@ const elements = {
   coreTicks: document.querySelector("#coreTicks"),
   coreFpsCounter: document.querySelector("#coreFpsCounter"),
   presentationGapCounter: document.querySelector("#presentationGapCounter"),
+  presentationLagCounter: document.querySelector("#presentationLagCounter"),
   ppcPc: document.querySelector("#ppcPc"),
   cpuCoreName: document.querySelector("#cpuCoreName"),
   ppcWasmJit: document.querySelector("#ppcWasmJit"),
@@ -40,18 +50,47 @@ const elements = {
   uiFpsCounter: document.querySelector("#uiFpsCounter"),
   gameSize: document.querySelector("#gameSize"),
   gameTitle: document.querySelector("#gameTitle"),
+  hudFps: document.querySelector("#hudFps"),
+  hudJit: document.querySelector("#hudJit"),
+  hudLatency: document.querySelector("#hudLatency"),
+  hudResolution: document.querySelector("#hudResolution"),
+  hudSpeed: document.querySelector("#hudSpeed"),
+  hudVisualFps: document.querySelector("#hudVisualFps"),
   inputSource: document.querySelector("#inputSource"),
   loadButton: document.querySelector("#loadButton"),
   mountNote: document.querySelector("#mountNote"),
   muteButton: document.querySelector("#muteButton"),
+  overlayToggle: document.querySelector("#overlayToggle"),
   resetButton: document.querySelector("#resetButton"),
   romInput: document.querySelector("#romInput"),
   rootEntryList: document.querySelector("#rootEntryList"),
   runButton: document.querySelector("#runButton"),
   saveButton: document.querySelector("#saveButton"),
   screen: document.querySelector("#screen"),
+  screenHud: document.querySelector("#screenHud"),
+  settingCore: document.querySelector("#settingCore"),
+  settingCpu: document.querySelector("#settingCpu"),
+  settingFastSw: document.querySelector("#settingFastSw"),
+  settingForceJit: document.querySelector("#settingForceJit"),
+  settingJitTier: document.querySelector("#settingJitTier"),
+  settingOglProxy: document.querySelector("#settingOglProxy"),
+  settingPacing: document.querySelector("#settingPacing"),
+  settingMetrics: document.querySelector("#settingMetrics"),
+  settingPresenter: document.querySelector("#settingPresenter"),
+  settingQueue: document.querySelector("#settingQueue"),
+  settingResolution: document.querySelector("#settingResolution"),
+  settingSpeed: document.querySelector("#settingSpeed"),
+  settingVideo: document.querySelector("#settingVideo"),
+  settingWasmJit: document.querySelector("#settingWasmJit"),
+  settingsApplyButton: document.querySelector("#settingsApplyButton"),
+  settingsForm: document.querySelector("#settingsForm"),
+  settingsPresetButton: document.querySelector("#settingsPresetButton"),
+  settingsSummary: document.querySelector("#settingsSummary"),
   statusPill: document.querySelector("#statusPill")
 };
+
+const DEBUG_PREF_KEY = "wasm-dolphin.debug-open";
+const OSD_PREF_KEY = "wasm-dolphin.osd-visible";
 
 const keyboardPressed = new Set();
 let touchPressed = new Set();
@@ -59,6 +98,7 @@ let gamepadPressed = new Set();
 let gamepadInputState = null;
 let combinedPressed = new Set();
 let lastFrameInfo = null;
+let currentSettings = readSettingsFromSearch(window.location.search);
 
 const audio = new AudioController();
 const host = new EmulatorHost({
@@ -67,8 +107,11 @@ const host = new EmulatorHost({
   onStatus: setStatus,
   onMode: setMode
 });
+audio.setSource((frames) => host.mixAudio(frames));
 
 renderControlGrid();
+wireSettings();
+wireDiagnostics();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
@@ -84,6 +127,23 @@ host
 
 function handleFrame(info) {
   lastFrameInfo = info;
+  updateScreenHud(info);
+  updateRuntimeControls(info);
+
+  if (!elements.debugPanel.hidden) {
+    updateDebugMetrics(info);
+  }
+}
+
+function updateRuntimeControls(info) {
+  elements.coreMode.textContent = info.mode === "dolphin" ? "Dolphin" : "Demo";
+  elements.runButton.textContent = info.running ? "Pause" : "Run";
+  elements.statusPill.classList.toggle("paused", !info.running);
+  audio.update(info.buttonMask, info.running);
+  elements.muteButton.textContent = audio.label();
+}
+
+function updateDebugMetrics(info) {
   elements.frameCounter.textContent = String(info.frame);
   elements.fpsCounter.textContent = String(info.fps);
   if (elements.visualFpsCounter) {
@@ -105,6 +165,15 @@ function handleFrame(info) {
     const formattedMax = maxGap.toFixed(maxGap >= 10 ? 0 : 1);
     elements.presentationGapCounter.textContent = `${formattedP95} p95 / ${formattedMax} max / ${longFrames}`;
   }
+  if (elements.presentationLagCounter) {
+    const frameLag = Math.max(0, Number(info.presentationFrameLag) || 0);
+    const queueAge = Math.max(0, Number(info.presentationQueueAgeMs) || 0);
+    elements.presentationLagCounter.textContent =
+      `${frameLag.toFixed(0)}f / ${queueAge.toFixed(queueAge >= 10 ? 0 : 1)} ms`;
+  }
+  if (elements.audioStatus) {
+    elements.audioStatus.textContent = audio.stats || audio.label();
+  }
   elements.coreTicks.textContent = formatLargeInteger(info.coreTicks || 0);
   elements.ppcPc.textContent = formatHex(info.ppcPc || 0) || "-";
   elements.cpuCoreName.textContent = info.cpuCoreName || "-";
@@ -113,10 +182,6 @@ function handleFrame(info) {
   if (elements.frameProfileStats) {
     elements.frameProfileStats.textContent = info.frameProfileStats || "-";
   }
-  elements.coreMode.textContent = info.mode === "dolphin" ? "Dolphin" : "Demo";
-  elements.runButton.textContent = info.running ? "Pause" : "Run";
-  elements.statusPill.classList.toggle("paused", !info.running);
-  audio.update(info.buttonMask, info.running);
 }
 
 function setStatus(message, tone = "") {
@@ -153,8 +218,10 @@ function wireTransport() {
   });
 
   elements.muteButton.addEventListener("click", async () => {
-    await audio.setMuted(!audio.muted);
-    elements.muteButton.textContent = audio.muted ? "Muted" : "Audio";
+    const muted = !audio.muted;
+    host.setAudioMuted(muted);
+    await audio.setMuted(muted);
+    elements.muteButton.textContent = audio.label();
   });
 
   elements.fullscreenButton.addEventListener("click", async () => {
@@ -164,6 +231,101 @@ function wireTransport() {
       await elements.dropZone.requestFullscreen();
     }
   });
+}
+
+function wireSettings() {
+  populateSettingsForm(currentSettings);
+  updateSettingsSummary();
+
+  elements.settingsForm.addEventListener("change", () => {
+    currentSettings = collectSettingsForm();
+    updateSettingsSummary();
+  });
+
+  elements.settingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const nextHref = buildSettingsHref(window.location.href, collectSettingsForm());
+    window.location.assign(nextHref);
+  });
+
+  elements.settingsPresetButton.addEventListener("click", () => {
+    window.location.assign(buildPlayablePresetHref(window.location.href));
+  });
+}
+
+function wireDiagnostics() {
+  const debugOpen = localStorage.getItem(DEBUG_PREF_KEY) === "1";
+  const osdVisible = localStorage.getItem(OSD_PREF_KEY) !== "0";
+
+  setDebugOpen(debugOpen);
+  setOverlayVisible(osdVisible);
+
+  elements.debugToggle.addEventListener("click", () => {
+    setDebugOpen(elements.debugPanel.hidden);
+  });
+
+  elements.overlayToggle.addEventListener("click", () => {
+    setOverlayVisible(elements.screenHud.hidden);
+  });
+}
+
+function populateSettingsForm(settings) {
+  elements.settingCore.value = settings.core;
+  elements.settingVideo.value = settings.video;
+  elements.settingResolution.value = settings.present;
+  elements.settingSpeed.value = settings.speed;
+  elements.settingCpu.value = settings.cpu;
+  elements.settingPresenter.value = settings.presenter;
+  elements.settingPacing.value = settings.pacing;
+  elements.settingOglProxy.value = settings.oglproxy;
+  elements.settingQueue.value = settings.queue;
+  elements.settingFastSw.value = settings.fastsw;
+  elements.settingJitTier.value = settings.jittier;
+  elements.settingWasmJit.checked = settings.wasmjit === "1";
+  elements.settingForceJit.checked = settings.forcejit === "1";
+  elements.settingMetrics.checked = settings.metrics === "1";
+}
+
+function collectSettingsForm() {
+  return {
+    core: elements.settingCore.value,
+    video: elements.settingVideo.value,
+    present: elements.settingResolution.value,
+    speed: elements.settingSpeed.value,
+    cpu: elements.settingCpu.value,
+    presenter: elements.settingPresenter.value,
+    pacing: elements.settingPacing.value,
+    oglproxy: elements.settingOglProxy.value,
+    queue: elements.settingQueue.value,
+    fastsw: elements.settingFastSw.value,
+    wasmjit: elements.settingWasmJit.checked ? "1" : "0",
+    jittier: elements.settingJitTier.value,
+    forcejit: elements.settingForceJit.checked ? "1" : "0",
+    metrics: elements.settingMetrics.checked ? "1" : "0"
+  };
+}
+
+function updateSettingsSummary() {
+  elements.settingsSummary.textContent = describeSettings(currentSettings);
+}
+
+function setDebugOpen(open) {
+  elements.debugPanel.hidden = !open;
+  elements.debugToggle.setAttribute("aria-expanded", String(open));
+  elements.debugToggle.classList.toggle("active", open);
+  elements.debugToggle.textContent = open ? "DBG on" : "DBG";
+  localStorage.setItem(DEBUG_PREF_KEY, open ? "1" : "0");
+  if (open && lastFrameInfo) {
+    updateDebugMetrics(lastFrameInfo);
+  }
+}
+
+function setOverlayVisible(visible) {
+  elements.screenHud.hidden = !visible;
+  elements.overlayToggle.setAttribute("aria-pressed", String(visible));
+  elements.overlayToggle.classList.toggle("active", visible);
+  elements.overlayToggle.textContent = visible ? "FPS on" : "FPS";
+  localStorage.setItem(OSD_PREF_KEY, visible ? "1" : "0");
 }
 
 function wireFileMounting() {
@@ -198,9 +360,20 @@ function wireFileMounting() {
   });
 }
 
+function updateScreenHud(info) {
+  elements.hudFps.textContent = formatMetricNumber(info.presentationFps ?? info.fps);
+  elements.hudVisualFps.textContent =
+    info.visualChangeFps == null ? "n/a" : formatMetricNumber(info.visualChangeFps);
+  elements.hudSpeed.textContent = `${Math.max(0, Number(info.gameSpeed) || 0)}%`;
+  elements.hudLatency.textContent = formatPresentationLag(info);
+  elements.hudJit.textContent = parseJitState(info);
+  elements.hudResolution.textContent = parsePresentationResolution(info);
+}
+
 async function mountFile(file) {
   try {
     const game = await host.mountFile(file);
+    host.setAudioMuted(audio.muted);
     syncGameInfo(game);
     host.start();
   } catch (error) {
@@ -374,6 +547,44 @@ function formatHex(value) {
 
 function formatLargeInteger(value) {
   return Number.isFinite(value) ? Math.trunc(value).toLocaleString("en-US") : "0";
+}
+
+function formatMetricNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "0";
+  }
+
+  return numeric >= 10 ? String(Math.round(numeric)) : numeric.toFixed(1);
+}
+
+function formatPresentationLag(info) {
+  const frameLag = Math.max(0, Number(info.presentationFrameLag) || 0);
+  return `${frameLag.toFixed(0)}f`;
+}
+
+function parseJitState(info) {
+  const helperStats = info.ppcWasmHelperStats || "";
+  const match = /(?:^|\s)jit:([a-z0-9_-]+)/i.exec(helperStats);
+  if (match) {
+    return match[1] === "on" ? "JIT on" : `JIT ${match[1]}`;
+  }
+
+  if ((info.ppcWasmBlockCompileCount || 0) > 0 || (info.ppcWasmBlockRunCount || 0) > 0) {
+    return "JIT active";
+  }
+
+  return currentSettings.wasmjit === "1" ? "JIT armed" : "JIT off";
+}
+
+function parsePresentationResolution(info) {
+  const helperStats = info.ppcWasmHelperStats || "";
+  const match = /present:(\d+x\d+)/i.exec(helperStats);
+  if (match) {
+    return match[1];
+  }
+
+  return `${elements.screen.width}x${elements.screen.height}`;
 }
 
 function formatOffsetSize(offset, size) {

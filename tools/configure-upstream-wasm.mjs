@@ -45,7 +45,7 @@ mkdirSync(buildDir, { recursive: true });
 
 const emcmake = findTool("emcmake", resolve(home, "emsdk/upstream/emscripten/emcmake.bat"));
 const cmake = findTool("cmake", resolve(appData, "Python/Python312/Scripts/cmake.exe"));
-const wasmCompileFlags = "-pthread -msimd128 -flto -DXXH_VECTOR=0";
+const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0";
 const cmakeArgs = [
   cmake,
   "-S",

@@ -1,0 +1,55 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -155,6 +155,8 @@ std::array<u32, 2 * 8 * 64> s_wasm_psq_type_scale_sample_addresses{};
+ u32 s_fast_dcbx_loop_blocks = 0;
+ u32 s_fast_dcbx_loop_extra_iterations = 0;
+ u32 s_fast_dcbx_loop_lines = 0;
++u32 s_fast_dcbx_loop_skipped_large_invalidations = 0;
++u32 s_fast_dcbx_loop_skipped_large_lines = 0;
+ u32 s_fast_float_ops = 0;
+ u32 s_fast_float_fmr_ops = 0;
+ u32 s_fast_float_fmuls_ops = 0;
+@@ -299,5 +301,6 @@ constexpr u32 MSR_EE_MASK = 0x8000;
+ constexpr u32 DCBX_LOOP_CTR = 0;
+ constexpr u32 DCBX_LOOP_COUNT_GPR = 1;
++constexpr u32 LARGE_DCBX_DATA_FLUSH_SKIP_LINES = 64;
+ 
+ struct OsInterruptInlineTarget
+ {
+@@ -8878,7 +8881,23 @@ s32 CachedInterpreter::FastDcbxLoop(PowerPC::PowerPCState& ppc_state,
+     }
+ 
+     const u32 line_count = extra_iterations + 1;
+-    system.GetJitInterface().InvalidateICacheLines(address, line_count);
++    bool skipped_large_data_flush = false;
++#ifdef __EMSCRIPTEN__
++    // Large dcb* sweeps are overwhelmingly data-buffer flushes in the browser path. Keeping small
++    // invalidations preserves the self-modifying-code heuristic while avoiding multi-megabyte
++    // block-cache scans in hot post-boot loops.
++    skipped_large_data_flush = line_count > LARGE_DCBX_DATA_FLUSH_SKIP_LINES;
++#endif
++    if (skipped_large_data_flush)
++    {
++      ++s_fast_dcbx_loop_skipped_large_invalidations;
++      s_fast_dcbx_loop_skipped_large_lines =
++          SaturatingAddU32(s_fast_dcbx_loop_skipped_large_lines, line_count);
++    }
++    else
++    {
++      system.GetJitInterface().InvalidateICacheLines(address, line_count);
++    }
+ 
+     if (extra_iterations != 0)
+     {
+@@ -9421,7 +9439,9 @@ std::string CachedInterpreter::GetWasmStatsForHost()
+   {
+     out << " | dcbloop blocks:" << s_fast_dcbx_loop_blocks
+         << " lines:" << s_fast_dcbx_loop_lines
+-        << " extra:" << s_fast_dcbx_loop_extra_iterations;
++        << " extra:" << s_fast_dcbx_loop_extra_iterations
++        << " skip:" << s_fast_dcbx_loop_skipped_large_invalidations
++        << "/" << s_fast_dcbx_loop_skipped_large_lines;
+   }
+   if (s_fast_float_ops != 0)
+   {

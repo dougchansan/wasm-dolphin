@@ -744,6 +744,8 @@ void DolphinWeb_OnOglSwap(int worker_owned, int commit_result, std::uint32_t wid
   s_last_ogl_debug_bits.store(debug_bits, std::memory_order_relaxed);
   s_last_ogl_readback_rgba.store(readback_rgba, std::memory_order_relaxed);
   s_last_ogl_gl_error.store(gl_error, std::memory_order_relaxed);
+  ++s_frame;
+  PublishFrameSignal();
 }
 
 const char* GetVideoStats()

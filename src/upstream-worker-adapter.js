@@ -24,17 +24,20 @@ export class UpstreamWorkerAdapter {
     cpuThread = false,
     cpuCore = "cached",
     ppcWasmJit = false,
+    ppcWasmJitTier = "guarded",
     ppcWasmJitForce = false,
     ppcWasmJitWarmupFrames = 3600,
     ppcProfile = false,
     cpuOverclock = 1,
     emulationSpeed = 1,
     presentationScale = 1,
-    presentationQueueSize = 8,
+    presentationQueueSize = 2,
     presenterBackend = "webgl",
-    oglProxyMode = "proxy",
+    presentationPacing = "smooth",
+    oglProxyMode = "worker",
     oglTestClear = false,
-    fastSoftwareRaster = 0
+    fastSoftwareRaster = 0,
+    collectMetrics = false
   } = {}) {
     this.coreUrl = coreUrl;
     this.workerUrl = workerUrl;
@@ -45,6 +48,7 @@ export class UpstreamWorkerAdapter {
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
     this.ppcWasmJit = ppcWasmJit;
+    this.ppcWasmJitTier = ppcWasmJitTier === "mixed" ? "mixed" : "guarded";
     this.ppcWasmJitForce = Boolean(ppcWasmJitForce);
     this.ppcWasmJitWarmupFrames = ppcWasmJitWarmupFrames;
     this.ppcProfile = Boolean(ppcProfile);
@@ -53,16 +57,18 @@ export class UpstreamWorkerAdapter {
     this.presentationScale = presentationScale;
     this.presentationQueueSize = presentationQueueSize;
     this.presenterBackend = presenterBackend;
+    this.presentationPacing = presentationPacing;
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.collectMetrics = Boolean(collectMetrics);
     this.worker = null;
     this.nextId = 1;
     this.pending = new Map();
     this.loaded = false;
     this.framePending = false;
     this.lastTelemetryRequestTime = 0;
-    this.telemetryIntervalMs = this.workerCanvas ? 250 : 0;
+    this.telemetryIntervalMs = 250;
     this.width = 320;
     this.height = 240;
     this.coreFrame = 0;
@@ -74,8 +80,12 @@ export class UpstreamWorkerAdapter {
     this.presentationP95IntervalMs = 0;
     this.presentationMaxIntervalMs = 0;
     this.presentationLongFrameCount = 0;
+    this.presentationFrameLag = 0;
+    this.presentationQueueAgeMs = 0;
     this.visualChangeFps = 0;
     this.visualFrameHash = 0;
+    this.visualSampleSource = "none";
+    this.oglGlError = 0;
     this.coreTicks = 0;
     this.coreTicksPerSecond = 486000000;
     this.ppcPc = 0;
@@ -85,6 +95,7 @@ export class UpstreamWorkerAdapter {
     this.ppcWasmHelperStats = "";
     this.frameProfileStats = "-";
     this.frameData = null;
+    this.lastInputStateSignature = "";
   }
 
   async load() {
@@ -107,6 +118,7 @@ export class UpstreamWorkerAdapter {
       cpuThread: this.cpuThread,
       cpuCore: this.cpuCore,
       ppcWasmJit: this.ppcWasmJit,
+      ppcWasmJitTier: this.ppcWasmJitTier,
       ppcWasmJitForce: this.ppcWasmJitForce,
       ppcWasmJitWarmupFrames: this.ppcWasmJitWarmupFrames,
       ppcProfile: this.ppcProfile,
@@ -115,9 +127,11 @@ export class UpstreamWorkerAdapter {
       presentationScale: this.presentationScale,
       presentationQueueSize: this.presentationQueueSize,
       presenterBackend: this.presenterBackend,
+      presentationPacing: this.presentationPacing,
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
-      fastSoftwareRaster: this.fastSoftwareRaster
+      fastSoftwareRaster: this.fastSoftwareRaster,
+      collectMetrics: this.collectMetrics
     };
     const transfer = [];
     if (this.canvas) {
@@ -180,14 +194,14 @@ export class UpstreamWorkerAdapter {
     if (!this.loaded) {
       return;
     }
-    this.request("setInputMask", { mask: mask >>> 0 }).catch((error) => this.onStatus(error.message));
+    this.post("setInputMask", { mask: mask >>> 0 });
   }
 
   setInputState(state) {
     if (!this.loaded || !state) {
       return;
     }
-    this.request("setInputState", {
+    const payload = {
       mask: state.mask >>> 0,
       stickX: state.stickX | 0,
       stickY: state.stickY | 0,
@@ -197,15 +211,29 @@ export class UpstreamWorkerAdapter {
       triggerRight: state.triggerRight | 0,
       analogA: state.analogA | 0,
       analogB: state.analogB | 0
-    }).catch((error) => this.onStatus(error.message));
+    };
+    const signature = `${payload.mask}:${payload.stickX}:${payload.stickY}:${payload.cStickX}:${payload.cStickY}:${payload.triggerLeft}:${payload.triggerRight}:${payload.analogA}:${payload.analogB}`;
+    if (signature === this.lastInputStateSignature) {
+      return;
+    }
+    this.lastInputStateSignature = signature;
+    this.post("setInputState", payload);
   }
 
   runFrame() {
+    this.requestFrame();
+  }
+
+  pollFrame() {
+    this.requestFrame(this.telemetryIntervalMs);
+  }
+
+  requestFrame(minIntervalMs = 0) {
     if (!this.loaded || this.framePending) {
       return;
     }
     const now = performance.now();
-    if (this.telemetryIntervalMs > 0 && now - this.lastTelemetryRequestTime < this.telemetryIntervalMs) {
+    if (minIntervalMs > 0 && now - this.lastTelemetryRequestTime < minIntervalMs) {
       return;
     }
 
@@ -223,16 +251,49 @@ export class UpstreamWorkerAdapter {
     return this.frameData;
   }
 
-  start() {}
+  async mixAudio(frames = 1024) {
+    if (!this.loaded) {
+      return { available: false, frames: 0, channels: 2, sampleRate: 48000, samples: null };
+    }
 
-  pause() {}
+    return this.request("mixAudio", { frames });
+  }
+
+  setAudioMuted(muted) {
+    if (!this.loaded) {
+      return;
+    }
+
+    this.post("setAudioMuted", { muted: Boolean(muted) });
+  }
+
+  start() {
+    if (!this.loaded) {
+      return;
+    }
+    this.request("start")
+      .then((response) => this.applyFrame(response))
+      .catch((error) => this.onStatus(error.message));
+  }
+
+  pause() {
+    if (!this.loaded) {
+      return;
+    }
+    this.request("pause")
+      .then((response) => this.applyFrame(response))
+      .catch((error) => this.onStatus(error.message));
+  }
 
   reset() {
     if (!this.loaded) {
       return;
     }
     this.request("reset")
-      .then((response) => this.applyFrame(response))
+      .then((response) => {
+        this.applyFrame(response);
+        this.onStatus("Reset requested");
+      })
       .catch((error) => this.onStatus(error.message));
   }
 
@@ -240,7 +301,9 @@ export class UpstreamWorkerAdapter {
     if (!this.loaded) {
       return;
     }
-    this.request("saveState", { slot }).catch((error) => this.onStatus(error.message));
+    this.request("saveState", { slot })
+      .then((response) => this.onStatus(response.saved ? `Save slot ${slot} requested` : `Save slot ${slot} unavailable`))
+      .catch((error) => this.onStatus(error.message));
   }
 
   loadState(slot) {
@@ -248,7 +311,10 @@ export class UpstreamWorkerAdapter {
       return;
     }
     this.request("loadState", { slot })
-      .then((response) => this.applyFrame(response))
+      .then((response) => {
+        this.applyFrame(response);
+        this.onStatus(response.loaded ? `Load slot ${slot} requested` : `Load slot ${slot} unavailable`);
+      })
       .catch((error) => this.onStatus(error.message));
   }
 
@@ -266,9 +332,22 @@ export class UpstreamWorkerAdapter {
     });
   }
 
+  post(type, payload = {}, transfer = []) {
+    if (!this.worker) {
+      return;
+    }
+
+    this.worker.postMessage({ type, payload }, transfer);
+  }
+
   handleMessage(message) {
     if (message?.type === "status") {
       this.onStatus(message.message);
+      return;
+    }
+
+    if (message?.type === "frameUpdate" && message.payload) {
+      this.applyFrame(message.payload);
       return;
     }
 
@@ -353,11 +432,23 @@ export class UpstreamWorkerAdapter {
     if (Number.isFinite(response.presentationLongFrameCount)) {
       this.presentationLongFrameCount = response.presentationLongFrameCount;
     }
+    if (Number.isFinite(response.presentationFrameLag)) {
+      this.presentationFrameLag = response.presentationFrameLag;
+    }
+    if (Number.isFinite(response.presentationQueueAgeMs)) {
+      this.presentationQueueAgeMs = response.presentationQueueAgeMs;
+    }
     if (Number.isFinite(response.visualChangeFps)) {
       this.visualChangeFps = response.visualChangeFps;
     }
     if (Number.isFinite(response.visualFrameHash)) {
       this.visualFrameHash = response.visualFrameHash;
+    }
+    if (typeof response.visualSampleSource === "string") {
+      this.visualSampleSource = response.visualSampleSource;
+    }
+    if (Number.isFinite(response.oglGlError)) {
+      this.oglGlError = response.oglGlError;
     }
 
     if (response.frameBuffer) {

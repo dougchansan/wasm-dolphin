@@ -18,7 +18,7 @@ Open the printed local URL in Chrome. The app falls back to the demo WebAssembly
 For the current Melee browser path, use the upstream core with the full-resolution presenter:
 
 ```text
-http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&wasmjit=1&forcejit=1&jitwarmup=1700&oc=1&queue=8&presenter=webgpu&fastsw=1
+http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&wasmjit=1&forcejit=1&jitwarmup=5000&oc=1&queue=2&presenter=webgpu&fastsw=1
 ```
 
 Full 640x480 presentation is now the default. Add `present=half` to that URL only when testing the lower-cost 320x240 fallback.

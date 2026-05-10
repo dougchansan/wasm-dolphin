@@ -70,6 +70,33 @@ test("upstream full core can emit and execute a PPC-style addi WASM module", asy
   assert.equal(runPpcWasmAddiSmoke(100, -12), 88);
 });
 
+test("upstream full core exposes browser audio pull buffers", async (t) => {
+  if (!existsSync(coreJs) || !existsSync(coreWasm)) {
+    t.skip("upstream full core has not been built");
+    return;
+  }
+
+  const { default: createDolphinCore } = await import(coreJs);
+  const module = await createDolphinCore({
+    wasmBinary: readFileSync(coreWasm),
+    noInitialRun: true
+  });
+
+  const audioSampleRate = module.cwrap("AudioSampleRate", "number", []);
+  const audioChannels = module.cwrap("AudioChannels", "number", []);
+  const audioBufferFrames = module.cwrap("AudioBufferFrames", "number", []);
+  const audioBuffer = module.cwrap("AudioBuffer", "number", []);
+  const mixAudio = module.cwrap("MixAudio", "number", ["number"]);
+  const getAudioStats = module.cwrap("GetAudioStats", "string", []);
+
+  assert.equal(audioSampleRate(), 48000);
+  assert.equal(audioChannels(), 2);
+  assert.ok(audioBufferFrames() >= 1024);
+  assert.ok(audioBuffer() > 0);
+  assert.equal(mixAudio(1024), 0);
+  assert.match(getAudioStats(), /^audio:/);
+});
+
 test("upstream full core can execute a generated addi module over shared WASM memory", async (t) => {
   if (!existsSync(coreJs) || !existsSync(coreWasm)) {
     t.skip("upstream full core has not been built");
@@ -148,6 +175,11 @@ test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
     "number",
     []
   );
+  const runDoublePrecisionArithmeticSmoke = module.cwrap(
+    "RunPpcWasmDoublePrecisionArithmeticSmoke",
+    "number",
+    []
+  );
   const runPairedQuantizedMemorySmoke = module.cwrap("RunPpcWasmPairedQuantizedMemorySmoke", "number", []);
   const runFloatCompareSmoke = module.cwrap("RunPpcWasmFloatCompareSmoke", "number", []);
   const detectDcbxLoop = module.cwrap("TestDcbxLoopPattern", "number", [
@@ -172,11 +204,17 @@ test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
     encodeDForm(61, 1, 2, 0), // psq_stu f1, 0(r2), 0, qr0
     encodeAForm(59, 1, 2, 3, 4, 20), // fsubsx f1, f2, f3
     encodeAForm(59, 1, 2, 3, 4, 21), // faddsx f1, f2, f3
+    encodeAForm(59, 1, 2, 3, 4, 18), // fdivsx f1, f2, f3
     encodeAForm(59, 1, 2, 3, 4, 25), // fmulsx f1, f2, f4
     encodeAForm(59, 1, 2, 3, 4, 29), // fmaddsx f1, f2, f4, f3
     encodeFloatCompare(1, 2, 3, 0), // fcmpu cr1, f2, f3
     encodeFloatCompare(1, 2, 3, 32), // fcmpo cr1, f2, f3
+    encodeAForm(63, 1, 2, 3, 4, 20), // fsubx helper-backed direct-tier block
+    encodeAForm(63, 1, 2, 3, 4, 21), // faddx helper-backed direct-tier block
+    encodeAForm(63, 1, 2, 3, 4, 25), // fmulx helper-backed direct-tier block
+    encodeAForm(63, 1, 0, 2, 0, 26), // frsqrtex f1, f2
     encodeXForm(63, 1, 0, 2, 72), // fmr f1, f2
+    encodeXForm(31, 3, 0, 0, 146), // mtmsr r3 via guarded system fallback
     encodeXForm(31, 3, 4, 5, 535), // lfsx f3, r4, r5
     encodeXForm(31, 3, 4, 5, 663) // stfsx f3, r4, r5
   ];
@@ -187,8 +225,9 @@ test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
 
   const rejected = [
     encodeAForm(59, 1, 2, 3, 4, 29, true), // fmaddsx. is still outside direct tier
+    encodeAForm(63, 1, 0, 2, 0, 26, true), // frsqrtex. is still outside direct tier
     encodeFloatCompare(1, 2, 3, 0, true), // fcmpu. is still outside direct tier
-    encodeAForm(63, 1, 2, 3, 4, 21), // double-precision faddx stays helper-only
+    encodeAForm(63, 1, 2, 3, 4, 21, true), // faddx. stays outside direct tier
     encodeDForm(57, 1, 0, 0), // psq_lu with r0 update is invalid for direct tier
     encodeDForm(61, 1, 0, 0), // psq_stu with r0 update is invalid for direct tier
     encodeXForm(63, 1, 0, 2, 72, true) // fmr. is not a specialized path
@@ -200,6 +239,7 @@ test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
 
   assert.equal(runMultipleWordMemorySmoke(), 1);
   assert.equal(runSinglePrecisionArithmeticSmoke(), 1);
+  assert.equal(runDoublePrecisionArithmeticSmoke(), 1);
   assert.equal(runPairedQuantizedMemorySmoke(), 1);
   assert.equal(runFloatCompareSmoke(), 1);
 

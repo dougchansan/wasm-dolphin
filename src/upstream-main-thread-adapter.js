@@ -12,6 +12,7 @@ export class UpstreamMainThreadAdapter {
     cpuThread = false,
     cpuCore = "cached",
     ppcWasmJit = false,
+    ppcWasmJitTier = "guarded",
     ppcWasmJitForce = false,
     ppcWasmJitWarmupFrames = 3600,
     ppcProfile = false,
@@ -28,6 +29,7 @@ export class UpstreamMainThreadAdapter {
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
     this.ppcWasmJit = ppcWasmJit;
+    this.ppcWasmJitTier = ppcWasmJitTier === "mixed" ? "mixed" : "guarded";
     this.ppcWasmJitForce = Boolean(ppcWasmJitForce);
     this.ppcWasmJitWarmupFrames = ppcWasmJitWarmupFrames;
     this.ppcProfile = Boolean(ppcProfile);
@@ -50,8 +52,13 @@ export class UpstreamMainThreadAdapter {
     this.presentationP95IntervalMs = 0;
     this.presentationMaxIntervalMs = 0;
     this.presentationLongFrameCount = 0;
+    this.presentationFrameLag = 0;
+    this.presentationQueueAgeMs = 0;
     this.visualChangeFps = 0;
     this.visualFrameHash = 0;
+    this.visualSampleSource = "none";
+    this.oglGlError = 0;
+    this.lastOglSwapCount = 0;
     this.coreTicks = 0;
     this.coreTicksPerSecond = 486000000;
     this.ppcPc = 0;
@@ -121,6 +128,10 @@ export class UpstreamMainThreadAdapter {
       setPresentationScale: optionalCwrap("SetPresentationScale", null, ["number"]),
       setFastSoftwareRaster: optionalCwrap("SetFastSoftwareRaster", "number", ["number"]),
       bootDisc: optionalCwrap("BootDisc", "number", ["string"]),
+      setCorePaused: optionalCwrap("SetCorePaused", "number", ["number"]),
+      resetCore: optionalCwrap("ResetCore", "number", []),
+      saveCoreState: optionalCwrap("SaveCoreState", "number", ["number"]),
+      loadCoreState: optionalCwrap("LoadCoreState", "number", ["number"]),
       pumpHostJobs: optionalCwrap("PumpHostJobs", null, []),
       getCoreState: optionalCwrap("GetCoreState", "number", []),
       getCoreStateName: optionalCwrap("GetCoreStateName", "string", []),
@@ -131,6 +142,13 @@ export class UpstreamMainThreadAdapter {
       getCoreTicksPerSecond: optionalCwrap("GetCoreTicksPerSecond", "number", []),
       getPpcPc: optionalCwrap("GetPPCPC", "number", []),
       getCpuCoreName: optionalCwrap("GetCPUCoreName", "string", []),
+      audioSampleRate: optionalCwrap("AudioSampleRate", "number", []),
+      audioChannels: optionalCwrap("AudioChannels", "number", []),
+      audioBufferFrames: optionalCwrap("AudioBufferFrames", "number", []),
+      audioBuffer: optionalCwrap("AudioBuffer", "number", []),
+      mixAudio: optionalCwrap("MixAudio", "number", ["number"]),
+      setAudioMuted: optionalCwrap("SetAudioMuted", "number", ["number"]),
+      getAudioStats: optionalCwrap("GetAudioStats", "string", []),
       getPpcWasmBlockCompileCount: optionalCwrap("GetPpcWasmBlockCompileCount", "number", []),
       getPpcWasmBlockRunCount: optionalCwrap("GetPpcWasmBlockRunCount", "number", []),
       getPpcWasmHelperStats: optionalCwrap("GetPpcWasmHelperStats", "string", []),
@@ -365,7 +383,24 @@ export class UpstreamMainThreadAdapter {
       this.api.getVideoStats?.(),
       "present main-ogl"
     );
-    this.visualFrameHash = parseVideoFrameHash(this.ppcWasmHelperStats);
+    // For OGL the videoStats `hash:` field is frozen on a stale XFB snapshot
+    // because OnXfb is bypassed when the OGL backend renders straight to the
+    // canvas; only OnOglSwap fires, and it does not refresh that hash. The
+    // ogl_swap counter in OglSwapStats() does increment per swap, so use it
+    // as the authoritative OGL frame-change signal here too.
+    const oglStats = parseOglSwapStats(this.ppcWasmHelperStats);
+    if (oglStats.swap > 0) {
+      if (this.lastOglSwapCount > 0 && oglStats.swap > this.lastOglSwapCount) {
+        this.visualChangeFps = oglStats.swap - this.lastOglSwapCount;
+      }
+      this.visualFrameHash = oglStats.swap;
+      this.visualSampleSource = "ogl-swap";
+      this.lastOglSwapCount = oglStats.swap;
+    } else {
+      this.visualFrameHash = parseVideoFrameHash(this.ppcWasmHelperStats);
+      this.visualSampleSource = "xfb-hash";
+    }
+    this.oglGlError = oglStats.glError;
   }
 
   readCoreTicks() {
@@ -386,20 +421,61 @@ export class UpstreamMainThreadAdapter {
     return null;
   }
 
-  start() {}
+  async mixAudio(frames = 1024) {
+    if (!this.loaded || !this.api?.mixAudio || !this.api?.audioBuffer || !this.module?.HEAPU8) {
+      return {
+        available: false,
+        frames: 0,
+        channels: 2,
+        sampleRate: 48000,
+        samples: null,
+        stats: this.api?.getAudioStats?.() || "audio:unavailable"
+      };
+    }
 
-  pause() {}
+    const channels = Math.max(1, Math.min(2, this.api.audioChannels?.() || 2));
+    const sampleRate = Math.max(8000, this.api.audioSampleRate?.() || 48000);
+    const maxFrames = Math.max(1, this.api.audioBufferFrames?.() || 4096);
+    const requested = Math.max(1, Math.min(maxFrames, Number(frames) || 1024));
+    const mixed = Math.max(0, Math.min(maxFrames, this.api.mixAudio(requested) | 0));
+    const byteLength = mixed * channels * Int16Array.BYTES_PER_ELEMENT;
+    const pointer = this.api.audioBuffer();
+    const samples = pointer && byteLength > 0 ? this.module.HEAPU8.slice(pointer, pointer + byteLength).buffer : null;
+
+    return {
+      available: Boolean(pointer && mixed > 0),
+      frames: mixed,
+      channels,
+      sampleRate,
+      samples,
+      stats: this.api.getAudioStats?.() || ""
+    };
+  }
+
+  setAudioMuted(muted) {
+    this.api?.setAudioMuted?.(muted ? 1 : 0);
+  }
+
+  start() {
+    this.api?.setCorePaused?.(0);
+  }
+
+  pause() {
+    this.api?.setCorePaused?.(1);
+  }
 
   reset() {
-    this.api?.reset();
+    if (!this.api?.resetCore?.()) {
+      this.api?.reset();
+    }
   }
 
   saveState(slot) {
-    return this.api?.saveState(slot | 0);
+    return this.api?.saveCoreState?.(slot | 0) || this.api?.saveState(slot | 0);
   }
 
   loadState(slot) {
-    return this.api?.loadState(slot | 0);
+    return this.api?.loadCoreState?.(slot | 0) || this.api?.loadState(slot | 0);
   }
 }
 
@@ -410,6 +486,16 @@ function joinedStats(...parts) {
 function parseVideoFrameHash(stats) {
   const match = String(stats || "").match(/\bhash:([0-9a-f]+)/i);
   return match ? Number.parseInt(match[1], 16) >>> 0 : 0;
+}
+
+function parseOglSwapStats(stats) {
+  const text = String(stats || "");
+  const swap = Number.parseInt(/\bogl_swap:(\d+)/i.exec(text)?.[1] || "", 10);
+  const glError = Number.parseInt(/\bglerr:0x([0-9a-f]+)/i.exec(text)?.[1] || "", 16);
+  return {
+    swap: Number.isFinite(swap) ? swap >>> 0 : 0,
+    glError: Number.isFinite(glError) ? glError >>> 0 : 0
+  };
 }
 
 function formatHex(value) {

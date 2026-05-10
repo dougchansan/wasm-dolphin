@@ -1,0 +1,29 @@
+diff --git a/Source/Core/VideoBackends/OGL/OGLTexture.cpp b/Source/Core/VideoBackends/OGL/OGLTexture.cpp
+--- a/Source/Core/VideoBackends/OGL/OGLTexture.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLTexture.cpp
+@@ -461,6 +461,12 @@ std::unique_ptr<OGLStagingTexture> OGLStagingTexture::Create(StagingTextureType
+       map_flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
+     }
+
++#ifdef __EMSCRIPTEN__
++    // WebGL2 requires GL_MAP_INVALIDATE_BUFFER_BIT or GL_MAP_INVALIDATE_RANGE_BIT
++    // for any glMapBufferRange call that includes GL_MAP_WRITE_BIT.
++    if (map_flags & GL_MAP_WRITE_BIT)
++      map_flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
+     glBufferStorage(target, buffer_size, nullptr, buffer_flags);
+     buffer_ptr = static_cast<char*>(glMapBufferRange(target, 0, buffer_size, map_flags));
+     ASSERT(buffer_ptr != nullptr);
+@@ -638,6 +644,12 @@ bool OGLStagingTexture::Map()
+     flags = GL_MAP_WRITE_BIT;
+   else
+     flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
++#ifdef __EMSCRIPTEN__
++  // WebGL2 requires GL_MAP_INVALIDATE_BUFFER_BIT or GL_MAP_INVALIDATE_RANGE_BIT
++  // for any glMapBufferRange call that includes GL_MAP_WRITE_BIT.
++  if (flags & GL_MAP_WRITE_BIT)
++    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
+   glBindBuffer(m_target, m_buffer_name);
+   m_map_pointer = static_cast<char*>(glMapBufferRange(m_target, 0, m_buffer_size, flags));
+   glBindBuffer(m_target, 0);

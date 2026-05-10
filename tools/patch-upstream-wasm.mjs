@@ -4,13 +4,22 @@ import { resolve } from "node:path";
 
 const root = process.cwd();
 const dolphinDir = resolve(root, "vendor/dolphin");
-const patches = [resolve(root, "patches/dolphin-wasm/0001-browser-platform-build-gates.patch")];
+const patches = [
+  resolve(root, "patches/dolphin-wasm/0001-browser-platform-build-gates.patch"),
+  resolve(root, "patches/dolphin-wasm/0002-skip-large-dcbx-warmup-invalidations.patch"),
+  resolve(root, "patches/dolphin-wasm/0003-disable-webgl-base-vertex.patch"),
+  resolve(root, "patches/dolphin-wasm/0004-fix-ogltexture-mapbufferrange-invalidate.patch")
+];
 
 function runGit(args, stdio = "pipe") {
   return spawnSync("git", ["-C", dolphinDir, ...args], {
     encoding: "utf8",
     stdio
   });
+}
+
+function runGitApply(args, stdio = "pipe") {
+  return runGit(["apply", "--unidiff-zero", ...args], stdio);
 }
 
 if (!existsSync(resolve(dolphinDir, ".git"))) {
@@ -24,9 +33,9 @@ for (const patch of patches) {
     process.exit(1);
   }
 
-  const check = runGit(["apply", "--check", patch]);
+  const check = runGitApply(["--check", patch]);
   if (check.status === 0) {
-    const apply = runGit(["apply", patch], "inherit");
+    const apply = runGitApply([patch], "inherit");
     if (apply.status !== 0) {
       process.exit(apply.status || 1);
     }
@@ -34,7 +43,7 @@ for (const patch of patches) {
     continue;
   }
 
-  const reverseCheck = runGit(["apply", "--reverse", "--check", patch]);
+  const reverseCheck = runGitApply(["--reverse", "--check", patch]);
   if (reverseCheck.status === 0) {
     console.log(`already applied ${patch}`);
     continue;

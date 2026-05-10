@@ -4,14 +4,18 @@
 #include "dolphin_web_discio.cpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "AudioCommon/AudioCommon.h"
+#include "AudioCommon/SoundStream.h"
 #include "Common/CommonPaths.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -29,12 +33,14 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/GBAPad.h"
+#include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/GCKeyboard.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Host.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/State.h"
 #include "Core/System.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -47,6 +53,8 @@ extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+
+extern "C" const char* DolphinWeb_GetAudioCommonStats();
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -416,6 +424,10 @@ PowerPC::CPUCore s_cpu_core = PowerPC::CPUCore::CachedInterpreter;
 bool s_cpu_thread = false;
 float s_cpu_overclock = 1.0f;
 float s_emulation_speed = 1.0f;
+constexpr int AUDIO_PULL_MAX_FRAMES = 4096;
+std::array<s16, AUDIO_PULL_MAX_FRAMES * 2> s_audio_pull_buffer{};
+std::string s_audio_stats = "audio:unavailable";
+std::string s_audio_stats_snapshot = "audio:unavailable";
 
 bool BrowserMsgHandler(const char* caption, const char* text, bool yes_no, Common::MsgType style)
 {
@@ -494,7 +506,7 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_OVERCLOCK_ENABLE, true);
   Config::SetBase(Config::MAIN_OVERCLOCK, s_cpu_overclock);
   Config::SetBase(Config::MAIN_PRECISION_FRAME_TIMING, false);
-  Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, false);
+  Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, true);
   Config::SetBase(Config::MAIN_SMOOTH_EARLY_PRESENTATION, true);
   Config::SetBase(Config::MAIN_SYNC_ON_SKIP_IDLE, false);
   Config::SetBase(Config::MAIN_ACCURATE_FMADDS, false);
@@ -502,8 +514,8 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_OSD_MESSAGES, false);
   Config::SetBase(Config::MAIN_SLOT_A, ExpansionInterface::EXIDeviceType::MemoryCardFolder);
   Config::SetBase(Config::MAIN_SLOT_B, ExpansionInterface::EXIDeviceType::None);
-  Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
-  Config::SetBase(Config::MAIN_AUDIO_MUTED, true);
+  Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("Web Audio"));
+  Config::SetBase(Config::MAIN_AUDIO_MUTED, false);
   Config::SetBase(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, s_video_backend == "OGL");
   Config::SetBase(Config::GFX_HACK_COPY_EFB_SCALED, false);
   Config::SetBase(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::Synchronous);
@@ -747,6 +759,51 @@ void StopCore()
   s_core_status = "Stopped";
 }
 
+int SetCorePaused(int paused)
+{
+  if (!s_runtime_initialized || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  Core::SetState(Core::System::GetInstance(), paused ? Core::State::Paused : Core::State::Running);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = paused ? "Paused" : "Running";
+  return 1;
+}
+
+int ResetCore()
+{
+  if (!s_runtime_initialized || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  Core::QueueHostJob(
+      [](Core::System& system) { system.GetProcessorInterface().ResetButton_Tap(); });
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Reset requested";
+  return 1;
+}
+
+int SaveCoreState(int slot)
+{
+  if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::Save(Core::System::GetInstance(), slot);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Save state requested";
+  return 1;
+}
+
+int LoadCoreState(int slot)
+{
+  if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::Load(Core::System::GetInstance(), slot);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Load state requested";
+  return 1;
+}
+
 void PumpHostJobs()
 {
   if (s_runtime_initialized)
@@ -810,6 +867,97 @@ const char* GetCPUCoreName()
   if (!s_runtime_initialized)
     return "Not booted";
   return s_cpu_core == PowerPC::CPUCore::Interpreter ? "Interpreter" : "Cached Interpreter";
+}
+
+int AudioSampleRate()
+{
+  if (!s_runtime_initialized)
+    return 48000;
+
+  const SoundStream* sound_stream = Core::System::GetInstance().GetSoundStream();
+  const Mixer* mixer = sound_stream ? sound_stream->GetMixer() : nullptr;
+  const u32 sample_rate = mixer ? mixer->GetSampleRate() : 0;
+  return sample_rate > 0 ? static_cast<int>(sample_rate) : 48000;
+}
+
+int AudioChannels()
+{
+  return 2;
+}
+
+int AudioBufferFrames()
+{
+  return AUDIO_PULL_MAX_FRAMES;
+}
+
+s16* AudioBuffer()
+{
+  return s_audio_pull_buffer.data();
+}
+
+int MixAudio(int requested_frames)
+{
+  const int frames = std::clamp(requested_frames, 0, AUDIO_PULL_MAX_FRAMES);
+  if (frames <= 0)
+    return 0;
+
+  std::memset(s_audio_pull_buffer.data(), 0, static_cast<std::size_t>(frames) * 2 * sizeof(s16));
+
+  if (!s_runtime_initialized)
+  {
+    s_audio_stats = "audio:unavailable";
+    return 0;
+  }
+
+  if (Config::Get(Config::MAIN_AUDIO_MUTED))
+  {
+    s_audio_stats = "audio:muted";
+    return frames;
+  }
+
+  const SoundStream* sound_stream = Core::System::GetInstance().GetSoundStream();
+  Mixer* mixer = sound_stream ? sound_stream->GetMixer() : nullptr;
+  if (!mixer || !mixer->IsOutputSampleRateValid())
+  {
+    s_audio_stats = "audio:unavailable";
+    return 0;
+  }
+
+  const std::size_t mixed = mixer->Mix(s_audio_pull_buffer.data(), static_cast<std::size_t>(frames));
+  std::size_t nonzero_samples = 0;
+  for (std::size_t index = 0; index < mixed * 2; ++index)
+  {
+    if (s_audio_pull_buffer[index] != 0)
+      ++nonzero_samples;
+  }
+
+  s_audio_stats = "audio:frames:" + std::to_string(mixed) + " nz:" +
+                  std::to_string(nonzero_samples) + " rate:" +
+                  std::to_string(mixer->GetSampleRate());
+  return static_cast<int>(mixed);
+}
+
+int SetAudioMuted(int muted)
+{
+  if (!s_runtime_initialized)
+    return 0;
+
+  Config::SetBaseOrCurrent(Config::MAIN_AUDIO_MUTED, muted != 0);
+  AudioCommon::UpdateSoundStream(Core::System::GetInstance());
+  return 1;
+}
+
+const char* GetAudioStats()
+{
+#ifdef __EMSCRIPTEN__
+  const char* ai_stats = DolphinWeb_GetAudioCommonStats();
+  if (ai_stats && ai_stats[0] != '\0')
+  {
+    s_audio_stats_snapshot = s_audio_stats + " | " + ai_stats;
+    return s_audio_stats_snapshot.c_str();
+  }
+#endif
+  return s_audio_stats.c_str();
 }
 
 int RunWasmJitSmoke(int value)
