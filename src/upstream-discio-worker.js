@@ -844,7 +844,12 @@ function scheduleFrameSignalWait() {
     return;
   }
 
-  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 1000);
+  // 50ms timeout so the worker wakes at least 20Hz even when the OGL render
+  // thread temporarily stops bumping the frame signal (e.g. mid-transition,
+  // scene load, post-engage JIT compile). Each wake fires pumpHostJobs once
+  // which keeps CoreTiming advancing. The previous 1000ms timeout starved
+  // pumpHostJobs to 1Hz when the signal stopped, freezing the core.
+  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 50);
   if (!wait.async) {
     setTimeout(() => runPresentationLoop(), 0);
     return;
