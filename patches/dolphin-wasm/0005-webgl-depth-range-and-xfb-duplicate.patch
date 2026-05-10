@@ -1,0 +1,44 @@
+diff --git a/Source/Core/VideoBackends/OGL/OGLGfx.cpp b/Source/Core/VideoBackends/OGL/OGLGfx.cpp
+--- a/Source/Core/VideoBackends/OGL/OGLGfx.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLGfx.cpp
+@@ -270,6 +270,18 @@ void OGLGfx::SetViewport(float x, float y, float width, float height, float near
+     glViewport(iceilf(x), iceilf(y), iceilf(width), iceilf(height));
+   }
+
++#ifdef __EMSCRIPTEN__
++  // WebGL2 requires the depth-range arguments to be in [0, 1] AND near <= far;
++  // values outside that envelope trigger GL_INVALID_OPERATION (0x502) on
++  // Chromium. Dolphin's VideoCommon passes (1, 0) on the reverse-Z path which
++  // desktop GL silently accepts but WebGL2 rejects. Force forward-Z; the
++  // GameCube/Wii depth precision range is small enough that reverse-Z gives no
++  // meaningful benefit.
++  if (!(near_depth >= 0.0f && near_depth <= 1.0f))
++    near_depth = 0.0f;
++  if (!(far_depth >= 0.0f && far_depth <= 1.0f))
++    far_depth = 1.0f;
++  if (near_depth > far_depth)
++    std::swap(near_depth, far_depth);
++#endif
+   glDepthRangef(near_depth, far_depth);
+ }
+
+diff --git a/Source/Core/VideoCommon/VideoConfig.cpp b/Source/Core/VideoCommon/VideoConfig.cpp
+--- a/Source/Core/VideoCommon/VideoConfig.cpp
++++ b/Source/Core/VideoCommon/VideoConfig.cpp
+@@ -181,6 +181,16 @@ void VideoConfig::Refresh()
+   bVISkip = Config::Get(Config::GFX_HACK_VI_SKIP);
+   bSkipPresentingDuplicateXFBs = bVISkip || Config::Get(Config::GFX_HACK_SKIP_DUPLICATE_XFBS);
++#ifdef __EMSCRIPTEN__
++  // The duplicate-XFB detector keys on XFB texture id (hashed memory). On the
++  // browser OGL path the EFB->XFB copy completes asynchronously enough that
++  // consecutive VI vsyncs observe the same XFB hash, which causes Present()
++  // to be skipped for ~95% of vsyncs and pins visible FPS to ~3. Force every
++  // VI vsync to present, but only when OGL is the active backend - the
++  // software backend keeps its skip semantics so it doesn't waste CPU on
++  // redundant Present() work.
++  if (Config::Get(Config::MAIN_GFX_BACKEND) == "OGL")
++    bSkipPresentingDuplicateXFBs = false;
++#endif
+   bCopyEFBScaled = Config::Get(Config::GFX_HACK_COPY_EFB_SCALED);
+   bEFBEmulateFormatChanges = Config::Get(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES);
+   bVertexRounding = Config::Get(Config::GFX_HACK_VERTEX_ROUNDING);
