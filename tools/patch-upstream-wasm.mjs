@@ -9,7 +9,8 @@ const patches = [
   resolve(root, "patches/dolphin-wasm/0002-skip-large-dcbx-warmup-invalidations.patch"),
   resolve(root, "patches/dolphin-wasm/0003-disable-webgl-base-vertex.patch"),
   resolve(root, "patches/dolphin-wasm/0004-fix-ogltexture-mapbufferrange-invalidate.patch"),
-  resolve(root, "patches/dolphin-wasm/0005-webgl-depth-range-and-xfb-duplicate.patch")
+  resolve(root, "patches/dolphin-wasm/0005-webgl-depth-range-and-xfb-duplicate.patch"),
+  resolve(root, "patches/dolphin-wasm/0006-skip-sleepuntil-and-immediate-xfb.patch")
 ];
 
 function runGit(args, stdio = "pipe") {

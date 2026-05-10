@@ -487,6 +487,10 @@ function wireTouchControls() {
 }
 
 function wireGamepadPolling() {
+  // Poll on a 4ms interval rather than rAF. The Gamepad API has no event
+  // model so we must poll, but rAF caps the cadence at the display refresh
+  // rate (~16.7ms), which adds a worst-case full-frame of latency to every
+  // gamepad input. setInterval at 4ms cuts that floor to ~4ms.
   const poll = () => {
     const pads = navigator.getGamepads?.() ?? [];
     const firstPad = Array.from(pads).find(Boolean);
@@ -499,11 +503,9 @@ function wireGamepadPolling() {
     } else {
       syncInput(elements.inputSource.textContent === "Gamepad" ? "Keyboard" : elements.inputSource.textContent);
     }
-
-    requestAnimationFrame(poll);
   };
 
-  requestAnimationFrame(poll);
+  setInterval(poll, 4);
 }
 
 function syncInput(source) {

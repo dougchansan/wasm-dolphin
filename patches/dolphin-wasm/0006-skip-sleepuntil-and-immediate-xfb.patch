@@ -1,0 +1,20 @@
+diff --git a/Source/Core/VideoCommon/Present.cpp b/Source/Core/VideoCommon/Present.cpp
+--- a/Source/Core/VideoCommon/Present.cpp
++++ b/Source/Core/VideoCommon/Present.cpp
+@@ -903,7 +903,17 @@ void Presenter::Present(PresentInfo* present_info)
+     {
+       const auto present_time = GetUpdatedPresentationTime(present_info->intended_present_time);
+
++#ifndef __EMSCRIPTEN__
++      // In single-threaded WASM (the browser build) AsyncRequests passthrough
++      // mode is true, so this Present runs synchronously on the CPU thread.
++      // SleepUntil would then block the entire core for the next-VI-field
++      // wall-clock interval (~60ms observed), which collapses gameSpeed to 0
++      // while frames keep being committed by the GPU thread. The browser
++      // worker handles presentation pacing independently via Atomics.waitAsync
++      // on frameSignalHeap, so this VI sleep is redundant here.
+       Core::System::GetInstance().GetCoreTiming().SleepUntil(present_time);
++#endif
+
+       // Perhaps in the future a more accurate time can be acquired from the various backends.
+       present_info->actual_present_time = Clock::now();
