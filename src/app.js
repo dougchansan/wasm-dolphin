@@ -56,6 +56,14 @@ const elements = {
   hudResolution: document.querySelector("#hudResolution"),
   hudSpeed: document.querySelector("#hudSpeed"),
   hudVisualFps: document.querySelector("#hudVisualFps"),
+  hudCoreFps: document.querySelector("#hudCoreFps"),
+  hudFrame: document.querySelector("#hudFrame"),
+  hudGlSwap: document.querySelector("#hudGlSwap"),
+  hudMode: document.querySelector("#hudMode"),
+  hudWatchdog: document.querySelector("#hudWatchdog"),
+  hudGap: document.querySelector("#hudGap"),
+  hudGlError: document.querySelector("#hudGlError"),
+  hudStatus: document.querySelector("#hudStatus"),
   inputSource: document.querySelector("#inputSource"),
   loadButton: document.querySelector("#loadButton"),
   mountNote: document.querySelector("#mountNote"),
@@ -368,6 +376,36 @@ function updateScreenHud(info) {
   elements.hudLatency.textContent = formatPresentationLag(info);
   elements.hudJit.textContent = parseJitState(info);
   elements.hudResolution.textContent = parsePresentationResolution(info);
+
+  // Diagnostic fields parsed out of the worker's helper-stats string.
+  const helper = String(info.ppcWasmHelperStats || "");
+  elements.hudCoreFps.textContent = `${Math.max(0, Number(info.coreFps) || 0)}`;
+  elements.hudFrame.textContent = `${info.frame ?? 0}`;
+
+  const oglSwap = /\bogl_swap:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudGlSwap.textContent = oglSwap;
+
+  const present = /present\s+(\w+)\s+signal:(\w+)\s+mode:(\w+)/.exec(helper);
+  if (present) {
+    elements.hudMode.textContent = `${present[1]}/${present[3]}`;
+  } else {
+    elements.hudMode.textContent = "-";
+  }
+
+  const wd = /\bwd:(\d+)\/(\d+)/.exec(helper);
+  elements.hudWatchdog.textContent = wd ? `${wd[1]}/${wd[2]}` : "0/0";
+
+  const p95 = Number(info.presentationP95IntervalMs) || 0;
+  const maxGap = Number(info.presentationMaxIntervalMs) || 0;
+  elements.hudGap.textContent = `${Math.round(p95)}/${Math.round(maxGap)}`;
+
+  const glerr = Number(info.oglGlError) || 0;
+  elements.hudGlError.textContent = `0x${glerr.toString(16)}`;
+
+  if (elements.statusPill && elements.hudStatus) {
+    const txt = elements.statusPill.textContent || "";
+    elements.hudStatus.textContent = txt.length > 80 ? txt.slice(0, 77) + "..." : txt;
+  }
 }
 
 async function mountFile(file) {
