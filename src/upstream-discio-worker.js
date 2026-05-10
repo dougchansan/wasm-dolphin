@@ -77,7 +77,7 @@ let watchdogLastCoreTicks = -1;
 let watchdogStallCount = 0;
 let watchdogRecoveryCount = 0;
 let watchdogFireCount = 0;
-const WATCHDOG_STALL_THRESHOLD = 4; // 4 x 500ms = 2s of frozen coreTicks
+const WATCHDOG_STALL_THRESHOLD = 2; // 2 x 500ms = 1s of frozen coreTicks
 let presentationUnderrunCount = 0;
 let presentationDroppedFrameCount = 0;
 let presentationUnderrunsSinceFps = 0;
@@ -884,12 +884,13 @@ function scheduleFrameSignalWait() {
     return;
   }
 
-  // 50ms timeout so the worker wakes at least 20Hz even when the OGL render
-  // thread temporarily stops bumping the frame signal (e.g. mid-transition,
-  // scene load, post-engage JIT compile). Each wake fires pumpHostJobs once
-  // which keeps CoreTiming advancing. The previous 1000ms timeout starved
-  // pumpHostJobs to 1Hz when the signal stopped, freezing the core.
-  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 50);
+  // 8ms timeout so the worker wakes at >=125Hz when the OGL render thread is
+  // not bumping the frame signal. Each wake fires pumpHostJobs once which
+  // keeps CoreTiming flowing. Lane CC traced gameplay's "0% speed" symptom
+  // to a 50ms ceiling capping pumpHostJobs at 20Hz - far too slow for
+  // gameplay's heavier CoreTiming demand. 8ms is the smallest we can sleep
+  // without busy-spinning the worker thread.
+  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 8);
   if (!wait.async) {
     setTimeout(() => runPresentationLoop(), 0);
     return;
@@ -1353,7 +1354,13 @@ function checkBootStallWatchdog() {
   }
 
   const currentTicks = readCoreTicks();
-  if (currentTicks === watchdogLastCoreTicks && currentTicks > 0) {
+  // Treat "advancing slower than 1% real-time" as a stall too. At 486MHz a
+  // healthy 500ms window advances ~243M ticks; we flag if delta < 2.43M
+  // (~1% real-time). This catches the "core barely advancing" state that
+  // strict equality would miss but the user perceives as unplayable.
+  const ticksDelta = currentTicks - watchdogLastCoreTicks;
+  const SLOW_TICKS_THRESHOLD = 2430000;
+  if (currentTicks > 0 && ticksDelta < SLOW_TICKS_THRESHOLD) {
     watchdogStallCount += 1;
   } else {
     watchdogStallCount = 0;
