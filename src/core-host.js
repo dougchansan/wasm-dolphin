@@ -131,7 +131,14 @@ export class EmulatorHost {
         : this.coreKind === "upstream"
         ? new UpstreamWorkerAdapter({
             onStatus,
-            transferCanvas: transferCanvasToOffscreen,
+            // For OGL with oglproxy=worker, skip transferControlToOffscreen
+            // entirely. The worker creates a standalone OffscreenCanvas for
+            // its GL context and posts ImageBitmaps back per frame; main
+            // thread draws them onto the visible canvas via 2D context.
+            // This avoids all the captureStream / commit() / pthread-canvas
+            // issues that have plagued the bound-canvas paths.
+            transferCanvas: this.oglProxyMode === "worker" ? null : transferCanvasToOffscreen,
+            visibleCanvas: this.oglProxyMode === "worker" ? canvas : null,
             videoBackend: this.videoBackend,
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,

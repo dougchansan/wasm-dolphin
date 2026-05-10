@@ -21,6 +21,7 @@ export class UpstreamWorkerAdapter {
     onStatus = () => {},
     canvas = null,
     transferCanvas = null,
+    visibleCanvas = null,
     videoBackend = "Software Renderer",
     cpuThread = false,
     cpuCore = "cached",
@@ -46,6 +47,9 @@ export class UpstreamWorkerAdapter {
     this.canvas = canvas;
     this.transferCanvasFn = typeof transferCanvas === "function" ? transferCanvas : null;
     this.workerCanvas = Boolean(canvas) || Boolean(this.transferCanvasFn);
+    this.visibleCanvas = visibleCanvas;
+    this.detachedOglContext = null;
+    this.detachedOglFramesDrawn = 0;
     this.videoBackend = videoBackend;
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
@@ -414,9 +418,49 @@ export class UpstreamWorkerAdapter {
     this.worker.postMessage({ type, payload }, transfer);
   }
 
+  drawDetachedOglBitmap(bitmap, width, height) {
+    if (!bitmap) return;
+    if (!this.visibleCanvas) {
+      try { bitmap.close(); } catch {}
+      return;
+    }
+    if (!this.detachedOglContext) {
+      try {
+        this.detachedOglContext = this.visibleCanvas.getContext("2d", { alpha: false });
+      } catch (err) {
+        this.onStatus(`Detached OGL: cannot get 2D context on visible canvas: ${err.message}`);
+        try { bitmap.close(); } catch {}
+        return;
+      }
+      if (!this.detachedOglContext) {
+        this.onStatus("Detached OGL: visible canvas has no 2D context (may already be transferred)");
+        try { bitmap.close(); } catch {}
+        return;
+      }
+      this.onStatus(`Detached OGL: 2D presenter live (${this.visibleCanvas.width}x${this.visibleCanvas.height})`);
+    }
+    this.detachedOglContext.drawImage(
+      bitmap,
+      0,
+      0,
+      this.visibleCanvas.width,
+      this.visibleCanvas.height
+    );
+    this.detachedOglFramesDrawn += 1;
+    try { bitmap.close(); } catch {}
+  }
+
   handleMessage(message) {
     if (message?.type === "status") {
       this.onStatus(message.message);
+      return;
+    }
+
+    if (message?.type === "detachedOglFrame" && message.bitmap) {
+      // Worker has rendered a frame to its standalone OffscreenCanvas and
+      // handed us the result as an ImageBitmap. Draw onto the visible
+      // canvas via 2D context. Lazily create the context on first frame.
+      this.drawDetachedOglBitmap(message.bitmap, message.width, message.height);
       return;
     }
 

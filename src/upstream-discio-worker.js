@@ -70,6 +70,12 @@ let pacedPresentationStartedAt = 0;
 let presentationPacingMode = "smooth";
 let inputStateSabView = null;
 let lastInputStateGeneration = 0;
+// Detached OGL mode: worker owns a standalone OffscreenCanvas for the GL
+// backend (no transferControlToOffscreen, no compositor binding). After
+// each GL swap the worker transferToImageBitmap()s the canvas and posts
+// the bitmap to main thread, which drawImages it onto the visible canvas.
+let detachedOglCanvas = null;
+let detachedOglFrameCount = 0;
 // Boot-stall watchdog state. Detects the "core CPU is frozen but canvas
 // still updates" pattern (Chrome IntensiveWakeUpThrottling clamping the
 // worker's setTimeout below 1Hz, starving pumpHostJobs).
@@ -258,12 +264,26 @@ async function loadCore({
 
   const normalizedOglProxyMode = normalizeOglProxyMode(oglProxyMode);
   const readbackOgl = videoBackend === "OGL" && normalizedOglProxyMode === "readback";
-  let moduleCanvas =
-    videoBackend === "OGL"
-      ? readbackOgl && typeof OffscreenCanvas === "function"
-        ? new OffscreenCanvas(320, 240)
-        : canvas
-      : undefined;
+  // Detached mode: when no canvas was transferred but we're on the OGL
+  // worker path, create a standalone OffscreenCanvas for the GL backend.
+  // Standalone OCs aren't bound to any DOM element so commit/captureStream
+  // problems don't apply. Worker reads back pixels per frame and posts an
+  // ImageBitmap to the main thread, which paints the visible canvas via
+  // drawImage. This is the architecture that works in the user's
+  // environment when transferControlToOffscreen-based paths fail.
+  const detachedOgl =
+    videoBackend === "OGL" && !readbackOgl && !canvas && typeof OffscreenCanvas === "function";
+  let moduleCanvas;
+  if (videoBackend === "OGL") {
+    if (readbackOgl && typeof OffscreenCanvas === "function") {
+      moduleCanvas = new OffscreenCanvas(320, 240);
+    } else if (detachedOgl) {
+      moduleCanvas = new OffscreenCanvas(640, 480);
+      detachedOglCanvas = moduleCanvas;
+    } else {
+      moduleCanvas = canvas;
+    }
+  }
   if (moduleCanvas) {
     moduleCanvas.id = "canvas";
   }
@@ -272,6 +292,8 @@ async function loadCore({
     canvas.id = "canvas";
     workerOwnsCanvas = true;
     postStatus(`Worker received canvas: ${canvas.constructor?.name || typeof canvas}`);
+  } else if (detachedOgl) {
+    postStatus("Worker DETACHED OGL: standalone OffscreenCanvas, frames posted via ImageBitmap");
   } else {
     postStatus(`Worker received NO canvas (videoBackend=${videoBackend}, oglProxy=${normalizedOglProxyMode})`);
   }
@@ -280,6 +302,9 @@ async function loadCore({
     renderCanvas = canvas;
     renderBackend = "ogl";
     postStatus("Worker OGL path: canvas attached, awaiting WebGL2 context creation");
+  } else if (detachedOgl) {
+    renderCanvas = moduleCanvas;
+    renderBackend = "ogl";
   }
 
   if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
@@ -972,6 +997,26 @@ function runPresentationLoop() {
         // present-deduplication key so each new GL swap registers as a new frame.
         const oglSwap = parseOglSwapStats(api.getVideoStats?.()).swap >>> 0;
         const oglFrameKey = oglSwap > 0 ? oglSwap : coreFrame;
+        // Detached OGL: worker owns a standalone OffscreenCanvas. After each
+        // new GL swap, transferToImageBitmap to capture the rendered frame
+        // and post it to main thread for drawImage onto the visible canvas.
+        // Bypasses commit/captureStream/transferControlToOffscreen entirely.
+        if (detachedOglCanvas && oglFrameKey !== lastPresentedCoreFrame) {
+          try {
+            const bitmap = detachedOglCanvas.transferToImageBitmap();
+            if (bitmap) {
+              detachedOglFrameCount += 1;
+              self.postMessage(
+                { type: "detachedOglFrame", bitmap, width: bitmap.width, height: bitmap.height },
+                [bitmap]
+              );
+            }
+          } catch (err) {
+            // transferToImageBitmap can fail if the canvas was resized or
+            // GL context isn't ready yet. Silently skip; next frame will
+            // try again.
+          }
+        }
         presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
       } else if (coreBoot.accepted && frameSignalHeap && presentationPacingMode === "direct") {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
