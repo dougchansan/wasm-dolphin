@@ -20,6 +20,7 @@ export class UpstreamWorkerAdapter {
     workerUrl = DEFAULT_WORKER_URL,
     onStatus = () => {},
     canvas = null,
+    transferCanvas = null,
     videoBackend = "Software Renderer",
     cpuThread = false,
     cpuCore = "cached",
@@ -43,7 +44,8 @@ export class UpstreamWorkerAdapter {
     this.workerUrl = workerUrl;
     this.onStatus = onStatus;
     this.canvas = canvas;
-    this.workerCanvas = Boolean(canvas);
+    this.transferCanvasFn = typeof transferCanvas === "function" ? transferCanvas : null;
+    this.workerCanvas = Boolean(canvas) || Boolean(this.transferCanvasFn);
     this.videoBackend = videoBackend;
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
@@ -147,10 +149,19 @@ export class UpstreamWorkerAdapter {
       inputStateSab: this.inputStateSab
     };
     const transfer = [];
-    if (this.canvas) {
-      loadPayload.canvas = this.canvas;
-      transfer.push(this.canvas);
+    // Lazy transferControlToOffscreen: do it right at the moment we
+    // postMessage to the worker, so the OffscreenCanvas hasn't had time to
+    // be "used" by the main-thread compositor. Chrome rejects transferring
+    // an OffscreenCanvas that has been bound to its element for too long.
+    let canvasForLoad = this.canvas;
+    if (!canvasForLoad && this.transferCanvasFn) {
+      canvasForLoad = this.transferCanvasFn();
+    }
+    if (canvasForLoad) {
+      loadPayload.canvas = canvasForLoad;
+      transfer.push(canvasForLoad);
       this.canvas = null;
+      this.transferCanvasFn = null;
     }
 
     const response = await this.request("load", loadPayload, transfer);

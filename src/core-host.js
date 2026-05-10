@@ -66,11 +66,26 @@ export class EmulatorHost {
       canvas.width = Math.max(160, Math.round(640 * oglScale));
       canvas.height = Math.max(120, Math.round(480 * oglScale));
     }
-    const offscreenCanvas =
-      this.usesAdapterCanvas && canvas.transferControlToOffscreen ? canvas.transferControlToOffscreen() : null;
-    if (offscreenCanvas) {
-      offscreenCanvas.id = "canvas";
-    }
+    // Defer transferControlToOffscreen until the adapter actually posts the
+    // canvas to the worker. Calling it eagerly here was causing Chrome to
+    // refuse the later postMessage transfer with "Cannot transfer
+    // OffscreenCanvas bound to element used..." once the OffscreenCanvas
+    // had become "active" in the compositor pipeline. The adapter calls
+    // this thunk at exactly the moment it postMessages to its worker.
+    const transferCanvasToOffscreen = () => {
+      if (!this.usesAdapterCanvas || !canvas.transferControlToOffscreen) return null;
+      try {
+        const off = canvas.transferControlToOffscreen();
+        off.id = "canvas";
+        return off;
+      } catch (err) {
+        // Chrome can throw if a context has been bound to the canvas in the
+        // meantime. Swallow and let the worker run without an attached
+        // canvas - the worker-mode OGL fallback path will then engage.
+        console.warn("[host] transferControlToOffscreen failed:", err);
+        return null;
+      }
+    };
     this.adapter =
       this.coreKind === "upstream" && this.usesMainThreadOgl
         ? new UpstreamMainThreadAdapter({
@@ -93,7 +108,7 @@ export class EmulatorHost {
         : this.coreKind === "upstream"
         ? new UpstreamWorkerAdapter({
             onStatus,
-            canvas: offscreenCanvas,
+            transferCanvas: transferCanvasToOffscreen,
             videoBackend: this.videoBackend,
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,
