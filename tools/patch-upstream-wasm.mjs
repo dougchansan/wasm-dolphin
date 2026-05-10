@@ -11,7 +11,8 @@ const patches = [
   resolve(root, "patches/dolphin-wasm/0004-fix-ogltexture-mapbufferrange-invalidate.patch"),
   resolve(root, "patches/dolphin-wasm/0005-webgl-depth-range-and-xfb-duplicate.patch"),
   resolve(root, "patches/dolphin-wasm/0006-skip-sleepuntil-and-immediate-xfb.patch"),
-  resolve(root, "patches/dolphin-wasm/0007-skip-dcbx-when-jit-inactive.patch")
+  resolve(root, "patches/dolphin-wasm/0007-skip-dcbx-when-jit-inactive.patch"),
+  resolve(root, "patches/dolphin-wasm/0008-fix-character-rendering-on-webgl2.patch")
 ];
 
 function runGit(args, stdio = "pipe") {
