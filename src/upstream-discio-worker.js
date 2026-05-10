@@ -193,6 +193,39 @@ async function handleMessage(type, payload) {
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState":
       return { loaded: Boolean(api?.loadState(payload.slot | 0)), ...framePayload() };
+    case "mixAudio": {
+      if (!api?.mixAudio || !api?.audioBuffer || !moduleInstance?.HEAPU8) {
+        return {
+          available: false,
+          frames: 0,
+          channels: 2,
+          sampleRate: 48000,
+          samples: null,
+          stats: api?.getAudioStats?.() || "audio:unavailable"
+        };
+      }
+      const requested = Math.max(1, Math.min(4096, payload.frames | 0));
+      const channels = Math.max(1, Math.min(2, api.audioChannels?.() || 2));
+      const sampleRate = Math.max(8000, api.audioSampleRate?.() || 48000);
+      const maxFrames = Math.max(1, api.audioBufferFrames?.() || 4096);
+      const mixed = Math.max(0, Math.min(maxFrames, api.mixAudio(requested) | 0));
+      const pointer = api.audioBuffer();
+      const samples =
+        mixed > 0 && pointer
+          ? new Int16Array(moduleInstance.HEAPU8.buffer, pointer, mixed * channels).slice()
+          : null;
+      return {
+        available: mixed > 0,
+        frames: mixed,
+        channels,
+        sampleRate,
+        samples,
+        stats: api.getAudioStats?.() || ""
+      };
+    }
+    case "setAudioMuted":
+      api?.setAudioMuted?.(payload.muted ? 1 : 0);
+      return {};
     default:
       throw new Error(`Unknown upstream worker message: ${type}`);
   }
@@ -417,7 +450,14 @@ function bindApi(module) {
     getRootEntryIsDirectory: cwrap("GetRootEntryIsDirectory", "number", ["number"]),
     getRootEntryOffset: cwrap("GetRootEntryOffset", "number", ["number"]),
     getRootEntrySize: cwrap("GetRootEntrySize", "number", ["number"]),
-    readDisc: cwrap("ReadDisc", "number", ["number", "number", "number"])
+    readDisc: cwrap("ReadDisc", "number", ["number", "number", "number"]),
+    audioSampleRate: optionalCwrap("AudioSampleRate", "number", []),
+    audioChannels: optionalCwrap("AudioChannels", "number", []),
+    audioBufferFrames: optionalCwrap("AudioBufferFrames", "number", []),
+    audioBuffer: optionalCwrap("AudioBuffer", "number", []),
+    mixAudio: optionalCwrap("MixAudio", "number", ["number"]),
+    setAudioMuted: optionalCwrap("SetAudioMuted", "number", ["number"]),
+    getAudioStats: optionalCwrap("GetAudioStats", "string", [])
   };
 }
 

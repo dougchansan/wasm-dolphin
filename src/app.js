@@ -373,6 +373,14 @@ function updateScreenHud(info) {
 async function mountFile(file) {
   try {
     const game = await host.mountFile(file);
+    // Auto-unmute on disc boot. AudioController defaults to muted because
+    // the AudioContext can only be created after a user gesture; the disc
+    // mount click is the user gesture, so unmute here so audio actually
+    // plays. Users can still mute via the button.
+    if (audio.muted) {
+      await audio.setMuted(false);
+      elements.muteButton.textContent = audio.label();
+    }
     host.setAudioMuted(audio.muted);
     syncGameInfo(game);
     host.start();
