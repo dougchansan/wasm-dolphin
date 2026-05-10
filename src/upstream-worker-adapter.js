@@ -164,7 +164,29 @@ export class UpstreamWorkerAdapter {
       this.transferCanvasFn = null;
     }
 
-    const response = await this.request("load", loadPayload, transfer);
+    let response;
+    try {
+      response = await this.request("load", loadPayload, transfer);
+    } catch (err) {
+      const msg = String(err?.message || err);
+      // Some Chrome environments reject the OffscreenCanvas postMessage
+      // transfer with "Cannot transfer OffscreenCanvas bound to element
+      // using captureStream" because an extension or the compositor has
+      // bound captureStream to the canvas. Retry once WITHOUT the canvas;
+      // the worker boots, the OGL backend will fail to attach a canvas
+      // but the worker stays alive so the user gets a clear status message
+      // instead of a permanent black screen.
+      if (/captureStream|OffscreenCanvas/i.test(msg)) {
+        this.onStatus(
+          `OffscreenCanvas transfer blocked by browser (captureStream binding); ` +
+            `falling back to canvas-less worker. Use oglproxy=proxy for hardware OGL.`
+        );
+        delete loadPayload.canvas;
+        response = await this.request("load", loadPayload, []);
+      } else {
+        throw err;
+      }
+    }
     this.applyMetadata(response);
     this.loaded = true;
   }
