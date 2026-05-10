@@ -1007,6 +1007,10 @@ function runPresentationLoop() {
         // and post it to main thread for drawImage onto the visible canvas.
         // Bypasses commit/captureStream/transferControlToOffscreen entirely.
         if (detachedOglCanvas && oglFrameKey !== lastPresentedCoreFrame) {
+          // Skip if we've already learned the canvas is detached (Emscripten
+          // pthread transferred it to the GPU thread). Avoid spamming the
+          // status pill with every frame's failure. Set detachedOglCanvas
+          // to null after the first failure so we stop trying.
           try {
             const bitmap = detachedOglCanvas.transferToImageBitmap();
             if (bitmap) {
@@ -1019,12 +1023,18 @@ function runPresentationLoop() {
                 postStatus(`Detached OGL: first bitmap posted (${bitmap.width}x${bitmap.height})`);
               }
             } else if (detachedOglFrameCount === 0) {
-              postStatus("Detached OGL: transferToImageBitmap returned null");
+              postStatus("Detached OGL: transferToImageBitmap returned null; disabling");
+              detachedOglCanvas = null;
             }
           } catch (err) {
             if (detachedOglFrameCount === 0) {
-              postStatus(`Detached OGL: transferToImageBitmap threw: ${err.message || err}`);
+              postStatus(
+                `Detached OGL disabled (${err.message || err}). Canvas was transferred to GPU pthread; ` +
+                  `try cpu=single to keep canvas on worker thread.`
+              );
             }
+            // Disable so we don't spam errors every frame.
+            detachedOglCanvas = null;
           }
         }
         presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
