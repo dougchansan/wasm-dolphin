@@ -1015,11 +1015,16 @@ function runPresentationLoop() {
                 { type: "detachedOglFrame", bitmap, width: bitmap.width, height: bitmap.height },
                 [bitmap]
               );
+              if (detachedOglFrameCount === 1) {
+                postStatus(`Detached OGL: first bitmap posted (${bitmap.width}x${bitmap.height})`);
+              }
+            } else if (detachedOglFrameCount === 0) {
+              postStatus("Detached OGL: transferToImageBitmap returned null");
             }
           } catch (err) {
-            // transferToImageBitmap can fail if the canvas was resized or
-            // GL context isn't ready yet. Silently skip; next frame will
-            // try again.
+            if (detachedOglFrameCount === 0) {
+              postStatus(`Detached OGL: transferToImageBitmap threw: ${err.message || err}`);
+            }
           }
         }
         presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
