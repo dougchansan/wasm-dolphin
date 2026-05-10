@@ -394,7 +394,10 @@ function selectedScenarios() {
         present: "half",
         presenter: "webgl",
         oglproxy: process.env.OGL_PROXY_MODE || "proxy",
-        wasmjit: "2",
+        // OGL default is JIT-off (see requestedPpcWasmJit in core-host.js).
+        // The perf:guard test follows the default so it exercises the same
+        // path users get. Override via OGL_WASMJIT=2 to test JIT-on perf.
+        wasmjit: process.env.OGL_WASMJIT || "0",
         jittier: "mixed",
         jitwarmup: "700",
         oc: "1",

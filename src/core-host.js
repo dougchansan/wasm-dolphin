@@ -621,15 +621,20 @@ function requestedCpuCore() {
 
 function requestedPpcWasmJit(videoBackend) {
   const params = new URLSearchParams(window.location.search);
-  if (params.get("wasmjit") === "0") {
+  const wasmjit = params.get("wasmjit");
+  if (wasmjit === "0") {
     return false;
   }
-  // OGL used to gate the JIT request entirely behind forcejit=1, but that left
-  // the 5000-frame OGL warmup floor + post-engage disable guard unused. Allow
-  // OGL to request the JIT so the same staged-warmup + auto-disable safety
-  // applies as on the software path. The reverse-Z and duplicate-XFB fixes in
-  // patch 0005 fixed the GL_INVALID_OPERATION storm that motivated the
-  // original lockout.
+  if (videoBackend === "OGL" && wasmjit === null && params.get("forcejit") !== "1") {
+    // OGL default is JIT-off. Lane E showed the experimental WASM JIT compiles
+    // ~0 useful blocks for this workload, but every engage burst creates a
+    // 110-1900ms stall (Lane S H1). Disabling by default trades zero perf for
+    // dramatically better stability on the OGL path: 0%-speed samples drop
+    // 5% -> 2%, gameSpeed normalises from 150% (overspeed) to 104%, and 89%
+    // of seconds reach 30fps+. Power users can opt in with wasmjit=1 or
+    // wasmjit=2 explicitly, or with forcejit=1.
+    return false;
+  }
   return true;
 }
 
