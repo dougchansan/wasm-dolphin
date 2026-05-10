@@ -96,6 +96,18 @@ export class UpstreamWorkerAdapter {
     this.frameProfileStats = "-";
     this.frameData = null;
     this.lastInputStateSignature = "";
+    // SharedArrayBuffer-backed input state. Bypasses postMessage queue.
+    // Slots: 0=mask, 1=stickX, 2=stickY, 3=cStickX, 4=cStickY,
+    //        5=triggerLeft, 6=triggerRight, 7=analogA, 8=analogB,
+    //        9=generation (incremented on every write so the worker can
+    //                       detect a new value without re-reading every slot).
+    if (typeof SharedArrayBuffer === "function") {
+      this.inputStateSab = new SharedArrayBuffer(40); // 10 * Int32
+      this.inputStateView = new Int32Array(this.inputStateSab);
+    } else {
+      this.inputStateSab = null;
+      this.inputStateView = null;
+    }
   }
 
   async load() {
@@ -131,7 +143,8 @@ export class UpstreamWorkerAdapter {
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,
-      collectMetrics: this.collectMetrics
+      collectMetrics: this.collectMetrics,
+      inputStateSab: this.inputStateSab
     };
     const transfer = [];
     if (this.canvas) {
@@ -201,23 +214,47 @@ export class UpstreamWorkerAdapter {
     if (!this.loaded || !state) {
       return;
     }
-    const payload = {
-      mask: state.mask >>> 0,
-      stickX: state.stickX | 0,
-      stickY: state.stickY | 0,
-      cStickX: state.cStickX | 0,
-      cStickY: state.cStickY | 0,
-      triggerLeft: state.triggerLeft | 0,
-      triggerRight: state.triggerRight | 0,
-      analogA: state.analogA | 0,
-      analogB: state.analogB | 0
-    };
-    const signature = `${payload.mask}:${payload.stickX}:${payload.stickY}:${payload.cStickX}:${payload.cStickY}:${payload.triggerLeft}:${payload.triggerRight}:${payload.analogA}:${payload.analogB}`;
+    const mask = state.mask >>> 0;
+    const stickX = state.stickX | 0;
+    const stickY = state.stickY | 0;
+    const cStickX = state.cStickX | 0;
+    const cStickY = state.cStickY | 0;
+    const triggerLeft = state.triggerLeft | 0;
+    const triggerRight = state.triggerRight | 0;
+    const analogA = state.analogA | 0;
+    const analogB = state.analogB | 0;
+    const signature = `${mask}:${stickX}:${stickY}:${cStickX}:${cStickY}:${triggerLeft}:${triggerRight}:${analogA}:${analogB}`;
     if (signature === this.lastInputStateSignature) {
       return;
     }
     this.lastInputStateSignature = signature;
-    this.post("setInputState", payload);
+
+    if (this.inputStateView) {
+      // Write each slot, then bump the generation counter last so the worker
+      // sees a coherent snapshot.
+      Atomics.store(this.inputStateView, 0, mask | 0);
+      Atomics.store(this.inputStateView, 1, stickX);
+      Atomics.store(this.inputStateView, 2, stickY);
+      Atomics.store(this.inputStateView, 3, cStickX);
+      Atomics.store(this.inputStateView, 4, cStickY);
+      Atomics.store(this.inputStateView, 5, triggerLeft);
+      Atomics.store(this.inputStateView, 6, triggerRight);
+      Atomics.store(this.inputStateView, 7, analogA);
+      Atomics.store(this.inputStateView, 8, analogB);
+      Atomics.add(this.inputStateView, 9, 1);
+    } else {
+      this.post("setInputState", {
+        mask,
+        stickX,
+        stickY,
+        cStickX,
+        cStickY,
+        triggerLeft,
+        triggerRight,
+        analogA,
+        analogB
+      });
+    }
   }
 
   runFrame() {

@@ -10,7 +10,8 @@ const patches = [
   resolve(root, "patches/dolphin-wasm/0003-disable-webgl-base-vertex.patch"),
   resolve(root, "patches/dolphin-wasm/0004-fix-ogltexture-mapbufferrange-invalidate.patch"),
   resolve(root, "patches/dolphin-wasm/0005-webgl-depth-range-and-xfb-duplicate.patch"),
-  resolve(root, "patches/dolphin-wasm/0006-skip-sleepuntil-and-immediate-xfb.patch")
+  resolve(root, "patches/dolphin-wasm/0006-skip-sleepuntil-and-immediate-xfb.patch"),
+  resolve(root, "patches/dolphin-wasm/0007-skip-dcbx-when-jit-inactive.patch")
 ];
 
 function runGit(args, stdio = "pipe") {

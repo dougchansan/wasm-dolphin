@@ -68,6 +68,8 @@ let presentationQueueTarget = 4;
 let pacedPresentationPrimed = false;
 let pacedPresentationStartedAt = 0;
 let presentationPacingMode = "smooth";
+let inputStateSabView = null;
+let lastInputStateGeneration = 0;
 let presentationUnderrunCount = 0;
 let presentationDroppedFrameCount = 0;
 let presentationUnderrunsSinceFps = 0;
@@ -119,6 +121,10 @@ self.addEventListener("message", async (event) => {
 async function handleMessage(type, payload) {
   switch (type) {
     case "load":
+      if (payload.inputStateSab instanceof SharedArrayBuffer) {
+        inputStateSabView = new Int32Array(payload.inputStateSab);
+        lastInputStateGeneration = 0;
+      }
       await loadCore({
         coreUrl: payload.coreUrl,
         canvas: payload.canvas,
@@ -839,10 +845,35 @@ function scheduleFrameSignalWait() {
     });
 }
 
+function pollInputStateFromSab() {
+  if (!inputStateSabView || !api?.setInputState) {
+    return;
+  }
+  const generation = Atomics.load(inputStateSabView, 9);
+  if (generation === lastInputStateGeneration) {
+    return;
+  }
+  lastInputStateGeneration = generation;
+  const mask = Atomics.load(inputStateSabView, 0) >>> 0;
+  inputMask = mask;
+  api.setInputState({
+    mask,
+    stickX: Atomics.load(inputStateSabView, 1),
+    stickY: Atomics.load(inputStateSabView, 2),
+    cStickX: Atomics.load(inputStateSabView, 3),
+    cStickY: Atomics.load(inputStateSabView, 4),
+    triggerLeft: Atomics.load(inputStateSabView, 5),
+    triggerRight: Atomics.load(inputStateSabView, 6),
+    analogA: Atomics.load(inputStateSabView, 7),
+    analogB: Atomics.load(inputStateSabView, 8)
+  });
+}
+
 function runPresentationLoop() {
   try {
     loopsSincePresentationFps += 1;
     if (moduleInstance && api) {
+      pollInputStateFromSab();
       const now = performance.now();
       const loopStartedAt = performance.now();
       if (!coreBoot.accepted || now - lastHostPumpTime >= 100) {

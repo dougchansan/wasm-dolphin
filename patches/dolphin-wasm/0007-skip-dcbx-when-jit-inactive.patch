@@ -1,0 +1,19 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -8881,7 +8881,12 @@ s32 CachedInterpreter::FastDcbxLoop(PowerPC::PowerPCState& ppc_state,
+     bool skipped_large_data_flush = false;
+ #ifdef __EMSCRIPTEN__
+     // Large dcb* sweeps are overwhelmingly data-buffer flushes in the browser path. Keeping small
+     // invalidations preserves the self-modifying-code heuristic while avoiding multi-megabyte
+     // block-cache scans in hot post-boot loops.
+-    skipped_large_data_flush = line_count > LARGE_DCBX_DATA_FLUSH_SKIP_LINES;
++    // Additionally, when the experimental WASM JIT is not active (interpreter-only mode),
++    // there are no compiled blocks to invalidate, so every invalidation is wasted work -
++    // skip them all. Lane P traced ~1,300 InvalidateICacheLines calls/sec hitting the cheap
++    // (no-blocks-to-erase) bitset-test path during ordinary Melee gameplay; eliminating
++    // them removes ~85% of the dcbloop overhead while preserving SMC correctness whenever
++    // the JIT eventually engages.
++    skipped_large_data_flush =
++        !s_wasm_jit_enabled || line_count > LARGE_DCBX_DATA_FLUSH_SKIP_LINES;
+ #endif
