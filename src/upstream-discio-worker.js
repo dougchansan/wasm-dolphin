@@ -271,11 +271,15 @@ async function loadCore({
   if (canvas) {
     canvas.id = "canvas";
     workerOwnsCanvas = true;
+    postStatus(`Worker received canvas: ${canvas.constructor?.name || typeof canvas}`);
+  } else {
+    postStatus(`Worker received NO canvas (videoBackend=${videoBackend}, oglProxy=${normalizedOglProxyMode})`);
   }
 
   if (canvas && videoBackend === "OGL" && !readbackOgl) {
     renderCanvas = canvas;
     renderBackend = "ogl";
+    postStatus("Worker OGL path: canvas attached, awaiting WebGL2 context creation");
   }
 
   if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
