@@ -884,13 +884,12 @@ function scheduleFrameSignalWait() {
     return;
   }
 
-  // 8ms timeout so the worker wakes at >=125Hz when the OGL render thread is
-  // not bumping the frame signal. Each wake fires pumpHostJobs once which
-  // keeps CoreTiming flowing. Lane CC traced gameplay's "0% speed" symptom
-  // to a 50ms ceiling capping pumpHostJobs at 20Hz - far too slow for
-  // gameplay's heavier CoreTiming demand. 8ms is the smallest we can sleep
-  // without busy-spinning the worker thread.
-  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 8);
+  // 16ms timeout = ~60Hz fallback wake rate when the OGL render thread is
+  // not bumping the frame signal. Earlier 8ms made the worker thread
+  // compete with the EmuThread (cpu=dual mode) for CPU, regressing gameplay.
+  // 50ms was too slow when the signal stalled; 16ms is the middle ground:
+  // matches VI vsync rate so we never wait longer than one frame's worth.
+  const wait = Atomics.waitAsync(frameSignalHeap, frameSignalIndex, currentSignal, 16);
   if (!wait.async) {
     setTimeout(() => runPresentationLoop(), 0);
     return;
@@ -1354,13 +1353,12 @@ function checkBootStallWatchdog() {
   }
 
   const currentTicks = readCoreTicks();
-  // Treat "advancing slower than 1% real-time" as a stall too. At 486MHz a
-  // healthy 500ms window advances ~243M ticks; we flag if delta < 2.43M
-  // (~1% real-time). This catches the "core barely advancing" state that
-  // strict equality would miss but the user perceives as unplayable.
-  const ticksDelta = currentTicks - watchdogLastCoreTicks;
-  const SLOW_TICKS_THRESHOLD = 2430000;
-  if (currentTicks > 0 && ticksDelta < SLOW_TICKS_THRESHOLD) {
+  // Strict equality - only fire on a true freeze (no tick progress at all).
+  // Earlier "slow but advancing" threshold caused the watchdog to fire
+  // continuously during legitimate slow scenes (boot loading, complex
+  // cutscenes), and each recovery step (force-pump, re-schedule) ate CPU
+  // that the EmuThread needed to make progress, creating a feedback loop.
+  if (currentTicks === watchdogLastCoreTicks && currentTicks > 0) {
     watchdogStallCount += 1;
   } else {
     watchdogStallCount = 0;
