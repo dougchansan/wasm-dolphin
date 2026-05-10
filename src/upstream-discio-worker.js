@@ -305,6 +305,11 @@ async function loadCore({
   } else if (detachedOgl) {
     renderCanvas = moduleCanvas;
     renderBackend = "ogl";
+    // Detached mode still "owns" a canvas (the standalone OffscreenCanvas);
+    // it's just not the user's visible one. Without this, the presentation
+    // loop never starts (it gates on workerOwnsCanvas) and presentFrame is
+    // never called, so no frames flow through the pipeline.
+    workerOwnsCanvas = true;
   }
 
   if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
