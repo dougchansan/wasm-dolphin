@@ -1,0 +1,21 @@
+diff --git a/Source/Core/Common/GL/GLInterface/Emscripten.cpp b/Source/Core/Common/GL/GLInterface/Emscripten.cpp
+--- a/Source/Core/Common/GL/GLInterface/Emscripten.cpp
++++ b/Source/Core/Common/GL/GLInterface/Emscripten.cpp
+@@ -148,9 +148,16 @@ bool GLContextEmscripten::Initialize(const WindowSystemInfo& wsi, bool stereo, b
+   const bool diagnostic_clear = DolphinWebUseDiagnosticClear();
+   const bool readback_present = DolphinWebUseOglReadbackPresent();
+   attributes.explicitSwapControl = !(worker_owned_webgl && (diagnostic_clear || readback_present));
++  // Worker mode: try PROXY_FALLBACK so the runtime can create the context
++  // directly on the discio-worker thread (avoiding the per-call proxy
++  // round-trip to main). PROXY_DISALLOW failed because Emscripten's pthread
++  // canvas-transfer mechanism doesn't work on an already-transferred
++  // OffscreenCanvas (Lane Y trace). PROXY_FALLBACK lets the runtime use the
++  // direct path when possible and only proxy as a last resort.
++  // Proxy mode keeps PROXY_ALWAYS - the existing default for users who
++  // haven't explicitly opted into worker-owned WebGL.
+   attributes.proxyContextToMainThread = worker_owned_webgl ?
+-                                            EMSCRIPTEN_WEBGL_CONTEXT_PROXY_DISALLOW :
++                                            EMSCRIPTEN_WEBGL_CONTEXT_PROXY_FALLBACK :
+                                             EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
+   attributes.renderViaOffscreenBackBuffer =
+       worker_owned_webgl && !(diagnostic_clear || readback_present);
