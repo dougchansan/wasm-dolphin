@@ -445,16 +445,27 @@ async function launchBrowser() {
     "--autoplay-policy=no-user-gesture-required",
     "--enable-webgl",
     "--enable-unsafe-webgpu",
-    "--ignore-gpu-blocklist",
-    "--use-angle=d3d11"
+    // Force-on the occlusion-tracking and timer-throttling features so the
+    // probe sees the same scheduler clamps real Chrome applies. Without
+    // these the probe ran on a "free pass" and missed Lane W's worker
+    // setTimeout-throttle bug entirely.
+    "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
   ];
+  // Optional probe-only flags. Default unset so the probe matches what a real
+  // user gets in interactive Chrome. Set PERF_PROBE_AGGRESSIVE_GPU=1 to add
+  // the older Playwright-friendly args (--ignore-gpu-blocklist + --use-angle=d3d11)
+  // that masked GPU-blocklist disagreements between probe and real Chrome.
+  if (process.env.PERF_PROBE_AGGRESSIVE_GPU === "1") {
+    args.push("--ignore-gpu-blocklist", "--use-angle=d3d11");
+  }
+  const headless = process.env.PERF_PROBE_HEADED === "1" ? false : true;
   const channel = process.env.BROWSER_CHANNEL || "chrome";
   try {
-    return await chromium.launch({ channel, headless: true, args });
+    return await chromium.launch({ channel, headless, args });
   } catch (error) {
     if (!channel) throw error;
     console.warn(`Unable to launch ${channel}; falling back to bundled Chromium: ${error.message}`);
-    return chromium.launch({ headless: true, args });
+    return chromium.launch({ headless, args });
   }
 }
 

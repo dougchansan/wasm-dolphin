@@ -70,6 +70,14 @@ let pacedPresentationStartedAt = 0;
 let presentationPacingMode = "smooth";
 let inputStateSabView = null;
 let lastInputStateGeneration = 0;
+// Boot-stall watchdog state. Detects the "core CPU is frozen but canvas
+// still updates" pattern (Chrome IntensiveWakeUpThrottling clamping the
+// worker's setTimeout below 1Hz, starving pumpHostJobs).
+let watchdogLastCoreTicks = -1;
+let watchdogStallCount = 0;
+let watchdogRecoveryCount = 0;
+let watchdogFireCount = 0;
+const WATCHDOG_STALL_THRESHOLD = 4; // 4 x 500ms = 2s of frozen coreTicks
 let presentationUnderrunCount = 0;
 let presentationDroppedFrameCount = 0;
 let presentationUnderrunsSinceFps = 0;
@@ -743,7 +751,7 @@ function framePayload() {
       ppcWasmHelperStats,
       videoStats,
       ppcProfileStats,
-      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource}`
+      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}`
     ),
     frameProfileStats,
     presentedFrame,
@@ -782,7 +790,17 @@ function schedulePresentationLoop() {
     return;
   }
 
-  if (coreBoot.accepted && renderBackend === "ogl") {
+  if (coreBoot.accepted && renderBackend === "ogl" && frameSignalHeap) {
+    // OGL fires DolphinWeb_OnOglSwap on every GL swap, which calls
+    // PublishFrameSignal. Use Atomics.waitAsync on the same frame signal as
+    // the software path: it is exempt from Chrome's worker setTimeout
+    // throttling (IntensiveWakeUpThrottling clamps occluded-tab worker
+    // timers to a 1s minimum, starving pumpHostJobs and freezing the core).
+    // Lane W traced this as the root cause of "stuck at cutscene" reports
+    // in real Chrome. The Playwright probe never reproduced because headless
+    // has no occlusion-detected window.
+    scheduleFrameSignalWait();
+  } else if (coreBoot.accepted && renderBackend === "ogl") {
     scheduleOglPresentationPoll();
   } else if (coreBoot.accepted && frameSignalHeap) {
     if (presentationPacingMode !== "direct") {
@@ -876,12 +894,16 @@ function runPresentationLoop() {
       pollInputStateFromSab();
       const now = performance.now();
       const loopStartedAt = performance.now();
-      if (!coreBoot.accepted || now - lastHostPumpTime >= 100) {
-        const pumpStartedAt = performance.now();
-        api.pumpHostJobs?.();
-        addProfileTime("pump", performance.now() - pumpStartedAt);
-        lastHostPumpTime = now;
-      }
+      // Pump host jobs every loop iteration. The previous 100ms rate-limit
+      // capped pumpHostJobs at 10Hz post-boot, which starves CoreTiming when
+      // the worker's loop is running fine but pumpHostJobs is the bottleneck
+      // for game-clock progress. Pumping on every iteration (~60Hz when
+      // healthy) lets the core advance even under Chrome's worker timer
+      // throttling.
+      const pumpStartedAt = performance.now();
+      api.pumpHostJobs?.();
+      addProfileTime("pump", performance.now() - pumpStartedAt);
+      lastHostPumpTime = now;
       if (!coreBoot.accepted) {
         const runStartedAt = performance.now();
         api.runFrame?.();
@@ -1264,6 +1286,50 @@ function updatePresentationFps() {
     presentationUnderrunsSinceFps = 0;
     presentationDropsSinceFps = 0;
     lastPresentationFpsTime = now;
+    checkBootStallWatchdog();
+  }
+}
+
+function checkBootStallWatchdog() {
+  if (!coreBoot.accepted || !api) {
+    watchdogLastCoreTicks = -1;
+    watchdogStallCount = 0;
+    return;
+  }
+  const coreFrame = api.getFrame?.() ?? 0;
+  // Skip watchdog during JIT post-activation grace - JIT compile bursts
+  // legitimately freeze the CPU briefly.
+  if (
+    ppcWasmJitActive &&
+    (coreFrame >>> 0) - ppcWasmJitEnabledAtFrame < WASM_JIT_POST_ACTIVATION_GRACE_FRAMES
+  ) {
+    watchdogStallCount = 0;
+    return;
+  }
+
+  const currentTicks = readCoreTicks();
+  if (currentTicks === watchdogLastCoreTicks && currentTicks > 0) {
+    watchdogStallCount += 1;
+  } else {
+    watchdogStallCount = 0;
+  }
+  watchdogLastCoreTicks = currentTicks;
+
+  if (watchdogStallCount < WATCHDOG_STALL_THRESHOLD) return;
+
+  const step = watchdogStallCount - WATCHDOG_STALL_THRESHOLD;
+  watchdogRecoveryCount += 1;
+  if (step === 0 && frameSignalHeap && frameSignalIndex >= 0) {
+    Atomics.store(frameSignalHeap, frameSignalIndex, (coreFrame >>> 0) + 1);
+    Atomics.notify(frameSignalHeap, frameSignalIndex);
+  } else if (step === 1) {
+    lastHostPumpTime = 0;
+    api.pumpHostJobs?.();
+  } else if (step === 2) {
+    schedulePresentationLoop();
+  } else if (step === 3) {
+    watchdogFireCount += 1;
+    postStatus("Boot stall detected: core not advancing. Try reloading.");
   }
 }
 
