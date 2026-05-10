@@ -67,23 +67,46 @@ export class EmulatorHost {
       canvas.height = Math.max(120, Math.round(480 * oglScale));
     }
     // Defer transferControlToOffscreen until the adapter actually posts the
-    // canvas to the worker. Calling it eagerly here was causing Chrome to
-    // refuse the later postMessage transfer with "Cannot transfer
-    // OffscreenCanvas bound to element used..." once the OffscreenCanvas
-    // had become "active" in the compositor pipeline. The adapter calls
-    // this thunk at exactly the moment it postMessages to its worker.
+    // canvas to the worker, AND replace the canvas DOM node with a fresh
+    // clone right before transfer. The bare-canvas approach failed for at
+    // least one user with the Chrome error "Cannot transfer OffscreenCanvas
+    // bound to element using captureStream" - some browser extension (or
+    // Chrome's own compositor mirror in some configurations) had bound a
+    // captureStream to the original canvas, permanently locking it from
+    // transfer. Swapping in a fresh canvas element severs any such binding
+    // because the new element has none of that history.
     const transferCanvasToOffscreen = () => {
-      if (!this.usesAdapterCanvas || !canvas.transferControlToOffscreen) return null;
-      try {
-        const off = canvas.transferControlToOffscreen();
-        off.id = "canvas";
-        return off;
-      } catch (err) {
-        // Chrome can throw if a context has been bound to the canvas in the
-        // meantime. Swallow and let the worker run without an attached
-        // canvas - the worker-mode OGL fallback path will then engage.
-        console.warn("[host] transferControlToOffscreen failed:", err);
+      if (!this.usesAdapterCanvas || typeof canvas.transferControlToOffscreen !== "function") {
         return null;
+      }
+      try {
+        // Try direct transfer first - the simplest case.
+        const direct = canvas.transferControlToOffscreen();
+        direct.id = "canvas";
+        return direct;
+      } catch (err) {
+        console.warn("[host] direct transferControlToOffscreen failed; trying canvas replacement:", err);
+        try {
+          // Replace the DOM canvas with a freshly-created one. The new
+          // element has no captureStream history, no extension hooks, no
+          // compositor binding. Copy across the relevant attributes.
+          const replacement = document.createElement("canvas");
+          replacement.id = canvas.id;
+          replacement.width = canvas.width;
+          replacement.height = canvas.height;
+          for (const cls of canvas.classList) replacement.classList.add(cls);
+          replacement.setAttribute("aria-label", canvas.getAttribute("aria-label") || "");
+          if (canvas.parentNode) canvas.parentNode.replaceChild(replacement, canvas);
+          // Re-point the host's reference and the elements registry.
+          canvas = replacement;
+          this.canvas = replacement;
+          const off = replacement.transferControlToOffscreen();
+          off.id = "canvas";
+          return off;
+        } catch (err2) {
+          console.warn("[host] canvas-replacement transferControlToOffscreen also failed:", err2);
+          return null;
+        }
       }
     };
     this.adapter =
