@@ -242,19 +242,23 @@ export class UpstreamWorkerAdapter {
       Atomics.store(this.inputStateView, 7, analogA);
       Atomics.store(this.inputStateView, 8, analogB);
       Atomics.add(this.inputStateView, 9, 1);
-    } else {
-      this.post("setInputState", {
-        mask,
-        stickX,
-        stickY,
-        cStickX,
-        cStickY,
-        triggerLeft,
-        triggerRight,
-        analogA,
-        analogB
-      });
     }
+    // Always also send via postMessage. Belt-and-suspenders: if the worker
+    // is between SAB-poll iterations when an input arrives (e.g. it's
+    // blocked in a long pumpHostJobs() or compile burst), the message-based
+    // path will deliver the update on the next event-loop tick. SAB is
+    // strictly faster when the loop is healthy; postMessage is the floor.
+    this.post("setInputState", {
+      mask,
+      stickX,
+      stickY,
+      cStickX,
+      cStickY,
+      triggerLeft,
+      triggerRight,
+      analogA,
+      analogB
+    });
   }
 
   runFrame() {
