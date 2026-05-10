@@ -54,6 +54,7 @@ let ppcWasmJitRequested = false;
 let ppcWasmJitForce = false;
 let ppcWasmJitActive = false;
 let ppcWasmJitDisabledForSession = false;
+let ppcWasmJitCooldownUntilFrame = 0;
 let ppcWasmJitEnabledAtFrame = 0;
 let ppcWasmJitTier = "guarded";
 let ppcWasmJitWarmupFrames = 3600;
@@ -96,6 +97,9 @@ const WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS = 25;
 const WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS = 40;
 const WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS = 5000;
 const WASM_JIT_POST_ACTIVATION_GRACE_FRAMES = 300;
+// After a temporary degraded-presentation disable, wait this many video frames
+// before allowing the JIT to re-engage. ~5 seconds at 60fps.
+const WASM_JIT_DEGRADED_COOLDOWN_FRAMES = 300;
 
 self.addEventListener("message", async (event) => {
   const { id, type, payload = {} } = event.data ?? {};
@@ -262,6 +266,7 @@ async function loadCore({
   ppcWasmJitForce = Boolean(requestedPpcWasmJitForce);
   ppcWasmJitActive = false;
   ppcWasmJitDisabledForSession = false;
+  ppcWasmJitCooldownUntilFrame = 0;
   ppcWasmJitEnabledAtFrame = 0;
   ppcWasmJitTier = requestedPpcWasmJitTier === "mixed" ? "mixed" : "guarded";
   ppcWasmJitWarmupFrames = normalizePpcWasmJitWarmupFrames(requestedPpcWasmJitWarmupFrames);
@@ -898,6 +903,10 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
+  if ((coreFrame >>> 0) < ppcWasmJitCooldownUntilFrame) {
+    return;
+  }
+
   // Engage after warmup regardless of momentary presentation rate. Single-
   // window samples drop to 0 during multi-second core stalls and would
   // indefinitely block engage even when long-term throughput is healthy. The
@@ -944,10 +953,14 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
 
   api.setPpcWasmJitEnabled(0);
   ppcWasmJitActive = false;
-  ppcWasmJitDisabledForSession = true;
+  // Cooldown rather than permanent disable: degraded presentation often
+  // recovers (post-cutscene transition, post-shader-compile spike). After the
+  // cooldown frames pass the engage check can re-fire.
+  ppcWasmJitCooldownUntilFrame = (coreFrame >>> 0) + WASM_JIT_DEGRADED_COOLDOWN_FRAMES;
   postStatus(
-    `Experimental WASM JIT disabled after degraded presentation ` +
-      `(fps:${presentationFps} gap:${presentationP95IntervalMs}ms)`
+    `Experimental WASM JIT temporarily off ` +
+      `(fps:${presentationFps} gap:${presentationP95IntervalMs}ms; cooldown ` +
+      `${WASM_JIT_DEGRADED_COOLDOWN_FRAMES} frames)`
   );
 }
 
