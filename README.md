@@ -15,13 +15,36 @@ npm start
 
 Open the printed local URL in Chrome. The app falls back to the demo WebAssembly core when no Dolphin bundle is present.
 
-For the current Melee browser path, use the upstream core with the full-resolution presenter:
+For the current Melee browser path, use the **recommended playable URL**
+(software backend + WASM JIT, post-Day-2 carry-op fix):
 
 ```text
-http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&wasmjit=1&forcejit=1&jitwarmup=5000&oc=1&queue=2&presenter=webgpu&fastsw=1
+http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=1&oc=1&queue=2&fastsw=1&metrics=1
 ```
 
-Full 640x480 presentation is now the default. Add `present=half` to that URL only when testing the lower-cost 320x240 fallback.
+Drop a Melee ISO onto the page; the status pill announces "Experimental
+WASM JIT enabled after 700 stable video frames" ~12 seconds in, after
+which gameplay runs at near-100 % game speed.
+
+### Measured status (post-Day-2 fix, validator 180 s)
+
+| Config                                            | game speed | visual fps | playable |
+|---------------------------------------------------|-----------:|-----------:|----------|
+| `video=software` + `wasmjit=1` (recommended)      |   100.15 % |      22.4  | **Yes — best** |
+| `video=software` + `wasmjit=0`                    |    99.4 %  |      25.7  | Yes (slightly choppier startup) |
+| `video=ogl` + `oglproxy=readback` + `forcejit=1`  |    98.8 %  |       1.3  | Boots/renders, but visually choppy + bursty CPU swings |
+| `video=ogl` + `oglproxy=worker`                   |    n/a     |       0    | Not yet — Emscripten pthread message routing |
+| `video=ogl` + `oglproxy=proxy`                    |    n/a     |       0    | Not yet — OffscreenCanvas auto-mirror inactive |
+
+The OGL hardware path is bottlenecked on Emscripten's WebGL pthread proxy
+round-trip latency, not on glReadPixels bandwidth. Per-helper bisection
+knobs (`?disable=meleeloop,meleecall,...,wasmaddc,wasmsubfc,wasmadde,wasmsubfe,wasmaddze`)
+are wired so any future regression in the JIT fast-paths can be isolated
+without a rebuild — see `src/core-host.js` for the full bit list and
+`patches/dolphin-wasm/SESSION-2026-05-11-DAY-2-NOTES.md` for the rationale.
+
+Full multi-day investigation trail in `docs/ogl-performance-plan.md` and
+the `patches/dolphin-wasm/SESSION-*-NOTES.md` files.
 
 ## Native Core
 
