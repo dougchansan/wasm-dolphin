@@ -326,6 +326,55 @@ function setDebugOpen(open) {
   if (open && lastFrameInfo) {
     updateDebugMetrics(lastFrameInfo);
   }
+  setAutoScreenshotEnabled(open);
+}
+
+// Auto-screenshot: when DBG is on, snapshot the visible canvas every 3s and
+// download as a PNG. State is attached to globalThis directly without a
+// const/let intermediate so the function works regardless of where
+// setDebugOpen is called from during module init (lexical declarations
+// hit TDZ if accessed before their source line during the same module
+// evaluation pass).
+function setAutoScreenshotEnabled(enabled) {
+  const state = (globalThis.__autoScreenshotState ??= { timer: null, count: 0 });
+  if (state.timer) {
+    clearInterval(state.timer);
+    state.timer = null;
+  }
+  if (!enabled) return;
+  state.count = 0;
+  state.timer = setInterval(captureCanvasSnapshot, 3000);
+}
+
+function captureCanvasSnapshot() {
+  try {
+    const canvas = document.querySelector("#screen");
+    if (!canvas) return;
+    // Render the visible canvas into an offscreen 2D canvas first so we can
+    // turn the result into a PNG even if the original is a transferred
+    // OffscreenCanvas placeholder (which has no .toDataURL of its own).
+    const cw = canvas.clientWidth || canvas.width || 320;
+    const ch = canvas.clientHeight || canvas.height || 240;
+    const snap = document.createElement("canvas");
+    snap.width = cw;
+    snap.height = ch;
+    const ctx = snap.getContext("2d", { alpha: false });
+    if (!ctx) return;
+    ctx.drawImage(canvas, 0, 0, cw, ch);
+    const dataUrl = snap.toDataURL("image/png");
+    const state = (globalThis.__autoScreenshotState ??= { timer: null, count: 0 });
+    state.count += 1;
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `wasm-dolphin-${ts}-shot${String(state.count).padStart(3, "0")}.png`;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.warn("[auto-screenshot] failed:", err);
+  }
 }
 
 function setOverlayVisible(visible) {
@@ -533,10 +582,10 @@ function wireTouchControls() {
 }
 
 function wireGamepadPolling() {
-  // Poll on a 4ms interval rather than rAF. The Gamepad API has no event
+  // Poll on a 2ms interval rather than rAF. The Gamepad API has no event
   // model so we must poll, but rAF caps the cadence at the display refresh
   // rate (~16.7ms), which adds a worst-case full-frame of latency to every
-  // gamepad input. setInterval at 4ms cuts that floor to ~4ms.
+  // gamepad input. setInterval at 2ms cuts that floor to ~2ms.
   const poll = () => {
     const pads = navigator.getGamepads?.() ?? [];
     const firstPad = Array.from(pads).find(Boolean);
@@ -551,7 +600,7 @@ function wireGamepadPolling() {
     }
   };
 
-  setInterval(poll, 4);
+  setInterval(poll, 2);
 }
 
 function syncInput(source) {

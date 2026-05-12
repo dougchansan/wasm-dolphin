@@ -183,8 +183,14 @@ std::vector<std::uint8_t> BuildStateAddImmediateModule(std::uint32_t dest_offset
   imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
   imports.push_back(0x02);
   imports.push_back(0x03);
-  EmitU32Leb(imports, 16384);
-  EmitU32Leb(imports, 16384);
+  // Imported shared memory's declared min/max MUST equal the actual SAB's
+  // min/max — and we bumped INITIAL_MEMORY from 1 GiB → 1.5 GiB in
+  // CMakeLists.txt (no growth). 1.5 GiB / 64 KiB = 24576 pages. Out-of-sync
+  // values trigger LinkError("memory max 24576 > WASM binary max 16384") in
+  // the JIT block compiler around frame 700. Keep both numbers in step
+  // with INITIAL_MEMORY.
+  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, 24576);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -337,8 +343,9 @@ std::vector<std::uint8_t> BuildPpcIntegerBlockModule(std::span<const UGeckoInstr
   imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
   imports.push_back(0x02);
   imports.push_back(0x03);
-  EmitU32Leb(imports, 16384);
-  EmitU32Leb(imports, 16384);
+  // See INITIAL_MEMORY sync note above.
+  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, 24576);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});

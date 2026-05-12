@@ -137,8 +137,18 @@ export class EmulatorHost {
             // thread draws them onto the visible canvas via 2D context.
             // This avoids all the captureStream / commit() / pthread-canvas
             // issues that have plagued the bound-canvas paths.
-            transferCanvas: this.oglProxyMode === "worker" ? null : transferCanvasToOffscreen,
-            visibleCanvas: this.oglProxyMode === "worker" ? canvas : null,
+            //
+            // Only OGL+worker uses the visibleCanvas/no-transfer path. The
+            // software backend always transfers; oglProxyMode is a no-op for
+            // it. (Earlier this branch read `oglProxyMode === "worker"`
+            // unconditionally, which broke software mode because the default
+            // proxy mode is "worker" even when the video backend is software.)
+            transferCanvas:
+              this.videoBackend === "OGL" && this.oglProxyMode === "worker"
+                ? null
+                : transferCanvasToOffscreen,
+            visibleCanvas:
+              this.videoBackend === "OGL" && this.oglProxyMode === "worker" ? canvas : null,
             videoBackend: this.videoBackend,
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,

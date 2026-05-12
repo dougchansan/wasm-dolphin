@@ -118,7 +118,25 @@ const WASM_JIT_POST_ACTIVATION_GRACE_FRAMES = 300;
 const WASM_JIT_DEGRADED_COOLDOWN_FRAMES = 300;
 
 self.addEventListener("message", async (event) => {
-  const { id, type, payload = {} } = event.data ?? {};
+  const data = event.data ?? {};
+  // Forward detachedOglFrame messages from Dolphin's GPU pthread to main.
+  // The C++ Swap path posts the bitmap from whichever pthread owns the
+  // canvas (Emscripten transfers Module.canvas to the GPU pthread on first
+  // access, detaching it from the discio-worker side). The pthread's
+  // postMessage lands on its parent (this discio worker), so we forward
+  // it on to main where the upstream-worker-adapter handles it.
+  if (data && data.type === "detachedOglFrame" && data.bitmap) {
+    try {
+      self.postMessage(
+        { type: "detachedOglFrame", bitmap: data.bitmap, width: data.width, height: data.height },
+        [data.bitmap]
+      );
+    } catch (err) {
+      try { data.bitmap.close(); } catch {}
+    }
+    return;
+  }
+  const { id, type, payload = {} } = data;
 
   try {
     const result = await handleMessage(type, payload);
@@ -328,8 +346,13 @@ async function loadCore({
   moduleInstance = await factory({
     noInitialRun: true,
     canvas: videoBackend === "OGL" ? moduleCanvas || undefined : undefined,
-    dolphinOglWorkerWebGl:
-      videoBackend === "OGL" && (normalizedOglProxyMode === "worker" || normalizedOglProxyMode === "readback"),
+    // worker_owned_webgl must be true for any OGL run. The C++ side gates
+    // its worker-context path, the InitBackendInfo probe-skip, and per-Swap
+    // commit-frame handling on this flag. With it false, the standard
+    // emscripten_webgl_create_context path produces a degenerate proxied
+    // context (debug_bits=3, no GLctx) whose draw calls silently drop —
+    // GP fifo stays empty and the visible canvas stays black.
+    dolphinOglWorkerWebGl: videoBackend === "OGL",
     dolphinOglReadbackPresent: readbackOgl,
     dolphinOglTestClear: Boolean(oglTestClear),
     dolphinFastSoftwareRaster: Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0)),
