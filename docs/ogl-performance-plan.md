@@ -141,26 +141,45 @@ didn't freeze.
 so any future regression in this family is `?disable=wasmadde` away from
 isolation, no rebuild required.
 
-### Day 3 — OffscreenCanvas worker-mirror
+### Day 3 — OffscreenCanvas worker-mirror (investigated 2026-05-12, **NOT shipped**)
 Goal: eliminate the readback round-trip.
 
-1. Investigate why `oglproxy=worker` doesn't paint. Run with DBG on,
-   capture browser console + DevTools timeline; correlate canvas paint
-   ticks vs worker GL commit events.
-2. Try four architectures, time-boxed to ~1 hour each:
-   - (a) Explicit `setTimeout(0)` or `requestAnimationFrame` in worker
-     between GL frames to force a task boundary.
-   - (b) Render-to-FBO + per-frame `transferToImageBitmap` + postMessage
-     to main + 2D `drawImage` on visible canvas. Scaffolding already
-     exists in `upstream-discio-worker.js` (`detachedOglFrame`) and
-     `upstream-worker-adapter.js` (`drawDetachedOglBitmap`).
-   - (c) `OffscreenCanvas.commit()` if Chrome reintroduced it.
-   - (d) SAB-backed pixel buffer the worker writes from GL, main reads
-     and `putImageData`. Slower than (b) but architecturally simplest;
-     avoids ImageBitmap detach hazards entirely.
-3. Pick the winner, validate.
-   **Done when:** `oglproxy=worker` reaches char select at
-   `gameSpeed ≥ 60%`.
+**Status:** worker-mode painting still doesn't reach char select. The
+existing `detachedOglFrame` scaffolding (option (b)) was built on a wrong
+assumption: it expected the Emscripten GPU pthread's `self.postMessage`
+to land on its parent worker. It doesn't — Emscripten's pthread runtime
+intercepts user-level postMessage calls. Bitmap capture from the GPU
+pthread *does* succeed via `GL.currentContext.GLctx.canvas.transferToImageBitmap()`
+(3000+ frames per minute in tests) but the messages never reach the
+discio-worker forwarder. Catch-all message counter on discio-worker shows
+only `load`/`mixAudio` arrive; zero `detachedOglFrame`.
+
+`oglproxy=proxy` (direct GL→transferred canvas, no readback) also produces
+`distinct=1` — Chrome's OffscreenCanvas placeholder auto-mirror is not
+firing under this build's pthread layout. `cpu=single` doesn't keep the
+canvas on the worker thread because Emscripten's `OFFSCREENCANVAS_SUPPORT`
+transfers it to whichever pthread first runs GL.
+
+The only working OGL path remains `oglproxy=readback`, which carries the
+Day-2-fix's gameSpeed (≈ 98 %) but a low `visualFps` (1–4/s) versus
+software-mode's 22–26/s. That's a real ~20× gap in actual visible paint
+rate even though the emulator runs at full speed.
+
+**What was learned (see `patches/dolphin-wasm/SESSION-2026-05-12-DAY-3-NOTES.md`):**
+- GPU pthread bitmap capture works; the *transport* is the broken piece.
+- `cpu=single` is not a workaround.
+- Lower readback resolution (`present=half`) is faster than full-res;
+  WebGL presenter beats 2D presenter; WebGPU close to WebGL.
+
+**Next session's first move (Day 4 candidate):** SAB-backed pixel transport.
+GPU pthread `glReadPixels` into a shared `Uint8ClampedArray`, bump a
+generation counter via `Atomics.add`, main thread runs a `requestAnimationFrame`
+loop that `putImageData`s the pixels onto the visible canvas when the
+generation changes. Bypasses both the pthread-message problem and the
+OffscreenCanvas auto-mirror problem in one shot.
+
+**Done when:** `oglproxy=worker` (or whatever replaces it) reaches char
+select at `gameSpeed ≥ 60 %` *and* `visualFps ≥ 15` on the validator.
 
 ### Day 4 — Readback-path optimization (fallback)
 Goal: if Day 3 hits a Chrome/Emscripten wall, make readback 2× faster.

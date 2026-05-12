@@ -28,6 +28,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/atomic.h>
+#include <emscripten/em_asm.h>
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -796,7 +797,21 @@ void DolphinWeb_OnOglSwap(int worker_owned, int commit_result, std::uint32_t wid
   PushFrameRingEntry(s_frame, g_stats.this_frame.num_prims, g_stats.this_frame.num_draw_calls,
                      g_stats.this_frame.num_vertices_loaded, readback_rgba,
                      static_cast<std::uint32_t>(gl_error), commit_result, debug_bits);
+
 }
+
+// Day-3 investigation note: attempted to capture rendered frames on the GPU
+// pthread via canvas.transferToImageBitmap() inside this function, then post
+// them to discio-worker via self.postMessage. The capture *succeeds*
+// (transferToImageBitmap returns a valid bitmap from GL.currentContext.GLctx.canvas
+// on the pthread, where Emscripten transferred Module.canvas at GL init time),
+// but Emscripten's pthread runtime intercepts user-level self.postMessage
+// calls — the discio-worker never receives the bitmap messages despite
+// 3000+ captures per minute. Confirmed empirically by adding a catch-all
+// message counter in discio-worker: only "load"/"mixAudio" messages arrive,
+// no "detachedOglFrame" ever lands. See SESSION-2026-05-12-DAY-3-NOTES.md
+// for the full trail. Worker-mode painting requires a SAB-backed pixel
+// transport instead; that's deferred to Day 4.
 
 const char* GetVideoStats()
 {
