@@ -50,6 +50,8 @@
 #include "VideoCommon/VideoConfig.h"
 
 extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
+extern "C" std::uint32_t DolphinWeb_SetCachedInterpreterDisableMask(std::uint32_t mask);
+extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -728,6 +730,45 @@ int SetFastSoftwareRaster(int mode)
 {
   DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 2 ? 2 : mode);
   return 1;
+}
+
+// Day-1 bisection knob: per-helper disable bitmask for the cached-interpreter
+// fast paths. See the DOLPHIN_WEB_DISABLE_* constants in
+// vendor/dolphin/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+// for the bit layout. Returns the previous mask. Safe to call at any time —
+// changes take effect on the next block compile attempt.
+std::uint32_t SetCachedInterpreterDisableMask(std::uint32_t mask)
+{
+  return DolphinWeb_SetCachedInterpreterDisableMask(mask);
+}
+
+std::uint32_t GetCachedInterpreterDisableMask()
+{
+  return DolphinWeb_GetCachedInterpreterDisableMask();
+}
+
+// Day-1 instrumentation accessors: the per-swap ring buffer lives in
+// dolphin_web_discio.cpp's anonymous namespace and is visible here through
+// the single-TU include at the top of this file. JS reads via Module.HEAPU32
+// using the pointer, then walks slots `[lastDrainHead .. head) mod capacity`.
+DolphinWebFrameRingEntry* GetFrameRingEntryPtr()
+{
+  return s_frame_ring.data();
+}
+
+int GetFrameRingCapacity()
+{
+  return static_cast<int>(DOLPHIN_WEB_FRAME_RING_CAPACITY);
+}
+
+int GetFrameRingEntrySize()
+{
+  return static_cast<int>(sizeof(DolphinWebFrameRingEntry));
+}
+
+std::uint32_t GetFrameRingHead()
+{
+  return s_frame_ring_head.load(std::memory_order_relaxed);
 }
 
 int BootDisc(const char* path)

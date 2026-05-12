@@ -144,6 +144,46 @@ std::atomic<std::uint32_t> s_last_ogl_debug_bits{0};
 std::atomic<std::uint32_t> s_last_ogl_readback_rgba{0};
 std::atomic<int> s_last_ogl_gl_error{0};
 
+// Day-1 per-frame ring buffer. The OGL swap callback pushes one entry per
+// swap; the JS worker drains it on a 1Hz timer and logs to console. Lets us
+// see exactly which frame stops drawing without needing to set a breakpoint
+// in C++. Capacity is one ring slot per (Melee 60fps × ~4 seconds) — enough
+// to capture a JIT-engagement transition with margin around it.
+struct DolphinWebFrameRingEntry
+{
+  std::uint32_t frame;
+  std::uint32_t prim;
+  std::uint32_t draw;
+  std::uint32_t verts;
+  std::uint32_t xfb_hash;
+  std::uint32_t glerr;
+  std::int32_t  commit_result;
+  std::uint32_t debug_bits;
+};
+static_assert(sizeof(DolphinWebFrameRingEntry) == 32,
+              "frame ring entry must stay 32 bytes for JS HEAPU32 stride math");
+
+constexpr std::uint32_t DOLPHIN_WEB_FRAME_RING_CAPACITY = 256;
+std::atomic<std::uint32_t> s_frame_ring_head{0};  // monotonic write counter (mod CAPACITY = slot)
+std::array<DolphinWebFrameRingEntry, DOLPHIN_WEB_FRAME_RING_CAPACITY> s_frame_ring{};
+
+void PushFrameRingEntry(std::uint32_t frame, std::uint32_t prim, std::uint32_t draw,
+                        std::uint32_t verts, std::uint32_t xfb_hash, std::uint32_t glerr,
+                        std::int32_t commit_result, std::uint32_t debug_bits)
+{
+  const std::uint32_t head = s_frame_ring_head.fetch_add(1, std::memory_order_relaxed);
+  const std::uint32_t slot = head % DOLPHIN_WEB_FRAME_RING_CAPACITY;
+  DolphinWebFrameRingEntry& entry = s_frame_ring[slot];
+  entry.frame = frame;
+  entry.prim = prim;
+  entry.draw = draw;
+  entry.verts = verts;
+  entry.xfb_hash = xfb_hash;
+  entry.glerr = glerr;
+  entry.commit_result = commit_result;
+  entry.debug_bits = debug_bits;
+}
+
 int ScaledPresentationDimension(std::uint32_t source)
 {
   const int scaled = static_cast<int>(static_cast<float>(source) * s_presentation_scale);
@@ -746,6 +786,16 @@ void DolphinWeb_OnOglSwap(int worker_owned, int commit_result, std::uint32_t wid
   s_last_ogl_gl_error.store(gl_error, std::memory_order_relaxed);
   ++s_frame;
   PublishFrameSignal();
+
+  // Day-1 instrumentation: push a frame-ring entry. xfb_hash uses the most
+  // recently published readback hash; for direct OGL contexts where readback
+  // isn't computed each frame, we substitute the per-swap readback_rgba so
+  // any value change is still visible. g_stats.this_frame may be stale on
+  // backends that don't run the VideoCommon present path each swap — that's
+  // a known limitation of taking the recording at swap rather than present.
+  PushFrameRingEntry(s_frame, g_stats.this_frame.num_prims, g_stats.this_frame.num_draw_calls,
+                     g_stats.this_frame.num_vertices_loaded, readback_rgba,
+                     static_cast<std::uint32_t>(gl_error), commit_result, debug_bits);
 }
 
 const char* GetVideoStats()

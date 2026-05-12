@@ -38,6 +38,7 @@ export class EmulatorHost {
     this.oglProxyMode = requestedOglProxyMode();
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
+    this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.collectMetrics = requestedCollectMetrics();
     this.visibleSamplerEnabled = requestedVisibleSampler();
     this.usesMainThreadOgl =
@@ -166,6 +167,7 @@ export class EmulatorHost {
             oglProxyMode: this.oglProxyMode,
             oglTestClear: this.oglTestClear,
             fastSoftwareRaster: this.fastSoftwareRaster,
+            cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             collectMetrics: this.collectMetrics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
@@ -823,6 +825,50 @@ function requestedOglTestClear() {
 function requestedFastSoftwareRaster() {
   const requested = Number.parseInt(new URLSearchParams(window.location.search).get("fastsw") || "1", 10);
   return Number.isFinite(requested) ? Math.min(2, Math.max(0, requested)) : 1;
+}
+
+// Day-1 bisection knob: ?disable=cat1,cat2 → bitmask handed to the C++ JIT.
+// Bit layout matches DOLPHIN_WEB_DISABLE_* in CachedInterpreter.cpp.
+// Accepts comma-separated category names, a raw 0xHEX value, or a decimal int.
+// Unknown category names are logged and ignored (so a typo doesn't pretend to
+// disable things it isn't actually disabling).
+const CACHED_INTERPRETER_DISABLE_BITS = {
+  meleeloop:   1 << 0,
+  meleecall:   1 << 1,
+  osinterrupt: 1 << 2,
+  dcbxloop:    1 << 3,
+  fastbranch:  1 << 4,
+  fastfp:      1 << 5,
+  fastinteger: 1 << 6,
+  fastsystem:  1 << 7,
+  wasmblock:   1 << 8,
+  // Aliases the plan / TL;DR uses interchangeably:
+  fastinputpoll: 1 << 1, // legacy synonym for meleecall (input-poll lives there)
+  fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
+  all:           0x1ff
+};
+
+function requestedCachedInterpreterDisableMask() {
+  const raw = (new URLSearchParams(window.location.search).get("disable") || "").trim();
+  if (!raw) return 0;
+  if (/^0x[0-9a-f]+$/i.test(raw)) {
+    const parsed = Number.parseInt(raw.slice(2), 16);
+    return Number.isFinite(parsed) ? parsed >>> 0 : 0;
+  }
+  if (/^\d+$/.test(raw)) {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed >>> 0 : 0;
+  }
+  let mask = 0;
+  for (const token of raw.split(/[,+\s]+/).filter(Boolean)) {
+    const key = token.toLowerCase();
+    if (key in CACHED_INTERPRETER_DISABLE_BITS) {
+      mask |= CACHED_INTERPRETER_DISABLE_BITS[key];
+    } else {
+      console.warn(`[wasm-dolphin] unknown ?disable category "${token}" (ignored)`);
+    }
+  }
+  return mask >>> 0;
 }
 
 function requestedVisibleSampler() {

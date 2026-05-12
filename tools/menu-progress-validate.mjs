@@ -99,6 +99,7 @@ if (videoMode === "ogl") {
 }
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
+if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
 url.searchParams.set("metrics", "1");
 url.searchParams.set("probe", `menu-progress-${Date.now()}`);
 
@@ -224,19 +225,76 @@ try {
 }
 
 function summarize(samples, hashes) {
+  // Skip the initial 20% (boot warmup) when computing averages — same as
+  // before. But also split on JIT engagement so a JIT-on regression doesn't
+  // hide in a single overall average.
   const after = samples.slice(Math.floor(samples.length * 0.2));
-  const speeds = after.map((s) => parseFloat(String(s.gameSpeed).replace("%", ""))).filter(Number.isFinite);
-  const presents = after.map((s) => parseFloat(s.presentFps)).filter(Number.isFinite);
-  const cores = after.map((s) => parseFloat(s.coreFps)).filter(Number.isFinite);
-  const visuals = after.map((s) => parseFloat(s.visualFps)).filter(Number.isFinite);
+  const jitStartIndex = findJitEngagementIndex(samples);
+  const overall = computeBucket(after);
+  let preJit = null;
+  let postJit = null;
+  if (jitStartIndex >= 0) {
+    // Indexes are over the full samples array — translate to the post-warmup
+    // window where useful. preJit = samples 20%..jitStart-1, postJit = jitStart..end
+    // (with no warmup trim on postJit; the JIT engagement itself is the boundary).
+    const warmupCutoff = Math.floor(samples.length * 0.2);
+    const preFrom = warmupCutoff;
+    const preTo = Math.max(preFrom, jitStartIndex);
+    preJit = computeBucket(samples.slice(preFrom, preTo));
+    postJit = computeBucket(samples.slice(jitStartIndex));
+  }
   return {
     sampleCount: samples.length,
     distinctCanvasHashes: hashes.size,
+    jitEngaged: jitStartIndex >= 0,
+    jitEngagementSampleIndex: jitStartIndex,
+    jitEngagementElapsedSeconds:
+      jitStartIndex >= 0 ? samples[jitStartIndex]?.elapsedSeconds ?? null : null,
+    overall,
+    preJit,
+    postJit,
+    // Keep the flat averageX fields for backward compat with downstream tooling.
+    averageGameSpeed: overall.averageGameSpeed,
+    averagePresentFps: overall.averagePresentFps,
+    averageCoreFps: overall.averageCoreFps,
+    averageVisualFps: overall.averageVisualFps,
+    finalSample: samples.at(-1),
+  };
+}
+
+function findJitEngagementIndex(samples) {
+  // First sample where any of: statusPill briefly says "JIT enabled", helper
+  // stats include `jit:on`, or block compile count goes nonzero. Whichever
+  // wins, we treat as the start of the "post-JIT" regime.
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = samples[i];
+    if (typeof s.statusPill === "string" && s.statusPill.includes("JIT enabled")) return i;
+    if (typeof s.helper === "string" && /(?:^|\s)jit:on\b/i.test(s.helper)) return i;
+    if ((s.jitBlockCompileCount || 0) > 0) return i;
+  }
+  return -1;
+}
+
+function computeBucket(window) {
+  if (!window.length) {
+    return {
+      sampleCount: 0,
+      averageGameSpeed: 0,
+      averagePresentFps: 0,
+      averageCoreFps: 0,
+      averageVisualFps: 0,
+    };
+  }
+  const speeds = window.map((s) => parseFloat(String(s.gameSpeed).replace("%", ""))).filter(Number.isFinite);
+  const presents = window.map((s) => parseFloat(s.presentFps)).filter(Number.isFinite);
+  const cores = window.map((s) => parseFloat(s.coreFps)).filter(Number.isFinite);
+  const visuals = window.map((s) => parseFloat(s.visualFps)).filter(Number.isFinite);
+  return {
+    sampleCount: window.length,
     averageGameSpeed: avg(speeds),
     averagePresentFps: avg(presents),
     averageCoreFps: avg(cores),
     averageVisualFps: avg(visuals),
-    finalSample: samples.at(-1),
   };
 }
 
@@ -286,6 +344,12 @@ async function readSample(page, elapsedSeconds) {
       // Bucket the hash to ignore tiny variations.
       visibleHash = (hash >>> 0) & 0xfffffff0;
     } catch (e) { visibleError = e.message || String(e); }
+    // ppcWasmJit element is rendered as "runCount / compileCount" with locale
+    // group separators. Parse the second integer as the JIT block compile total.
+    const jitText = read("#ppcWasmJit");
+    const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
+    const jitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
+    const jitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
     return {
       elapsedSeconds,
       frame: read("#frameCounter"),
@@ -300,6 +364,8 @@ async function readSample(page, elapsedSeconds) {
       gameTitle: read("#gameTitle"),
       statusPill: read("#statusPill"),
       input: read("#inputSource"),
+      jitBlockRunCount,
+      jitBlockCompileCount,
       visibleHash,
       visibleError,
     };

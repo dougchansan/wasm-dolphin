@@ -39,6 +39,7 @@ export class UpstreamWorkerAdapter {
     oglProxyMode = "worker",
     oglTestClear = false,
     fastSoftwareRaster = 0,
+    cachedInterpreterDisableMask = 0,
     collectMetrics = false
   } = {}) {
     this.coreUrl = coreUrl;
@@ -67,6 +68,7 @@ export class UpstreamWorkerAdapter {
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.collectMetrics = Boolean(collectMetrics);
     this.worker = null;
     this.nextId = 1;
@@ -149,6 +151,7 @@ export class UpstreamWorkerAdapter {
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,
+      cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       collectMetrics: this.collectMetrics,
       inputStateSab: this.inputStateSab
     };

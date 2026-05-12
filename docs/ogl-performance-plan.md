@@ -1,6 +1,6 @@
 # OGL Hardware Path — Performance Plan & Handoff
 
-**Last updated:** 2026-05-11 (session that landed commits 1e05b65 and 21636b4)
+**Last updated:** 2026-05-11 (Day 1 instrumentation landed on top of 1e05b65 + 21636b4)
 
 This document captures the multi-day work needed to get the OGL hardware
 rendering path to native-emulation speed in the browser. Read this before
@@ -73,24 +73,42 @@ Three independent walls. Each needs its own day. They are NOT a single bug.
 
 ## Five-day plan
 
-### Day 1 — Instrumentation & bisection infrastructure
+### Day 1 — Instrumentation & bisection infrastructure ✅ (landed 2026-05-11)
 Goal: stop speculating, start measuring.
 
-1. **Per-helper disable URL flags**. In `core-host.js`, add
-   `?disable=fastfp,fastmem,fastinputpoll,meleeloop,...`. In
-   `core/upstream/dolphin_web_core.cpp` add an `extern "C"` setter that
-   takes a bitmask, store in a global atomic. In `CachedInterpreter.cpp`
-   gate each `TryWrite*` / `TryEmit*` on the bit. Critical: no rebuild
-   between bisection runs.
-2. **Validator metric split** (task OO). In
-   `tools/menu-progress-validate.mjs` post-processing, split samples on
-   `statusPill.includes("JIT enabled")` and report pre/post averages.
-   Currently a JIT-on regression hides in the average.
-3. **C++ per-frame ring buffer over SAB**. Worker drains and prints.
-   Records: `frame`, `prim`, `draw`, `verts`, `xfb_hash`, `glerr`,
-   `commit_result`. Lets us see exactly which frame stops rendering.
-4. Full validator sweep, confirm no regressions, commit.
-   **Done when:** the three tools above work and ship with the next build.
+1. **Per-helper disable URL flags**. ✅ Implemented as `?disable=<category,...>`.
+   Categories: `meleeloop`, `meleecall`, `osinterrupt`, `dcbxloop`, `fastbranch`,
+   `fastfp`, `fastinteger`, `fastsystem`, `wasmblock`. Also accepts hex/decimal
+   raw mask and aliases `fastinputpoll`→meleecall, `fastmem`→fastsystem,
+   `all`→0x1ff. URL→adapter→worker→`_SetCachedInterpreterDisableMask` atomic;
+   gates live in every `TryWrite*` in `CachedInterpreter.cpp`. Validator env
+   var: `DISABLE=...`. **No rebuild needed between bisection runs.**
+2. **Validator metric split** ✅. `tools/menu-progress-validate.mjs`
+   `summarize()` now emits `overall`, `preJit`, `postJit` buckets plus a
+   `jitEngagementSampleIndex` and `jitEngagementElapsedSeconds`. The split
+   triggers on the first sample where any of: `statusPill` includes
+   `"JIT enabled"`, helper stats contain `jit:on`, or `jitBlockCompileCount`
+   goes nonzero (the validator now reads the latter directly from `#ppcWasmJit`).
+3. **C++ per-frame ring buffer over SAB** ✅. 256-entry × 32-byte ring lives
+   in `dolphin_web_discio.cpp` and is pushed from `DolphinWeb_OnOglSwap` with
+   frame/prim/draw/verts/xfb_hash/glerr/commit_result/debug_bits. Exposed
+   via four C entry points (`GetFrameRing{EntryPtr,Capacity,EntrySize,Head}`),
+   drained 1Hz in the worker via `Module.HEAPU32` and printed to console as
+   `[frame-ring] f=… prim=… draw=… verts=… xfb=… glerr=… commit=… dbg=…`.
+
+**Day-1 verification (this session):**
+- Regression sweep `VIDEO=software/WASMJIT=0/FASTSW=1` (120s): 96 distinct
+  canvas hashes, avgGameSpeed 100.16%, no regression vs the documented
+  playable baseline.
+- Wiring smoke `DISABLE=meleeloop` (60s): 53 distinct hashes, avgGameSpeed
+  99.22%, helper stats no longer report `meleeloop attempts:N` (was 8 in
+  baseline) → gate is firing.
+
+**Open Day-2 polish item:** Playwright validator's `page.on("console")` only
+captures main-thread logs — the worker's `[frame-ring]` and disable-mask
+postStatus messages aren't currently saved to `console.log`. Add a worker
+listener via `browserContext.on("worker", ...)` or expose `[frame-ring]`
+through a getter the validator can poll directly.
 
 ### Day 2 — JIT corruption bisection
 Goal: pinpoint which fast-path category miscompiles.
