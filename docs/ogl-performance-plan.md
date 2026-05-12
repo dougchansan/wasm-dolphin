@@ -9,18 +9,31 @@ that isn't obvious from the diff alone.
 
 ## TL;DR — current state
 
-| Backend | Speed | Visuals | Playable? |
-|---------|-------|---------|-----------|
-| `video=software` + `wasmjit=0` + `fastsw=1` + `pacing=smooth` | 100% | Visible 1/4-density pixel dots, smooth | **Yes** |
-| `video=software` + `wasmjit=1` | 100% post-Day-2 (was 14%) | Clean after carry-op reorder | **Yes** (pending verify) |
-| `video=ogl` + `oglproxy=readback` + JIT off | 84% | Clean, reaches char select | Slow but works |
-| `video=ogl` + `oglproxy=readback` + `forcejit=1` | **98.75%** (was 100% w/4-distinct freeze) | 127 distinct hashes, JIT engaged, clean | **Yes** (Day-2 fix) |
-| `video=ogl` + `oglproxy=worker` | 52% | Stuck, 1 distinct frame | No (canvas mirror — Wall 2) |
+| Backend | gameSpeed | visualFps | distinct/s | Playable? |
+|---------|----------:|----------:|-----------:|-----------|
+| `video=software` + `wasmjit=1` + `fastsw=1` + `pacing=smooth` (NEW recommended) | **100.15 %** | **22.36** | 0.71 | **Yes — best** |
+| `video=software` + `wasmjit=0` + `fastsw=1` + `pacing=smooth`                  |  99.43 % | 25.69 | 0.90 | Yes (old recommended) |
+| `video=ogl` + `oglproxy=readback` + `forcejit=1` (Day-2 acceptance)            |  98.75 % |  1.27 | 0.34 | Visually slow + bursty CPU swings 10–327 %; not ideal for play |
+| `video=ogl` + `oglproxy=readback` + JIT off                                    |  84 %    |  ~1.3 | ~0.3 | Slower CPU; visually similar to above |
+| `video=ogl` + `oglproxy=worker` (Day-3 investigated)                            |  84.92 % | 83 (worker-internal) | 0 distinct on visible canvas | No — pthread `postMessage` swallowed by Emscripten |
+| `video=ogl` + `oglproxy=proxy`                                                 |  75.2 %  | 8.16 | 0 distinct on visible canvas | No — OffscreenCanvas auto-mirror inactive |
 
-**Recommended playable URL right now:**
+**The Day-2 carry-op fix unlocked `software+wasmjit=1` (was previously
+broken at 14 % + dot-matrix corruption — same root cause as the OGL JIT bug).
+This is now the best playable config.** OGL paths reach near-full gameSpeed
+but the visible canvas only repaints 1–4 ×/s, *and* the CPU thread experiences
+10–327 % per-sample swings (bursty stalls) that feel like slow motion +
+input lag in actual play. Software backend doesn't have either problem.
+
+**Recommended playable URL right now (Day-2 fix + software+JIT, post-2026-05-12):**
 ```
-http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=0&oc=1&queue=2&fastsw=1&metrics=1
+http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=1&oc=1&queue=2&fastsw=1&metrics=1
 ```
+
+Only difference from the prior URL: `wasmjit=1` (was `0`). With the Day-2 carry-op
+fix the JIT-on path no longer corrupts the title screen, so we get the
+speedup without the previously-fatal rendering bug. The OGL hardware URL
+also works visually but stutters under play; software is faster and smoother.
 
 ## What's blocking native-speed OGL
 
