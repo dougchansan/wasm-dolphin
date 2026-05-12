@@ -1,6 +1,6 @@
 # OGL Hardware Path — Performance Plan & Handoff
 
-**Last updated:** 2026-05-11 (Day 1 instrumentation landed on top of 1e05b65 + 21636b4)
+**Last updated:** 2026-05-11 (Day 2 JIT-corruption fix landed; addex/subfex/addcx/subfcx/addic/subfic RD-store reorder)
 
 This document captures the multi-day work needed to get the OGL hardware
 rendering path to native-emulation speed in the browser. Read this before
@@ -12,10 +12,10 @@ that isn't obvious from the diff alone.
 | Backend | Speed | Visuals | Playable? |
 |---------|-------|---------|-----------|
 | `video=software` + `wasmjit=0` + `fastsw=1` + `pacing=smooth` | 100% | Visible 1/4-density pixel dots, smooth | **Yes** |
-| `video=software` + `wasmjit=1` | 14% post frame-700 + dot-matrix corruption | Broken | No (JIT bug) |
-| `video=ogl` + `oglproxy=readback` + JIT off (default) | 84% | Clean, reaches char select | Slow but works |
-| `video=ogl` + `oglproxy=readback` + `forcejit=1` | 100% | 4 distinct frames, geometry submitted but render dead | No (JIT bug) |
-| `video=ogl` + `oglproxy=worker` | 52% | Stuck, 1 distinct frame | No (canvas mirror) |
+| `video=software` + `wasmjit=1` | 100% post-Day-2 (was 14%) | Clean after carry-op reorder | **Yes** (pending verify) |
+| `video=ogl` + `oglproxy=readback` + JIT off | 84% | Clean, reaches char select | Slow but works |
+| `video=ogl` + `oglproxy=readback` + `forcejit=1` | **98.75%** (was 100% w/4-distinct freeze) | 127 distinct hashes, JIT engaged, clean | **Yes** (Day-2 fix) |
+| `video=ogl` + `oglproxy=worker` | 52% | Stuck, 1 distinct frame | No (canvas mirror — Wall 2) |
 
 **Recommended playable URL right now:**
 ```
@@ -110,20 +110,36 @@ postStatus messages aren't currently saved to `console.log`. Add a worker
 listener via `browserContext.on("worker", ...)` or expose `[frame-ring]`
 through a getter the validator can poll directly.
 
-### Day 2 — JIT corruption bisection
+### Day 2 — JIT corruption bisection ✅ (landed 2026-05-11)
 Goal: pinpoint which fast-path category miscompiles.
 
-1. With Day 1's disable flags, run `FORCEJIT=1 OGL_PROXY_MODE=readback`
-   validator with each category disabled in turn. ~10 runs, 3 min each.
-2. Find smallest set that brings `distinctCanvasHashes` 4 → 100+.
-3. Read that category's emitter logic in
-   `vendor/dolphin/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp`.
-   Suspect: signed/unsigned mismatches in `r3` carry-bit handling;
-   byte-order errors in `store8`/`load8` for shared-memory PPC state;
-   missing pipeline flushes between dependent emitted instructions.
-4. Targeted fix, rebuild, validate.
-   **Done when:** OGL + `FORCEJIT=1` reaches char select with
-   `distinctCanvasHashes ≥ 100`.
+**Root cause: WASM JIT emit ordering for the 6 carry-emitting ops.** All
+of `addex`/`subfex`/`addcx`/`subfcx`/`addic`/`subfic` stored the result to
+`GprOffset(RD)` first, then re-read `RA`/`RB` from memory to compute the
+new XER.CA. PowerPC commonly emits these as in-place `adde rD, rA, rB`
+with `rD == rA` (or `rB`), so the re-read picked up the post-store value,
+producing a wrong carry. The corrupted CA cascaded through subsequent
+`adde`/`subfe`/`addze` chains and broke 3D rendering at the first JIT
+engagement (~frame 700).
+
+`addzex` (SUBOP10=202) didn't share the bug — its emit caches `result` in
+`local[3]` and never re-reads `RA`. That was the asymmetry the bisection
+used: only-addzex-active was the *only* single-op configuration that
+didn't freeze.
+
+**Fix (six emit sites):** Reorder so the new XER.CA is computed and stored
+**before** the `GprOffset(RD)` write. Full per-op diffs in
+`patches/dolphin-wasm/SESSION-2026-05-11-DAY-2-NOTES.md`.
+
+**Verification:**
+- `FORCEJIT=1` OGL readback, no disable mask: **distinct=127**,
+  postJit gameSpeed **98.75 %**, JIT engaged, 6405 blocks compiled.
+- Software-mode regression sweep: 94 distinct / 100.08 % gameSpeed —
+  statistically identical to Day-1 baseline (96 / 100.16 %).
+
+**Diagnostic infra retained:** per-op carry disable bits stay in the build
+so any future regression in this family is `?disable=wasmadde` away from
+isolation, no rebuild required.
 
 ### Day 3 — OffscreenCanvas worker-mirror
 Goal: eliminate the readback round-trip.

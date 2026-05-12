@@ -137,6 +137,24 @@ const browser = await (browserName === "firefox"
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 page.on("console", (m) => consoleLines.push(`[${m.type()}] ${m.text()}`));
 page.on("pageerror", (e) => consoleLines.push(`[pageerror] ${e.stack || e.message}`));
+// Worker console capture. The Dolphin upstream core runs in a Web Worker; its
+// console.log (including the C++ per-frame ring-buffer drain and disable-mask
+// status messages) is not surfaced by page.on("console"). Listen at the
+// browser-context level so each spawned worker is wired up automatically.
+const seenWorkers = new WeakSet();
+function attachWorker(worker) {
+  if (seenWorkers.has(worker)) return;
+  seenWorkers.add(worker);
+  const label = `worker:${worker.url()?.split("/").pop() || "?"}`;
+  worker.on("console", (m) => consoleLines.push(`[${label}:${m.type()}] ${m.text()}`));
+  worker.on("pageerror", (e) =>
+    consoleLines.push(`[${label}:pageerror] ${e.stack || e.message}`));
+}
+const browserContext = page.context();
+for (const w of browserContext.serviceWorkers?.() ?? []) attachWorker(w);
+browserContext.on("serviceworker", attachWorker);
+page.on("worker", attachWorker);
+for (const w of page.workers?.() ?? []) attachWorker(w);
 
 const scriptState = inputScript.map((event) => ({ ...event, sent: false }));
 

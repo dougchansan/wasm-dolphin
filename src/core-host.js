@@ -842,10 +842,16 @@ const CACHED_INTERPRETER_DISABLE_BITS = {
   fastinteger: 1 << 6,
   fastsystem:  1 << 7,
   wasmblock:   1 << 8,
+  wasmcarry:   1 << 9,   // umbrella: all 5 carry-emitting OPCD-31 ops
+  wasmaddc:    1 << 10,  // SUBOP10=10  addcx  only
+  wasmsubfc:   1 << 11,  // SUBOP10=8   subfcx only
+  wasmadde:    1 << 12,  // SUBOP10=138 addex  only
+  wasmsubfe:   1 << 13,  // SUBOP10=136 subfex only
+  wasmaddze:   1 << 14,  // SUBOP10=202 addzex only
   // Aliases the plan / TL;DR uses interchangeably:
   fastinputpoll: 1 << 1, // legacy synonym for meleecall (input-poll lives there)
   fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
-  all:           0x1ff
+  all:           0x7fff
 };
 
 function requestedCachedInterpreterDisableMask() {
