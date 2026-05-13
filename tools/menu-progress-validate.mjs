@@ -76,7 +76,7 @@ url.searchParams.set("video", videoMode);
 url.searchParams.set("cpu", process.env.CPU || "dual");
 url.searchParams.set("speed", "1");
 url.searchParams.set("presenter", process.env.PRESENTER || (videoMode === "software" ? "webgpu" : "webgl"));
-url.searchParams.set("pacing", process.env.PACING || "direct");
+url.searchParams.set("pacing", process.env.PACING || "smooth");
 // Use the safer guarded JIT for both backends. The "mixed" tier compiles
 // more aggressive patterns that proved fine for boot dialogs but appear to
 // corrupt some post-boot CPU code paths under the browser pthread layout
@@ -94,7 +94,7 @@ if (videoMode === "ogl") {
 } else {
   url.searchParams.set("present", process.env.PRESENT || "full");
   url.searchParams.set("wasmjit", process.env.WASMJIT ?? "1");
-  url.searchParams.set("queue", process.env.QUEUE_SIZE || "2");
+  url.searchParams.set("queue", process.env.QUEUE_SIZE || "4");
   url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
 }
 url.searchParams.set("oc", process.env.OC || "1");

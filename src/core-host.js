@@ -863,7 +863,7 @@ function requestedPresentationQueueSize() {
   if (Number.isFinite(requested) && requested >= 2 && requested <= 12) {
     return requested;
   }
-  return 2;
+  return 4;
 }
 
 function requestedPresenterBackend() {

@@ -25,10 +25,21 @@ but the visible canvas only repaints 1–4 ×/s, *and* the CPU thread experience
 10–327 % per-sample swings (bursty stalls) that feel like slow motion +
 input lag in actual play. Software backend doesn't have either problem.
 
-**Recommended playable URL right now (Day-2 fix + software+JIT, post-2026-05-12):**
+**Recommended playable URL right now (Day-2 fix + software+JIT + Day-8 queue bump, post-2026-05-12):**
 ```
-http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=1&oc=1&queue=2&fastsw=1&metrics=1
+http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=1&oc=1&queue=4&fastsw=1&metrics=1
 ```
+
+Day 8 (presentFps gap fix): bumped default presentation queue from 2 → 4
+(`DEFAULT_PRESENTATION_QUEUE` in `src/upstream-discio-worker.js`,
+`requestedPresentationQueueSize` in `src/core-host.js`). At queue=2 +
+`pacing=direct` (the old validator default), the paint-loop p95 interval
+hit 60ms+ whenever a JIT compile or worker-contention spike dropped a
+frame, which clamped the reported `presentFps` to ~16-18. The actual
+paint rate was already 59 fps — queue=4 + `pacing=smooth` absorbs the
+jitter and the metric now reads 55+ fps to match. No latency cost:
+`presentationQueueTarget = 1` keeps steady-state buffering at 1 frame;
+the extra slots only kick in on transient spikes.
 
 Only difference from the prior URL: `wasmjit=1` (was `0`). With the Day-2 carry-op
 fix the JIT-on path no longer corrupts the title screen, so we get the

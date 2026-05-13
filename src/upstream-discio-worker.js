@@ -110,7 +110,14 @@ let coreBoot = {
 const MIN_FULL_BOOT_BYTES = 16 * 1024 * 1024;
 const LONG_PRESENTATION_FRAME_MS = 24;
 const PACED_PRESENTATION_INTERVAL_MS = 1000 / 60;
-const DEFAULT_PRESENTATION_QUEUE = 2;
+// Default queue depth (smooth pacing) — 4 absorbs typical paint-time jitter
+// (~3 long-frames/s under JIT compile bursts and worker contention) without
+// stalling the paced loop. At target=1, steady-state queue depth is ~1-2
+// frames; the extra headroom only kicks in on transient spikes. Empirically
+// (Day 8) bumping 2→4 lifted presentFps from ~26 to ~55 at the same actual
+// paint rate (rawFps=59) — the gap was metric-induced via p95-clamping on
+// underrun/drop events.
+const DEFAULT_PRESENTATION_QUEUE = 4;
 const MIN_PRESENTATION_QUEUE = 2;
 const MAX_PRESENTATION_QUEUE = 12;
 const VISUAL_HASH_SAMPLE_STRIDE_BYTES = 256;
