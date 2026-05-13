@@ -401,6 +401,14 @@ async function loadCore({
   });
 
   api = bindApi(moduleInstance);
+  // Day-7 persistent JIT cache (Phase A — message channel only). Push the
+  // master cache map (currently empty) to every pthread worker so the
+  // pre-js receiver on each pthread can stash it on Module._dolphinJitCache.
+  // The EM_JS compile body will then consult the local cache on each
+  // pthread, instantiate cached Modules locally, and avoid the cross-thread
+  // table problem from Day 6. Phase B adds cache lookup in the EM_JS;
+  // Phase C adds IndexedDB persistence.
+  installDolphinJitCacheChannel(moduleInstance);
   api.setVideoBackend?.(videoBackend);
   api.setCpuThread?.(Boolean(cpuThread));
   api.setCpuCore?.(cpuCore);
@@ -2162,6 +2170,216 @@ function postStatus(message) {
     type: "status",
     message: String(message)
   });
+}
+
+// Day-7 persistent JIT cache. The master cache lives here on the discio
+// worker. We load it from IndexedDB at boot and persist new compiles back
+// to IDB so the next session boots with a pre-warmed cache. At factory()
+// return time we postMessage the cache to every pthread worker in the
+// pool so each pthread can consult it from its EM_JS compile body. Each
+// pthread instantiates cached Modules locally on its own wasmTable —
+// bypassing the cross-pthread-table problem from Day 6.
+const dolphinJitCacheMap = new Map(); // Map<hashHex, WebAssembly.Module>
+const DOLPHIN_JIT_IDB_NAME = "dolphin-jit-cache";
+const DOLPHIN_JIT_IDB_STORE = "modules";
+const DOLPHIN_JIT_CACHE_MAX = 8192; // hard cap on in-memory entries
+let dolphinJitIdb = null;
+let dolphinJitIdbWritesPending = 0;
+let dolphinJitIdbWriteCount = 0;
+function openDolphinJitIdb() {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === "undefined") {
+      resolve(null);
+      return;
+    }
+    let request;
+    try {
+      request = indexedDB.open(DOLPHIN_JIT_IDB_NAME, 1);
+    } catch (err) {
+      postStatus(`jit-cache: indexedDB.open failed: ${err?.message || err}`);
+      resolve(null);
+      return;
+    }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
+        db.createObjectStore(DOLPHIN_JIT_IDB_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      postStatus(`jit-cache: indexedDB.open error: ${request.error?.message || "unknown"}`);
+      resolve(null);
+    };
+  });
+}
+async function loadDolphinJitCacheFromIdb(db) {
+  if (!db) return 0;
+  const entries = await new Promise((resolve) => {
+    const out = [];
+    try {
+      const tx = db.transaction(DOLPHIN_JIT_IDB_STORE, "readonly");
+      const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor) {
+          resolve(out);
+          return;
+        }
+        out.push({ key: cursor.key, value: cursor.value });
+        cursor.continue();
+      };
+      cursorReq.onerror = () => resolve(out);
+      tx.onerror = () => resolve(out);
+    } catch (err) {
+      postStatus(`jit-cache: IDB load failed: ${err?.message || err}`);
+      resolve(out);
+    }
+  });
+  let loaded = 0;
+  // Cached entries are stored as bytes (WebAssembly.Module storage in IDB
+  // proved unreliable across Chromium versions). Compile each on discio
+  // before sending to pthreads — Module is structured-cloneable across
+  // postMessage, so each pthread receives a ready-to-instantiate Module.
+  for (const { key, value } of entries) {
+    if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
+    if (dolphinJitCacheMap.has(key)) continue;
+    if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) break;
+    try {
+      const buf = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+      const mod = await WebAssembly.compile(buf);
+      dolphinJitCacheMap.set(key, mod);
+      loaded += 1;
+    } catch {
+      // Skip corrupt entries; they'll be re-cached on next miss.
+    }
+  }
+  return loaded;
+}
+function writeDolphinJitEntryToIdb(hash, bytes) {
+  if (!dolphinJitIdb) return;
+  try {
+    const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
+    tx.onabort = () => {
+      if (!self._dolphinJitIdbTxAbortLogged) {
+        self._dolphinJitIdbTxAbortLogged = true;
+        postStatus(`jit-cache: IDB tx abort: ${tx.error?.message || "unknown"}`);
+      }
+    };
+    const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
+    dolphinJitIdbWritesPending += 1;
+    const req = store.put(bytes, hash);
+    req.onsuccess = () => {
+      dolphinJitIdbWritesPending -= 1;
+      dolphinJitIdbWriteCount += 1;
+      if (
+        dolphinJitIdbWriteCount === 100 ||
+        dolphinJitIdbWriteCount % 500 === 0
+      ) {
+        postStatus(
+          `jit-cache: IDB writes=${dolphinJitIdbWriteCount} pending=${dolphinJitIdbWritesPending}`
+        );
+      }
+    };
+    req.onerror = () => {
+      dolphinJitIdbWritesPending -= 1;
+      if (!self._dolphinJitIdbWriteErrLogged) {
+        self._dolphinJitIdbWriteErrLogged = true;
+        postStatus(`jit-cache: IDB write error: ${req.error?.message || "unknown"}`);
+      }
+    };
+  } catch (err) {
+    if (!self._dolphinJitIdbWriteErrLogged) {
+      self._dolphinJitIdbWriteErrLogged = true;
+      postStatus(`jit-cache: IDB write threw: ${err?.message || err}`);
+    }
+  }
+}
+// Kick off the load immediately. installDolphinJitCacheChannel will await
+// this before pushing the (now-populated) cache map to pthreads.
+const dolphinJitCacheReady = (async () => {
+  dolphinJitIdb = await openDolphinJitIdb();
+  const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
+  if (loaded > 0) {
+    postStatus(`jit-cache: loaded ${loaded} compiled modules from IndexedDB`);
+  }
+})();
+let dolphinJitNewCompileCount = 0;
+function handleDolphinJitNewCompile(event) {
+  const data = event.data;
+  if (!data || data.type !== "dolphin-jit-new-compile") return;
+  dolphinJitNewCompileCount += 1;
+  if (!data.hash || !data.bytes) return;
+  if (dolphinJitCacheMap.has(data.hash)) return;
+  if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) return;
+  // Reserve the slot synchronously so duplicate notifications dedupe even
+  // before the async compile finishes. Replace with the real Module once
+  // compilation completes. Async to keep discio off-critical-path. After
+  // the compile lands, persist to IndexedDB so subsequent boots can
+  // pre-warm without recompiling.
+  dolphinJitCacheMap.set(data.hash, null);
+  // Persist bytes synchronously (fire-and-forget IDB put). Storage format
+  // is raw wasm bytes; we recompile at boot. WebAssembly.Module storage in
+  // IDB proved unreliable empirically (put().oncomplete fires but
+  // req.onsuccess never does, and the data doesn't survive). Bytes are
+  // boring TypedArrays and clone reliably.
+  writeDolphinJitEntryToIdb(data.hash, data.bytes);
+  WebAssembly.compile(data.bytes).then((mod) => {
+    dolphinJitCacheMap.set(data.hash, mod);
+  }).catch((err) => {
+    dolphinJitCacheMap.delete(data.hash);
+    if (!self._dolphinJitNewCompileErrLogged) {
+      self._dolphinJitNewCompileErrLogged = true;
+      postStatus(`jit-cache: async compile-on-discio failed: ${err?.message || err}`);
+    }
+  });
+  if (
+    dolphinJitNewCompileCount === 1 ||
+    dolphinJitNewCompileCount === 10 ||
+    dolphinJitNewCompileCount % 100 === 0
+  ) {
+    postStatus(
+      `jit-cache: discio recorded ${dolphinJitNewCompileCount} new compiles (cache size=${dolphinJitCacheMap.size})`
+    );
+  }
+}
+async function installDolphinJitCacheChannel(moduleInstance) {
+  const pthread = moduleInstance?.PThread;
+  if (!pthread) {
+    postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
+    return;
+  }
+  // Wait for IndexedDB load to finish so pthreads receive a fully-populated
+  // map and the first compile attempts hit the cache instead of recompiling.
+  await dolphinJitCacheReady;
+  const workers = [
+    ...(pthread.runningWorkers || []),
+    ...(pthread.unusedWorkers || [])
+  ];
+  if (!workers.length) {
+    postStatus("jit-cache: no pthread workers visible at boot (PTHREAD_POOL_SIZE may be 0)");
+    return;
+  }
+  // Send the cache to every worker. We send the same payload to running +
+  // unused so when Dolphin assigns a fresh pthread to a previously-idle
+  // worker, the cache is already installed. Also addEventListener so the
+  // pthread's self.postMessage cache-miss notifications reach us alongside
+  // Emscripten's worker.onmessage.
+  let sent = 0;
+  for (const w of workers) {
+    try {
+      w.postMessage({ type: "dolphin-jit-cache", cache: dolphinJitCacheMap });
+      w.addEventListener("message", handleDolphinJitNewCompile);
+      sent += 1;
+    } catch (err) {
+      if (!self._dolphinJitChannelErrLogged) {
+        self._dolphinJitChannelErrLogged = true;
+        postStatus(`jit-cache: postMessage to pthread worker failed: ${err?.message || err}`);
+      }
+    }
+  }
+  postStatus(`jit-cache: pushed cache (${dolphinJitCacheMap.size} entries) to ${sent}/${workers.length} pthread workers`);
 }
 
 // Day-1 instrumentation: drain the C++ per-frame ring buffer ~1Hz and print

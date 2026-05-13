@@ -109,33 +109,59 @@ const samples = [];
 const milestoneLog = [];
 const distinctHashes = new Map(); // hash → { firstAt, screenshot }
 
-const browser = await (browserName === "firefox"
-  ? firefox.launch({
-      headless: !headed,
-      firefoxUserPrefs: {
-        // Mirror what serve.mjs gives us — Firefox needs explicit COOP/COEP
-        // and SharedArrayBuffer enabled for the pthread WASM core.
-        "dom.postMessage.sharedArrayBuffer.withCOOP_COEP": true,
-        "javascript.options.shared_memory": true,
-        // Enable WebGL2 (default on, but explicit so we don't fight the user).
-        "webgl.force-enabled": true
-      }
-    })
-  : chromium.launch({
+// Optional persistent user-data-dir, so IndexedDB (e.g. Day-7 JIT cache)
+// and other origin-scoped storage survive across probe runs.
+const persistUserDataDir = process.env.PROBE_PERSIST_DIR || null;
+const persistBrowserData = persistUserDataDir
+  ? path.resolve(persistUserDataDir)
+  : null;
+
+const chromiumLaunchArgs = [
+  "--autoplay-policy=no-user-gesture-required",
+  "--enable-webgl",
+  "--enable-unsafe-webgpu",
+  "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
+];
+
+const browser = persistBrowserData
+  ? await chromium.launchPersistentContext(persistBrowserData, {
       channel: process.env.BROWSER_CHANNEL || "chrome",
       headless: !headed,
-      args: [
-        "--autoplay-policy=no-user-gesture-required",
-        "--enable-webgl",
-        "--enable-unsafe-webgpu",
-        "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
-      ]
-    })).catch(async (error) => {
-  console.warn(`Failed ${browserName} channel; falling back to bundled chromium: ${error.message}`);
-  return chromium.launch({ headless: !headed });
-});
+      args: chromiumLaunchArgs
+    }).catch(async (error) => {
+      console.warn(`Failed persistent context; falling back to bundled chromium: ${error.message}`);
+      return chromium.launchPersistentContext(persistBrowserData, { headless: !headed });
+    })
+  : await (browserName === "firefox"
+      ? firefox.launch({
+          headless: !headed,
+          firefoxUserPrefs: {
+            // Mirror what serve.mjs gives us — Firefox needs explicit COOP/COEP
+            // and SharedArrayBuffer enabled for the pthread WASM core.
+            "dom.postMessage.sharedArrayBuffer.withCOOP_COEP": true,
+            "javascript.options.shared_memory": true,
+            // Enable WebGL2 (default on, but explicit so we don't fight the user).
+            "webgl.force-enabled": true
+          }
+        })
+      : chromium.launch({
+          channel: process.env.BROWSER_CHANNEL || "chrome",
+          headless: !headed,
+          args: chromiumLaunchArgs
+        })).catch(async (error) => {
+      console.warn(`Failed ${browserName} channel; falling back to bundled chromium: ${error.message}`);
+      return chromium.launch({ headless: !headed });
+    });
 
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+// launchPersistentContext returns a BrowserContext (not Browser). Both
+// expose .newPage()/.on() with the same signatures we need below, so we
+// can treat them uniformly. Same applies to teardown via .close().
+const page = persistBrowserData
+  ? await browser.newPage()
+  : await browser.newPage({ viewport: { width: 1280, height: 900 } });
+if (persistBrowserData) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+}
 page.on("console", (m) => consoleLines.push(`[${m.type()}] ${m.text()}`));
 page.on("pageerror", (e) => consoleLines.push(`[pageerror] ${e.stack || e.message}`));
 // Worker console capture. The Dolphin upstream core runs in a Web Worker; its
