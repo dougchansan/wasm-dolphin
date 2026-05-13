@@ -100,6 +100,7 @@ if (videoMode === "ogl") {
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
+if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 url.searchParams.set("metrics", "1");
 url.searchParams.set("probe", `menu-progress-${Date.now()}`);
 

@@ -40,7 +40,11 @@ export class UpstreamWorkerAdapter {
     oglTestClear = false,
     fastSoftwareRaster = 0,
     cachedInterpreterDisableMask = 0,
-    collectMetrics = false
+    collectMetrics = false,
+    oglPixelSab = null,
+    oglMetaSab = null,
+    oglSabWidth = 0,
+    oglSabHeight = 0
   } = {}) {
     this.coreUrl = coreUrl;
     this.workerUrl = workerUrl;
@@ -70,6 +74,10 @@ export class UpstreamWorkerAdapter {
     this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.collectMetrics = Boolean(collectMetrics);
+    this.oglPixelSab = oglPixelSab;
+    this.oglMetaSab = oglMetaSab;
+    this.oglSabWidth = oglSabWidth | 0;
+    this.oglSabHeight = oglSabHeight | 0;
     this.worker = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -153,7 +161,11 @@ export class UpstreamWorkerAdapter {
       fastSoftwareRaster: this.fastSoftwareRaster,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       collectMetrics: this.collectMetrics,
-      inputStateSab: this.inputStateSab
+      inputStateSab: this.inputStateSab,
+      oglPixelSab: this.oglPixelSab,
+      oglMetaSab: this.oglMetaSab,
+      oglSabWidth: this.oglSabWidth,
+      oglSabHeight: this.oglSabHeight
     };
     const transfer = [];
     // Lazy transferControlToOffscreen: do it right at the moment we

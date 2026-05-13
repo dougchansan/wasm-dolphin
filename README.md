@@ -32,7 +32,8 @@ which gameplay runs at near-100 % game speed.
 |---------------------------------------------------|-----------:|-----------:|----------|
 | `video=software` + `wasmjit=1` (recommended)      |   100.15 % |      22.4  | **Yes — best** |
 | `video=software` + `wasmjit=0`                    |    99.4 %  |      25.7  | Yes (slightly choppier startup) |
-| `video=ogl` + `oglproxy=readback` + `forcejit=1`  |    98.8 %  |       1.3  | Boots/renders, but visually choppy + bursty CPU swings |
+| `video=ogl` + `oglproxy=readback` + `forcejit=1`  |    98.8 %  |       1.3  | Boots/renders. Distinct hash progression 0.34/s. |
+| `video=ogl` + `oglproxy=readback` + `forcejit=1` + `oglsab=1` |    97.2 %  |       1.6  | **2× faster visible progression** via SAB pixel transport (0.67/s distinct); main thread `putImageData`s a SharedArrayBuffer the worker fills per-readback, bypassing the WebGPU presenter + OffscreenCanvas auto-mirror. |
 | `video=ogl` + `oglproxy=worker`                   |    n/a     |       0    | Not yet — Emscripten pthread message routing |
 | `video=ogl` + `oglproxy=proxy`                    |    n/a     |       0    | Not yet — OffscreenCanvas auto-mirror inactive |
 

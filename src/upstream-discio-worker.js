@@ -76,6 +76,15 @@ let lastInputStateGeneration = 0;
 // the bitmap to main thread, which drawImages it onto the visible canvas.
 let detachedOglCanvas = null;
 let detachedOglFrameCount = 0;
+// SAB pixel transport state (Day-5). When enabled, the worker copies
+// s_framebuffer bytes into oglPixelSabView per OGL swap and increments
+// oglMetaSabView[0] atomically. Main thread reads the counter on RAF and
+// putImageDatas to the visible canvas, bypassing the WebGPU presenter.
+let oglPixelSabView = null;
+let oglMetaSabView = null;
+let oglSabWidth = 0;
+let oglSabHeight = 0;
+let oglSabEnabledForLoad = false;
 // Boot-stall watchdog state. Detects the "core CPU is frozen but canvas
 // still updates" pattern (Chrome IntensiveWakeUpThrottling clamping the
 // worker's setTimeout below 1Hz, starving pumpHostJobs).
@@ -157,6 +166,17 @@ async function handleMessage(type, payload) {
         inputStateSabView = new Int32Array(payload.inputStateSab);
         lastInputStateGeneration = 0;
       }
+      // SAB pixel transport: set up shared views once. The worker's
+      // presentation loop will copy s_framebuffer bytes into oglPixelSabView
+      // per OGL swap and bump oglMetaSabView[0] atomically — main thread
+      // reads the counter in its existing RAF loop and putImageDatas.
+      if (payload.oglPixelSab instanceof SharedArrayBuffer &&
+          payload.oglMetaSab instanceof SharedArrayBuffer) {
+        oglPixelSabView = new Uint8Array(payload.oglPixelSab);
+        oglMetaSabView = new Int32Array(payload.oglMetaSab);
+        oglSabWidth = payload.oglSabWidth | 0;
+        oglSabHeight = payload.oglSabHeight | 0;
+      }
       await loadCore({
         coreUrl: payload.coreUrl,
         canvas: payload.canvas,
@@ -177,7 +197,8 @@ async function handleMessage(type, payload) {
         oglProxyMode: payload.oglProxyMode,
         oglTestClear: payload.oglTestClear,
         fastSoftwareRaster: payload.fastSoftwareRaster,
-        cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask
+        cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
+        oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
     case "mountFile":
@@ -276,14 +297,21 @@ async function loadCore({
   oglProxyMode = "proxy",
   oglTestClear = false,
   fastSoftwareRaster = 0,
-  cachedInterpreterDisableMask = 0
+  cachedInterpreterDisableMask = 0,
+  oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
     return moduleInstance;
   }
+  oglSabEnabledForLoad = Boolean(oglSabEnabled);
 
   const normalizedOglProxyMode = normalizeOglProxyMode(oglProxyMode);
-  const readbackOgl = videoBackend === "OGL" && normalizedOglProxyMode === "readback";
+  // SAB mode behaves like readback (worker fills s_framebuffer via readback)
+  // but pipes pixels via SAB+main-thread putImageData instead of running a
+  // WebGPU presenter on a transferred OffscreenCanvas. So we force-enable
+  // readback when SAB is on, regardless of the user's oglproxy choice.
+  const readbackOgl =
+    videoBackend === "OGL" && (normalizedOglProxyMode === "readback" || oglSabEnabledForLoad);
   // Detached mode: when no canvas was transferred but we're on the OGL
   // worker path, create a standalone OffscreenCanvas for the GL backend.
   // Standalone OCs aren't bound to any DOM element so commit/captureStream
@@ -330,6 +358,14 @@ async function loadCore({
     // loop never starts (it gates on workerOwnsCanvas) and presentFrame is
     // never called, so no frames flow through the pipeline.
     workerOwnsCanvas = true;
+  } else if (oglSabEnabledForLoad && moduleCanvas) {
+    // SAB pixel transport: the standalone moduleCanvas hosts the GL backend
+    // and we publish pixels to main via the SAB. Same workerOwnsCanvas
+    // promotion as detached mode — otherwise the presentation loop won't
+    // start and we'll never call publishOglSabFrame.
+    renderCanvas = moduleCanvas;
+    workerOwnsCanvas = true;
+    postStatus("Worker SAB OGL: standalone OffscreenCanvas, pixels via SharedArrayBuffer");
   }
 
   if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
@@ -1342,6 +1378,14 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   } else if (renderContext) {
     drawFrameToCanvas(width, height, pointer, length);
   }
+  // SAB pixel transport: copy s_framebuffer bytes into the shared pixel
+  // buffer and bump the generation counter atomically. Main thread reads
+  // the counter on RAF and putImageDatas the SAB contents onto the visible
+  // canvas. The drawFrame* path above is a no-op in SAB mode (no presenter
+  // was set up), so this IS the visible-paint pipeline for OGL+SAB.
+  if (frameView && oglPixelSabView && oglMetaSabView) {
+    publishOglSabFrame(width, height, frameView);
+  }
   addProfileTime("draw", performance.now() - drawStartedAt);
 
   const hashStartedAt = performance.now();
@@ -1349,6 +1393,41 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   addProfileTime("hash", performance.now() - hashStartedAt);
   recordPresentedFrame(coreFrame);
   addProfileTime("present", performance.now() - presentStartedAt);
+}
+
+let oglSabLastPublishMs = 0;
+const OGL_SAB_MIN_INTERVAL_MS = 14;  // ~70 Hz cap; vsync is 60 Hz on most monitors
+
+function publishOglSabFrame(width, height, frameView) {
+  // Throttle to ~60 Hz: without this cap, the worker drives glReadPixels
+  // at 150-200 Hz (no presenter pacing in SAB mode), eating GPU pthread
+  // time that the CPU emulation pthread could otherwise use. Empirically
+  // dropped gameSpeed from 98 % to 67 %. Capping the publish rate keeps the
+  // readback at human-visible cadence without saturating the pipeline.
+  const now = performance.now();
+  if (now - oglSabLastPublishMs < OGL_SAB_MIN_INTERVAL_MS) return;
+  oglSabLastPublishMs = now;
+
+  // SAB allocation in core-host.js is sized to match this readback output
+  // exactly (presentationScale × 320 × 240). On the rare path where sizes
+  // diverge (e.g. presentation-scale change mid-run, currently not
+  // supported), clip to the smaller buffer so we don't OOB.
+  const sabBytes = oglPixelSabView.length;
+  const fbBytes = frameView.length;
+  const copyBytes = fbBytes < sabBytes ? fbBytes : sabBytes;
+  if (copyBytes === 0) return;
+  if (copyBytes === sabBytes && copyBytes === fbBytes) {
+    // Common path: same-size memcpy via TypedArray.set, which compiles to
+    // a SIMD memmove on Chrome.
+    oglPixelSabView.set(frameView);
+  } else {
+    oglPixelSabView.set(frameView.subarray(0, copyBytes));
+    if (copyBytes < sabBytes) {
+      oglPixelSabView.fill(0, copyBytes);
+    }
+  }
+  // Bump the generation; main thread polls this with Atomics.load on RAF.
+  Atomics.add(oglMetaSabView, 0, 1);
 }
 
 function presentFrameBytes(width, height, bytes, coreFrame) {

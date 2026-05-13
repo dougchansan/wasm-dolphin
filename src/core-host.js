@@ -41,14 +41,65 @@ export class EmulatorHost {
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.collectMetrics = requestedCollectMetrics();
     this.visibleSamplerEnabled = requestedVisibleSampler();
+    // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
+    // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
+    // to the worker. The worker writes per-readback pixels into the pixel
+    // SAB and atomically bumps a generation counter in the meta SAB. Main
+    // thread reads the generation in its existing animation loop and
+    // putImageDatas onto a 2D-context visible canvas — bypassing the
+    // worker's WebGPU presenter + OffscreenCanvas auto-mirror that today's
+    // oglproxy=readback path pays for.
+    this.oglSabEnabled =
+      this.coreKind === "upstream" &&
+      this.videoBackend === "OGL" &&
+      requestedOglSab() &&
+      typeof SharedArrayBuffer === "function";
     this.usesMainThreadOgl =
       this.coreKind === "upstream" && this.videoBackend === "OGL" && this.oglProxyMode === "main";
     this.usesAdapterCanvas =
-      this.coreKind === "upstream" && !this.usesMainThreadOgl && Boolean(canvas.transferControlToOffscreen);
-    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl;
-    this.context = this.canvasOwnedByAdapter ? null : canvas.getContext("2d", { alpha: false });
+      this.coreKind === "upstream" &&
+      !this.usesMainThreadOgl &&
+      !this.oglSabEnabled &&
+      Boolean(canvas.transferControlToOffscreen);
+    // canvasOwnedByAdapter gates the host's stats-poll cadence (250 ms). In
+    // SAB mode the visible canvas stays on main, but the *frame production*
+    // still happens in the worker, so we still want the poll active.
+    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl || this.oglSabEnabled;
+    // SAB mode keeps the visible canvas on the main thread so we can paint
+    // it directly via putImageData. The host owns a 2D context here.
+    this.context =
+      this.canvasOwnedByAdapter && !this.oglSabEnabled
+        ? null
+        : canvas.getContext("2d", { alpha: false });
     if (this.context) {
       this.context.imageSmoothingEnabled = false;
+    }
+
+    // Allocate the SAB pair if SAB mode is enabled. Dimensions match the
+    // worker's readback output: DolphinWebPublishAsyncReadback fills
+    // s_framebuffer at ScaledPresentationDimension(GL canvas dim) which is
+    // presentationScale × 320 × 240. We resize the visible canvas to those
+    // exact dimensions so putImageData paints 1:1; CSS scales the canvas
+    // up to its display size.
+    if (this.oglSabEnabled) {
+      const scale = Math.min(1, Math.max(0.25, Number(this.presentationScale) || 0.5));
+      this.oglSabWidth = Math.max(160, Math.round(320 * scale));
+      this.oglSabHeight = Math.max(120, Math.round(240 * scale));
+      canvas.width = this.oglSabWidth;
+      canvas.height = this.oglSabHeight;
+      const pixelBytes = this.oglSabWidth * this.oglSabHeight * 4;
+      this.oglPixelSab = new SharedArrayBuffer(pixelBytes);
+      this.oglMetaSab = new SharedArrayBuffer(8); // [generation, reserved]
+      this.oglPixelView = new Uint8ClampedArray(this.oglPixelSab);
+      this.oglMetaView = new Int32Array(this.oglMetaSab);
+      this.oglLastSeenGen = 0;
+      // ImageData rejects SharedArrayBuffer-backed views in Chrome. Allocate
+      // a regular Uint8ClampedArray and copy SAB → ImageData.data per paint
+      // (one TypedArray.set, ~76 KB at present=half — < 0.1 ms).
+      this.oglImageData = new ImageData(this.oglSabWidth, this.oglSabHeight);
+    } else {
+      this.oglPixelSab = null;
+      this.oglMetaSab = null;
     }
 
     this.frameCanvas = this.canvasOwnedByAdapter ? null : document.createElement("canvas");
@@ -62,7 +113,11 @@ export class EmulatorHost {
     this.nativeImageData = null;
 
     this.adapterLabel = this.coreKind === "upstream" ? "Dolphin upstream core" : "Dolphin native scaffold";
-    if (this.coreKind === "upstream" && this.videoBackend === "OGL") {
+    if (this.coreKind === "upstream" && this.videoBackend === "OGL" && !this.oglSabEnabled) {
+      // Standard OGL path: visible canvas is sized for the WebGPU/WebGL
+      // presenter that will paint at higher-than-readback density. SAB mode
+      // owns its own canvas sizing above (matched to readback size); skip
+      // this so the SAB-sized canvas isn't clobbered.
       const oglScale = Math.min(1, Math.max(0.25, Number(this.presentationScale) || 0.5));
       canvas.width = Math.max(160, Math.round(640 * oglScale));
       canvas.height = Math.max(120, Math.round(480 * oglScale));
@@ -145,11 +200,17 @@ export class EmulatorHost {
             // unconditionally, which broke software mode because the default
             // proxy mode is "worker" even when the video backend is software.)
             transferCanvas:
-              this.videoBackend === "OGL" && this.oglProxyMode === "worker"
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
                 ? null
                 : transferCanvasToOffscreen,
             visibleCanvas:
-              this.videoBackend === "OGL" && this.oglProxyMode === "worker" ? canvas : null,
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
+                ? canvas
+                : null,
+            oglPixelSab: this.oglPixelSab,
+            oglMetaSab: this.oglMetaSab,
+            oglSabWidth: this.oglSabWidth || 0,
+            oglSabHeight: this.oglSabHeight || 0,
             videoBackend: this.videoBackend,
             cpuThread: this.cpuThread,
             cpuCore: this.cpuCore,
@@ -430,6 +491,29 @@ export class EmulatorHost {
   }
 
   renderDolphin() {
+    // SAB pixel transport: in this mode the visible canvas stays on the
+    // main thread. The worker writes per-readback pixels into a shared
+    // array buffer and bumps a generation counter; we putImageData on
+    // every animation frame where the counter changed. Skips the worker's
+    // setupSoftwarePresenter + OffscreenCanvas auto-mirror entirely.
+    if (this.oglSabEnabled) {
+      if (this.adapterStatsPollMs > 0) {
+        const now = performance.now();
+        if (now - this.lastAdapterStatsPollAt >= this.adapterStatsPollMs) {
+          this.lastAdapterStatsPollAt = now;
+          this.adapter.pollFrame?.();
+        }
+      }
+      const currentGen = Atomics.load(this.oglMetaView, 0) | 0;
+      if (currentGen !== this.oglLastSeenGen && this.context) {
+        this.oglLastSeenGen = currentGen;
+        // Copy SAB-backed bytes into the non-shared ImageData buffer
+        // (Chrome refuses to construct ImageData over a SAB view directly).
+        this.oglImageData.data.set(this.oglPixelView);
+        this.context.putImageData(this.oglImageData, 0, 0);
+      }
+      return;
+    }
     if (this.canvasOwnedByAdapter) {
       if (this.adapterStatsPollMs > 0) {
         const now = performance.now();
@@ -820,6 +904,10 @@ function requestedOglProxyMode() {
 
 function requestedOglTestClear() {
   return new URLSearchParams(window.location.search).get("ogltestclear") === "1";
+}
+
+function requestedOglSab() {
+  return new URLSearchParams(window.location.search).get("oglsab") === "1";
 }
 
 function requestedFastSoftwareRaster() {
