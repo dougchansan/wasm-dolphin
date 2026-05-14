@@ -1194,41 +1194,14 @@ function runPresentationLoop() {
         // present-deduplication key so each new GL swap registers as a new frame.
         const oglSwap = parseOglSwapStats(api.getVideoStats?.()).swap >>> 0;
         const oglFrameKey = oglSwap > 0 ? oglSwap : coreFrame;
-        // Detached OGL: worker owns a standalone OffscreenCanvas. After each
-        // new GL swap, transferToImageBitmap to capture the rendered frame
-        // and post it to main thread for drawImage onto the visible canvas.
-        // Bypasses commit/captureStream/transferControlToOffscreen entirely.
-        if (detachedOglCanvas && oglFrameKey !== lastPresentedCoreFrame) {
-          // Skip if we've already learned the canvas is detached (Emscripten
-          // pthread transferred it to the GPU thread). Avoid spamming the
-          // status pill with every frame's failure. Set detachedOglCanvas
-          // to null after the first failure so we stop trying.
-          try {
-            const bitmap = detachedOglCanvas.transferToImageBitmap();
-            if (bitmap) {
-              detachedOglFrameCount += 1;
-              self.postMessage(
-                { type: "detachedOglFrame", bitmap, width: bitmap.width, height: bitmap.height },
-                [bitmap]
-              );
-              if (detachedOglFrameCount === 1) {
-                postStatus(`Detached OGL: first bitmap posted (${bitmap.width}x${bitmap.height})`);
-              }
-            } else if (detachedOglFrameCount === 0) {
-              postStatus("Detached OGL: transferToImageBitmap returned null; disabling");
-              detachedOglCanvas = null;
-            }
-          } catch (err) {
-            if (detachedOglFrameCount === 0) {
-              postStatus(
-                `Detached OGL disabled (${err.message || err}). Canvas was transferred to GPU pthread; ` +
-                  `try cpu=single to keep canvas on worker thread.`
-              );
-            }
-            // Disable so we don't spam errors every frame.
-            detachedOglCanvas = null;
-          }
-        }
+        // Detached OGL bitmap capture now happens C++-side from the GPU
+        // pthread (Emscripten.cpp Swap() does transferToImageBitmap +
+        // self.postMessage), and the discio worker forwards via
+        // handleDetachedOglFrame attached per-pthread in
+        // installDolphinJitCacheChannel. The discio worker can't
+        // transferToImageBitmap on detachedOglCanvas because Emscripten
+        // transferred it to the GPU pthread — that's what Day-3 hit and
+        // why we couldn't make worker-mode painting work then.
         presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
       } else if (coreBoot.accepted && frameSignalHeap && presentationPacingMode === "direct") {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
@@ -2647,6 +2620,14 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     try {
       w.postMessage({ type: "dolphin-jit-cache", cache: dolphinJitCacheMap });
       w.addEventListener("message", handleDolphinJitNewCompile);
+      // Detached OGL: also catch detachedOglFrame postMessages from the
+      // GPU pthread (whichever one owns the OffscreenCanvas after
+      // Emscripten transfers it). C++ Swap() in Emscripten.cpp does the
+      // transferToImageBitmap + postMessage from that pthread; we forward
+      // it on to the main thread for drawImage onto the visible canvas.
+      // This is the no-glReadPixels paint path — bypasses the multi-
+      // second GPU-sync stalls the Chrome trace pinpointed.
+      w.addEventListener("message", handleDetachedOglFrame);
       sent += 1;
     } catch (err) {
       if (!self._dolphinJitChannelErrLogged) {
@@ -2656,6 +2637,30 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     }
   }
   postStatus(`jit-cache: pushed cache (${dolphinJitCacheMap.size} entries) to ${sent}/${workers.length} pthread workers`);
+}
+
+let detachedOglForwardedCount = 0;
+function handleDetachedOglFrame(event) {
+  const data = event.data;
+  if (!data || data.type !== "detachedOglFrame" || !data.bitmap) return;
+  detachedOglForwardedCount += 1;
+  if (detachedOglForwardedCount === 1) {
+    postStatus(
+      `ogl-detached: first bitmap received from GPU pthread (${data.width}x${data.height}); forwarding to main`
+    );
+  }
+  try {
+    self.postMessage(
+      { type: "detachedOglFrame", bitmap: data.bitmap, width: data.width, height: data.height },
+      [data.bitmap]
+    );
+  } catch (err) {
+    if (!self._detachedOglForwardErrLogged) {
+      self._detachedOglForwardErrLogged = true;
+      postStatus(`ogl-detached: forward to main failed: ${err?.message || err}`);
+    }
+    try { data.bitmap.close(); } catch {}
+  }
 }
 
 // Day-1 instrumentation: drain the C++ per-frame ring buffer ~1Hz and print
