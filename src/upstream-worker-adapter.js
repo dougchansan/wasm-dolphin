@@ -473,6 +473,30 @@ export class UpstreamWorkerAdapter {
   }
 
   handleMessage(message) {
+    // Stall logger: surface worker→main message handlers that take >20 ms.
+    // This catches applyFrame backlog, detachedOgl bitmap draws, and
+    // status floods. Correlates with PerformanceLongAnimationFrame entries.
+    const handlerStartedAt = performance.now();
+    const result = this._handleMessageInner(message);
+    const handlerMs = performance.now() - handlerStartedAt;
+    if (handlerMs > 20) {
+      this._msgStallCount = (this._msgStallCount || 0) + 1;
+      const isNewWorst = handlerMs > (this._msgStallWorstMs || 0);
+      if (isNewWorst) this._msgStallWorstMs = handlerMs;
+      if (isNewWorst || this._msgStallCount % 10 === 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[msg-stall#${this._msgStallCount}${isNewWorst ? "*" : ""}] ` +
+          `handler=${handlerMs.toFixed(0)}ms ` +
+          `type=${message?.type || "rpc"} ` +
+          `hasFrameBuffer=${Boolean(message?.payload?.frameBuffer ?? message?.frameBuffer)}`
+        );
+      }
+    }
+    return result;
+  }
+
+  _handleMessageInner(message) {
     if (message?.type === "status") {
       this.onStatus(message.message);
       return;

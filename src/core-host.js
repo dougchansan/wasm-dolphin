@@ -456,13 +456,42 @@ export class EmulatorHost {
       return;
     }
 
+    const loopStartedAt = performance.now();
     this.frame += 1;
     if (this.mode === "demo") {
       this.renderDemo();
     } else {
       this.renderDolphin();
     }
+    const renderEndedAt = performance.now();
     this.publishFrame();
+    const loopEndedAt = performance.now();
+    // Stall logger: surface main-thread RAF iterations that take > 20 ms
+    // (one missed 60 Hz slot). Worst-so-far + every 5th, with per-stage
+    // breakdown so we can correlate with the validator's long-anim-frame
+    // entries. Also log the very first slow iteration regardless of
+    // threshold so we have a sanity check that the logger is firing.
+    const loopMs = loopEndedAt - loopStartedAt;
+    if (!this._mainStallFirstLogged && loopMs > 0) {
+      this._mainStallFirstLogged = true;
+      // eslint-disable-next-line no-console
+      console.log(`[main-stall:first] loop=${loopMs.toFixed(2)}ms frame=${this.frame} mode=${this.mode}`);
+    }
+    if (loopMs > 20) {
+      this._mainStallCount = (this._mainStallCount || 0) + 1;
+      const isNewWorst = loopMs > (this._mainStallWorstMs || 0);
+      if (isNewWorst) this._mainStallWorstMs = loopMs;
+      if (isNewWorst || this._mainStallCount % 5 === 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[main-stall#${this._mainStallCount}${isNewWorst ? "*" : ""}] ` +
+          `loop=${loopMs.toFixed(0)}ms ` +
+          `render=${(renderEndedAt - loopStartedAt).toFixed(0)} ` +
+          `publish=${(loopEndedAt - renderEndedAt).toFixed(0)} ` +
+          `frame=${this.frame} mode=${this.mode}`
+        );
+      }
+    }
     this.animationId = requestAnimationFrame(this.loop);
   };
 
@@ -497,6 +526,7 @@ export class EmulatorHost {
     // every animation frame where the counter changed. Skips the worker's
     // setupSoftwarePresenter + OffscreenCanvas auto-mirror entirely.
     if (this.oglSabEnabled) {
+      const sabT0 = performance.now();
       if (this.adapterStatsPollMs > 0) {
         const now = performance.now();
         if (now - this.lastAdapterStatsPollAt >= this.adapterStatsPollMs) {
@@ -504,13 +534,38 @@ export class EmulatorHost {
           this.adapter.pollFrame?.();
         }
       }
+      const sabT1 = performance.now();
       const currentGen = Atomics.load(this.oglMetaView, 0) | 0;
+      const sabT2 = performance.now();
+      let copiedThisFrame = false;
       if (currentGen !== this.oglLastSeenGen && this.context) {
         this.oglLastSeenGen = currentGen;
         // Copy SAB-backed bytes into the non-shared ImageData buffer
         // (Chrome refuses to construct ImageData over a SAB view directly).
         this.oglImageData.data.set(this.oglPixelView);
         this.context.putImageData(this.oglImageData, 0, 0);
+        copiedThisFrame = true;
+      }
+      const sabT3 = performance.now();
+      // Surface slow renderDolphin iterations with per-stage breakdown.
+      // poll = pollFrame message dispatch, atomic = gen-counter read,
+      // paint = SAB→ImageData memcpy + putImageData.
+      const total = sabT3 - sabT0;
+      if (total > 20) {
+        this._sabStallCount = (this._sabStallCount || 0) + 1;
+        const isNewWorst = total > (this._sabStallWorstMs || 0);
+        if (isNewWorst) this._sabStallWorstMs = total;
+        if (isNewWorst || this._sabStallCount % 10 === 0) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[sab-paint-stall#${this._sabStallCount}${isNewWorst ? "*" : ""}] ` +
+            `total=${total.toFixed(0)}ms ` +
+            `poll=${(sabT1 - sabT0).toFixed(0)} ` +
+            `atomic=${(sabT2 - sabT1).toFixed(0)} ` +
+            `paint=${(sabT3 - sabT2).toFixed(0)} ` +
+            `painted=${copiedThisFrame}`
+          );
+        }
       }
       return;
     }
