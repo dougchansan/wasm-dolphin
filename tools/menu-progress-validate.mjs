@@ -259,6 +259,10 @@ await page.exposeFunction("__menuProgressReportAudio", (sample) => {
 // latency. True input-to-paint latency would need GPU scanout timing
 // (out of scope); processingStart-startTime is a decent proxy.
 const inputEvents = []; // { startTime, processingStart, duration, name }
+// Boot timeline marks (Day 13). Wall-clock ms from t0 (ROM upload start).
+// Declared at module scope so the `finally` block can still see them
+// if the try-body bails out partway through boot.
+let bootMarks = null;
 await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
   inputEvents.push(entry);
 });
@@ -310,10 +314,46 @@ try {
       // PerformanceEventTiming not supported — input latency stays empty.
     }
   });
+  // Boot timeline (Day 13). All times are wall-clock ms from "ROM upload
+  // dispatched", so we know exactly where each second of startup goes.
+  const bootT0 = Date.now();
+  bootMarks = { uploadDispatched: 0 };
   await page.setInputFiles("#romInput", romPath);
+  bootMarks.uploadComplete = Date.now() - bootT0;
   await page.click("#screen");
+  bootMarks.screenClicked = Date.now() - bootT0;
   console.log(`[menu-progress] mounting ROM…`);
   await waitForMount(page);
+  bootMarks.mountComplete = Date.now() - bootT0;
+  // First-visible-content milestone: poll the canvas hash once a second
+  // until we see something other than the all-zeros boot frame. This
+  // captures "time-to-first-pixels", separate from "core mounted".
+  bootMarks.firstVisibleContentAt = null;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const hashHex = await page.evaluate(() => {
+      const screen = document.querySelector("#screen");
+      if (!screen) return "no-screen";
+      const c = document.createElement("canvas");
+      c.width = 32; c.height = 24;
+      const ctx = c.getContext("2d", { alpha: false, willReadFrequently: true });
+      try {
+        ctx.drawImage(screen, 0, 0, c.width, c.height);
+        const bytes = ctx.getImageData(0, 0, c.width, c.height).data;
+        // Quick non-zero check — if every R/G/B pixel is < 16, treat as
+        // "still black" and keep polling.
+        let bright = 0;
+        for (let i = 0; i < bytes.length; i += 4) {
+          if (bytes[i] > 16 || bytes[i + 1] > 16 || bytes[i + 2] > 16) bright++;
+        }
+        return bright > 5 ? "bright" : "black";
+      } catch { return "err"; }
+    });
+    if (hashHex === "bright") {
+      bootMarks.firstVisibleContentAt = Date.now() - bootT0;
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
 
   // Start CDP tracing after mount so the trace covers steady-state +
   // gameplay, not the boot wasm-instantiate spike (already covered by
@@ -535,6 +575,7 @@ try {
     audioSamples,
     longAnimationFrames,
     inputEvents,
+    bootMarks,
   });
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
   console.log(`\n[menu-progress] done: ${JSON.stringify(summary, null, 2)}`);
@@ -544,7 +585,8 @@ try {
 }
 
 function summarize(samples, hashes, extras = {}) {
-  const { audioSamples = [], longAnimationFrames = [], inputEvents = [] } = extras;
+  const { audioSamples = [], longAnimationFrames = [], inputEvents = [], bootMarks = null } =
+    extras;
   // Skip the initial 20% (boot warmup) when computing averages — same as
   // before. But also split on JIT engagement so a JIT-on regression doesn't
   // hide in a single overall average.
@@ -566,6 +608,7 @@ function summarize(samples, hashes, extras = {}) {
   const smoothness = computeSmoothnessSummary(samples);
   const audioSummary = computeAudioSummary(audioSamples);
   const inputLatency = computeInputLatencySummary(inputEvents);
+  const boot = computeBootSummary(bootMarks, samples);
   const renderingHealth = computeRenderingHealth(
     samples,
     hashes,
@@ -573,7 +616,8 @@ function summarize(samples, hashes, extras = {}) {
     smoothness,
     audioSummary,
     longAnimationFrames,
-    inputLatency
+    inputLatency,
+    boot
   );
   return {
     sampleCount: samples.length,
@@ -588,6 +632,7 @@ function summarize(samples, hashes, extras = {}) {
     smoothness,
     audio: audioSummary,
     inputLatency,
+    boot,
     renderingHealth,
     // Keep the flat averageX fields for backward compat with downstream tooling.
     averageGameSpeed: overall.averageGameSpeed,
@@ -632,6 +677,42 @@ function computeAudioSummary(audioSamples) {
   };
 }
 
+// Boot timeline. Breaks the cold-start cost into named phases so we know
+// which one is slowest. Times are wall-clock ms from "ROM upload
+// dispatched" (the t0 of the validator's interaction with the page).
+function computeBootSummary(bootMarks, samples) {
+  if (!bootMarks) return null;
+  const jitSampleIdx = samples.findIndex(
+    (s) => (s.jitBlockCompileCount || 0) > 0 || /JIT enabled/.test(s.statusPill || "")
+  );
+  const jitEngagementBootMs =
+    jitSampleIdx >= 0
+      ? Math.round((samples[jitSampleIdx].elapsedSeconds || 0) * 1000) + (bootMarks.mountComplete || 0)
+      : null;
+  return {
+    // Phase durations (ms each). null for first-visible if we never saw
+    // bright pixels within the 15 s polling window.
+    uploadMs: bootMarks.uploadComplete ?? null,
+    clickMs: bootMarks.screenClicked != null && bootMarks.uploadComplete != null
+      ? bootMarks.screenClicked - bootMarks.uploadComplete
+      : null,
+    mountMs: bootMarks.mountComplete != null && bootMarks.screenClicked != null
+      ? bootMarks.mountComplete - bootMarks.screenClicked
+      : null,
+    firstVisibleMs: bootMarks.firstVisibleContentAt != null && bootMarks.mountComplete != null
+      ? bootMarks.firstVisibleContentAt - bootMarks.mountComplete
+      : null,
+    // Cumulative milestones (ms from t0 = upload dispatched).
+    timeline: {
+      uploadComplete: bootMarks.uploadComplete ?? null,
+      screenClicked: bootMarks.screenClicked ?? null,
+      mountComplete: bootMarks.mountComplete ?? null,
+      firstVisibleContent: bootMarks.firstVisibleContentAt ?? null,
+      jitEngagement: jitEngagementBootMs,
+    },
+  };
+}
+
 // Summarize input-event latency. Each entry is a PerformanceEventTiming
 // record: startTime (event arrival), processingStart (handler began),
 // processingEnd, duration. We compute p50/p95/max of
@@ -672,7 +753,7 @@ function computeInputLatencySummary(inputEvents) {
 // human-readable report and a CI-friendly assertion. The thresholds aim
 // for the user-stated bar: "every frame renders as fast as possible like
 // perfect 60 Hz no dropping frames or slowing the game down."
-function computeRenderingHealth(samples, hashes, overall, smoothness, audio, loafEntries, inputLatency) {
+function computeRenderingHealth(samples, hashes, overall, smoothness, audio, loafEntries, inputLatency, boot) {
   const checks = [];
   const last = samples.at(-1);
 
@@ -836,6 +917,42 @@ function computeRenderingHealth(samples, hashes, overall, smoothness, audio, loa
     threshold: 10,
     detail: `count of >50 ms main-thread frames per minute (total ${loafCount})`,
   });
+
+  // 10. Boot snappiness. Headline number: time from ROM upload to
+  //     first visible (non-black) pixel on the canvas. 5 s is the
+  //     loose cutoff — under that "feels snappy"; over feels laggy.
+  //     We split phases in the boot block above so a fail here can
+  //     pinpoint whether it's mount, wasm-instantiate, or first paint
+  //     that's slow.
+  if (boot && boot.timeline?.firstVisibleContent != null) {
+    const ms = boot.timeline.firstVisibleContent;
+    checks.push({
+      name: "boot-snappy",
+      passed: ms <= 5000,
+      value: ms,
+      threshold: 5000,
+      detail:
+        `ms from ROM upload to first visible pixel ` +
+        `(mount=${boot.mountMs}ms first-paint=${boot.firstVisibleMs}ms)`,
+    });
+  } else if (boot) {
+    checks.push({
+      name: "boot-snappy",
+      passed: false,
+      value: -1,
+      threshold: 5000,
+      detail: "first visible pixel never observed within 15 s polling window",
+    });
+  } else {
+    checks.push({
+      name: "boot-snappy",
+      passed: true,
+      value: 0,
+      threshold: 5000,
+      detail: "skipped — no boot timeline data",
+      skipped: true,
+    });
+  }
 
   const passed = checks.filter((c) => c.passed).length;
   const failed = checks.filter((c) => !c.passed);

@@ -1253,7 +1253,19 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
-  if ((coreFrame >>> 0) < ppcWasmJitWarmupFrames) {
+  // Warm-cache fast path. When Day-9 fingerprint matched and Day-7 loaded
+  // enough cached modules to cover the initial compile burst, skip the
+  // long warmup gate — there's no stability concern because the JIT
+  // doesn't have to actually compile anything; it just instantiates from
+  // cache. The MINIMUM_PRE_JIT_FRAMES floor is still respected so the
+  // emulator gets through the first few video frames stably before we
+  // change its compilation behavior.
+  const MINIMUM_PRE_JIT_FRAMES = 30;
+  const effectiveWarmup =
+    dolphinJitCachePreWarmed && coreFrame >= MINIMUM_PRE_JIT_FRAMES
+      ? MINIMUM_PRE_JIT_FRAMES
+      : ppcWasmJitWarmupFrames;
+  if ((coreFrame >>> 0) < effectiveWarmup) {
     return;
   }
 
@@ -1270,7 +1282,10 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
   ppcWasmJitEnabledAtFrame = coreFrame >>> 0;
-  postStatus(`Experimental WASM JIT enabled after ${coreFrame} stable video frames`);
+  const reason = dolphinJitCachePreWarmed && effectiveWarmup === MINIMUM_PRE_JIT_FRAMES
+    ? `pre-warmed cache hit, JIT engaged at frame ${coreFrame}`
+    : `JIT enabled after ${coreFrame} stable video frames`;
+  postStatus(`Experimental WASM ${reason}`);
 }
 
 function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
@@ -2535,6 +2550,15 @@ async function fetchWasmAndFingerprint(coreUrlValue) {
 const dolphinJitIdbReady = (async () => {
   dolphinJitIdb = await openDolphinJitIdb();
 })();
+// When the persistent JIT cache loaded a non-trivial number of modules
+// for this build at boot, maybeEnablePpcWasmJit will skip the warmup
+// frame gate and engage JIT essentially immediately. Without this,
+// warm boots wait 700+ stable video frames (15+ seconds) before JIT
+// kicks in, even though the cache could service the first compile
+// burst near-instantly. Threshold is intentionally low (>= 50): the
+// cache only needs to absorb the initial burst, not the whole game.
+let dolphinJitCachePreWarmed = false;
+const DOLPHIN_JIT_PREWARM_THRESHOLD = 50;
 async function reconcileJitCacheWithBuild(fingerprint) {
   await dolphinJitIdbReady;
   if (!dolphinJitIdb) return 0;
@@ -2551,6 +2575,12 @@ async function reconcileJitCacheWithBuild(fingerprint) {
   const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
   if (loaded > 0) {
     postStatus(`jit-cache: loaded ${loaded} compiled modules from IndexedDB`);
+  }
+  if (loaded >= DOLPHIN_JIT_PREWARM_THRESHOLD) {
+    dolphinJitCachePreWarmed = true;
+    postStatus(
+      `jit-cache: pre-warmed with ${loaded} modules; JIT warmup gate will be skipped on this session`
+    );
   }
   return loaded;
 }
