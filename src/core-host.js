@@ -600,6 +600,8 @@ export class EmulatorHost {
         this.mode === "dolphin" ? this.adapter.presentationLongFrameCount : 0,
       presentationLifetimeMaxIntervalMs:
         this.mode === "dolphin" ? this.adapter.presentationLifetimeMaxIntervalMs : 0,
+      presentationLifetimeMaxIntervalAtMs:
+        this.mode === "dolphin" ? this.adapter.presentationLifetimeMaxIntervalAtMs : 0,
       presentationLifetimeDropCount:
         this.mode === "dolphin" ? this.adapter.presentationLifetimeDropCount : 0,
       presentationLifetimeFrameCount:

@@ -28,10 +28,14 @@ let presentationMaxIntervalMs = 0;
 let presentationLongFrameCount = 0;
 // Lifetime smoothness counters (never reset). presentationMaxIntervalMs
 // resets every 500 ms FPS window, so a transient freeze between windows
-// would be invisible. These three persist across the full run so the
+// would be invisible. These four persist across the full run so the
 // validator can summarize "worst single gap" and full inter-frame
-// distribution shape.
+// distribution shape. presentationLifetimeMaxIntervalAtMs is the
+// performance.now() timestamp of when the worst gap happened — lets
+// the validator distinguish boot-phase stalls (early) from gameplay
+// stalls (late).
 let presentationLifetimeMaxIntervalMs = 0;
+let presentationLifetimeMaxIntervalAtMs = 0;
 let presentationLifetimeDropCount = 0;
 let presentationLifetimeFrameCount = 0;
 // Welford online stddev for inter-frame intervals across the whole run.
@@ -990,6 +994,7 @@ function framePayload() {
     // above resets every 500 ms window; presentationLifetimeMaxIntervalMs
     // here is the worst single gap across the whole run.
     presentationLifetimeMaxIntervalMs,
+    presentationLifetimeMaxIntervalAtMs,
     presentationLifetimeDropCount,
     presentationLifetimeFrameCount,
     presentationIntervalStddevMs:
@@ -1656,6 +1661,7 @@ function recordPresentedFrame(coreFrame) {
     // Lifetime stats (never reset).
     if (interval > presentationLifetimeMaxIntervalMs) {
       presentationLifetimeMaxIntervalMs = interval;
+      presentationLifetimeMaxIntervalAtMs = now;
     }
     // Welford online: numerically-stable streaming mean+variance.
     presentationIntervalCount += 1;

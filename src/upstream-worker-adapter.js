@@ -97,6 +97,7 @@ export class UpstreamWorkerAdapter {
     this.presentationMaxIntervalMs = 0;
     this.presentationLongFrameCount = 0;
     this.presentationLifetimeMaxIntervalMs = 0;
+    this.presentationLifetimeMaxIntervalAtMs = 0;
     this.presentationLifetimeDropCount = 0;
     this.presentationLifetimeFrameCount = 0;
     this.presentationIntervalStddevMs = 0;
@@ -573,6 +574,9 @@ export class UpstreamWorkerAdapter {
     }
     if (Number.isFinite(response.presentationLifetimeMaxIntervalMs)) {
       this.presentationLifetimeMaxIntervalMs = response.presentationLifetimeMaxIntervalMs;
+    }
+    if (Number.isFinite(response.presentationLifetimeMaxIntervalAtMs)) {
+      this.presentationLifetimeMaxIntervalAtMs = response.presentationLifetimeMaxIntervalAtMs;
     }
     if (Number.isFinite(response.presentationLifetimeDropCount)) {
       this.presentationLifetimeDropCount = response.presentationLifetimeDropCount;

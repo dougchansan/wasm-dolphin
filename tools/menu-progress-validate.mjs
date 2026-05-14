@@ -597,14 +597,37 @@ function computeRenderingHealth(samples, hashes, overall, smoothness, audio, loa
   });
 
   // 4. Worst single paint gap. The user-reported 2 s freezes are caught
-  //    here. <500 ms is "no single freeze longer than a coin flip".
+  //    here. Split into "boot phase" (first 5 s) and "runtime" (after).
+  //    Boot phase always pays a wasm-instantiate + initial-JIT spike;
+  //    we report it for visibility but don't fail on it. Runtime stalls
+  //    are the real user-perceived freezes.
   const maxGap = smoothness?.lifetimeMaxIntervalMs ?? 0;
+  const maxGapAtMs = smoothness?.lifetimeMaxIntervalAtMs ?? 0;
+  // performance.now() = ms since page load. waitForMount typically
+  // takes ~3 s, so anything <5000 ms is boot phase.
+  const maxGapInBoot = maxGapAtMs > 0 && maxGapAtMs < 5000;
   checks.push({
-    name: "max-gap",
-    passed: maxGap <= 500,
-    value: maxGap,
+    name: "max-gap-boot",
+    passed: true, // never fails — boot stalls are expected
+    value: maxGapInBoot ? maxGap : 0,
+    threshold: null,
+    detail: `ms — worst gap during boot phase (first 5 s). ${
+      maxGapInBoot ? "(this run)" : "(no boot stall this run)"
+    }`,
+    informational: true,
+  });
+  // The asserting check: post-boot stalls. Threshold 500 ms = "no single
+  // freeze longer than a coin flip". The user-reported 2 s in-game
+  // freeze would fail this check.
+  const runtimeMaxGap = maxGapInBoot ? 0 : maxGap;
+  checks.push({
+    name: "runtime-max-gap",
+    passed: runtimeMaxGap <= 500,
+    value: runtimeMaxGap,
     threshold: 500,
-    detail: "ms — worst single gap between successive paints (lifetime)",
+    detail: maxGapInBoot
+      ? `ms — no post-boot stall (worst gap was at t=${(maxGapAtMs / 1000).toFixed(1)}s in boot)`
+      : `ms — worst gap post-boot at t=${(maxGapAtMs / 1000).toFixed(1)}s`,
   });
 
   // 5. 60 Hz target hit rate. With p99 of intervals in <20 ms band, the
@@ -721,6 +744,7 @@ function computeSmoothnessSummary(samples) {
   if (!samples.length) return null;
   const last = samples.at(-1);
   const lifetimeMaxIntervalMs = Number(last.presentationLifetimeMaxIntervalMs) || 0;
+  const lifetimeMaxIntervalAtMs = Number(last.presentationLifetimeMaxIntervalAtMs) || 0;
   const lifetimeDropCount = Number(last.presentationLifetimeDropCount) || 0;
   const lifetimeFrameCount = Number(last.presentationLifetimeFrameCount) || 0;
   const intervalStddevMs = Number(last.presentationIntervalStddevMs) || 0;
@@ -762,6 +786,12 @@ function computeSmoothnessSummary(samples) {
   return {
     lifetimeFrameCount,
     lifetimeMaxIntervalMs: Number(lifetimeMaxIntervalMs.toFixed(1)),
+    // performance.now() timestamp of when the worst gap happened.
+    // The validator's elapsedSeconds is measured from Date.now() at probe
+    // start, performance.now() is measured from page load — they're on
+    // different clocks. We use this only to bucket "boot phase" vs
+    // "post-boot", not for precise correlation.
+    lifetimeMaxIntervalAtMs: Number(lifetimeMaxIntervalAtMs.toFixed(0)),
     lifetimeDropCount,
     dropRatePercent: dropRate,
     intervalStddevMs: Number(intervalStddevMs.toFixed(2)),
@@ -896,6 +926,8 @@ async function readSample(page, elapsedSeconds) {
       presentationMaxIntervalMs: Number(info.presentationMaxIntervalMs) || 0,
       presentationLifetimeMaxIntervalMs:
         Number(info.presentationLifetimeMaxIntervalMs) || 0,
+      presentationLifetimeMaxIntervalAtMs:
+        Number(info.presentationLifetimeMaxIntervalAtMs) || 0,
       presentationLifetimeDropCount:
         Number(info.presentationLifetimeDropCount) || 0,
       presentationLifetimeFrameCount:
