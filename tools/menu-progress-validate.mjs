@@ -7,10 +7,13 @@
 //
 // Env: ROM (default smash melee path), BASE_URL, OGL_PROXY_MODE, HEADED=1.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createWriteStream, existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createGzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 
 const root = process.cwd();
 const args = parseArgs(process.argv.slice(2));
@@ -198,6 +201,34 @@ browserContext.on("serviceworker", attachWorker);
 page.on("worker", attachWorker);
 for (const w of page.workers?.() ?? []) attachWorker(w);
 
+// Chrome DevTools Protocol tracing. JS-level stall loggers showed
+// blockingDuration:0 on most long-anim-frame entries — the bottleneck
+// is browser-internal (GPU process, compositor, viz). CDP tracing
+// captures those layers. Trace output is openable in Chrome's
+// DevTools Performance panel or chrome://tracing.
+//
+// Categories chosen for OGL paint-stall hunting:
+//   gpu                                      — GPU process commands & sync
+//   cc                                       — compositor frame scheduling
+//   viz                                      — display compositor
+//   blink.user_timing                        — our performance.mark spots
+//   devtools.timeline / devtools.timeline.frame — render scheduling
+//   v8.execute                               — V8 work attribution
+//   disabled-by-default-* are heavyweight but necessary for GPU detail
+//
+// Opt-in via PROBE_TRACE=1 to keep default runs cheap (trace files are
+// large — ~50 MB for a 90s run).
+let cdpSession = null;
+const traceEnabled = process.env.PROBE_TRACE === "1";
+if (traceEnabled) {
+  try {
+    cdpSession = await page.context().newCDPSession(page);
+  } catch (err) {
+    console.warn(`[menu-progress] CDP session failed: ${err.message}`);
+    cdpSession = null;
+  }
+}
+
 const scriptState = inputScript.map((event) => ({ ...event, sent: false }));
 
 // Long-animation-frame entries (Chrome 123+) tell us when the main
@@ -283,6 +314,36 @@ try {
   await page.click("#screen");
   console.log(`[menu-progress] mounting ROM…`);
   await waitForMount(page);
+
+  // Start CDP tracing after mount so the trace covers steady-state +
+  // gameplay, not the boot wasm-instantiate spike (already covered by
+  // LoAF entries from Phase A). Categories chosen for OGL paint-stall
+  // hunting — see the cdpSession block above for the rationale.
+  if (cdpSession) {
+    try {
+      await cdpSession.send("Tracing.start", {
+        transferMode: "ReturnAsStream",
+        traceConfig: {
+          recordMode: "recordContinuously",
+          // Minimal categories for compositor / GPU stall diagnosis.
+          // Each additional category multiplies trace size. cc + viz +
+          // gpu + toplevel give us frame scheduling + GPU command flow
+          // without the huge blink/devtools.timeline event volumes.
+          includedCategories: [
+            "cc",
+            "viz",
+            "gpu",
+            "toplevel",
+            "devtools.timeline.frame",
+          ],
+        },
+      });
+      console.log("[menu-progress] CDP trace started");
+    } catch (err) {
+      console.warn(`[menu-progress] Tracing.start failed: ${err.message}`);
+      cdpSession = null;
+    }
+  }
 
   // Phase C: install the audio probe. Unmute (audio defaults to muted),
   // attach an AnalyserNode to the audio graph, and poll envelope
@@ -388,6 +449,57 @@ try {
   consoleLines.push(`[probe-error] ${error.stack || error.message}`);
   await capture(page, "zz-error.png");
 } finally {
+  // Stop CDP tracing and stream the trace file out before browser
+  // teardown. Trace is a JSON of trace events; size ~10-50 MB for a
+  // 90-second run with our category set. Openable in Chrome DevTools
+  // Performance panel (drag the file in) or chrome://tracing.
+  if (cdpSession) {
+    try {
+      const tracePath = path.join(outDir, "chrome-trace.json.gz");
+      const traceDone = new Promise((resolve, reject) => {
+        cdpSession.once("Tracing.tracingComplete", async (event) => {
+          try {
+            const handle = event.stream;
+            // Stream-decode CDP base64 chunks → gzip → file. Avoids
+            // accumulating the whole trace (often >1 GB) in memory.
+            const gzip = createGzip();
+            const out = createWriteStream(tracePath);
+            const piped = pipeline(gzip, out);
+            let raw = 0;
+            for (;;) {
+              const res = await cdpSession.send("IO.read", { handle, size: 1 << 20 });
+              if (res.data) {
+                const buf = res.base64Encoded
+                  ? Buffer.from(res.data, "base64")
+                  : Buffer.from(res.data);
+                raw += buf.length;
+                if (!gzip.write(buf)) {
+                  await new Promise((r) => gzip.once("drain", r));
+                }
+              }
+              if (res.eof) break;
+            }
+            gzip.end();
+            await piped;
+            await cdpSession.send("IO.close", { handle });
+            const { size: gzSize } = await stat(tracePath);
+            console.log(
+              `[menu-progress] CDP trace saved: ${tracePath} ` +
+              `(${(raw / 1048576).toFixed(1)} MB raw, ${(gzSize / 1048576).toFixed(1)} MB gzipped). ` +
+              `Open with: gunzip < chrome-trace.json.gz > trace.json ; then load in Chrome DevTools Performance panel.`
+            );
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+      await cdpSession.send("Tracing.end");
+      await traceDone;
+    } catch (err) {
+      console.warn(`[menu-progress] CDP trace stop failed: ${err.message}`);
+    }
+  }
   await writeFile(path.join(outDir, "console.log"), consoleLines.join("\n")).catch(() => {});
   await writeFile(path.join(outDir, "samples.json"), JSON.stringify(samples, null, 2));
   await writeFile(path.join(outDir, "milestones.json"), JSON.stringify(milestoneLog, null, 2));
