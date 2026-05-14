@@ -96,6 +96,12 @@ export class UpstreamWorkerAdapter {
     this.presentationP95IntervalMs = 0;
     this.presentationMaxIntervalMs = 0;
     this.presentationLongFrameCount = 0;
+    this.presentationLifetimeMaxIntervalMs = 0;
+    this.presentationLifetimeDropCount = 0;
+    this.presentationLifetimeFrameCount = 0;
+    this.presentationIntervalStddevMs = 0;
+    this.presentationIntervalHistogram = null;
+    this.presentationIntervalHistogramBuckets = null;
     this.presentationFrameLag = 0;
     this.presentationQueueAgeMs = 0;
     this.visualChangeFps = 0;
@@ -564,6 +570,24 @@ export class UpstreamWorkerAdapter {
     }
     if (Number.isFinite(response.presentationLongFrameCount)) {
       this.presentationLongFrameCount = response.presentationLongFrameCount;
+    }
+    if (Number.isFinite(response.presentationLifetimeMaxIntervalMs)) {
+      this.presentationLifetimeMaxIntervalMs = response.presentationLifetimeMaxIntervalMs;
+    }
+    if (Number.isFinite(response.presentationLifetimeDropCount)) {
+      this.presentationLifetimeDropCount = response.presentationLifetimeDropCount;
+    }
+    if (Number.isFinite(response.presentationLifetimeFrameCount)) {
+      this.presentationLifetimeFrameCount = response.presentationLifetimeFrameCount;
+    }
+    if (Number.isFinite(response.presentationIntervalStddevMs)) {
+      this.presentationIntervalStddevMs = response.presentationIntervalStddevMs;
+    }
+    if (Array.isArray(response.presentationIntervalHistogram)) {
+      this.presentationIntervalHistogram = response.presentationIntervalHistogram;
+    }
+    if (Array.isArray(response.presentationIntervalHistogramBuckets)) {
+      this.presentationIntervalHistogramBuckets = response.presentationIntervalHistogramBuckets;
     }
     if (Number.isFinite(response.presentationFrameLag)) {
       this.presentationFrameLag = response.presentationFrameLag;

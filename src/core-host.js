@@ -598,6 +598,18 @@ export class EmulatorHost {
       presentationMaxIntervalMs: this.mode === "dolphin" ? this.adapter.presentationMaxIntervalMs : 0,
       presentationLongFrameCount:
         this.mode === "dolphin" ? this.adapter.presentationLongFrameCount : 0,
+      presentationLifetimeMaxIntervalMs:
+        this.mode === "dolphin" ? this.adapter.presentationLifetimeMaxIntervalMs : 0,
+      presentationLifetimeDropCount:
+        this.mode === "dolphin" ? this.adapter.presentationLifetimeDropCount : 0,
+      presentationLifetimeFrameCount:
+        this.mode === "dolphin" ? this.adapter.presentationLifetimeFrameCount : 0,
+      presentationIntervalStddevMs:
+        this.mode === "dolphin" ? this.adapter.presentationIntervalStddevMs : 0,
+      presentationIntervalHistogram:
+        this.mode === "dolphin" ? this.adapter.presentationIntervalHistogram : null,
+      presentationIntervalHistogramBuckets:
+        this.mode === "dolphin" ? this.adapter.presentationIntervalHistogramBuckets : null,
       presentationFrameLag: this.mode === "dolphin" ? this.adapter.presentationFrameLag : 0,
       presentationQueueAgeMs: this.mode === "dolphin" ? this.adapter.presentationQueueAgeMs : 0,
       visualChangeFps:

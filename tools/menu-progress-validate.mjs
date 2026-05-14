@@ -185,12 +185,44 @@ for (const w of page.workers?.() ?? []) attachWorker(w);
 
 const scriptState = inputScript.map((event) => ({ ...event, sent: false }));
 
+// Long-animation-frame entries (Chrome 123+) tell us when the main
+// thread blocked the next paint by >50 ms. Each entry has startTime,
+// duration, blockingDuration, renderStart, paintTime, presentationTime.
+// We push them through page.exposeFunction so we can persist them with
+// the rest of the run artifacts. Empty array if the browser doesn't
+// support PerformanceLongAnimationFrameTiming.
+const longAnimationFrames = [];
+await page.exposeFunction("__menuProgressReportLoAF", (entry) => {
+  longAnimationFrames.push(entry);
+});
+
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.evaluate(() => {
     const panel = document.querySelector("#debugPanel");
     const toggle = document.querySelector("#debugToggle");
     if (panel?.hidden) toggle?.click();
+    // Install LoAF observer. Browsers that don't support
+    // "long-animation-frame" (older Chrome, Firefox, Safari) throw —
+    // swallow the error so the rest of the probe still runs.
+    try {
+      const obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          window.__menuProgressReportLoAF({
+            startTime: e.startTime,
+            duration: e.duration,
+            renderStart: e.renderStart,
+            paintTime: e.paintTime,
+            presentationTime: e.presentationTime,
+            blockingDuration: e.blockingDuration,
+          });
+        }
+      });
+      obs.observe({ type: "long-animation-frame", buffered: true });
+    } catch (err) {
+      // Not all browsers support LoAF. Validator still works; this just
+      // skips the long-frame detail capture.
+    }
   });
   await page.setInputFiles("#romInput", romPath);
   await page.click("#screen");
@@ -251,6 +283,12 @@ try {
   await writeFile(path.join(outDir, "console.log"), consoleLines.join("\n")).catch(() => {});
   await writeFile(path.join(outDir, "samples.json"), JSON.stringify(samples, null, 2));
   await writeFile(path.join(outDir, "milestones.json"), JSON.stringify(milestoneLog, null, 2));
+  if (longAnimationFrames.length) {
+    await writeFile(
+      path.join(outDir, "long-animation-frames.json"),
+      JSON.stringify(longAnimationFrames, null, 2)
+    );
+  }
   await writeFile(
     path.join(outDir, "distinct-hashes.json"),
     JSON.stringify(
@@ -288,6 +326,7 @@ function summarize(samples, hashes) {
     preJit = computeBucket(samples.slice(preFrom, preTo));
     postJit = computeBucket(samples.slice(jitStartIndex));
   }
+  const smoothness = computeSmoothnessSummary(samples);
   return {
     sampleCount: samples.length,
     distinctCanvasHashes: hashes.size,
@@ -298,12 +337,70 @@ function summarize(samples, hashes) {
     overall,
     preJit,
     postJit,
+    smoothness,
     // Keep the flat averageX fields for backward compat with downstream tooling.
     averageGameSpeed: overall.averageGameSpeed,
     averagePresentFps: overall.averagePresentFps,
     averageCoreFps: overall.averageCoreFps,
     averageVisualFps: overall.averageVisualFps,
     finalSample: samples.at(-1),
+  };
+}
+
+// Compile the lifetime smoothness picture across the run. Uses the
+// last sample's lifetime counters (they're monotonically increasing,
+// so the last sample sees the whole run) plus per-sample drop counts
+// from the helper string.
+function computeSmoothnessSummary(samples) {
+  if (!samples.length) return null;
+  const last = samples.at(-1);
+  const lifetimeMaxIntervalMs = Number(last.presentationLifetimeMaxIntervalMs) || 0;
+  const lifetimeDropCount = Number(last.presentationLifetimeDropCount) || 0;
+  const lifetimeFrameCount = Number(last.presentationLifetimeFrameCount) || 0;
+  const intervalStddevMs = Number(last.presentationIntervalStddevMs) || 0;
+  const histogram = Array.isArray(last.presentationIntervalHistogram)
+    ? last.presentationIntervalHistogram
+    : null;
+  const buckets = Array.isArray(last.presentationIntervalHistogramBuckets)
+    ? last.presentationIntervalHistogramBuckets
+    : null;
+  const histogramTotal = histogram
+    ? histogram.reduce((a, b) => a + (b || 0), 0)
+    : 0;
+  // Translate the histogram into percentage-of-frames-in-each-bucket so
+  // the summary is readable across runs of different length.
+  let histogramPercent = null;
+  if (histogram && buckets && histogramTotal > 0) {
+    histogramPercent = histogram.map((count, i) => {
+      const label =
+        i < buckets.length
+          ? `<${buckets[i]}ms`
+          : `>=${buckets[buckets.length - 1]}ms`;
+      const pct = (100 * (count || 0)) / histogramTotal;
+      return { label, count: count || 0, percent: Number(pct.toFixed(2)) };
+    });
+  }
+  const dropRate =
+    lifetimeFrameCount > 0
+      ? Number(((100 * lifetimeDropCount) / lifetimeFrameCount).toFixed(2))
+      : 0;
+  // "Smooth 60Hz" interpretation: under 60Hz target, 99% of intervals
+  // should fall in <20ms (i.e., not miss a 16.67ms slot by more than a
+  // few ms slack). Drop rate (intervals >24ms) tells us how often we
+  // miss a full frame's worth.
+  const fastIntervalPct = histogramPercent
+    ? histogramPercent
+        .filter((b) => /^<(8|12|16|20)ms$/.test(b.label))
+        .reduce((a, b) => a + b.percent, 0)
+    : null;
+  return {
+    lifetimeFrameCount,
+    lifetimeMaxIntervalMs: Number(lifetimeMaxIntervalMs.toFixed(1)),
+    lifetimeDropCount,
+    dropRatePercent: dropRate,
+    intervalStddevMs: Number(intervalStddevMs.toFixed(2)),
+    fastIntervalPercent: fastIntervalPct !== null ? Number(fastIntervalPct.toFixed(2)) : null,
+    histogram: histogramPercent,
   };
 }
 
@@ -395,6 +492,20 @@ async function readSample(page, elapsedSeconds) {
     const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
     const jitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
     const jitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
+    // Structured worker stats (set by app.js's handleFrame). Reading via
+    // window is cheaper than DOM scraping and preserves numeric fields
+    // (histogram array, lifetime counters, stddev) without round-tripping
+    // through textContent.
+    const info = window.__lastFrameInfo || {};
+    // Parse drop/underrun out of the helper string. These are emitted as
+    // "drop:N underrun:N" inside the worker's ppcWasmHelperStats. The
+    // structured fields aren't yet surfaced separately to the DOM but the
+    // helper string is always available.
+    const helperStr = read("#ppcWasmHelperStats");
+    const helperDropMatch = /\bdrop:(\d+)/.exec(helperStr);
+    const helperUnderrunMatch = /\bunderrun:(\d+)/.exec(helperStr);
+    const helperLongMatch = /\blong:(\d+)/.exec(helperStr);
+    const helperRawFpsMatch = /\braw:(\d+)/.exec(helperStr);
     return {
       elapsedSeconds,
       frame: read("#frameCounter"),
@@ -403,7 +514,7 @@ async function readSample(page, elapsedSeconds) {
       coreFps: read("#coreFpsCounter"),
       gameSpeed: read("#gameSpeedCounter"),
       gap: read("#presentationGapCounter"),
-      helper: read("#ppcWasmHelperStats"),
+      helper: helperStr,
       coreMode: read("#coreMode"),
       mountNote: read("#mountNote"),
       gameTitle: read("#gameTitle"),
@@ -413,6 +524,31 @@ async function readSample(page, elapsedSeconds) {
       jitBlockCompileCount,
       visibleHash,
       visibleError,
+      // Structured smoothness fields (Phase A).
+      presentationRawFps: Number(info.presentationRawFps) || 0,
+      presentationP95IntervalMs: Number(info.presentationP95IntervalMs) || 0,
+      presentationMaxIntervalMs: Number(info.presentationMaxIntervalMs) || 0,
+      presentationLifetimeMaxIntervalMs:
+        Number(info.presentationLifetimeMaxIntervalMs) || 0,
+      presentationLifetimeDropCount:
+        Number(info.presentationLifetimeDropCount) || 0,
+      presentationLifetimeFrameCount:
+        Number(info.presentationLifetimeFrameCount) || 0,
+      presentationIntervalStddevMs:
+        Number(info.presentationIntervalStddevMs) || 0,
+      presentationIntervalHistogram: Array.isArray(info.presentationIntervalHistogram)
+        ? info.presentationIntervalHistogram.slice()
+        : null,
+      presentationIntervalHistogramBuckets: Array.isArray(
+        info.presentationIntervalHistogramBuckets
+      )
+        ? info.presentationIntervalHistogramBuckets.slice()
+        : null,
+      // Parsed from helper string (worker doesn't surface these to DOM yet).
+      helperDropCount: helperDropMatch ? Number(helperDropMatch[1]) : 0,
+      helperUnderrunCount: helperUnderrunMatch ? Number(helperUnderrunMatch[1]) : 0,
+      helperLongFrameCount: helperLongMatch ? Number(helperLongMatch[1]) : 0,
+      helperRawFps: helperRawFpsMatch ? Number(helperRawFpsMatch[1]) : 0,
     };
   }, elapsedSeconds);
 }

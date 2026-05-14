@@ -26,6 +26,25 @@ let presentationAverageIntervalMs = 0;
 let presentationP95IntervalMs = 0;
 let presentationMaxIntervalMs = 0;
 let presentationLongFrameCount = 0;
+// Lifetime smoothness counters (never reset). presentationMaxIntervalMs
+// resets every 500 ms FPS window, so a transient freeze between windows
+// would be invisible. These three persist across the full run so the
+// validator can summarize "worst single gap" and full inter-frame
+// distribution shape.
+let presentationLifetimeMaxIntervalMs = 0;
+let presentationLifetimeDropCount = 0;
+let presentationLifetimeFrameCount = 0;
+// Welford online stddev for inter-frame intervals across the whole run.
+let presentationIntervalMean = 0;
+let presentationIntervalM2 = 0;
+let presentationIntervalCount = 0;
+// Fixed-width histogram (ms buckets) of inter-frame intervals — captures
+// distribution shape (bimodal, periodic jitter) that p95 alone misses.
+// Buckets: 0-8, 8-12, 12-16, 16-20, 20-24, 24-33, 33-50, 50-100, 100-200, 200+
+const PRESENTATION_HISTOGRAM_BUCKETS_MS = [8, 12, 16, 20, 24, 33, 50, 100, 200];
+const presentationIntervalHistogram = new Uint32Array(
+  PRESENTATION_HISTOGRAM_BUCKETS_MS.length + 1
+);
 let visualChangeFps = 0;
 let visualFrameHash = 0;
 let lastVisualFrameHash = 0;
@@ -967,6 +986,18 @@ function framePayload() {
     presentationP95IntervalMs,
     presentationMaxIntervalMs,
     presentationLongFrameCount,
+    // Lifetime smoothness fields (never reset). presentationMaxIntervalMs
+    // above resets every 500 ms window; presentationLifetimeMaxIntervalMs
+    // here is the worst single gap across the whole run.
+    presentationLifetimeMaxIntervalMs,
+    presentationLifetimeDropCount,
+    presentationLifetimeFrameCount,
+    presentationIntervalStddevMs:
+      presentationIntervalCount > 1
+        ? Math.sqrt(presentationIntervalM2 / (presentationIntervalCount - 1))
+        : 0,
+    presentationIntervalHistogram: Array.from(presentationIntervalHistogram),
+    presentationIntervalHistogramBuckets: PRESENTATION_HISTOGRAM_BUCKETS_MS,
     visualChangeFps,
     visualFrameHash,
     visualSampleSource,
@@ -1482,8 +1513,19 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
 }
 
 let oglSabLastPublishMs = 0;
-const OGL_SAB_MIN_INTERVAL_MS = 14;  // ~70 Hz cap; vsync is 60 Hz on most monitors
+// Throttle on SAB writes. Each OGL swap fires the frame signal twice
+// (OnGlBackbuffer + OnOglSwap, ~1 ms apart) and ogl_swap_count's relaxed
+// memory ordering means the worker reads it racily — sometimes both wakes
+// see the same count, sometimes adjacent counts. 14 ms catches the paired
+// wakes reliably but caps SAB write-rate around 20 Hz. Lower values lift
+// the write rate but trade gameSpeed (Day-10 measured 91% at 4 ms vs 100%
+// at 14 ms — main-thread paint contention with worker's SAB reads).
+const OGL_SAB_MIN_INTERVAL_MS = 14;
 
+let oglSabWriteCount = 0;       // successful SAB writes (memcpy + gen bump)
+let oglSabThrottleSkipCount = 0; // calls returned early by 14ms throttle
+let oglSabLastReportMs = 0;
+const OGL_SAB_REPORT_INTERVAL_MS = 5000;
 function publishOglSabFrame(width, height, frameView) {
   // Throttle to ~60 Hz: without this cap, the worker drives glReadPixels
   // at 150-200 Hz (no presenter pacing in SAB mode), eating GPU pthread
@@ -1491,7 +1533,11 @@ function publishOglSabFrame(width, height, frameView) {
   // dropped gameSpeed from 98 % to 67 %. Capping the publish rate keeps the
   // readback at human-visible cadence without saturating the pipeline.
   const now = performance.now();
-  if (now - oglSabLastPublishMs < OGL_SAB_MIN_INTERVAL_MS) return;
+  if (now - oglSabLastPublishMs < OGL_SAB_MIN_INTERVAL_MS) {
+    oglSabThrottleSkipCount += 1;
+    maybeReportOglSabRates(now);
+    return;
+  }
   oglSabLastPublishMs = now;
 
   // SAB allocation in core-host.js is sized to match this readback output
@@ -1514,6 +1560,29 @@ function publishOglSabFrame(width, height, frameView) {
   }
   // Bump the generation; main thread polls this with Atomics.load on RAF.
   Atomics.add(oglMetaSabView, 0, 1);
+  oglSabWriteCount += 1;
+  maybeReportOglSabRates(now);
+}
+function maybeReportOglSabRates(now) {
+  if (oglSabLastReportMs === 0) {
+    oglSabLastReportMs = now;
+    return;
+  }
+  const elapsed = now - oglSabLastReportMs;
+  if (elapsed < OGL_SAB_REPORT_INTERVAL_MS) return;
+  const writes = oglSabWriteCount;
+  const skips = oglSabThrottleSkipCount;
+  const writesPerSec = ((writes * 1000) / elapsed).toFixed(1);
+  const skipsPerSec = ((skips * 1000) / elapsed).toFixed(1);
+  const genValue = oglMetaSabView ? Atomics.load(oglMetaSabView, 0) : 0;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[ogl-sab] writes/s=${writesPerSec} skips/s=${skipsPerSec} ` +
+    `gen=${genValue} renderBackend=${renderBackend} window=${(elapsed / 1000).toFixed(1)}s`
+  );
+  oglSabWriteCount = 0;
+  oglSabThrottleSkipCount = 0;
+  oglSabLastReportMs = now;
 }
 
 function presentFrameBytes(width, height, bytes, coreFrame) {
@@ -1573,6 +1642,7 @@ function recordVisualFrameHash(hash) {
 function recordPresentedFrame(coreFrame) {
   presentedFrame += 1;
   framesSincePresentationFps += 1;
+  presentationLifetimeFrameCount += 1;
   lastPresentedCoreFrame = coreFrame;
   const now = performance.now();
   if (lastPresentedAt > 0) {
@@ -1582,6 +1652,32 @@ function recordPresentedFrame(coreFrame) {
     maxIntervalSincePresentationFps = Math.max(maxIntervalSincePresentationFps, interval);
     if (interval > LONG_PRESENTATION_FRAME_MS) {
       longFramesSincePresentationFps += 1;
+    }
+    // Lifetime stats (never reset).
+    if (interval > presentationLifetimeMaxIntervalMs) {
+      presentationLifetimeMaxIntervalMs = interval;
+    }
+    // Welford online: numerically-stable streaming mean+variance.
+    presentationIntervalCount += 1;
+    const delta = interval - presentationIntervalMean;
+    presentationIntervalMean += delta / presentationIntervalCount;
+    const delta2 = interval - presentationIntervalMean;
+    presentationIntervalM2 += delta * delta2;
+    // Bucket the interval. Last bucket is the "200+ ms" catch-all.
+    let bucket = PRESENTATION_HISTOGRAM_BUCKETS_MS.length;
+    for (let i = 0; i < PRESENTATION_HISTOGRAM_BUCKETS_MS.length; i++) {
+      if (interval < PRESENTATION_HISTOGRAM_BUCKETS_MS[i]) {
+        bucket = i;
+        break;
+      }
+    }
+    presentationIntervalHistogram[bucket] += 1;
+    // Anything past the 24 ms "long frame" threshold counts as a dropped
+    // frame for end-of-run reporting. The 24 ms threshold matches
+    // LONG_PRESENTATION_FRAME_MS and corresponds to >1 frame at 60 Hz
+    // (16.67 ms target + 7 ms slack).
+    if (interval > LONG_PRESENTATION_FRAME_MS) {
+      presentationLifetimeDropCount += 1;
     }
   }
   lastPresentedAt = now;

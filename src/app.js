@@ -135,6 +135,11 @@ host
 
 function handleFrame(info) {
   lastFrameInfo = info;
+  // Expose to the validator. Reading via window is cheaper than DOM
+  // querySelector + textContent parsing and preserves structured
+  // numeric fields (histogram array, stddev) without round-tripping
+  // through human-readable strings.
+  window.__lastFrameInfo = info;
   updateScreenHud(info);
   updateRuntimeControls(info);
 
