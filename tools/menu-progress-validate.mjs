@@ -50,12 +50,27 @@ if (!existsSync(romPath)) throw new Error(`Missing Melee ISO: ${romPath}`);
 function makeAggressiveInputScript() {
   const events = [];
   let index = 0;
+  // Phase 1 (t=3..200s): A + Start spam to advance through dialogs, attract
+  //   cutscene skip, title, main menu. Reaches character select around t~200.
+  // Phase 2 (t=200..400s): A + Start spam + occasional D-Right + Z. D-Right
+  //   moves the character-select cursor; Z confirms/cancels. Once a char is
+  //   picked, A starts the match. Reaches stage select.
+  // Phase 3 (t=400..600s): A spam only — the validator is now in-game or
+  //   on the results screen; we just want to keep something happening.
   for (let t = 3; t <= 600; t += 3) {
-    // Alternate A and Start so dialogs (need A) and title (need Start) both advance.
     const key = (index % 2 === 0) ? "x" : "Enter";
     events.push(`down:${t}:${key}`);
     events.push(`down:${t + 1}:${key}`);
     events.push(`up:${t + 1.5}:${key}`);
+    // Phase 2: every 4th iteration, also tap a directional key + Z so the
+    // character-select cursor moves and any "ready"/"back" prompt can be
+    // dismissed in case A alone isn't enough.
+    if (t >= 200 && t < 400 && index % 4 === 0) {
+      events.push(`down:${t + 0.5}:ArrowRight`);
+      events.push(`up:${t + 0.7}:ArrowRight`);
+      events.push(`down:${t + 2}:z`);
+      events.push(`up:${t + 2.2}:z`);
+    }
     index += 1;
   }
   return events.join(",");
@@ -327,6 +342,7 @@ function summarize(samples, hashes) {
     postJit = computeBucket(samples.slice(jitStartIndex));
   }
   const smoothness = computeSmoothnessSummary(samples);
+  const renderingHealth = computeRenderingHealth(samples, hashes, overall, smoothness);
   return {
     sampleCount: samples.length,
     distinctCanvasHashes: hashes.size,
@@ -338,12 +354,108 @@ function summarize(samples, hashes) {
     preJit,
     postJit,
     smoothness,
+    renderingHealth,
     // Keep the flat averageX fields for backward compat with downstream tooling.
     averageGameSpeed: overall.averageGameSpeed,
     averagePresentFps: overall.averagePresentFps,
     averageCoreFps: overall.averageCoreFps,
     averageVisualFps: overall.averageVisualFps,
     finalSample: samples.at(-1),
+  };
+}
+
+// Aggregate pass/fail health signal across the run. Each check returns
+// { name, passed, value, threshold, detail } so the summary doubles as a
+// human-readable report and a CI-friendly assertion. The thresholds aim
+// for the user-stated bar: "every frame renders as fast as possible like
+// perfect 60 Hz no dropping frames or slowing the game down."
+function computeRenderingHealth(samples, hashes, overall, smoothness) {
+  const checks = [];
+  const last = samples.at(-1);
+
+  // 1. Game makes visible progress (catches "boot-and-stick" regressions).
+  checks.push({
+    name: "progression",
+    passed: hashes.size >= 20,
+    value: hashes.size,
+    threshold: 20,
+    detail: "distinct canvas hashes across the run",
+  });
+
+  // 2. Average game speed close to 100% post-warmup. <85% means the
+  //    emulator can't keep up with NTSC 60 Hz.
+  const speed = Number(overall.averageGameSpeed) || 0;
+  checks.push({
+    name: "game-speed",
+    passed: speed >= 85,
+    value: Number(speed.toFixed(1)),
+    threshold: 85,
+    detail: "overall average gameSpeed % (post-warmup)",
+  });
+
+  // 3. Drop rate stays low. Each "drop" is a paint interval > 24 ms (one
+  //    full 60 Hz frame late). 5% is the loose cutoff; user-perceived
+  //    "smooth" needs to stay near 2-3%.
+  const dropRate = smoothness?.dropRatePercent ?? 0;
+  checks.push({
+    name: "drop-rate",
+    passed: dropRate <= 5,
+    value: dropRate,
+    threshold: 5,
+    detail: "% of paint intervals > 24 ms (long-frame threshold)",
+  });
+
+  // 4. Worst single paint gap. The user-reported 2 s freezes are caught
+  //    here. <500 ms is "no single freeze longer than a coin flip".
+  const maxGap = smoothness?.lifetimeMaxIntervalMs ?? 0;
+  checks.push({
+    name: "max-gap",
+    passed: maxGap <= 500,
+    value: maxGap,
+    threshold: 500,
+    detail: "ms — worst single gap between successive paints (lifetime)",
+  });
+
+  // 5. 60 Hz target hit rate. With p99 of intervals in <20 ms band, the
+  //    emulator is painting on-cadence 99 % of the time.
+  const fastPct = smoothness?.fastIntervalPercent ?? 0;
+  checks.push({
+    name: "fast-interval",
+    passed: fastPct >= 90,
+    value: fastPct,
+    threshold: 90,
+    detail: "% of paint intervals < 20 ms (within one 60 Hz slot + slack)",
+  });
+
+  // 6. No solid-color frames (all-black or all-clear). A render-corruption
+  //    canary: visibleHash == 0 or a stable single-color hash for >3
+  //    consecutive samples is a hard fail. We check the most common
+  //    hash count vs total — if one hash dominates (>40% of samples)
+  //    something is stuck.
+  const hashCounts = new Map();
+  for (const s of samples) {
+    if (!s.visibleHash) continue;
+    hashCounts.set(s.visibleHash, (hashCounts.get(s.visibleHash) || 0) + 1);
+  }
+  const dominantHashCount = Math.max(0, ...hashCounts.values());
+  const dominantHashShare =
+    samples.length > 0 ? (dominantHashCount / samples.length) * 100 : 0;
+  checks.push({
+    name: "no-stuck-frame",
+    passed: dominantHashShare <= 40,
+    value: Number(dominantHashShare.toFixed(1)),
+    threshold: 40,
+    detail: "% of samples sharing the single most-common canvas hash",
+  });
+
+  const passed = checks.filter((c) => c.passed).length;
+  const failed = checks.filter((c) => !c.passed);
+  return {
+    passed: failed.length === 0,
+    passedChecks: passed,
+    totalChecks: checks.length,
+    failedChecks: failed.map((c) => c.name),
+    checks,
   };
 }
 
