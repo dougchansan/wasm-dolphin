@@ -674,6 +674,15 @@ int SetVideoBackend(const char* backend)
     s_video_backend = "Null";
     return 1;
   }
+  // Day-14 scaffold: WebGPU backend exists but renders nothing yet.
+  // Accepting "WebGPU" here lets ?video=webgpu round-trip through
+  // ActivateBackend so future days can iterate without rewiring the
+  // JS→C++ string plumbing.
+  if (requested == "WebGPU")
+  {
+    s_video_backend = "WebGPU";
+    return 1;
+  }
 
   return 0;
 }

@@ -807,6 +807,13 @@ function requestedVideoBackend() {
   if (requested === "null") {
     return "Null";
   }
+  // Day-14 scaffold: WebGPU backend exists in the wasm build but only
+  // renders blank frames today. Reachable via ?video=webgpu so future
+  // sessions can light it up incrementally without breaking the
+  // currently-shipping software/OGL paths.
+  if (requested === "webgpu") {
+    return "WebGPU";
+  }
   return "Software Renderer";
 }
 
