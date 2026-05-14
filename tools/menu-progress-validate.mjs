@@ -211,6 +211,27 @@ await page.exposeFunction("__menuProgressReportLoAF", (entry) => {
   longAnimationFrames.push(entry);
 });
 
+// Audio capture (Phase C). The page's AudioController exposes itself as
+// window.__audio. The validator unmutes it after mount, attaches an
+// AnalyserNode to the gain output, and periodically samples the audio
+// envelope (peak amplitude + RMS) so we can assert "audio is producing
+// non-silent output during gameplay scenes".
+const audioSamples = []; // { tSec, peak, rms }
+await page.exposeFunction("__menuProgressReportAudio", (sample) => {
+  audioSamples.push(sample);
+});
+
+// Input-latency probe (Phase C). PerformanceEventTiming reports each
+// input event with both arrival time and handler-processing time. With
+// a low durationThreshold the observer surfaces every keypress the
+// validator dispatches, letting us compute p50/p95/max input-to-handler
+// latency. True input-to-paint latency would need GPU scanout timing
+// (out of scope); processingStart-startTime is a decent proxy.
+const inputEvents = []; // { startTime, processingStart, duration, name }
+await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
+  inputEvents.push(entry);
+});
+
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.evaluate(() => {
@@ -238,11 +259,83 @@ try {
       // Not all browsers support LoAF. Validator still works; this just
       // skips the long-frame detail capture.
     }
+    // Input-event observer (Phase C). durationThreshold:0 captures every
+    // input event regardless of handler cost. Lets us measure validator
+    // keypress → handler latency. Same swallow-on-error pattern.
+    try {
+      const obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          window.__menuProgressReportInputEvent({
+            startTime: e.startTime,
+            processingStart: e.processingStart,
+            processingEnd: e.processingEnd,
+            duration: e.duration,
+            name: e.name,
+          });
+        }
+      });
+      obs.observe({ type: "event", durationThreshold: 0, buffered: true });
+    } catch (err) {
+      // PerformanceEventTiming not supported — input latency stays empty.
+    }
   });
   await page.setInputFiles("#romInput", romPath);
   await page.click("#screen");
   console.log(`[menu-progress] mounting ROM…`);
   await waitForMount(page);
+
+  // Phase C: install the audio probe. Unmute (audio defaults to muted),
+  // attach an AnalyserNode to the audio graph, and poll envelope
+  // every 250 ms. Wrapped in a single page.evaluate so it runs cleanly
+  // even if AudioContext isn't available (older browsers) — failures
+  // just leave audioSamples empty.
+  await page.evaluate(() => {
+    try {
+      const audio = window.__audio;
+      if (!audio) return;
+      void audio.setMuted(false);
+      // ensureContext is async; the actual AudioContext + gain node is
+      // created on first call. Trigger it now so the analyser can hook
+      // in. We don't await — the validator's RAF-driven sampling will
+      // start working as soon as the graph is up.
+      void audio.ensureContext();
+      const installAnalyser = () => {
+        if (!audio.context || !audio.gain) {
+          setTimeout(installAnalyser, 50);
+          return;
+        }
+        const analyser = audio.context.createAnalyser();
+        analyser.fftSize = 2048;
+        // Tap the post-gain stage so muted runs read 0 (sanity check
+        // for the unmute path), but unmuted runs see real samples.
+        audio.gain.connect(analyser);
+        const buf = new Float32Array(analyser.fftSize);
+        const t0 = performance.now();
+        setInterval(() => {
+          analyser.getFloatTimeDomainData(buf);
+          let peak = 0;
+          let sumSq = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = buf[i];
+            const absV = v < 0 ? -v : v;
+            if (absV > peak) peak = absV;
+            sumSq += v * v;
+          }
+          const rms = Math.sqrt(sumSq / buf.length);
+          window.__menuProgressReportAudio({
+            tSec: (performance.now() - t0) / 1000,
+            peak: Number(peak.toFixed(6)),
+            rms: Number(rms.toFixed(6)),
+          });
+        }, 250);
+      };
+      installAnalyser();
+    } catch (err) {
+      // Browser doesn't support what we need — validator falls back to
+      // running without audio samples, the assertion just becomes a
+      // "not measured" rather than a fail.
+    }
+  });
 
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
@@ -304,6 +397,18 @@ try {
       JSON.stringify(longAnimationFrames, null, 2)
     );
   }
+  if (audioSamples.length) {
+    await writeFile(
+      path.join(outDir, "audio-samples.json"),
+      JSON.stringify(audioSamples, null, 2)
+    );
+  }
+  if (inputEvents.length) {
+    await writeFile(
+      path.join(outDir, "input-events.json"),
+      JSON.stringify(inputEvents, null, 2)
+    );
+  }
   await writeFile(
     path.join(outDir, "distinct-hashes.json"),
     JSON.stringify(
@@ -314,7 +419,11 @@ try {
       2
     )
   );
-  const summary = summarize(samples, distinctHashes);
+  const summary = summarize(samples, distinctHashes, {
+    audioSamples,
+    longAnimationFrames,
+    inputEvents,
+  });
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
   console.log(`\n[menu-progress] done: ${JSON.stringify(summary, null, 2)}`);
   console.log(`[menu-progress] ${distinctHashes.size} distinct canvas hashes across ${samples.length} samples`);
@@ -322,7 +431,8 @@ try {
   await browser.close();
 }
 
-function summarize(samples, hashes) {
+function summarize(samples, hashes, extras = {}) {
+  const { audioSamples = [], longAnimationFrames = [], inputEvents = [] } = extras;
   // Skip the initial 20% (boot warmup) when computing averages — same as
   // before. But also split on JIT engagement so a JIT-on regression doesn't
   // hide in a single overall average.
@@ -342,7 +452,17 @@ function summarize(samples, hashes) {
     postJit = computeBucket(samples.slice(jitStartIndex));
   }
   const smoothness = computeSmoothnessSummary(samples);
-  const renderingHealth = computeRenderingHealth(samples, hashes, overall, smoothness);
+  const audioSummary = computeAudioSummary(audioSamples);
+  const inputLatency = computeInputLatencySummary(inputEvents);
+  const renderingHealth = computeRenderingHealth(
+    samples,
+    hashes,
+    overall,
+    smoothness,
+    audioSummary,
+    longAnimationFrames,
+    inputLatency
+  );
   return {
     sampleCount: samples.length,
     distinctCanvasHashes: hashes.size,
@@ -354,6 +474,8 @@ function summarize(samples, hashes) {
     preJit,
     postJit,
     smoothness,
+    audio: audioSummary,
+    inputLatency,
     renderingHealth,
     // Keep the flat averageX fields for backward compat with downstream tooling.
     averageGameSpeed: overall.averageGameSpeed,
@@ -364,12 +486,81 @@ function summarize(samples, hashes) {
   };
 }
 
+// Summarize the audio-envelope samples collected from the AnalyserNode.
+// Each entry is { tSec, peak, rms } at 4 Hz. We report: total samples,
+// active sample count (rms above silence floor), peak-rms-ever-seen,
+// and "audio was producing sound for N % of the run".
+function computeAudioSummary(audioSamples) {
+  if (!audioSamples?.length) {
+    return {
+      enabled: false,
+      sampleCount: 0,
+      activeSamples: 0,
+      activePercent: 0,
+      peakRms: 0,
+      peakAmplitude: 0,
+    };
+  }
+  const SILENCE_RMS = 0.001; // ~-60 dBFS — well below any real audio
+  let activeSamples = 0;
+  let peakRms = 0;
+  let peakAmplitude = 0;
+  for (const s of audioSamples) {
+    if (s.rms > SILENCE_RMS) activeSamples += 1;
+    if (s.rms > peakRms) peakRms = s.rms;
+    if (s.peak > peakAmplitude) peakAmplitude = s.peak;
+  }
+  return {
+    enabled: true,
+    sampleCount: audioSamples.length,
+    activeSamples,
+    activePercent: Number(((100 * activeSamples) / audioSamples.length).toFixed(2)),
+    peakRms: Number(peakRms.toFixed(6)),
+    peakAmplitude: Number(peakAmplitude.toFixed(6)),
+  };
+}
+
+// Summarize input-event latency. Each entry is a PerformanceEventTiming
+// record: startTime (event arrival), processingStart (handler began),
+// processingEnd, duration. We compute p50/p95/max of
+// processingStart - startTime as "input-to-handler" latency. Note this
+// isn't the true input-to-paint metric (would need GPU scanout time)
+// but it's the largest controllable slice of the round trip.
+function computeInputLatencySummary(inputEvents) {
+  // Only count keyboard inputs the validator dispatched (keydown/keyup).
+  // Mouse events from Playwright orchestration shouldn't pollute the
+  // input-latency channel.
+  const keys = inputEvents.filter(
+    (e) => e.name === "keydown" || e.name === "keyup"
+  );
+  if (!keys.length) {
+    return {
+      enabled: false,
+      sampleCount: 0,
+      p50Ms: 0,
+      p95Ms: 0,
+      maxMs: 0,
+    };
+  }
+  const latencies = keys
+    .map((e) => Math.max(0, e.processingStart - e.startTime))
+    .sort((a, b) => a - b);
+  const pct = (p) => latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))];
+  return {
+    enabled: true,
+    sampleCount: latencies.length,
+    p50Ms: Number(pct(0.5).toFixed(2)),
+    p95Ms: Number(pct(0.95).toFixed(2)),
+    maxMs: Number(latencies[latencies.length - 1].toFixed(2)),
+  };
+}
+
 // Aggregate pass/fail health signal across the run. Each check returns
 // { name, passed, value, threshold, detail } so the summary doubles as a
 // human-readable report and a CI-friendly assertion. The thresholds aim
 // for the user-stated bar: "every frame renders as fast as possible like
 // perfect 60 Hz no dropping frames or slowing the game down."
-function computeRenderingHealth(samples, hashes, overall, smoothness) {
+function computeRenderingHealth(samples, hashes, overall, smoothness, audio, loafEntries, inputLatency) {
   const checks = [];
   const last = samples.at(-1);
 
@@ -446,6 +637,69 @@ function computeRenderingHealth(samples, hashes, overall, smoothness) {
     value: Number(dominantHashShare.toFixed(1)),
     threshold: 40,
     detail: "% of samples sharing the single most-common canvas hash",
+  });
+
+  // 7. Audio is producing sound. Headless probes may not have working
+  //    audio output (Chrome's autoplay policy, missing audio device),
+  //    so this check is skipped — not failed — when audio wasn't
+  //    measured at all. When measured, at least 5 % of samples must
+  //    have RMS above the silence floor.
+  if (audio?.enabled) {
+    checks.push({
+      name: "audio-presence",
+      passed: audio.activePercent >= 5,
+      value: audio.activePercent,
+      threshold: 5,
+      detail:
+        `% of audio samples above silence floor (peak rms = ${audio.peakRms})`,
+    });
+  } else {
+    checks.push({
+      name: "audio-presence",
+      passed: true, // not measured — not failed
+      value: 0,
+      threshold: 5,
+      detail: "skipped — audio probe didn't capture any samples",
+      skipped: true,
+    });
+  }
+
+  // 8. Input handler latency. p95 input-to-handler should stay below
+  //    32 ms (two 60 Hz slots — fast enough that nobody notices).
+  if (inputLatency?.enabled) {
+    checks.push({
+      name: "input-latency",
+      passed: inputLatency.p95Ms <= 32,
+      value: inputLatency.p95Ms,
+      threshold: 32,
+      detail: `ms — p95 input event arrival -> handler start (n=${inputLatency.sampleCount})`,
+    });
+  } else {
+    checks.push({
+      name: "input-latency",
+      passed: true,
+      value: 0,
+      threshold: 32,
+      detail: "skipped — no input events observed",
+      skipped: true,
+    });
+  }
+
+  // 9. Main-thread blocking frames are rare. PerformanceLongAnimationFrame
+  //    entries report whenever a frame took >50 ms on the main thread.
+  //    A few per minute is normal during JIT engagement; many sustained
+  //    long frames indicate a thrash.
+  const loafCount = loafEntries?.length ?? 0;
+  const runSeconds = samples.length > 0
+    ? (samples.at(-1)?.elapsedSeconds || samples.length)
+    : 1;
+  const loafPerMinute = (60 * loafCount) / Math.max(1, runSeconds);
+  checks.push({
+    name: "long-anim-frames",
+    passed: loafPerMinute <= 10,
+    value: Number(loafPerMinute.toFixed(2)),
+    threshold: 10,
+    detail: `count of >50 ms main-thread frames per minute (total ${loafCount})`,
   });
 
   const passed = checks.filter((c) => c.passed).length;

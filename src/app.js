@@ -109,6 +109,10 @@ let lastFrameInfo = null;
 let currentSettings = readSettingsFromSearch(window.location.search);
 
 const audio = new AudioController();
+// Exposed for the validator: lets it unmute programmatically and tap the
+// AudioContext via an AnalyserNode to check that audio is actually being
+// produced during gameplay (Phase C of the smoothness/audio validator).
+window.__audio = audio;
 const host = new EmulatorHost({
   canvas: elements.screen,
   onFrame: handleFrame,
