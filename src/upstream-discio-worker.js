@@ -45,6 +45,11 @@ let lastHostPumpTime = 0;
 let renderBackend = "none";
 let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
+// Stall-logger state.
+let worstLoopMsLogged = 0;
+let stallCount = 0;
+let worstSignalWaitMs = 0;
+let signalStallCount = 0;
 let presentationChannel = null;
 let frameSignalHeap = null;
 let frameSignalIndex = -1;
@@ -370,7 +375,15 @@ async function loadCore({
     // and we publish pixels to main via the SAB. Same workerOwnsCanvas
     // promotion as detached mode — otherwise the presentation loop won't
     // start and we'll never call publishOglSabFrame.
+    //
+    // renderBackend = "ogl" is critical: it routes the presentation loop
+    // through the OGL branch (which dedups on OGL-swap-count) instead of
+    // the generic frameSignal branch (which dedups on coreFrame). OGL
+    // bypasses XFB, so coreFrame doesn't tick per visible swap, and the
+    // dedup would reject every paint except the first — pthread reports
+    // 1000s of swaps but the visible canvas only updates once.
     renderCanvas = moduleCanvas;
+    renderBackend = "ogl";
     workerOwnsCanvas = true;
     postStatus("Worker SAB OGL: standalone OffscreenCanvas, pixels via SharedArrayBuffer");
   }
@@ -1049,10 +1062,29 @@ function scheduleFrameSignalWait() {
   }
 
   frameSignalWaitPending = true;
+  const waitStartedAt = performance.now();
   wait.value
     .catch(() => "error")
     .then(() => {
       frameSignalWaitPending = false;
+      // Diagnostic: if signal wait took >200ms, the OGL pthread is stalled
+      // (likely glReadPixels syncing on a deep GPU queue — texture loads on
+      // scene transitions like character-select are the prime suspect).
+      // discio's loop itself is fast; the long gap shows up as a paint-rate
+      // stall because the signal that triggers the next paint doesn't tick.
+      const waitMs = performance.now() - waitStartedAt;
+      if (waitMs > 200) {
+        signalStallCount += 1;
+        const isNewWorst = waitMs > worstSignalWaitMs;
+        if (isNewWorst || signalStallCount % 5 === 0) {
+          if (isNewWorst) worstSignalWaitMs = waitMs;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[signal-stall#${signalStallCount}${isNewWorst ? "*" : ""}] ` +
+            `waitMs=${waitMs.toFixed(0)} renderBackend=${renderBackend}`
+          );
+        }
+      }
       if (!presentationLoopActive) {
         return;
       }
@@ -1086,6 +1118,7 @@ function pollInputStateFromSab() {
 }
 
 function runPresentationLoop() {
+  const stages = {};
   try {
     loopsSincePresentationFps += 1;
     if (moduleInstance && api) {
@@ -1100,12 +1133,14 @@ function runPresentationLoop() {
       // throttling.
       const pumpStartedAt = performance.now();
       api.pumpHostJobs?.();
-      addProfileTime("pump", performance.now() - pumpStartedAt);
+      stages.pump = performance.now() - pumpStartedAt;
+      addProfileTime("pump", stages.pump);
       lastHostPumpTime = now;
       if (!coreBoot.accepted) {
         const runStartedAt = performance.now();
         api.runFrame?.();
-        addProfileTime("run", performance.now() - runStartedAt);
+        stages.run = performance.now() - runStartedAt;
+        addProfileTime("run", stages.run);
       }
 
       const apiStartedAt = performance.now();
@@ -1113,8 +1148,10 @@ function runPresentationLoop() {
       const height = api.frameHeight();
       const pointer = api.frameBuffer();
       const coreFrame = api.getFrame?.() ?? 0;
-      addProfileTime("api", performance.now() - apiStartedAt);
+      stages.api = performance.now() - apiStartedAt;
+      addProfileTime("api", stages.api);
       maybeEnablePpcWasmJit(coreFrame);
+      const presentStartedAt = performance.now();
       if (coreBoot.accepted && frameSignalHeap && renderBackend === "ogl") {
         // OGL bypasses XFB, so api.getFrame() doesn't increment per visible frame.
         // Use the OGL swap count (incremented in DolphinWeb_OnOglSwap) as the
@@ -1164,9 +1201,31 @@ function runPresentationLoop() {
       } else if (coreFrame !== lastPresentedCoreFrame) {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
       }
+      stages.present = performance.now() - presentStartedAt;
       updatePresentationFps();
       maybeDisablePpcWasmJit(coreFrame);
-      addProfileTime("loop", performance.now() - loopStartedAt);
+      const loopMs = performance.now() - loopStartedAt;
+      stages.loop = loopMs;
+      addProfileTime("loop", loopMs);
+      // Stall logger: when a single loop iteration exceeds 100 ms, log a
+      // per-stage breakdown. We always log the worst sample so far, and
+      // additionally every 5th stall after that, so a sustained slow patch
+      // surfaces in the console without overwhelming it.
+      if (loopMs > 100) {
+        stallCount += 1;
+        const isNewWorst = loopMs > worstLoopMsLogged;
+        if (isNewWorst || stallCount % 5 === 0) {
+          if (isNewWorst) worstLoopMsLogged = loopMs;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[stall#${stallCount}${isNewWorst ? "*" : ""}] loop=${loopMs.toFixed(0)}ms ` +
+            `pump=${(stages.pump ?? 0).toFixed(0)} ` +
+            `api=${(stages.api ?? 0).toFixed(0)} ` +
+            `present=${(stages.present ?? 0).toFixed(0)} ` +
+            `coreFrame=${coreFrame} renderBackend=${renderBackend}`
+          );
+        }
+      }
     }
   } catch (error) {
     postStatus(error instanceof Error ? error.message : String(error));
