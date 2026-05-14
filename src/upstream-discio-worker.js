@@ -388,9 +388,21 @@ async function loadCore({
     throw new Error("Upstream Dolphin bundle did not expose createDolphinCore");
   }
 
+  // Pre-fetch the wasm binary so we can both (a) hand it to Emscripten via
+  // wasmBinary (skips its internal fetch) and (b) fingerprint it for the
+  // JIT-cache cross-build invalidation. Single localhost fetch instead of
+  // a double-fetch + extra hash pass.
+  const { wasmBinary, fingerprint: buildFingerprint } =
+      await fetchWasmAndFingerprint(coreUrl);
+  // Reconcile IDB cache against this build's fingerprint before we touch
+  // the cache map. If the build changed since the previous session, clear
+  // the stale modules so we don't carry forward dead entries forever.
+  await reconcileJitCacheWithBuild(buildFingerprint);
+
   moduleInstance = await factory({
     noInitialRun: true,
     canvas: videoBackend === "OGL" ? moduleCanvas || undefined : undefined,
+    wasmBinary,
     // worker_owned_webgl must be true for any OGL run. The C++ side gates
     // its worker-context path, the InitBackendInfo probe-skip, and per-Swap
     // commit-frame handling on this flag. With it false, the standard
@@ -2189,7 +2201,10 @@ function postStatus(message) {
 const dolphinJitCacheMap = new Map(); // Map<hashHex, WebAssembly.Module>
 const DOLPHIN_JIT_IDB_NAME = "dolphin-jit-cache";
 const DOLPHIN_JIT_IDB_STORE = "modules";
+const DOLPHIN_JIT_IDB_META = "metadata";
+const DOLPHIN_JIT_IDB_VERSION = 2;
 const DOLPHIN_JIT_CACHE_MAX = 8192; // hard cap on in-memory entries
+const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
 let dolphinJitIdbWriteCount = 0;
@@ -2201,16 +2216,25 @@ function openDolphinJitIdb() {
     }
     let request;
     try {
-      request = indexedDB.open(DOLPHIN_JIT_IDB_NAME, 1);
+      request = indexedDB.open(DOLPHIN_JIT_IDB_NAME, DOLPHIN_JIT_IDB_VERSION);
     } catch (err) {
       postStatus(`jit-cache: indexedDB.open failed: ${err?.message || err}`);
       resolve(null);
       return;
     }
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
+      // v1 → v2: add metadata store. The pre-v2 modules have no associated
+      // build fingerprint, so clear them on upgrade — they'd otherwise be
+      // treated as belonging to the current build and only grow stale.
+      if (event.oldVersion < 2 && db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
+        db.deleteObjectStore(DOLPHIN_JIT_IDB_STORE);
+      }
       if (!db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
         db.createObjectStore(DOLPHIN_JIT_IDB_STORE);
+      }
+      if (!db.objectStoreNames.contains(DOLPHIN_JIT_IDB_META)) {
+        db.createObjectStore(DOLPHIN_JIT_IDB_META);
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -2218,6 +2242,45 @@ function openDolphinJitIdb() {
       postStatus(`jit-cache: indexedDB.open error: ${request.error?.message || "unknown"}`);
       resolve(null);
     };
+  });
+}
+function readDolphinJitMetadata(db, key) {
+  return new Promise((resolve) => {
+    if (!db) { resolve(null); return; }
+    try {
+      const tx = db.transaction(DOLPHIN_JIT_IDB_META, "readonly");
+      const req = tx.objectStore(DOLPHIN_JIT_IDB_META).get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+function writeDolphinJitMetadata(db, key, value) {
+  return new Promise((resolve) => {
+    if (!db) { resolve(false); return; }
+    try {
+      const tx = db.transaction(DOLPHIN_JIT_IDB_META, "readwrite");
+      const req = tx.objectStore(DOLPHIN_JIT_IDB_META).put(value, key);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+function clearDolphinJitModulesStore(db) {
+  return new Promise((resolve) => {
+    if (!db) { resolve(false); return; }
+    try {
+      const tx = db.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
+      const req = tx.objectStore(DOLPHIN_JIT_IDB_STORE).clear();
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
   });
 }
 async function loadDolphinJitCacheFromIdb(db) {
@@ -2303,15 +2366,60 @@ function writeDolphinJitEntryToIdb(hash, bytes) {
     }
   }
 }
-// Kick off the load immediately. installDolphinJitCacheChannel will await
-// this before pushing the (now-populated) cache map to pthreads.
-const dolphinJitCacheReady = (async () => {
+async function fetchWasmAndFingerprint(coreUrlValue) {
+  // coreUrlValue points at the JS shim (dolphin-core-upstream.js). The
+  // wasm sits beside it under the conventional name.
+  const wasmUrl = new URL("dolphin-core-upstream.wasm", coreUrlValue).href;
+  let buffer = null;
+  let fingerprint = null;
+  try {
+    const resp = await fetch(wasmUrl);
+    if (!resp.ok) {
+      postStatus(`jit-cache: wasm fetch returned ${resp.status} (no fingerprint)`);
+      return { wasmBinary: null, fingerprint: null };
+    }
+    buffer = await resp.arrayBuffer();
+  } catch (err) {
+    postStatus(`jit-cache: wasm fetch failed (${err?.message || err}); no fingerprint`);
+    return { wasmBinary: null, fingerprint: null };
+  }
+  // Stride-64 FNV-1a over the full wasm. 8MB / 64 = 128K iters ≈ 1ms.
+  // Wasm files have distinct bytes throughout (code section, data section,
+  // import/export names), so any non-trivial build change moves the hash.
+  const view = new Uint8Array(buffer);
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < view.length; i += 64) {
+    h ^= view[i];
+    h = Math.imul(h, 16777619);
+  }
+  fingerprint = ((h ^ view.length) >>> 0).toString(16) + ":" + view.length.toString(16);
+  return { wasmBinary: buffer, fingerprint };
+}
+// Open IDB eagerly so loadCore() doesn't pay the open latency. Module load
+// is deferred until the build fingerprint is computed (after fetching the
+// wasm) so we can skip / clear stale entries from a previous build.
+const dolphinJitIdbReady = (async () => {
   dolphinJitIdb = await openDolphinJitIdb();
+})();
+async function reconcileJitCacheWithBuild(fingerprint) {
+  await dolphinJitIdbReady;
+  if (!dolphinJitIdb) return 0;
+  const stored = await readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY);
+  if (stored && fingerprint && stored !== fingerprint) {
+    await clearDolphinJitModulesStore(dolphinJitIdb);
+    postStatus(
+      `jit-cache: build changed (${stored.slice(0, 8)} → ${fingerprint.slice(0, 8)}); cleared stale modules`
+    );
+  }
+  if (fingerprint) {
+    await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, fingerprint);
+  }
   const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
   if (loaded > 0) {
     postStatus(`jit-cache: loaded ${loaded} compiled modules from IndexedDB`);
   }
-})();
+  return loaded;
+}
 let dolphinJitNewCompileCount = 0;
 function handleDolphinJitNewCompile(event) {
   const data = event.data;
@@ -2357,9 +2465,9 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
     return;
   }
-  // Wait for IndexedDB load to finish so pthreads receive a fully-populated
-  // map and the first compile attempts hit the cache instead of recompiling.
-  await dolphinJitCacheReady;
+  // dolphinJitCacheMap is already populated by loadCore() (which awaits
+  // reconcileJitCacheWithBuild before reaching this call site), so we
+  // can push immediately.
   const workers = [
     ...(pthread.runningWorkers || []),
     ...(pthread.unusedWorkers || [])
