@@ -1,0 +1,27 @@
+# Day-23: the Naga staticlib is linked into dolphin_web_core, which is
+# an Emscripten pthread / shared-memory wasm module. Every object in
+# that module — including Rust's std — must be built with the
+# atomics + bulk-memory wasm features, else wasm-ld rejects it
+# ("--shared-memory is disallowed ... not compiled with 'atomics' or
+# 'bulk-memory'"). The precompiled wasm32-unknown-emscripten std has
+# neither, so we rebuild std from source (-Z build-std, nightly).
+#
+# Build with:
+#   cargo +nightly build --release --target wasm32-unknown-emscripten
+# (the unstable build-std + target-feature flags below are applied
+# automatically from this file).
+
+[build]
+rustflags = [
+  "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[target.wasm32-unknown-emscripten]
+# Match the main module's shared-memory pthread ABI at the Rust
+# codegen/link level.
+rustflags = [
+  "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+]
