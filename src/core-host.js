@@ -807,12 +807,19 @@ function requestedVideoBackend() {
   if (requested === "null") {
     return "Null";
   }
-  // Day-14 scaffold: WebGPU backend exists in the wasm build but only
-  // renders blank frames today. Reachable via ?video=webgpu so future
-  // sessions can light it up incrementally without breaking the
-  // currently-shipping software/OGL paths.
+  // Day-16: `?video=webgpu` keeps the Software→WebGPU-presenter hybrid
+  // (real game pixels reach the canvas through a wgpuRenderPass blit,
+  // CPU does the rasterisation). Stable, plays Melee.
+  //
+  // Day-17+: `?video=wgpu` selects the real WebGPU video backend that's
+  // under construction — no Software bridge, the C++ side owns the
+  // render pipeline. Early phases will only show clear-colour or
+  // partial content; this is the path to 60fps GPU rendering.
   if (requested === "webgpu") {
     return "WebGPU";
+  }
+  if (requested === "wgpu" || requested === "webgpu-real" || requested === "webgpu2") {
+    return "WebGPU-Real";
   }
   return "Software Renderer";
 }

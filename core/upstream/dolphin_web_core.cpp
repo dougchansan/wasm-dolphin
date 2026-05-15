@@ -674,11 +674,23 @@ int SetVideoBackend(const char* backend)
     s_video_backend = "Null";
     return 1;
   }
-  // Day-14 scaffold: WebGPU backend exists but renders nothing yet.
-  // Accepting "WebGPU" here lets ?video=webgpu round-trip through
-  // ActivateBackend so future days can iterate without rewiring the
-  // JS→C++ string plumbing.
+  // Day-16: `?video=webgpu` (the user-facing string "WebGPU") routes
+  // to the Software→WebGPU-presenter hybrid. The C++ Software path
+  // runs the CPU rasteriser into s_framebuffer; JS uploads those
+  // bytes through a real wgpuRenderPass blit on the canvas context.
+  // This is the path that plays Melee today.
   if (requested == "WebGPU")
+  {
+    s_video_backend = "Software Renderer";
+    return 1;
+  }
+  // Day-17 (wasm-dolphin): `?video=wgpu` activates the *real* WebGPU
+  // video backend (the WebGPU::VideoBackend class registered in
+  // VideoBackendBase). Construction underway — early days render
+  // clear-colour or partial content while WebGPUGfx / WebGPUTexture
+  // gain real wgpu API calls. End goal: GPU rasterisation, 60fps,
+  // no CPU bottleneck.
+  if (requested == "WebGPU-Real")
   {
     s_video_backend = "WebGPU";
     return 1;

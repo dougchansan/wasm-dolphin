@@ -84,6 +84,11 @@ let ppcWasmJitActive = false;
 let ppcWasmJitDisabledForSession = false;
 let ppcWasmJitCooldownUntilFrame = 0;
 let ppcWasmJitEnabledAtFrame = 0;
+// Day-21: presentation fps captured immediately before the JIT
+// engaged. The disable guard fuses the JIT only if presentation
+// regressed materially below this baseline (i.e. the JIT itself hurt),
+// not merely because the renderer is slow.
+let ppcWasmJitPreEngageFps = 0;
 let ppcWasmJitTier = "guarded";
 let ppcWasmJitWarmupFrames = 3600;
 let pacedPresentationActive = false;
@@ -153,8 +158,15 @@ const DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES = 3600;
 const WASM_JIT_MIN_STABLE_PRESENTATION_FPS = 25;
 const WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS = 80;
 const WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE = 240;
-const WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS = 25;
-const WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS = 40;
+// Day-21: regression-relative fuse. Keep the JIT unless presentation
+// fell to < 65% of its pre-engage rate (a regression the JIT itself
+// introduced) and the baseline was high enough to trust, OR fps is
+// catastrophically low in absolute terms (a real freeze). The old
+// absolute fps/gap floor mis-fused the JIT whenever the CPU software
+// rasteriser — not the JIT — was the fps bottleneck.
+const WASM_JIT_REGRESSION_FRACTION = 0.65;
+const WASM_JIT_REGRESSION_MIN_BASELINE_FPS = 18;
+const WASM_JIT_ABSOLUTE_FLOOR_FPS = 6;
 const WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS = 5000;
 const WASM_JIT_POST_ACTIVATION_GRACE_FRAMES = 300;
 // After a temporary degraded-presentation disable, wait this many video frames
@@ -435,6 +447,17 @@ async function loadCore({
   // the stale modules so we don't carry forward dead entries forever.
   await reconcileJitCacheWithBuild(buildFingerprint);
 
+  // Day-15 (wasm-dolphin) WebGPU video backend: when the user selects
+  // `?video=webgpu`, the existing WebGPU presenter (createWebGpuPresenter)
+  // has already acquired a WGPUDevice and configured the canvas context.
+  // Hand that same device to Emscripten via `preinitializedWebGPUDevice`
+  // so the C++ side can pull it with `emscripten_webgpu_get_device()` and
+  // reuse the existing context rather than acquiring a second device.
+  const preinitializedWebGPUDevice =
+    (videoBackend === "WebGPU" || videoBackend === "WebGPU-Real") && renderGpu
+      ? renderGpu.device
+      : undefined;
+
   moduleInstance = await factory({
     noInitialRun: true,
     canvas: videoBackend === "OGL" ? moduleCanvas || undefined : undefined,
@@ -449,11 +472,27 @@ async function loadCore({
     dolphinOglReadbackPresent: readbackOgl,
     dolphinOglTestClear: Boolean(oglTestClear),
     dolphinFastSoftwareRaster: Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0)),
+    preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
     printErr: (message) => postStatus(message),
     onAbort: (reason) => postStatus(`Emscripten abort: ${reason}`)
   });
+
+  // Day-16: `?video=webgpu` runs the Software→WebGPU-presenter hybrid.
+  // The C++ Software path writes XFB into s_framebuffer; the existing
+  // JS WebGPU presenter uploads + blits those bytes via a real
+  // wgpuRenderPass. Plays Melee end-to-end today.
+  if (videoBackend === "WebGPU" && renderGpu) {
+    postStatus("WebGPU video backend: Software→WebGPU presenter hybrid (day-16)");
+  }
+  // Day-17: `?video=wgpu` activates the real WebGPU video backend in
+  // C++. No Software bridge. WebGPUGfx drives the canvas directly via
+  // wgpu API calls. Early phases: clear-colour or partial frames while
+  // pipeline pieces (textures, shaders, draw calls) come online.
+  if (videoBackend === "WebGPU-Real" && renderGpu) {
+    postStatus("WebGPU video backend: real C++ render path active (day-17, under construction)");
+  }
 
   api = bindApi(moduleInstance);
   // Day-7 persistent JIT cache (Phase A — message channel only). Push the
@@ -1279,6 +1318,16 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // post-engage guard (maybeDisablePpcWasmJit, ACTIVE_* thresholds) handles
   // catastrophic regression.
 
+  // Day-21: snapshot the pre-engage presentation rate. The disable
+  // guard judges the JIT by *regression vs this baseline*, not an
+  // absolute fps floor. A heavy renderer (fastsw=0 full-res CPU
+  // raster) caps present fps far below the old absolute threshold;
+  // the JIT still speeds up PPC emulation in that regime, so fusing
+  // it off there was strictly counterproductive (and flapped every
+  // cooldown). Record the baseline so we only fuse when the JIT
+  // itself made presentation worse.
+  ppcWasmJitPreEngageFps = presentationFps;
+
   api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
   ppcWasmJitEnabledAtFrame = coreFrame >>> 0;
@@ -1313,10 +1362,26 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
     return;
   }
 
-  if (
-    presentationFps >= WASM_JIT_MIN_ACTIVE_PRESENTATION_FPS &&
-    presentationP95IntervalMs <= WASM_JIT_MAX_ACTIVE_PRESENTATION_GAP_MS
-  ) {
+  // Day-21: judge the JIT by regression vs the pre-engage baseline,
+  // not an absolute fps floor. The absolute floor (fps>=25, gap<=40ms)
+  // assumed a GPU-class renderer; with the CPU software rasteriser
+  // (especially fastsw=0 full-res) present fps is renderer-capped well
+  // below that even though the JIT is *helping* PPC throughput. The
+  // old logic disabled the JIT every cooldown, making emulation slower
+  // for no benefit — exactly the "feels slower" the user hit.
+  //
+  // Keep the JIT unless presentation dropped materially below where it
+  // was right before the JIT engaged (a regression the JIT caused),
+  // OR it's catastrophically slow in absolute terms (sub-floor — a
+  // genuine freeze, not just a heavy renderer). The 5s post-activation
+  // stall check above already handles compile-burst freezes.
+  const baseline = ppcWasmJitPreEngageFps;
+  const regressed =
+    baseline >= WASM_JIT_REGRESSION_MIN_BASELINE_FPS &&
+    presentationFps < baseline * WASM_JIT_REGRESSION_FRACTION;
+  const catastrophic = presentationFps < WASM_JIT_ABSOLUTE_FLOOR_FPS;
+
+  if (!regressed && !catastrophic) {
     return;
   }
 
@@ -1328,7 +1393,8 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   ppcWasmJitCooldownUntilFrame = (coreFrame >>> 0) + WASM_JIT_DEGRADED_COOLDOWN_FRAMES;
   postStatus(
     `Experimental WASM JIT temporarily off ` +
-      `(fps:${presentationFps} gap:${presentationP95IntervalMs}ms; cooldown ` +
+      `(fps:${presentationFps} baseline:${baseline} ` +
+      `${catastrophic ? "catastrophic" : "regressed"}; cooldown ` +
       `${WASM_JIT_DEGRADED_COOLDOWN_FRAMES} frames)`
   );
 }
@@ -1950,10 +2016,17 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
 }
 `
   });
+  // Day-21: linear filtering on the XFB→canvas blit. The GameCube
+  // XFB is 640x480; the visible canvas is usually larger, so nearest
+  // sampling magnified every texel into a hard block — and that
+  // compounded fastsw=1's already-half-res output into a very chunky
+  // image. Linear costs nothing on the GPU and smooths the upscale,
+  // closer to how Dolphin's other backends present. (Native res is
+  // unchanged; this is purely the final present-stage filter.)
   const sampler = device.createSampler({
-    label: "dolphin-xfb-nearest",
-    magFilter: "nearest",
-    minFilter: "nearest"
+    label: "dolphin-xfb-linear",
+    magFilter: "linear",
+    minFilter: "linear"
   });
   const bindGroupLayout = device.createBindGroupLayout({
     label: "dolphin-xfb-bind-layout",
@@ -2017,6 +2090,43 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
 
   return state;
 }
+
+// Day-17 (wasm-dolphin) C++ → JS bridge for the real WebGPU video
+// backend (`?video=wgpu`). C++ `WebGPUGfx::PresentBackbuffer` calls
+// `self.__dolphinWebGpuClear(r, g, b)` via EM_ASM to drive a real
+// `wgpuRenderPass` clear on the canvas every frame. This replaces the
+// Day-15 JS clear loop with a C++-owned render path; the next phases
+// (17.3, 17.4) will extend this bridge with texture upload + blit so
+// real game content reaches the canvas through the WebGPU backend.
+//
+// Why the bridge instead of issuing the render pass directly in C++:
+// the canvas's WGPU context is configured on the discio worker's
+// JS scope (via `createWebGpuPresenter`). Emscripten's webgpu.h
+// exposes the device handle to C++, but the canvas surface is
+// JS-side. Driving the pass through a `self`-scoped function keeps
+// the surface bookkeeping in one place while letting C++ own the
+// per-frame timing.
+self.__dolphinWebGpuClear = function (r, g, b) {
+  const gpu = renderGpu;
+  if (!gpu || !gpu.context) return;
+  try {
+    const textureView = gpu.context.getCurrentTexture().createView();
+    const encoder = gpu.device.createCommandEncoder({ label: "webgpu-real-clear" });
+    const pass = encoder.beginRenderPass({
+      label: "webgpu-real-clear-pass",
+      colorAttachments: [{
+        view: textureView,
+        clearValue: { r, g, b, a: 1 },
+        loadOp: "clear",
+        storeOp: "store"
+      }]
+    });
+    pass.end();
+    gpu.device.queue.submit([encoder.finish()]);
+  } catch (e) {
+    postStatus(`WebGPU real-clear error: ${e?.message || e}`);
+  }
+};
 
 function softwareBlitContextAttributes() {
   return {
@@ -2658,6 +2768,12 @@ async function installDolphinJitCacheChannel(moduleInstance) {
       // This is the no-glReadPixels paint path — bypasses the multi-
       // second GPU-sync stalls the Chrome trace pinpointed.
       w.addEventListener("message", handleDetachedOglFrame);
+      // Day-17 phase 4: catch `webgpu-show-image` payloads emitted by
+      // `WebGPUGfx::ShowImage` (via EM_ASM postMessage) from whichever
+      // pthread the GPU thread lands on. The discio worker owns the
+      // WGPU presenter pipeline (`renderGpu` / drawFrameBytesToWebGpu),
+      // so we route the XFB bytes to it here.
+      w.addEventListener("message", handleWebGpuShowImage);
       sent += 1;
     } catch (err) {
       if (!self._dolphinJitChannelErrLogged) {
@@ -2667,6 +2783,39 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     }
   }
   postStatus(`jit-cache: pushed cache (${dolphinJitCacheMap.size} entries) to ${sent}/${workers.length} pthread workers`);
+}
+
+// Day-17 phase 4: receive XFB pixel data from `WebGPUGfx::ShowImage`
+// (`?video=wgpu` path). The C++ side posts {type:'webgpu-show-image',
+// width, height, bytes: Uint8Array} from the GPU pthread; we feed
+// those bytes through the existing WebGPU presenter pipeline so the
+// canvas displays the real frame via a `wgpuRenderPass` blit.
+let webGpuShowImageCount = 0;
+function handleWebGpuShowImage(event) {
+  const data = event.data;
+  if (!data || data.type !== "webgpu-show-image" || !data.ptr || !data.len) return;
+  webGpuShowImageCount += 1;
+  if (webGpuShowImageCount === 1) {
+    postStatus(
+      `WebGPU video backend: first XFB frame ${data.width}x${data.height} ` +
+        `(zero-copy via shared heap @0x${data.ptr.toString(16)})`
+    );
+  }
+  try {
+    // Zero-copy: read the pixels straight out of the shared wasm heap
+    // at the pointer C++ handed us. drawFrameBytesToWebGpu only reads
+    // the view (queue.writeTexture copies into the GPU texture), so no
+    // intermediate JS allocation is needed.
+    const heap = moduleInstance?.HEAPU8;
+    if (!heap) return;
+    const frameView = new Uint8Array(heap.buffer, data.ptr, data.len);
+    drawFrameBytesToWebGpu(data.width, data.height, frameView);
+  } catch (e) {
+    if (!self._webGpuShowImageErrLogged) {
+      self._webGpuShowImageErrLogged = true;
+      postStatus(`webgpu-show-image draw error: ${e?.message || e}`);
+    }
+  }
 }
 
 let detachedOglForwardedCount = 0;
