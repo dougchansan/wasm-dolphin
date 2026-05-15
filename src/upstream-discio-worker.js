@@ -1,6 +1,14 @@
 import { DEFAULT_UPSTREAM_CORE_URL, WORKERFS_MOUNT_DIR, sanitizeDiscFileName } from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
 
+// Day-25: mark this thread. The discio worker owns the WebGPU device
+// (createWebGpuPresenter runs here). WebGPU objects aren't shareable
+// across Emscripten pthreads, so the real GPU pipeline's wgpu calls
+// must run on THIS thread. C++ probes `self.__dolphinDiscioWorker`
+// via EM_ASM at Initialize/Draw/ShowImage to confirm it's on the
+// device-owning thread. Pthreads have their own `self` without it.
+self.__dolphinDiscioWorker = true;
+
 let coreUrl = DEFAULT_UPSTREAM_CORE_URL;
 let moduleInstance = null;
 let api = null;
@@ -1198,6 +1206,11 @@ function runPresentationLoop() {
     loopsSincePresentationFps += 1;
     if (moduleInstance && api) {
       pollInputStateFromSab();
+      // Day-27: drain the cross-thread WebGPU command ring and replay
+      // on renderGpu.device. No-op until the video pthread hands the
+      // ring over (handleWebGpuCmdRing) and only matters for
+      // ?video=wgpu. Cheap when empty (one atomic load).
+      drainWebGpuCmdRing();
       const now = performance.now();
       const loopStartedAt = performance.now();
       // Pump host jobs every loop iteration. The previous 100ms rate-limit
@@ -2774,6 +2787,11 @@ async function installDolphinJitCacheChannel(moduleInstance) {
       // WGPU presenter pipeline (`renderGpu` / drawFrameBytesToWebGpu),
       // so we route the XFB bytes to it here.
       w.addEventListener("message", handleWebGpuShowImage);
+      // Day-27: catch the `webgpu-cmd-ring` hand-off from the video
+      // pthread (WebGPUCommandStream::EnsureRing). Registers the
+      // shared-memory command ring so the presentation loop can drain
+      // + replay GPU commands on renderGpu.device.
+      w.addEventListener("message", handleWebGpuCmdRing);
       sent += 1;
     } catch (err) {
       if (!self._dolphinJitChannelErrLogged) {
@@ -2783,6 +2801,110 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     }
   }
   postStatus(`jit-cache: pushed cache (${dolphinJitCacheMap.size} entries) to ${sent}/${workers.length} pthread workers`);
+}
+
+// Day-27: cross-thread WebGPU command ring. The video pthread can't
+// own a WebGPU device (Day-26 wall), so WebGPUCommandStream records
+// GPU commands into a ring in the shared wasm heap and the discio
+// worker (which owns renderGpu.device + pumps its event loop)
+// replays them here. This is the wire protocol for the remote WebGPU
+// backend. Day-27 implements the transport + OP_CLEAR; the full
+// AbstractGfx opcode set layers on next.
+//
+// Header layout (CmdRingHeader, 16 bytes @ headerPtr):
+//   [0] u32 write (atomic)  [1] u32 read (atomic)
+//   [2] u32 capacity        [3] u32 reserved
+// Slot layout (CmdRecord, 32 bytes @ slotsPtr + i*32):
+//   [0] u32 op   [1..7] 7 words (f32/u32 per opcode)
+const WGPU_CMD_OP_NOP = 0;
+const WGPU_CMD_OP_CLEAR = 1;
+let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity }
+
+function handleWebGpuCmdRing(event) {
+  const data = event.data;
+  if (!data || data.type !== "webgpu-cmd-ring") return;
+  const heap = moduleInstance?.HEAPU8;
+  if (!heap || !(heap.buffer instanceof SharedArrayBuffer)) {
+    postStatus("webgpu-cmd-ring: wasm heap is not shared; bridge disabled");
+    return;
+  }
+  webGpuCmdRing = {
+    headerI32: new Int32Array(heap.buffer, data.headerPtr, 4),
+    headerU32: new Uint32Array(heap.buffer, data.headerPtr, 4),
+    slotsBase: data.slotsPtr,
+    capacity: data.capacity >>> 0
+  };
+  postStatus(
+    `webgpu-cmd-ring: registered (cap=${data.capacity}) — GPU command bridge live`
+  );
+}
+
+// Drain + replay pending commands on renderGpu.device. Called every
+// presentation tick. Single-consumer; the producer (video pthread)
+// publishes with a release store on `write`, we acquire-load it.
+function drainWebGpuCmdRing() {
+  const ring = webGpuCmdRing;
+  if (!ring || !renderGpu) return;
+  const hdr = ring.headerU32;
+  // Atomics.load on the Int32Array view = acquire of the producer's
+  // release store.
+  const write = Atomics.load(ring.headerI32, 0) >>> 0;
+  let read = Atomics.load(ring.headerI32, 1) >>> 0;
+  if (write === read) return;
+
+  const heap = moduleInstance.HEAPU8;
+  const f32 = new Float32Array(heap.buffer);
+  const u32 = new Uint32Array(heap.buffer);
+  let lastClear = null;
+  while (read !== write) {
+    const slot = read % ring.capacity;
+    const recByte = ring.slotsBase + slot * 32;
+    const recWord = recByte >>> 2;
+    const op = u32[recWord];
+    if (op === WGPU_CMD_OP_CLEAR) {
+      // Coalesce: only the final CLEAR of the batch matters for a
+      // single-clear-per-frame proof.
+      lastClear = {
+        r: f32[recWord + 1],
+        g: f32[recWord + 2],
+        b: f32[recWord + 3],
+        a: f32[recWord + 4]
+      };
+    }
+    read = (read + 1) >>> 0;
+  }
+  // Publish consumed count (release) so the producer sees free slots.
+  Atomics.store(ring.headerI32, 1, read | 0);
+
+  if (lastClear) {
+    try {
+      const gpu = renderGpu;
+      const view = gpu.context.getCurrentTexture().createView();
+      const enc = gpu.device.createCommandEncoder({ label: "webgpu-cmd-clear" });
+      const pass = enc.beginRenderPass({
+        colorAttachments: [{
+          view,
+          clearValue: lastClear,
+          loadOp: "clear",
+          storeOp: "store"
+        }]
+      });
+      pass.end();
+      gpu.device.queue.submit([enc.finish()]);
+      if (!self._webGpuCmdFirst) {
+        self._webGpuCmdFirst = true;
+        postStatus(
+          `webgpu-cmd-ring: first CLEAR replayed (rgba=${lastClear.r.toFixed(2)},` +
+          `${lastClear.g.toFixed(2)},${lastClear.b.toFixed(2)}) — bridge proven`
+        );
+      }
+    } catch (e) {
+      if (!self._webGpuCmdErr) {
+        self._webGpuCmdErr = true;
+        postStatus(`webgpu-cmd-ring replay error: ${e?.message || e}`);
+      }
+    }
+  }
 }
 
 // Day-17 phase 4: receive XFB pixel data from `WebGPUGfx::ShowImage`
