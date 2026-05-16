@@ -12,7 +12,39 @@
 // game wasm, so every path below is panic-free (no unwrap/expect/
 // indexing — all Results handled, return null on any failure).
 
+use std::cell::RefCell;
 use std::os::raw::c_char;
+
+// Day-30: last failure reason, so the C++/JS side can see *why* Naga
+// rejected a real Dolphin shader (frontend parse vs validation vs
+// WGSL backend, plus the message) instead of just a null. Thread-
+// local because naga_spirv_to_wgsl is called synchronously on the
+// single video pthread; valid until the next call on that thread.
+thread_local! {
+    static LAST_ERROR: RefCell<Option<std::ffi::CString>> = RefCell::new(None);
+}
+
+fn set_last_error(msg: String) {
+    // Truncate hard so a giant naga dump can't blow the FFI copy.
+    let mut m = msg;
+    if m.len() > 600 {
+        m.truncate(600);
+    }
+    let cs = std::ffi::CString::new(m)
+        .unwrap_or_else(|_| std::ffi::CString::new("<err string had interior NUL>").unwrap());
+    LAST_ERROR.with(|e| *e.borrow_mut() = Some(cs));
+}
+
+/// Pointer to the last failure message (NUL-terminated, owned by the
+/// crate, valid until the next naga_spirv_to_wgsl call on this
+/// thread), or null if the last call succeeded / none yet.
+#[no_mangle]
+pub extern "C" fn naga_last_error() -> *const c_char {
+    LAST_ERROR.with(|e| match &*e.borrow() {
+        Some(cs) => cs.as_ptr(),
+        None => std::ptr::null(),
+    })
+}
 
 /// Translate a SPIR-V module to WGSL.
 ///
@@ -38,11 +70,20 @@ pub extern "C" fn naga_spirv_to_wgsl(
     let words: &[u32] = unsafe { std::slice::from_raw_parts(spirv_ptr, spirv_word_count) };
 
     match translate(words) {
-        Some(wgsl) => match std::ffi::CString::new(wgsl) {
-            Ok(cstr) => cstr.into_raw(),
-            Err(_) => std::ptr::null_mut(), // interior NUL — shouldn't happen for WGSL text
-        },
-        None => std::ptr::null_mut(),
+        Ok(wgsl) => {
+            LAST_ERROR.with(|e| *e.borrow_mut() = None);
+            match std::ffi::CString::new(wgsl) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => {
+                    set_last_error("WGSL output had an interior NUL".into());
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Err(msg) => {
+            set_last_error(msg);
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -60,11 +101,11 @@ pub extern "C" fn naga_free_wgsl(ptr: *mut c_char) {
     }
 }
 
-fn translate(words: &[u32]) -> Option<String> {
+fn translate(words: &[u32]) -> Result<String, String> {
     let options = naga::front::spv::Options::default();
     let module = naga::front::spv::Frontend::new(words.iter().copied(), &options)
         .parse()
-        .ok()?;
+        .map_err(|e| format!("spv-frontend: {e}"))?;
 
     // The WGSL backend needs validation info. Allow the full
     // capability set — Dolphin emits a wide range of features and we
@@ -73,7 +114,10 @@ fn translate(words: &[u32]) -> Option<String> {
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     );
-    let info = validator.validate(&module).ok()?;
+    let info = validator
+        .validate(&module)
+        .map_err(|e| format!("validate: {e}"))?;
 
-    naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty()).ok()
+    naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+        .map_err(|e| format!("wgsl-backend: {e}"))
 }
