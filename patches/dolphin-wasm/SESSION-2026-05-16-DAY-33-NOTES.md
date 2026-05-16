@@ -538,6 +538,34 @@ clear-screen never initialised the EFB **depth** buffer → every
 primitive fails the depth test → only the background shows. Fix
 landed: `ClearRegion` now ends the open pass and begins a fresh
 loadOp=clear EFB pass (game ARGB colour; consumer clears depth to
-1.0), so subsequent draws render into a properly-cleared EFB. Build
-in progress; next probe checks for actual geometry, then the black-
-margin viewport offset, then bind-group LRU + the 1/65 utility shader.
+1.0), so subsequent draws render into a properly-cleared EFB.
+
+### Post-ClearRegion probe (measured) — narrows it to EFB→XFB resolve
+
+Console now shows `EFB pass#1 fb=14(rgba8unorm) depth=15(depth32float)
+load=clear clear=0,0,0,0` — the EFB **is** cleared (colour+depth)
+every frame, geometry draws, then it's resolved into
+`fb=47 (bgra8unorm, no depth, load)` and blitted to the backbuffer.
+Screen unchanged: green field + ~12% black LEFT margin. Therefore:
+- the green is NOT the EFB clear (black 0,0,0,0) — it enters at the
+  fb=47 XFB-intermediate / present-blit stage;
+- prime suspect: **`WebGPUTexture::CopyRectangleFromTexture` is still
+  the CPU-only stub** — it memcpy's into `m_data` and emits NO GPU
+  opcode, so the GPU XFB texture never receives the rendered EFB.
+  The EFB→XFB resolve must become a real GPU copy/blit opcode
+  (CopyRectangleFromTexture / ResolveFromTexture → emit a
+  copyTextureToTexture or a blit pass).
+- black left margin = the XFB→backbuffer blit sub-rect (aspect/
+  viewport) — a smaller, later item.
+
+Then: geometry/UBO correctness, bind-group LRU, the 1/65 utility
+shader, and the smoothness/comp-play pass (task 8).
+
+**SESSION MILESTONE:** Phase A→B→C complete and committed — Software
+delegation retired, the remote WebGPU hardware renderer runs the full
+GameCube frame validation-clean at 100% speed, and (this session's
+decisive fix) its output now reaches the visible canvas end-to-end.
+Remaining is the EFB→XFB GPU-resolve + geometry grind, fully scoped,
+no research left. Late-session the dev environment degraded badly
+(probes/builds ~5min, every shell backgrounds) — the documented grind
+is best continued on a fresh environment.
