@@ -2821,12 +2821,38 @@ const WGPU_CMD_OP_CLEAR = 1;
 const WGPU_CMD_OP_CREATE_SHADER = 2;
 const WGPU_CMD_OP_CREATE_PIPELINE = 3;
 const WGPU_CMD_OP_DRAW_TEST = 4;
-let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity }
+// Phase A (Day-33): full AbstractGfx opcode set. Wire form fixed by
+// DESIGN-webgpu-command-protocol; consumer handlers land per-increment.
+const WGPU_CMD_OP_CREATE_BUFFER = 5;
+const WGPU_CMD_OP_UPLOAD_BUFFER = 6;
+const WGPU_CMD_OP_CREATE_TEXTURE = 7;
+const WGPU_CMD_OP_UPLOAD_TEXTURE = 8;
+const WGPU_CMD_OP_CREATE_PIPELINE_CFG = 9;
+const WGPU_CMD_OP_CREATE_SAMPLER = 10;
+const WGPU_CMD_OP_CREATE_BIND_GROUP = 11;
+const WGPU_CMD_OP_BEGIN_PASS = 12;
+const WGPU_CMD_OP_SET_PIPELINE = 13;
+const WGPU_CMD_OP_SET_BIND_GROUP = 14;
+const WGPU_CMD_OP_SET_VERTEX_BUFFER = 15;
+const WGPU_CMD_OP_SET_INDEX_BUFFER = 16;
+const WGPU_CMD_OP_SET_VIEWPORT = 17;
+const WGPU_CMD_OP_SET_SCISSOR = 18;
+const WGPU_CMD_OP_DRAW = 19;
+const WGPU_CMD_OP_DRAW_INDEXED = 20;
+const WGPU_CMD_OP_END_PASS = 21;
+const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
+const WGPU_CMD_OP_DESTROY = 23;
+let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
 // Day-28/29 resource object table: producer-assigned id → real GPU
-// object built here on renderGpu.device.
+// object built here on renderGpu.device. Phase A widens this to the
+// full AbstractGfx resource set.
 const webGpuObjects = {
   shaders: new Map(),
   pipelines: new Map(),
+  buffers: new Map(),
+  textures: new Map(),
+  samplers: new Map(),
+  bindGroups: new Map(),
   shaderOk: 0,
   shaderFail: 0
 };
@@ -2854,10 +2880,17 @@ function handleWebGpuCmdRing(event) {
     headerI32: new Int32Array(heap.buffer, data.headerPtr, 4),
     headerU32: new Uint32Array(heap.buffer, data.headerPtr, 4),
     slotsBase: data.slotsPtr,
-    capacity: data.capacity >>> 0
+    capacity: data.capacity >>> 0,
+    // Phase A: per-frame upload arena base (absolute wasm-heap
+    // offset). UploadBuffer/UploadTexture src pointers are absolute
+    // heap offsets into this region; the consumer reads them straight
+    // from moduleInstance.HEAPU8 (zero-copy).
+    uploadBase: (data.uploadPtr >>> 0) || 0,
+    uploadSize: (data.uploadSize >>> 0) || 0
   };
   postStatus(
-    `webgpu-cmd-ring: registered (cap=${data.capacity}) — GPU command bridge live`
+    `webgpu-cmd-ring: registered (cap=${data.capacity} upload=${
+      (webGpuCmdRing.uploadSize / 1048576) | 0}MB) — GPU command bridge live`
   );
 }
 
