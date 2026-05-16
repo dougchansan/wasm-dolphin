@@ -2911,9 +2911,11 @@ function drainWebGpuCmdRing() {
       const stage = u32[recWord + 4];
       replayCreateShader(id, blobPtr, blobLen, stage);
     } else if (op === WGPU_CMD_OP_CREATE_PIPELINE) {
-      // Day-29: build a real GPURenderPipeline (one-shot).
-      // arg: [1]=pipelineId [2]=vsShaderId [3]=topology
-      replayCreatePipeline(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3]);
+      // Day-32: build a real GPURenderPipeline from a Dolphin VS+FS
+      // pair (one-shot). arg: [1]=pipelineId [2]=vsId [3]=fsId
+      // [4]=topology
+      replayCreatePipeline(u32[recWord + 1], u32[recWord + 2],
+                           u32[recWord + 3], u32[recWord + 4]);
     } else if (op === WGPU_CMD_OP_DRAW_TEST) {
       // arg: [1]=pipelineId [2]=vertexCount. Coalesce: one draw per
       // tick (producer emits one per frame).
@@ -2996,48 +2998,52 @@ function drainWebGpuCmdRing() {
 // vertex-shader module + the constant-colour test FS. Wrapped in an
 // error scope so WGSL/pipeline-validation failures are reported
 // rather than silently swallowed. One-shot per pipeline id.
-function replayCreatePipeline(pipelineId, vsShaderId, topology) {
+function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
   if (!renderGpu || webGpuObjects.pipelines.has(pipelineId)) return;
   const vs = webGpuObjects.shaders.get(vsShaderId);
-  if (!vs) {
-    if (!self._webGpuPipeNoVs) {
-      self._webGpuPipeNoVs = true;
+  const fs = webGpuObjects.shaders.get(fsShaderId);
+  if (!vs || !fs) {
+    if (!self._webGpuPipeNoShader) {
+      self._webGpuPipeNoShader = true;
       console.log(
-        `[webgpu-cmd-pipeline] CREATE_PIPELINE id=${pipelineId} but VS id=` +
-        `${vsShaderId} not in shader map (drain-order bug?)`
+        `[webgpu-cmd-pipeline] CREATE_PIPELINE id=${pipelineId}: ` +
+        `vs ${vsShaderId}=${vs ? "ok" : "MISSING"} ` +
+        `fs ${fsShaderId}=${fs ? "ok" : "MISSING"} (drain-order bug?)`
       );
     }
     return;
   }
   try {
-    if (!webGpuTestFsModule) {
-      webGpuTestFsModule = renderGpu.device.createShaderModule({
-        label: "dolphin-test-fs",
-        code: WGPU_TEST_FS_WGSL
-      });
-    }
     renderGpu.device.pushErrorScope("validation");
+    // Day-32: real Dolphin VS + real Dolphin FS pair (both
+    // bridge-translated). layout:"auto" lets WGPU derive bind groups
+    // from the shaders for now; Day-33 supplies Dolphin's real
+    // pipeline/vertex/bind state.
     const pipe = renderGpu.device.createRenderPipeline({
       label: `dolphin-pipeline-${pipelineId}`,
       layout: "auto",
       vertex: { module: vs },
       fragment: {
-        module: webGpuTestFsModule,
+        module: fs,
         targets: [{ format: renderGpu.format }]
       },
       primitive: { topology: topology === 0 ? "triangle-list" : "triangle-list" }
     });
     renderGpu.device.popErrorScope().then((err) => {
       if (err) {
-        console.log(
-          `[webgpu-cmd-pipeline] pipeline ${pipelineId} validation error: ` +
-          `${String(err.message).slice(0, 200)}`
-        );
+        if (!self._webGpuPipeFirstErr) {
+          self._webGpuPipeFirstErr = true;
+          console.log(
+            `[webgpu-cmd-pipeline] pipeline ${pipelineId} (vs=${vsShaderId} ` +
+            `fs=${fsShaderId}) validation error: ${String(err.message).slice(0, 280)}`
+          );
+        }
       } else {
         webGpuObjects.pipelines.set(pipelineId, pipe);
         console.log(
           `[webgpu-cmd-pipeline] GPURenderPipeline ${pipelineId} built OK ` +
-          `from bridge VS id=${vsShaderId} — pipeline replay proven`
+          `from real Dolphin VS=${vsShaderId}+FS=${fsShaderId} — ` +
+          `shader-pair pipeline proven`
         );
       }
     }).catch(() => {});
