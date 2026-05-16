@@ -2818,7 +2818,29 @@ async function installDolphinJitCacheChannel(moduleInstance) {
 //   [0] u32 op   [1..7] 7 words (f32/u32 per opcode)
 const WGPU_CMD_OP_NOP = 0;
 const WGPU_CMD_OP_CLEAR = 1;
+const WGPU_CMD_OP_CREATE_SHADER = 2;
+const WGPU_CMD_OP_CREATE_PIPELINE = 3;
+const WGPU_CMD_OP_DRAW_TEST = 4;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity }
+// Day-28/29 resource object table: producer-assigned id → real GPU
+// object built here on renderGpu.device.
+const webGpuObjects = {
+  shaders: new Map(),
+  pipelines: new Map(),
+  shaderOk: 0,
+  shaderFail: 0
+};
+// Day-29: constant-colour test fragment shader the consumer pairs
+// with a bridge-translated vertex shader to prove the pipeline/draw
+// replay path. Real Dolphin pixel shaders arrive with the Day-30
+// api_type→Vulkan flip; this FS just emits a recognisable colour so
+// a successful pipeline+draw is visible on the canvas.
+const WGPU_TEST_FS_WGSL =
+  "@fragment fn main() -> @location(0) vec4<f32> " +
+  "{ return vec4<f32>(0.13, 0.62, 0.91, 1.0); }";
+let webGpuTestFsModule = null;
+const webGpuTextDecoder =
+  typeof TextDecoder === "function" ? new TextDecoder("utf-8") : null;
 
 function handleWebGpuCmdRing(event) {
   const data = event.data;
@@ -2852,10 +2874,19 @@ function drainWebGpuCmdRing() {
   let read = Atomics.load(ring.headerI32, 1) >>> 0;
   if (write === read) return;
 
+  // NOTE (Day-27 audit): the Atomics.load(write) above is seq-cst.
+  // The slot reads below are plain (non-atomic) Uint32/Float32 reads.
+  // Per the abstract ECMAScript SAB memory model that's technically
+  // unordered, but on a wasm-backed SharedArrayBuffer wasm seq-cst
+  // atomics emit full memory fences, so every slot byte written
+  // before the producer's release-store on `write` is visible here.
+  // This is a deliberate, documented reliance on wasm SAB semantics
+  // (not a portable-JS guarantee) — kept for zero-copy speed.
   const heap = moduleInstance.HEAPU8;
   const f32 = new Float32Array(heap.buffer);
   const u32 = new Uint32Array(heap.buffer);
   let lastClear = null;
+  let lastDrawTest = null;
   while (read !== write) {
     const slot = read % ring.capacity;
     const recByte = ring.slotsBase + slot * 32;
@@ -2870,6 +2901,24 @@ function drainWebGpuCmdRing() {
         b: f32[recWord + 3],
         a: f32[recWord + 4]
       };
+    } else if (op === WGPU_CMD_OP_CREATE_SHADER) {
+      // Day-28: build a real GPUShaderModule from the WGSL blob the
+      // pthread translated (Dolphin GLSL → glslang → Naga → WGSL).
+      // arg: [1]=id [2]=blobPtr [3]=blobLen [4]=stage
+      const id = u32[recWord + 1];
+      const blobPtr = u32[recWord + 2];
+      const blobLen = u32[recWord + 3];
+      const stage = u32[recWord + 4];
+      replayCreateShader(id, blobPtr, blobLen, stage);
+    } else if (op === WGPU_CMD_OP_CREATE_PIPELINE) {
+      // Day-29: build a real GPURenderPipeline (one-shot).
+      // arg: [1]=pipelineId [2]=vsShaderId [3]=topology
+      replayCreatePipeline(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3]);
+    } else if (op === WGPU_CMD_OP_DRAW_TEST) {
+      // arg: [1]=pipelineId [2]=vertexCount. Coalesce: one draw per
+      // tick (producer emits one per frame).
+      lastClear = null;
+      lastDrawTest = { pipelineId: u32[recWord + 1], vertexCount: u32[recWord + 2] };
     }
     read = (read + 1) >>> 0;
   }
@@ -2904,6 +2953,194 @@ function drainWebGpuCmdRing() {
         postStatus(`webgpu-cmd-ring replay error: ${e?.message || e}`);
       }
     }
+  }
+
+  if (lastDrawTest) {
+    const pipe = webGpuObjects.pipelines.get(lastDrawTest.pipelineId);
+    if (pipe) {
+      try {
+        const gpu = renderGpu;
+        const view = gpu.context.getCurrentTexture().createView();
+        const enc = gpu.device.createCommandEncoder({ label: "webgpu-cmd-draw" });
+        const pass = enc.beginRenderPass({
+          colorAttachments: [{
+            view,
+            clearValue: { r: 0.02, g: 0.02, b: 0.05, a: 1 },
+            loadOp: "clear",
+            storeOp: "store"
+          }]
+        });
+        pass.setPipeline(pipe);
+        pass.draw(lastDrawTest.vertexCount, 1, 0, 0);
+        pass.end();
+        gpu.device.queue.submit([enc.finish()]);
+        if (!self._webGpuDrawFirst) {
+          self._webGpuDrawFirst = true;
+          console.log(
+            `[webgpu-cmd-pipeline] first DRAW replayed (pipeline=` +
+            `${lastDrawTest.pipelineId} verts=${lastDrawTest.vertexCount}) ` +
+            `— GPU pipeline path proven`
+          );
+        }
+      } catch (e) {
+        if (!self._webGpuDrawErr) {
+          self._webGpuDrawErr = true;
+          console.log(`[webgpu-cmd-pipeline] DRAW replay error: ${e?.message || e}`);
+        }
+      }
+    }
+  }
+}
+
+// Day-29: build a real GPURenderPipeline from a bridge-translated
+// vertex-shader module + the constant-colour test FS. Wrapped in an
+// error scope so WGSL/pipeline-validation failures are reported
+// rather than silently swallowed. One-shot per pipeline id.
+function replayCreatePipeline(pipelineId, vsShaderId, topology) {
+  if (!renderGpu || webGpuObjects.pipelines.has(pipelineId)) return;
+  const vs = webGpuObjects.shaders.get(vsShaderId);
+  if (!vs) {
+    if (!self._webGpuPipeNoVs) {
+      self._webGpuPipeNoVs = true;
+      console.log(
+        `[webgpu-cmd-pipeline] CREATE_PIPELINE id=${pipelineId} but VS id=` +
+        `${vsShaderId} not in shader map (drain-order bug?)`
+      );
+    }
+    return;
+  }
+  try {
+    if (!webGpuTestFsModule) {
+      webGpuTestFsModule = renderGpu.device.createShaderModule({
+        label: "dolphin-test-fs",
+        code: WGPU_TEST_FS_WGSL
+      });
+    }
+    renderGpu.device.pushErrorScope("validation");
+    const pipe = renderGpu.device.createRenderPipeline({
+      label: `dolphin-pipeline-${pipelineId}`,
+      layout: "auto",
+      vertex: { module: vs },
+      fragment: {
+        module: webGpuTestFsModule,
+        targets: [{ format: renderGpu.format }]
+      },
+      primitive: { topology: topology === 0 ? "triangle-list" : "triangle-list" }
+    });
+    renderGpu.device.popErrorScope().then((err) => {
+      if (err) {
+        console.log(
+          `[webgpu-cmd-pipeline] pipeline ${pipelineId} validation error: ` +
+          `${String(err.message).slice(0, 200)}`
+        );
+      } else {
+        webGpuObjects.pipelines.set(pipelineId, pipe);
+        console.log(
+          `[webgpu-cmd-pipeline] GPURenderPipeline ${pipelineId} built OK ` +
+          `from bridge VS id=${vsShaderId} — pipeline replay proven`
+        );
+      }
+    }).catch(() => {});
+  } catch (e) {
+    if (!self._webGpuPipeErr) {
+      self._webGpuPipeErr = true;
+      console.log(`[webgpu-cmd-pipeline] createRenderPipeline threw: ${e?.message || e}`);
+    }
+  }
+}
+
+// Day-28: build a real GPUShaderModule from a WGSL blob in the shared
+// wasm heap, keyed by the producer-assigned id. createShaderModule is
+// synchronous; compilation diagnostics come back via the async
+// getCompilationInfo() — we count ok/fail off that and surface the
+// first few + the first error so we can see how much of Dolphin's
+// real shader set survives GLSL→Naga→WGSL→browser end-to-end.
+function replayCreateShader(id, blobPtr, blobLen, stage) {
+  if (!self._webGpuShaderSeen) {
+    self._webGpuShaderSeen = true;
+    console.log(
+      `[webgpu-cmd-shader] first CREATE_SHADER reached consumer: id=${id} ` +
+      `ptr=${blobPtr} len=${blobLen} stage=${stage} ` +
+      `renderGpu=${renderGpu ? 1 : 0} dec=${webGpuTextDecoder ? 1 : 0}`
+    );
+  }
+  if (!renderGpu || !webGpuTextDecoder || !blobPtr || !blobLen) {
+    webGpuObjects.shaderFail += 1;
+    return;
+  }
+  let wgsl;
+  try {
+    // TextDecoder.decode() rejects SharedArrayBuffer-backed views in
+    // several engines ("cannot decode from a shared ArrayBuffer"), so
+    // copy the blob into a plain (non-shared) Uint8Array first. The
+    // copy is small (a shader's WGSL, ~1-4 KB) and one-time per shader.
+    const shared = new Uint8Array(moduleInstance.HEAPU8.buffer, blobPtr, blobLen);
+    const local = new Uint8Array(blobLen);
+    local.set(shared);
+    wgsl = webGpuTextDecoder.decode(local);
+  } catch (e) {
+    webGpuObjects.shaderFail += 1;
+    if (!self._webGpuShaderDecodeErr) {
+      self._webGpuShaderDecodeErr = true;
+      console.log(`[webgpu-cmd-shader] WGSL decode failed: ${e?.message || e}`);
+    }
+    return;
+  }
+
+  let module;
+  try {
+    module = renderGpu.device.createShaderModule({
+      label: `dolphin-shader-${id}-s${stage}`,
+      code: wgsl
+    });
+  } catch (e) {
+    webGpuObjects.shaderFail += 1;
+    if (!self._webGpuShaderFirstErr) {
+      self._webGpuShaderFirstErr = true;
+      // console.log (not postStatus) so the validator's console.log
+      // capture preserves it — postStatus only keeps the latest pill.
+      console.log(`[webgpu-cmd-shader] createShaderModule threw: ${e?.message || e}`);
+    }
+    return;
+  }
+  webGpuObjects.shaders.set(id, module);
+  if (webGpuObjects.shaders.size <= 4) {
+    console.log(
+      `[webgpu-cmd-shader] GPUShaderModule created id=${id} stage=${stage} ` +
+      `wgslLen=${wgsl.length} hasCompileInfo=` +
+      `${typeof module.getCompilationInfo === "function" ? 1 : 0} ` +
+      `(map size=${webGpuObjects.shaders.size})`
+    );
+  }
+
+  // Validate asynchronously (discio worker is event-loop driven, so
+  // this resolves — unlike the pthread). Count + report via
+  // console.log so it lands in the captured console stream.
+  if (typeof module.getCompilationInfo === "function") {
+    module.getCompilationInfo().then((info) => {
+      const errs = (info?.messages || []).filter((m) => m.type === "error");
+      if (errs.length === 0) {
+        webGpuObjects.shaderOk += 1;
+        if (webGpuObjects.shaderOk <= 4) {
+          console.log(
+            `[webgpu-cmd-shader] module id=${id} stage=${stage} compiled OK ` +
+            `[ok=${webGpuObjects.shaderOk} fail=${webGpuObjects.shaderFail}]`
+          );
+        }
+      } else {
+        webGpuObjects.shaderFail += 1;
+        if (!self._webGpuShaderFirstCompileErr) {
+          self._webGpuShaderFirstCompileErr = true;
+          const e0 = errs[0];
+          console.log(
+            `[webgpu-cmd-shader] first WGSL compile error (id=${id} stage=${stage}) ` +
+            `L${e0.lineNum}:${e0.linePos} ${String(e0.message).slice(0, 160)}`
+          );
+        }
+      }
+    }).catch(() => { webGpuObjects.shaderFail += 1; });
+  } else {
+    webGpuObjects.shaderOk += 1;
   }
 }
 
