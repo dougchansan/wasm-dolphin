@@ -500,3 +500,44 @@ whatever owns it (mirror the legacy presentFrame/ImageBitmap hop).
 This is the *only* thing between "validation-clean hardware frames"
 and "visible GameCube content". Then: bind-group LRU, the 1/65
 utility-shader layout, and the smoothness/comp-play pass (task 8).
+
+### ROOT CAUSE of the green — found (the real one)
+
+A magenta-final-clear (absolute last GPU op submitted to
+`renderGpu.context`, logged, no throw) STILL showed green. Decisive:
+something overwrites `renderGpu.context` *after* `drainWebGpuCmdRing`
+every loop iteration. It's `runPresentationLoop`: right after
+`drainWebGpuCmdRing()` it unconditionally calls
+`presentFrame(width,height,api.frameBuffer(),…)` →
+`drawFrameBytesToWebGpu` → renders the **CPU framebuffer** to
+`gpu.context.getCurrentTexture()` and submits. Pre-cutover that CPU
+buffer was the SW rasteriser's XFB (correct Melee). **Post-cutover the
+SW rasteriser is retired**, so `api.frameBuffer()` is stale/empty —
+that's the uniform green — and it clobbered our correct cmd-ring GPU
+render on every single iteration. The hardware renderer was working
+the whole time; the legacy CPU-present path was painting over it.
+
+Fix: `cmdRingOwnsCanvas` flag — set once the executor processes a
+SUBMIT_PRESENT; `runPresentationLoop` then skips the legacy
+`presentFrame`/capture blit (the cmd-ring presents the canvas itself
+via `gpu.context`). `?video=webgpu` hybrid never sets the flag (it
+doesn't drive the executor's present path), so its CPU→canvas blit is
+unaffected — no regression.
+
+**VERIFIED:** with the fix, `?video=wgpu` canvas now shows the
+cmd-ring's OWN GPU output (no longer the clobbering green; `present`
+pill = 0 confirming the legacy blit is suppressed). The WebGPU
+hardware-renderer present path is now correct end-to-end. Committed.
+
+### Now: EFB render-correctness grind (geometry → pixels)
+
+The canvas shows our real EFB output: a green field + black margin —
+i.e. the EFB *clear* shows, geometry isn't visible yet. Classic
+cause: `WebGPUGfx::ClearRegion` was a no-op, so the game's BP
+clear-screen never initialised the EFB **depth** buffer → every
+primitive fails the depth test → only the background shows. Fix
+landed: `ClearRegion` now ends the open pass and begins a fresh
+loadOp=clear EFB pass (game ARGB colour; consumer clears depth to
+1.0), so subsequent draws render into a properly-cleared EFB. Build
+in progress; next probe checks for actual geometry, then the black-
+margin viewport offset, then bind-group LRU + the 1/65 utility shader.

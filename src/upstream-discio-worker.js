@@ -1240,7 +1240,12 @@ function runPresentationLoop() {
       addProfileTime("api", stages.api);
       maybeEnablePpcWasmJit(coreFrame);
       const presentStartedAt = performance.now();
-      if (coreBoot.accepted && frameSignalHeap && renderBackend === "ogl") {
+      if (cmdRingOwnsCanvas) {
+        // The WebGPU hardware renderer presents the canvas itself via
+        // the cmd-ring executor; skip the legacy CPU-framebuffer blit
+        // (post-cutover that buffer is stale — it was overwriting the
+        // real GPU frame every iteration).
+      } else if (coreBoot.accepted && frameSignalHeap && renderBackend === "ogl") {
         // OGL bypasses XFB, so api.getFrame() doesn't increment per visible frame.
         // Use the OGL swap count (incremented in DolphinWeb_OnOglSwap) as the
         // present-deduplication key so each new GL swap registers as a new frame.
@@ -3000,6 +3005,10 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
   }
 }
 
+// Set true once the WebGPU hardware renderer (cmd-ring executor) has
+// presented a frame; suppresses the legacy CPU-framebuffer canvas blit
+// in runPresentationLoop so the two don't fight over renderGpu.context.
+let cmdRingOwnsCanvas = false;
 const webGpuExecStats = {
   beginFb0: 0, beginFbN: 0, draw: 0, drawIdx: 0, setPipe: 0,
   setBg: 0, present: 0, missPipe: 0, missBg: 0, lastLog: 0
@@ -3317,6 +3326,13 @@ function drainWebGpuCmdRing() {
   endPass();
   submitEnc();
   Atomics.store(ring.headerI32, 1, read | 0);
+  // Once the cmd-ring executor has presented a real frame, IT owns the
+  // canvas (renderGpu.context). The legacy runPresentationLoop blit of
+  // the CPU framebuffer (presentFrame → drawFrameBytesToWebGpu) must
+  // then be suppressed — post-cutover the Software rasteriser is gone
+  // so that CPU buffer is stale/empty (the green that was clobbering
+  // our GPU render every loop iteration).
+  if (webGpuExecStats.present > 0) cmdRingOwnsCanvas = true;
 }
 
 // Day-29: build a real GPURenderPipeline from a bridge-translated
