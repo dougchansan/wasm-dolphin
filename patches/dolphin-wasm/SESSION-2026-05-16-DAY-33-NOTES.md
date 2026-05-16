@@ -685,3 +685,63 @@ draws execute but don't appear. Suspects, in order:
 The decisive next probe: dump the EFB (fb=14) directly to the
 backbuffer (bypass XFB) — geometry visible ⇒ present-chain bug;
 still uniform ⇒ EFB-content (transform/depth) bug.
+
+### 6. Bisected: EFB-content bug, narrowed to the VERTEX INTERFACE
+
+DIAG scaffolding added (all gated, revertible — `DIAG_EFB_TO_CANVAS`,
+`DIAG_DEPTH_ALWAYS`, `[webgpu-DIAG-vs/-vtx/-wgsl/-attr]`):
+
+1. **EFB→canvas bypass** (`DIAG_EFB_TO_CANVAS`): blit the raw EFB
+   colour straight to the canvas after present. Result: **uniform
+   BLACK** (not green). ⇒ the green was the XFB/present chain; the EFB
+   itself has *no geometry*. Present chain is fine; bug is EFB content.
+2. **Depth disabled** (`DIAG_DEPTH_ALWAYS` forces depthCompare
+   "always"): still uniform black. ⇒ NOT depth-rejection.
+3. **VS constants** (`[webgpu-DIAG-vs]`, offsets corrected to
+   posnormalmatrix@float8 / projection@float32): steady-state values
+   are **valid** — `pnm0=1,0,0,0 proj0=2.235,0,0,0 proj3=0,0,-1,0
+   vp=0,0,640,480`. UBO data is correct (early all-zero samples were
+   just pre-`SetConstants` boot draws). `dirty` path works.
+4. **Vertex data** (`[webgpu-DIAG-vtx]`): sane —
+   `nv=4 stride=12 v0=27.5,-22.5,-1.0,...` (real GC-space positions).
+5. **Shader/pcfg interface** (`[webgpu-DIAG-wgsl]` +
+   `[webgpu-DIAG-attr]`) — the smoking gun:
+   - GX VS entry points: `fn main(@location(0) param: vec4<f32>)` OR
+     `fn main(@location(1) param: vec4<u32>, @location(0) param_1:
+     vec4<f32>, @location(8) param_2: vec2<f32>)`. VSBlock UBO at
+     `@group(0) @binding(1)` ✓ (matches producer group0 b1=VS).
+   - pcfg vertex layouts: `id=13 stride=20 L0:float32x2@0
+     L5:unorm8x4@16 L8:float32x2@8`; `id=45 stride=20 L0:float32x4@0
+     L5:unorm8x4@16`.
+   So the **vertex attribute interface is inconsistent**: VS inputs
+   use locations {0}, or {0,1,8} with L1 = `vec4<u32>` (posmtx, the
+   Day-33 A2b uint4); pcfg supplies {0,5,8} / {0,5} with NO L1, and
+   L0 format/stride disagree with the live `DIAG-vtx stride=12`.
+   Position read with the wrong format/stride (e.g. float32x4 over a
+   12-byte/​3-float vertex) corrupts `.w` → vertices to infinity →
+   nothing rasterised → uniform-black EFB. Geometry executes (drawIdx
+   huge, pipelines build) but every vertex is degenerate.
+
+**Conclusion:** present chain ✓, UBO ✓, vertex data ✓, depth ruled
+out — the bug is the **producer's pcfg vertex-attribute serialization
+not matching the Naga-translated VS `@location` inputs / the
+VertexManager's actual `PortableVertexDeclaration`** (shaderLocation
+set, formats, offsets, arrayStride). This is task #3's core, now
+precisely localised.
+
+### 7. Exact next step (one-construct fix)
+
+Correlate, for ONE concrete pipeline id, three things and make them
+agree (extend the DIAG to print the third):
+- the VS `@location` set + WGSL types (have it),
+- the pcfg attribute list shaderLocation/format/offset/arrayStride
+  (have it — from `WebGPUGfx::SerializePipelineConfig`, the
+  `VKVertexFormat::MapAttributes` mirror),
+- the live `PortableVertexDeclaration` the `WebGPU::VertexManager`
+  actually packs (stride + per-attr enable/offset/type/components).
+The mismatch is in `SerializePipelineConfig` (shaderLocation must be
+the `ShaderAttrib` enum the translator emits — Position=0,
+PositionMatrix=1 uint4, Color=?, TexCoord0=8 — and format/offset must
+mirror the real PortableVertexDeclaration, skipping disabled attrs).
+Fix that mapping → vertices transform correctly → first geometry.
+All DIAG flags/log sites are gated constants; flip off when done.

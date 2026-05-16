@@ -3179,6 +3179,17 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
   }
 }
 
+// DIAGNOSTIC (revertible): after the producer's present, blit the raw
+// EFB colour texture straight onto the canvas, bypassing the XFB-copy
+// + present-blit chain. Isolates "geometry not visible": if the canvas
+// then shows Melee geometry, the EFB is correct and the XFB/present
+// chain (scale/UV) is the bug; if still uniform, the EFB itself is
+// wrong (transform/depth). Flip to false to restore normal present.
+const DIAG_EFB_TO_CANVAS = false;
+// DIAGNOSTIC (revertible): force depthCompare "always" on every
+// pipeline (see resolvePipeline) to bisect the black-EFB cause.
+const DIAG_DEPTH_ALWAYS = false;
+
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
 // in runPresentationLoop so the two don't fight over renderGpu.context.
@@ -3392,6 +3403,10 @@ function drainWebGpuCmdRing() {
           pass = enc.beginRenderPass(desc);
           passHasPipe = false;
           passFbId = fbId;
+          // The EFB colour pass is the only one with a depth
+          // attachment (the fb=47 XFB has none) — track its id so the
+          // DIAG path can blit it straight to the canvas.
+          if (fbId !== 0 && depthId) self._wgEfbColorId = fbId;
           if (fbId !== 0) {
             self._wgEfbN = (self._wgEfbN || 0) + 1;
             if (self._wgEfbN <= 6) {
@@ -3484,6 +3499,47 @@ function drainWebGpuCmdRing() {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           endPass();
+          if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
+            const efb = webGpuObjects.textures.get(self._wgEfbColorId);
+            const bs = efb ? ensureBlitState() : null;
+            const dpipe = bs ? ensureBlitPipeline(renderGpu.format) : null;
+            if (efb && dpipe) {
+              try {
+                ensureEnc();
+                const ubo = dev.createBuffer({ size: 16, usage: 0x40 | 0x8,
+                                               mappedAtCreation: true });
+                new Float32Array(ubo.getMappedRange()).set([1, 1, 0, 0]);
+                ubo.unmap();
+                const ev = efb.tex.createView({ dimension: "2d-array",
+                  baseArrayLayer: 0, arrayLayerCount: 1 });
+                const dbg = dev.createBindGroup({ layout: bs.bgl, entries: [
+                  { binding: 0, resource: ev },
+                  { binding: 1, resource: bs.sampler },
+                  { binding: 2, resource: { buffer: ubo } } ] });
+                const ctex = renderGpu.context.getCurrentTexture();
+                const rp = enc.beginRenderPass({ label: "DIAG-efb-to-canvas",
+                  colorAttachments: [{ view: ctex.createView(),
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                    loadOp: "clear", storeOp: "store" }] });
+                rp.setPipeline(dpipe);
+                rp.setViewport(0, 0, ctex.width, ctex.height, 0, 1);
+                rp.setBindGroup(0, dbg);
+                rp.draw(3);
+                rp.end();
+                if (!self._wgDiagOnce) {
+                  self._wgDiagOnce = true;
+                  console.log(`[webgpu-DIAG] EFB ${self._wgEfbColorId} ` +
+                    `${efb.format} ${efb.tex.width}x${efb.tex.height} -> ` +
+                    `canvas ${ctex.width}x${ctex.height}`);
+                }
+              } catch (e) {
+                if (!self._wgDiagErr) {
+                  self._wgDiagErr = true;
+                  console.log(`[webgpu-DIAG] threw: ${e?.message || e}`);
+                }
+              }
+            }
+          }
           submitEnc();
           webGpuExecStats.present++;
           if (webGpuExecStats.present - webGpuExecStats.lastLog >= 120) {
@@ -3697,6 +3753,12 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     });
   }
 
+  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 3) {
+    console.log(`[webgpu-DIAG-attr] pcfg id=${pipelineId} vs=${vsId} fs=${fsId} ` +
+      `stride=${stride} attrCount=${attrCount} ` +
+      attributes.map((a) => `L${a.shaderLocation}:${a.format}@${a.offset}`).join(" "));
+  }
+
   const TOPO = ["point-list", "line-list", "triangle-list",
                 "triangle-strip"];
   const CULL = ["none", "back", "front"];
@@ -3780,6 +3842,15 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
   if (depthFmt) {
     d.depthStencil = Object.assign({ format: depthFmt },
       tpl.depthBase || { depthWriteEnabled: false, depthCompare: "always" });
+    // DIAGNOSTIC (revertible): force depth-test off so nothing is
+    // depth-rejected. With the EFB→canvas DIAG, this bisects "black
+    // EFB": geometry appears ⇒ uniform depth-rejection (EFB depth
+    // clear / GX-vs-Vulkan z convention); still black ⇒ transform/
+    // vertex bug. Flip false to restore real depth state.
+    if (DIAG_DEPTH_ALWAYS) {
+      d.depthStencil.depthCompare = "always";
+      d.depthStencil.depthWriteEnabled = false;
+    }
   } else {
     delete d.depthStencil;
   }
@@ -3852,6 +3923,28 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
       console.log(`[webgpu-cmd-shader] WGSL decode failed: ${e?.message || e}`);
     }
     return;
+  }
+
+  // DIAG one-shot per stage: dump the translated WGSL head so the
+  // @group/@binding for the UBO blocks and the @location vertex inputs
+  // can be checked against the producer's group0 layout + pcfg vertex
+  // attributes (the suspected black-EFB cause: shader-interface
+  // mismatch).
+  if (!self._wgWgslN) self._wgWgslN = {};
+  // Dump the first big vertex shader (GX geometry VS — has vertex
+  // @location inputs + the VSBlock UBO), not the tiny utility/blit VS.
+  const wantDump = (stage === 0 && wgsl.length > 2500 &&
+                    (self._wgWgslN[0] = (self._wgWgslN[0] || 0) + 1) <= 2) ||
+                   (stage === 2 && wgsl.length > 2500 &&
+                    (self._wgWgslN[2] = (self._wgWgslN[2] || 0) + 1) <= 1);
+  if (wantDump) {
+    const vi = wgsl.indexOf("@vertex");
+    const fi = wgsl.indexOf("@fragment");
+    const mi = stage === 0 ? vi : fi;
+    const head = wgsl.slice(0, 900);
+    const around = mi >= 0 ? wgsl.slice(Math.max(0, mi - 700), mi + 700) : "(no entry)";
+    console.log(`[webgpu-DIAG-wgsl] stage=${stage} id=${id} len=${wgsl.length}\n` +
+      `--HEAD--\n${head}\n--ENTRY--\n${around}`);
   }
 
   let module;
