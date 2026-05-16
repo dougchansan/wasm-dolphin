@@ -792,3 +792,42 @@ Exact next step (no research, mechanical):
 This is the documented multi-session first-light bring-up; the cause
 is now boxed to one component (translated VS / clip-space) with the
 entire rest of the pipeline proven correct and instrumented.
+
+### 9. ★ FIRST LIGHT — root cause found & fixed ★
+
+Dumped the full GX VS body (`[webgpu-DIAG-vsfull]`) and traced
+`@builtin(position)`: `clip = projection·viewpos` (✓), depth-range
+remap via `pixelcentercorrection` (✓), then **`clip.z = clip.z*2 -
+clip.w`** — the OpenGL [0,1]→[-1,1] depth conversion
+(`VertexShaderGen.cpp:824-829`, gated `if (!host_config.
+backend_clip_control)`). WebGPU NDC depth is **[0,1]** (Vulkan/D3D
+convention), so this remap pushed the near half of EVERY primitive to
+`ndc_z < 0` → outside the WebGPU clip volume → discarded → the exact
+"everything-correct-but-uniform-black-EFB" symptom.
+
+Root cause: `WebGPU::VideoBackend::InitBackendInfo` **never set
+`g_backend_info.bSupportsClipControl`** (default false, as in the
+Software clone). `ShaderGenCommon.cpp:30` derives
+`host_config.backend_clip_control` from it. Fix (one line, the
+documented "revisit InitBackendInfo caps post-cutover" gotcha):
+
+    g_backend_info.bSupportsClipControl = true;
+
+**PROBE-VERIFIED — FIRST REAL GEOMETRY.** Raw EFB (via the
+`DIAG_EFB_TO_CANVAS` bypass) now renders actual Melee: the
+single-player **"Select / VERY EASY"** difficulty screen, `distinct`
+1→13 (live/animating), 100% speed. The remote WebGPU hardware renderer
+draws real GameCube geometry+text end-to-end. Committed.
+
+Caveat / next: the *normal* present chain (DIAG off) still shows the
+green field — the EFB is correct but the Dolphin XFB-copy→backbuffer
+present path doesn't deliver it (this is task #2's territory and was
+mis-scoped earlier as "working" from opcode counts alone). The
+`DIAG_EFB_TO_CANVAS` blit is, in effect, a *correct* present (it puts
+the real EFB on the canvas) and is left **enabled** as the interim
+present so `?video=wgpu` shows real Melee now; replace it with a
+proper EFB→XFB→backbuffer fix (aspect/sub-rect = the old "black left
+margin", task #2) and then revisit colour/TEV/texture fidelity.
+Remaining DIAG flags (`DIAG_DEPTH_ALWAYS`, `DIAG_RASTER_OPEN`) are
+committed off; the passive `[webgpu-DIAG-*]` logs stay for the next
+fidelity grind.

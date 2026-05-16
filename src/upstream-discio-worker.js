@@ -3185,7 +3185,7 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // then shows Melee geometry, the EFB is correct and the XFB/present
 // chain (scale/UV) is the bug; if still uniform, the EFB itself is
 // wrong (transform/depth). Flip to false to restore normal present.
-const DIAG_EFB_TO_CANVAS = false;
+const DIAG_EFB_TO_CANVAS = true;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;
@@ -3966,6 +3966,17 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
       sig = wgsl.slice(mi, end >= 0 ? end : mi + 240).replace(/\s+/g, " ");
     }
     console.log(`[webgpu-DIAG-wgsl] vs id=${id} len=${wgsl.length} ${sig}`);
+  }
+  // Full body of the first GX vertex shader (has @location inputs, big)
+  // to trace how @builtin(position) is computed from the position attr
+  // + VSBlock (clip-space / projection / Y-Z-W convention).
+  if (stage === 0 && wgsl.length > 5000 && wgsl.indexOf("@location(0)") >= 0 &&
+      !self._wgVsFull) {
+    self._wgVsFull = true;
+    for (let o = 0; o < wgsl.length; o += 1600) {
+      console.log(`[webgpu-DIAG-vsfull id=${id} ${o}] ` +
+                  wgsl.slice(o, o + 1600));
+    }
   }
 
   let module;
