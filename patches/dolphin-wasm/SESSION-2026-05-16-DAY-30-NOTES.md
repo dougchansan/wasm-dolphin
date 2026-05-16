@@ -168,6 +168,47 @@ Also vendored to make this possible: SPIRV-Tools @ `7f2d9ee9` +
 SPIRV-Headers @ `01e0577` under glslang/External; glslang
 `ENABLE_OPT ON` + `BUILD_EXTERNAL ON`.
 
+## Step 4 — the grind to 100% translation coverage (user: stay Naga/Rust)
+
+User chose to stay on the Naga/Rust path ("copy what Tint does …
+rust reward speed … continue that path"). Continued the mechanical
+loop. Each fix is Vulkan-gated (WebGPU only; OGL/Software untouched):
+
+| fix | coverage |
+|-----|----------|
+| (start) | 6/64 |
+| api_type=Vulkan | 12 |
+| separate samplers: Pixel/Uber + object-macro Framebuffer/PostProc/TexConv | 36 |
+| isnan → (f!=f); bSupportsBitfield=true | (within above) |
+| TEV helper chain: SAMP_PARAM/USE/FWD macros (separate tex+samp threaded, combined only at builtin) | 36 (glslang-level solved) |
+| separate textures tex_0u..tex_7u + token-paste SAMP_AT (no texture array) | 36 |
+| **bSupportsDualSourceBlend=false** | **64/64 (100%)** |
+
+Every real Dolphin shader now goes
+GLSL→glslang→SPIR-V→Naga→WGSL with zero failures. The Naga strategy
+is fully viable for the entire shader set — Tint not needed. The
+naga crate now walks the error source-chain so generic Naga messages
+("Entry point invalid") reveal the real cause
+("Multiple bindings at location 0" = dual-source blend).
+
+Root causes were all either (a) combined image-samplers (WGSL has
+none — split in shadergen, Vulkan-gated) or (b) capability-flag
+mismatches in the InitBackendInfo copied from Software (bitfield,
+dual-source-blend) or (c) a Naga frontend gap worked around in
+shadergen (texture-array indexing, isnan).
+
+### Next layer (not yet done)
+
+Translation is 100%, but the *browser's* WGSL validator is stricter
+than Naga's emitter: simple shaders `compiled OK`, some complex TEV
+pixel shaders hit `cyclic dependency found: 'function' -> 'function'`
+(WGSL forbids recursion; Naga emits a forward/mutual pattern Chrome
+rejects). So remaining: (1) browser-WGSL validity for the complex
+subset, (2) wire the real pipeline/draw path (Dolphin vertex+state →
+GPURenderPipeline via the bridge) so game content actually renders,
+(3) retire the Software delegation. Commits: 84fa7b9, 1ecf2c2,
+1b75173, 205cd01.
+
 ## State
 
 `?video=wgpu` is mid-cutover (api_type=Vulkan): Software geometry now
