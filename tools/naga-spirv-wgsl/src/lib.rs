@@ -101,11 +101,25 @@ pub extern "C" fn naga_free_wgsl(ptr: *mut c_char) {
     }
 }
 
+// Naga errors nest the real cause in their source chain; the top-level
+// Display is often generic ("Entry point main at Fragment is
+// invalid"). Walk the chain so the C++/JS log shows the actual reason.
+fn chain(prefix: &str, e: &(dyn std::error::Error)) -> String {
+    let mut s = format!("{prefix}: {e}");
+    let mut src = e.source();
+    while let Some(c) = src {
+        s.push_str(" <- ");
+        s.push_str(&c.to_string());
+        src = c.source();
+    }
+    s
+}
+
 fn translate(words: &[u32]) -> Result<String, String> {
     let options = naga::front::spv::Options::default();
     let module = naga::front::spv::Frontend::new(words.iter().copied(), &options)
         .parse()
-        .map_err(|e| format!("spv-frontend: {e}"))?;
+        .map_err(|e| chain("spv-frontend", &e))?;
 
     // The WGSL backend needs validation info. Allow the full
     // capability set — Dolphin emits a wide range of features and we
@@ -116,8 +130,8 @@ fn translate(words: &[u32]) -> Result<String, String> {
     );
     let info = validator
         .validate(&module)
-        .map_err(|e| format!("validate: {e}"))?;
+        .map_err(|e| chain("validate", &e))?;
 
     naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-        .map_err(|e| format!("wgsl-backend: {e}"))
+        .map_err(|e| chain("wgsl-backend", &e))
 }
