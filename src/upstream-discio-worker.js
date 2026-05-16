@@ -2853,6 +2853,8 @@ const webGpuObjects = {
   textures: new Map(),
   samplers: new Map(),
   bindGroups: new Map(),
+  pipeTpl: new Map(),  // id → {desc, target, depthBase} template
+  pipeVar: new Map(),  // `id|cFmt|dFmt` → GPURenderPipeline|null
   shaderOk: 0,
   shaderFail: 0
 };
@@ -3013,6 +3015,34 @@ function drainWebGpuCmdRing() {
   const q = dev.queue;
   let enc = null;
   let pass = null;
+  let passW = 0;
+  let passH = 0;
+  let passColorFmt = null;
+  let passDepthFmt = null;
+  let passHasPipe = false;
+  let errScope = false;
+  const ensureEnc = () => {
+    if (!enc) {
+      dev.pushErrorScope("validation");
+      errScope = true;
+      enc = dev.createCommandEncoder({ label: "dolphin-frame" });
+    }
+    return enc;
+  };
+  const submitEnc = () => {
+    if (!enc) return;
+    try { q.submit([enc.finish()]); } catch (e) {}
+    enc = null;
+    if (errScope) {
+      errScope = false;
+      dev.popErrorScope().then((er) => {
+        if (er && !self._wgValErr) {
+          self._wgValErr = true;
+          console.log(`[webgpu-exec] VALIDATION: ${String(er.message).slice(0, 320)}`);
+        }
+      }).catch(() => {});
+    }
+  };
   const endPass = () => {
     if (pass) { try { pass.end(); } catch (e) {} pass = null; }
   };
@@ -3058,23 +3088,26 @@ function drainWebGpuCmdRing() {
           const id = u32[recWord + 1];
           if (!webGpuObjects.textures.has(id)) {
             const fmt = WGPU_TEX_FORMAT[u32[recWord + 4]] || "rgba8unorm";
+            const layers = Math.max(1, u32[recWord + 6] || 1);
             const tex = dev.createTexture({
               size: [Math.max(1, u32[recWord + 2]),
-                     Math.max(1, u32[recWord + 3]), 1],
+                     Math.max(1, u32[recWord + 3]), layers],
               format: fmt, usage: u32[recWord + 5]
             });
-            webGpuObjects.textures.set(id, { tex, format: fmt, view2dArray: null });
+            webGpuObjects.textures.set(id,
+              { tex, format: fmt, layers, view2dArray: null });
           }
           break;
         }
         case WGPU_CMD_OP_UPLOAD_TEXTURE: {
           const t = webGpuObjects.textures.get(u32[recWord + 1]);
-          if (t && !t.format.startsWith("depth")) {
+          const uz = u32[recWord + 7];
+          if (t && !t.format.startsWith("depth") && uz < t.layers) {
             const src = u32[recWord + 2], bpr = u32[recWord + 3];
             const w = u32[recWord + 4], h = u32[recWord + 5];
             q.writeTexture(
               { texture: t.tex, mipLevel: u32[recWord + 6],
-                origin: { x: 0, y: 0, z: u32[recWord + 7] } },
+                origin: { x: 0, y: 0, z: uz } },
               heapCopy(src, bpr * h),
               { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
               { width: w, height: h, depthOrArrayLayers: 1 });
@@ -3098,20 +3131,29 @@ function drainWebGpuCmdRing() {
           break;
         case WGPU_CMD_OP_BEGIN_PASS: {
           endPass();
-          if (!enc) enc = dev.createCommandEncoder({ label: "dolphin-frame" });
+          ensureEnc();
           const fbId = u32[recWord + 1];
           const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
           const depthId = u32[recWord + 7];
           let colorView;
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
-            colorView = renderGpu.context.getCurrentTexture().createView();
+            const cur = renderGpu.context.getCurrentTexture();
+            colorView = cur.createView();
+            passW = cur.width;
+            passH = cur.height;
+            passColorFmt = renderGpu.format;
           } else {
             webGpuExecStats.beginFbN++;
             const ct = webGpuObjects.textures.get(fbId);
             if (!ct) break;
             colorView = ct.tex.createView();
+            passW = ct.tex.width;
+            passH = ct.tex.height;
+            passColorFmt = ct.format;
           }
+          passDepthFmt = (depthId && webGpuObjects.textures.get(depthId))
+            ? webGpuObjects.textures.get(depthId).format : null;
           const desc = {
             colorAttachments: [{
               view: colorView,
@@ -3134,6 +3176,7 @@ function drainWebGpuCmdRing() {
             desc.depthStencilAttachment = ds;
           }
           pass = enc.beginRenderPass(desc);
+          passHasPipe = false;
           if (fbId !== 0) {
             self._wgEfbN = (self._wgEfbN || 0) + 1;
             if (self._wgEfbN <= 6) {
@@ -3153,9 +3196,11 @@ function drainWebGpuCmdRing() {
           break;
         }
         case WGPU_CMD_OP_SET_PIPELINE: {
-          const p = webGpuObjects.pipelines.get(u32[recWord + 1]);
-          if (pass && p) { pass.setPipeline(p); webGpuExecStats.setPipe++; }
-          else webGpuExecStats.missPipe++;
+          const pid = u32[recWord + 1];
+          const p = pass ? resolvePipeline(pid, passColorFmt, passDepthFmt) : null;
+          if (pass && p) {
+            pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++;
+          } else webGpuExecStats.missPipe++;
           break;
         }
         case WGPU_CMD_OP_SET_BIND_GROUP: {
@@ -3178,23 +3223,37 @@ function drainWebGpuCmdRing() {
           break;
         }
         case WGPU_CMD_OP_SET_VIEWPORT:
-          if (pass) {
-            pass.setViewport(f32[recWord + 1], f32[recWord + 2],
-                             f32[recWord + 3], f32[recWord + 4],
-                             f32[recWord + 5], f32[recWord + 6]);
+          if (pass && passW > 0) {
+            // WebGPU: x,y>=0; x+w<=W; y+h<=H; 0<=minD<=maxD<=1.
+            let vx = f32[recWord + 1], vy = f32[recWord + 2];
+            let vw = f32[recWord + 3], vh = f32[recWord + 4];
+            if (vx < 0) { vw += vx; vx = 0; }
+            if (vy < 0) { vh += vy; vy = 0; }
+            vw = Math.max(1, Math.min(vw, passW - vx));
+            vh = Math.max(1, Math.min(vh, passH - vy));
+            let mn = f32[recWord + 5], mx = f32[recWord + 6];
+            mn = Math.min(1, Math.max(0, mn));
+            mx = Math.min(1, Math.max(0, mx));
+            if (mn > mx) { const t = mn; mn = mx; mx = t; }
+            pass.setViewport(vx, vy, vw, vh, mn, mx);
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
-          if (pass) {
-            pass.setScissorRect(u32[recWord + 1], u32[recWord + 2],
-                                u32[recWord + 3], u32[recWord + 4]);
+          if (pass && passW > 0) {
+            let sx = u32[recWord + 1], sy = u32[recWord + 2];
+            let sw = u32[recWord + 3], sh = u32[recWord + 4];
+            if (sx > passW) sx = passW;
+            if (sy > passH) sy = passH;
+            sw = Math.min(sw, passW - sx);
+            sh = Math.min(sh, passH - sy);
+            pass.setScissorRect(sx, sy, sw, sh);
           }
           break;
         case WGPU_CMD_OP_DRAW:
-          if (pass) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; }
+          if (pass && passHasPipe) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; }
           break;
         case WGPU_CMD_OP_DRAW_INDEXED:
-          if (pass) {
+          if (pass && passHasPipe) {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++;
@@ -3210,7 +3269,7 @@ function drainWebGpuCmdRing() {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           endPass();
-          if (enc) { q.submit([enc.finish()]); enc = null; }
+          submitEnc();
           webGpuExecStats.present++;
           if (webGpuExecStats.present - webGpuExecStats.lastLog >= 120) {
             webGpuExecStats.lastLog = webGpuExecStats.present;
@@ -3244,7 +3303,7 @@ function drainWebGpuCmdRing() {
     read = (read + 1) >>> 0;
   }
   endPass();
-  if (enc) { try { q.submit([enc.finish()]); } catch (e) {} enc = null; }
+  submitEnc();
   Atomics.store(ring.headerI32, 1, read | 0);
 }
 
@@ -3452,29 +3511,59 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     };
   }
 
+  // Store a template; the actual GPURenderPipeline is built lazily per
+  // (colorFmt, depthFmt) the pass actually uses — Dolphin's pipeline
+  // framebuffer-state and the real WebGPU target formats can diverge
+  // (RGBA8 vs the bgra8unorm canvas/XFB), and WebGPU requires an exact
+  // attachment match. Pipeline *variants* keyed on the live pass
+  // formats eliminate the whole attachment-mismatch class.
+  const depthBase = hasDepth
+    ? { depthWriteEnabled: !!depthWrite,
+        depthCompare: depthTest ? (WGPU_COMPARE[depthCompare] || "always")
+                                : "always" }
+    : null;
+  webGpuObjects.pipeTpl.set(pipelineId, { desc, target, depthBase });
+  // Build the default (pcfg-format) variant now so the map is warm.
+  resolvePipeline(pipelineId, target.format, depthBase ? desc.depthStencil.format : null,
+                  { vsId, fsId, attrCount, stride, blendEnable, hasDepth });
+}
+
+// Return (building+caching on first use) the pipeline variant whose
+// colour/depth attachment formats match the render pass it'll run in.
+function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
+  const key = `${pipelineId}|${colorFmt}|${depthFmt}`;
+  const cached = webGpuObjects.pipeVar.get(key);
+  if (cached !== undefined) return cached;
+  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
+  if (!tpl) { webGpuObjects.pipeVar.set(key, null); return null; }
+  const d = Object.assign({}, tpl.desc);
+  d.fragment = { module: tpl.desc.fragment.module,
+                 targets: [Object.assign({}, tpl.target, { format: colorFmt })] };
+  if (depthFmt) {
+    d.depthStencil = Object.assign({ format: depthFmt },
+      tpl.depthBase || { depthWriteEnabled: false, depthCompare: "always" });
+  } else {
+    delete d.depthStencil;
+  }
+  let pipe = null;
   try {
     renderGpu.device.pushErrorScope("validation");
-    const pipe = renderGpu.device.createRenderPipeline(desc);
+    pipe = renderGpu.device.createRenderPipeline(d);
     renderGpu.device.popErrorScope().then((err) => {
       if (err) {
+        webGpuObjects.pipeVar.set(key, null);
         webGpuPcfg.fail += 1;
         if (!self._webGpuPcfgFirstErr) {
           self._webGpuPcfgFirstErr = true;
-          console.log(
-            `[webgpu-pcfg] first build FAIL id=${pipelineId} ` +
-            `(vs=${vsId} fs=${fsId} attrs=${attrCount} blend=${blendEnable} ` +
-            `depth=${hasDepth}): ${String(err.message).slice(0, 260)}`
-          );
+          console.log(`[webgpu-pcfg] variant FAIL ${key}` +
+            (dbg ? ` (vs=${dbg.vsId} fs=${dbg.fsId} attrs=${dbg.attrCount})` : "") +
+            `: ${String(err.message).slice(0, 240)}`);
         }
       } else {
-        webGpuObjects.pipelines.set(pipelineId, pipe);
         webGpuPcfg.ok += 1;
-        if (webGpuPcfg.ok <= 3 || webGpuPcfg.ok % 64 === 0) {
-          console.log(
-            `[webgpu-pcfg] real pipeline ${pipelineId} built OK ` +
-            `[ok=${webGpuPcfg.ok} fail=${webGpuPcfg.fail} defer=${webGpuPcfg.defer}] ` +
-            `(attrs=${attrCount} stride=${stride} blend=${blendEnable} depth=${hasDepth})`
-          );
+        if (webGpuPcfg.ok <= 3 || webGpuPcfg.ok % 128 === 0) {
+          console.log(`[webgpu-pcfg] variant OK ${key} ` +
+            `[ok=${webGpuPcfg.ok} fail=${webGpuPcfg.fail}]`);
         }
       }
     }).catch(() => {});
@@ -3482,9 +3571,11 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     webGpuPcfg.fail += 1;
     if (!self._webGpuPcfgThrew) {
       self._webGpuPcfgThrew = true;
-      console.log(`[webgpu-pcfg] createRenderPipeline threw id=${pipelineId}: ${e?.message || e}`);
+      console.log(`[webgpu-pcfg] createRenderPipeline threw ${key}: ${e?.message || e}`);
     }
   }
+  webGpuObjects.pipeVar.set(key, pipe);
+  return pipe;
 }
 
 // Day-28: build a real GPUShaderModule from a WGSL blob in the shared

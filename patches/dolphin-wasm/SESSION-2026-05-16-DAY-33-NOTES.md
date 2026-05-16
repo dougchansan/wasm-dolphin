@@ -402,3 +402,71 @@ EFB, zero exec/validation errors *caught*, yet nothing visible.
 
 Every item is a known probe→fix cycle; no research left. This is the
 documented multi-session first-light bring-up.
+
+### Render-correctness grind (probe→one-construct→fix, error-scoped)
+
+Added `device.pushErrorScope("validation")` around each frame's
+encoder so silent uncaptured WebGPU validation surfaces in
+`console.log` — then fixed each one-at-a-time. Every one of these was
+poisoning the whole frame's submit (one bad op → entire frame
+discarded → canvas stuck at 2 hashes); they must ALL clear before
+first pixel:
+
+1. **Upload 4-alignment** — `writeBuffer` offset/size ≡0 mod4.
+2. **Bind-group reuse** — group0/2 once, group1 by sig (1.7M→~190k).
+3. **Scissor/viewport clamp** — VideoCommon emits 640×480 but the
+   EFB/canvas target is 320×240; consumer clamps to live pass dims.
+4. **No-pipeline-draw guard** + **synchronous pipeline-map insert**
+   (the async popErrorScope window caused "No pipeline set").
+5. **GetSurfaceInfo → BGRA8** — backbuffer is the bgra8unorm canvas,
+   not RGBA8.
+6. **Pipeline variants keyed on live (colorFmt,depthFmt)** — Dolphin
+   pipeline framebuffer-state vs real WebGPU target formats diverge;
+   build/cache a variant per actual pass attachment set
+   (`resolvePipeline`). Killed the whole "Attachment state not
+   compatible" class.
+7. **Texture array layers** — thread `TextureConfig.layers` through
+   CREATE_TEXTURE (+ defensive z-skip) — was "copy range z:1 outside
+   1-layer texture".
+8. **EFB-feedback dummy substitution** — a sampler slot referencing
+   the current render target is a read-while-write hazard
+   ("writable usage and another usage in the same synchronization
+   scope"); substitute the 1×1 dummy (genuine EFB-copy renders to a
+   different target so its id won't match).
+
+Method proven, converging — each fix removes one frame-poisoning
+validation error; the error-scope probe surfaces the next. Remaining
+known-minor: the 1/65 utility shader (group-1 binding outside the
+fixed sampler layout — likely TEXEL_BUFFER) and the bind-group LRU.
+
+### DECISIVE: all WebGPU validation now clears, but wrong surface
+
+After fix 8 the error scope reports **zero validation errors** —
+every frame's encoder builds & submits cleanly (present=2640,
+beginFb0=2640, beginFbN≈7100, drawIdx≈570k, 100% speed). Yet the
+canvas stays a static green (2-3 hashes).
+
+Decisive diagnostic: forced our backbuffer (fb=0) pass clear to
+**magenta** → the canvas stayed **green**. So our executor's
+`fb=0 → renderGpu.context.getCurrentTexture()` render is *not* the
+surface the page composites / the validator screenshots. We have
+been rendering correctly to the wrong canvas.
+
+`renderGpu` is `createWebGpuPresenter(renderCanvas)` and
+`renderCanvas` is the worker's `canvas`. The legacy present path
+(`handleWebGpuShowImage → presentFrame → drawFrameBytesToWebGpu`)
+is what actually drove the visible canvas pre-cutover; post-cutover
+(SupportsUtilityDrawing=true) `ShowImage` is dead so that path gets
+no frames and the displayed surface is frozen green, while our
+cmd-ring backbuffer pass renders to a context that isn't presented.
+
+**This is the next (and likely last structural) grind item:** route
+the cmd-ring's final presented frame onto the surface the page
+actually shows — either (a) have the executor's backbuffer pass
+target the exact context the page composites (confirm whether
+`renderCanvas` is the transferControlToOffscreen'd visible canvas vs
+a standalone OffscreenCanvas whose ImageBitmap is posted to main),
+or (b) after SUBMIT_PRESENT, push the rendered backbuffer through
+the same presentFrame/ImageBitmap mechanism the legacy path used.
+All GPU rendering itself is now validation-clean; this is plumbing,
+not correctness.
