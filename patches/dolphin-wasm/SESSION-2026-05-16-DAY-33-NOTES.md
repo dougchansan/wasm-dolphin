@@ -85,6 +85,34 @@ The 9 failures are one systematic cause:
 Location 1 = `ShaderAttrib::PositionMatrix` (posmtx). When
 `decl.posmtx.integer` is set we emit `uint8x4` (Uint base), but the
 Naga-translated WGSL VS declares that input as `Float`. WebGPU's
-vertex base-type match is strict (Vulkan is lax). This is the next
-single-construct fix and is load-bearing for A3 (real vertex buffers
-+ draw) — pursue before/with A3.
+vertex base-type match is strict (Vulkan is lax).
+
+### A2b — posmtx base-type fix (api_type-gated, CONCLUSIVE)
+
+Root cause was concrete: `VertexShaderGen.cpp` had a `#ifdef
+__EMSCRIPTEN__` forcing `in float4 posmtx` for **all** Emscripten
+backends. That workaround is an **OGL/WebGL2/ANGLE**
+`glVertexAttribIPointer` bug fix only — WebGPU has no such bug and its
+vertex format is `uint8x4 → uint4`, matching desktop Vulkan. Gated the
+float workaround off the Vulkan dialect (`api_type == APIType::Vulkan
+→ in uint4 posmtx`); OGL Emscripten keeps `float4`, desktop unchanged.
+The transform body uses `int(posmtx.r)` which is type-agnostic, so no
+body change. (Cosmetic `-Wdangling-else` on the new nested if/else —
+logic verified correct; explicit braces folded into the A3 edit to
+avoid a rebuild solely for a warning.)
+
+Verified `?video=wgpu`: **pcfg ok=64 fail=0 defer=0** (was fail=9) —
+**100% of real Dolphin pipeline configs build as valid WebGPU
+pipelines**; 64/64 shaders (no translation regression from the VS
+change); 45 distinct hashes; Melee CSS renders. Checkpoint committed.
+
+## A3 — real WebGPU VertexManager + AbstractGfx draw recording
+
+Architecture note (load-bearing): `VertexManagerBase::DrawCurrentBatch`
+calls `g_gfx->DrawIndexed(...)`; VideoCommon's real Renderer drives
+`g_gfx->SetPipeline / BindFramebuffer / SetViewport / DrawIndexed`.
+Today `SupportsUtilityDrawing()==false` → VideoCommon takes the simple
+`ShowImage(xfb)` SW-hybrid fallback and never calls those, so the
+recording machinery built in A3/A4/A5 is **dormant until the Phase-C
+flip** (same no-regression pattern as A1/A2). Real end-to-end render
+is verified at/after Phase C.
