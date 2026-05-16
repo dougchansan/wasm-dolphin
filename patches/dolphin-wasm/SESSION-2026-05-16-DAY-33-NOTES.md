@@ -357,3 +357,48 @@ remote WebGPU hardware renderer end-to-end; the remaining grind is
 render-correctness (why EFB draws don't yield visible geometry) +
 the bind-group LRU + the 1 utility-shader layout. `?video=webgpu`
 hybrid remains a separate untouched shipping path.
+
+### Diagnostic findings (probe-measured, not speculation)
+
+One-shot executor logging of the first passes/draws:
+- `first backbuffer pass load=clear clear=0,0,0` → the green is NOT
+  our backbuffer clear (black). Green is downstream of the blit.
+- `EFB pass#1 fb=14(rgba8unorm) depth=15(depth32float) load=clear`
+  → the real EFB is correctly structured (color+depth, cleared).
+- `EFB pass#2/3/5 fb=47(bgra8unorm) depth=0(none) load=load` →
+  intermediate/XFB-format passes with **no depth attachment**.
+- `DRAW_INDEXED# idx=6/99/51 firstIdx/baseVtx increasing` → real
+  batched GX geometry with sane parameters is being issued.
+
+So geometry draws execute with correct params into a correctly-formed
+EFB, zero exec/validation errors *caught*, yet nothing visible.
+
+### Prioritised remaining grind (mechanical, ordered by evidence)
+
+1. **Pipeline/pass attachment-format match.** Pipelines are built
+   from `pcfg` `FramebufferState` (MapDepthFormat/MapColorFormat),
+   but draws are replayed into whatever texture the bound framebuffer
+   is (rgba8unorm+depth32float for EFB, bgra8unorm+none for fb=47).
+   A pipeline with `depthStencil` drawn into a no-depth pass, or a
+   colour-format mismatch, is a **silent uncaptured WebGPU
+   validation failure** (we don't `pushErrorScope` around passes →
+   no log). Fix: wrap pass/draw replay in an error scope to surface
+   it (get the signal), then make the consumer choose the pipeline
+   variant / attachments to match (or rebuild pcfg keyed on the
+   actual target formats). This is the #1 suspect for "draws do
+   nothing".
+2. **`WebGPUGfx::ClearRegion` is a no-op** — the game's per-frame BP
+   EFB clear (background colour + depth) is dropped. EFB depth never
+   gets the game's clear → depth test rejects geometry. Needs a real
+   clear (scoped clear pass / loadOp) on the EFB.
+3. **The green source.** Backbuffer clears black; if the XFB blit
+   fails (per #1) the canvas should be black, not green — identify
+   what paints green (legacy presenter idle? canvas alpha? page
+   backdrop) once #1/#2 land.
+4. Bind-group LRU (group1 still ~170k/run — reuse by signature
+   across frames, not just consecutive).
+5. The 1/65 utility pcfg layout fail (group-1 binding outside the
+   fixed sampler layout — likely TEXEL_BUFFER_BINDING).
+
+Every item is a known probe→fix cycle; no research left. This is the
+documented multi-session first-light bring-up.

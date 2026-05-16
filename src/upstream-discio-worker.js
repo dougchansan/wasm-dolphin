@@ -3134,10 +3134,21 @@ function drainWebGpuCmdRing() {
             desc.depthStencilAttachment = ds;
           }
           pass = enc.beginRenderPass(desc);
-          if (!self._webGpuExecFirst) {
-            self._webGpuExecFirst = true;
-            console.log(`[webgpu-exec] first BEGIN_PASS fb=${fbId} depth=${depthId} ` +
-                        `load=${loadOp} — hardware render path live`);
+          if (fbId !== 0) {
+            self._wgEfbN = (self._wgEfbN || 0) + 1;
+            if (self._wgEfbN <= 6) {
+              const ct2 = webGpuObjects.textures.get(fbId);
+              console.log(`[webgpu-exec] EFB pass#${self._wgEfbN} fb=${fbId}` +
+                `(${ct2 ? ct2.format : "?"}) depth=${depthId}` +
+                `(${dt ? dt.format : "none"}) load=${loadOp} ` +
+                `clear=${f32[recWord + 2].toFixed(2)},${f32[recWord + 3].toFixed(2)},` +
+                `${f32[recWord + 4].toFixed(2)},${f32[recWord + 5].toFixed(2)}`);
+            }
+          } else if (!self._wgFb0Logged) {
+            self._wgFb0Logged = true;
+            console.log(`[webgpu-exec] first backbuffer pass load=${loadOp} ` +
+              `clear=${f32[recWord + 2].toFixed(2)},${f32[recWord + 3].toFixed(2)},` +
+              `${f32[recWord + 4].toFixed(2)}`);
           }
           break;
         }
@@ -3187,6 +3198,11 @@ function drainWebGpuCmdRing() {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++;
+            if ((self._wgDi = (self._wgDi || 0) + 1) <= 5) {
+              console.log(`[webgpu-exec] DRAW_INDEXED#${self._wgDi} ` +
+                `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
+                `firstIdx=${u32[recWord + 3]} baseVtx=${u32[recWord + 4]}`);
+            }
           }
           break;
         case WGPU_CMD_OP_END_PASS:
