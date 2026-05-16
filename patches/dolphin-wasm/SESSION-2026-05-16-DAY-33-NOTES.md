@@ -205,3 +205,33 @@ the wasm rebuild): `WebGPUCommandStream.{h,cpp}` (shared accessor),
 `WebGPUVertexManager.{h,cpp}`, `WebGPUGfx.{h,cpp}`, `WebGPUTexture.*`,
 `VideoBackend.cpp`; plus `src/upstream-discio-worker.js` (executor)
 and the SESSION notes.
+
+### A3 step 1-2 landed (dormant, no regression)
+
+User chose "build the full block, then flip & iterate". Step 1
+(shared `WebGPU::GetCommandStream()` accessor; `WebGPUGfx::m_cmd_stream`
+is now a reference to it) and step 2 (`WebGPU::VertexManager` —
+persistent 16 MB vbuf / 4 MB ibuf via `PushCreateBuffer`, `CommitBuffer`
+rolls offsets + `UploadAlloc`+`PushUploadBuffer`, `DrawCurrentBatch`
+records `SET_VERTEX/INDEX_BUFFER`+`DRAW_INDEXED`) are in.
+`WebGPUVertexManager.cpp`/`WebGPUTexture.cpp` added to the WebGPU
+CMakeLists (reconfigure needed; done). All dormant — VertexManager not
+yet installed in VideoBackend, `CreateTexture` still SWTexture,
+`SupportsUtilityDrawing()` still false. Verified `?video=wgpu`: 64/64
+shaders, pcfg 64/0, test DRAW replays, Melee renders — no regression.
+Checkpoint committed.
+
+Bind layout (from the Day-22 translator SHADER_HEADER + shadergen,
+nailed down for step 3/A4):
+- `UBO_BINDING(packing,x)` → bind group 0, binding `x-1`:
+  PSBlock x=1→b0, VSBlock x=2→b1, CustomShaderBlock x=3→b2 (usually
+  absent), GSBlock x=4→b3. PS also declares VSBlock (VS consts in PS).
+- `SAMPLER_BINDING(x)` → bind group 1: GX pixel path is the Day-30
+  split — `texture2DArray tex_{0..7}u` at b0-7 + one shared
+  `sampler samp_ss` at b8.
+- `SSBO_BINDING(0)` → bind group 2, binding 0: BBox storage buffer
+  (bSupportsBBox=true → PS references it → must be bound).
+- UBO data: `system.Get{Vertex,Pixel,Geometry}ShaderManager().constants`
+  (+ `.dirty`), upload `sizeof(*Constants)` (ConstantManager.h).
+- Auto layout: build bind groups from
+  `pipeline.getBindGroupLayout(group)`.
