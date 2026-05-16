@@ -2859,6 +2859,7 @@ const WGPU_CMD_OP_DRAW_INDEXED = 20;
 const WGPU_CMD_OP_END_PASS = 21;
 const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
+const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
 // Day-28/29 resource object table: producer-assigned id → real GPU
 // object built here on renderGpu.device. Phase A widens this to the
@@ -2938,6 +2939,15 @@ function getFixedLayouts() {
       binding: b, visibility: VF, buffer: { type: "uniform" }
     }))
   });
+  // GX pixel path (Day-30 split): texture2DArray tex_0..7 at b0-7 +
+  // shared sampler samp_ss at b8. Utility/framebuffer shaders
+  // (FramebufferShaderGen EmitSamplerDeclarations) use a WIDER scheme:
+  // fbtex{i} → SAMPLER_BINDING(i) (b0-7), fbsmp{i} → SAMPLER_BINDING(i+8)
+  // (b8-15). GenerateEFBRestorePixelShader uses index 0+1, so fbsmp1
+  // lands at @group(1) @binding(9). Declare b0-7 textures + b8-15
+  // samplers so every SHADER_HEADER sampler binding the translator can
+  // emit exists in the fixed layout (declaring bindings a given shader
+  // omits is allowed; the reverse is the pipeline-build failure).
   const e1 = [];
   for (let i = 0; i < 8; i++) {
     e1.push({
@@ -2945,10 +2955,12 @@ function getFixedLayouts() {
       texture: { sampleType: "float", viewDimension: "2d-array" }
     });
   }
-  e1.push({
-    binding: 8, visibility: GPUShaderStage.FRAGMENT,
-    sampler: { type: "filtering" }
-  });
+  for (let i = 8; i < 16; i++) {
+    e1.push({
+      binding: i, visibility: GPUShaderStage.FRAGMENT,
+      sampler: { type: "filtering" }
+    });
+  }
   const l1 = dev.createBindGroupLayout({ label: "dolphin-bg1-samp", entries: e1 });
   const l2 = dev.createBindGroupLayout({
     label: "dolphin-bg2-ssbo",
@@ -2960,7 +2972,18 @@ function getFixedLayouts() {
   const pipelineLayout = dev.createPipelineLayout({
     label: "dolphin-pipeline-layout", bindGroupLayouts: [l0, l1, l2]
   });
-  renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout };
+  // Persistent dummies to pad bind-group entries the producer's blob
+  // omits but the (now wider) fixed layout declares — WebGPU requires
+  // a bind group to bind every layout binding. 1×1 2d-array texture +
+  // a sampler; harmless when the shader never references them.
+  const dummyTex = dev.createTexture({
+    size: [1, 1, 1], format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+  });
+  const dummyTexView = dummyTex.createView({ dimension: "2d-array" });
+  const dummySampler = dev.createSampler({});
+  renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout,
+                              dummyTex, dummyTexView, dummySampler };
   return renderGpu._fixedLayouts;
 }
 
@@ -2994,6 +3017,21 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
       entries.push({ binding, resource: { buffer: b } });
     }
   }
+  // The fixed group-1 layout declares b0-7 (texture) + b8-15 (sampler)
+  // so utility shaders (e.g. EFBRestore's fbsmp1 @binding 9) build, but
+  // the producer's blob only carries the bindings it actually uses.
+  // WebGPU requires a bind group to bind EVERY layout binding — pad the
+  // gaps with persistent dummies (never sampled when the shader omits
+  // them).
+  if (group === 1) {
+    const have = new Set(entries.map((e) => e.binding));
+    for (let b = 0; b < 16; b++) {
+      if (have.has(b)) continue;
+      entries.push(b < 8
+        ? { binding: b, resource: layouts.dummyTexView }
+        : { binding: b, resource: layouts.dummySampler });
+    }
+  }
   try {
     webGpuObjects.bindGroups.set(id,
       renderGpu.device.createBindGroup({ layout, entries }));
@@ -3001,6 +3039,142 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     if (!self._webGpuBgErr) {
       self._webGpuBgErr = true;
       console.log(`[webgpu-bg] createBindGroup group=${group} threw: ${e?.message || e}`);
+    }
+  }
+}
+
+// Day-33 grind: GPU texture-to-texture blit for the EFB→XFB resolve
+// (and EFB copies). Same-format same-size → exact copyTextureToTexture;
+// otherwise (the rgba8unorm EFB → bgra8unorm XFB resolve) a sampled
+// fullscreen-triangle render pass that also handles the format
+// conversion + src/dst sub-rect. Lazily built, pipeline cached per
+// destination format.
+let blitState = null;
+function ensureBlitState() {
+  if (blitState) return blitState;
+  const dev = renderGpu.device;
+  const module = dev.createShaderModule({
+    label: "wgpu-blit",
+    code: `
+struct U { v: vec4<f32> };
+@group(0) @binding(0) var t: texture_2d_array<f32>;
+@group(0) @binding(1) var sm: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VO {
+  var p = array<vec2<f32>,3>(vec2<f32>(-1.,-1.), vec2<f32>(3.,-1.), vec2<f32>(-1.,3.));
+  let xy = p[vi];
+  var o: VO;
+  o.pos = vec4<f32>(xy, 0., 1.);
+  let base = vec2<f32>((xy.x + 1.) * 0.5, (1. - xy.y) * 0.5);
+  o.uv = base * u.v.xy + u.v.zw;
+  return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+  return textureSampleLevel(t, sm, i.uv, 0, 0.);
+}` });
+  const bgl = dev.createBindGroupLayout({
+    label: "wgpu-blit-bgl",
+    entries: [
+      { binding: 0, visibility: 2 /*FRAGMENT*/,
+        texture: { sampleType: "float", viewDimension: "2d-array" } },
+      { binding: 1, visibility: 2, sampler: { type: "filtering" } },
+      { binding: 2, visibility: 1 /*VERTEX*/, buffer: { type: "uniform" } }
+    ]
+  });
+  blitState = {
+    module, bgl,
+    layout: dev.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+    sampler: dev.createSampler({
+      magFilter: "linear", minFilter: "linear",
+      addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" }),
+    pipelines: new Map()
+  };
+  return blitState;
+}
+function ensureBlitPipeline(dstFmt) {
+  const bs = ensureBlitState();
+  let p = bs.pipelines.get(dstFmt);
+  if (p) return p;
+  try {
+    p = renderGpu.device.createRenderPipeline({
+      label: `wgpu-blit-${dstFmt}`,
+      layout: bs.layout,
+      vertex: { module: bs.module, entryPoint: "vs" },
+      fragment: { module: bs.module, entryPoint: "fs",
+                  targets: [{ format: dstFmt }] },
+      primitive: { topology: "triangle-list" }
+    });
+    bs.pipelines.set(dstFmt, p);
+  } catch (e) {
+    if (!self._wgBlitPipeErr) {
+      self._wgBlitPipeErr = true;
+      console.log(`[webgpu-blit] pipeline(${dstFmt}) threw: ${e?.message || e}`);
+    }
+    return null;
+  }
+  return p;
+}
+function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
+                     sLayer, sLevel, dLayer, dLevel) {
+  const dev = renderGpu.device;
+  const sameFmt = s.format === d.format;
+  // Exact GPU copy: identical format + no scaling. Handles sub-rect /
+  // layers / levels precisely (the common EFB→texture-cache copy, and
+  // depth, which can't go through the sampled color blit).
+  if (sameFmt && sw === dw && sh === dh) {
+    try {
+      enc.copyTextureToTexture(
+        { texture: s.tex, mipLevel: sLevel, origin: { x: sx, y: sy, z: sLayer } },
+        { texture: d.tex, mipLevel: dLevel, origin: { x: dx, y: dy, z: dLayer } },
+        { width: sw, height: sh, depthOrArrayLayers: 1 });
+    } catch (e) {
+      if (!self._wgBlitCopyErr) {
+        self._wgBlitCopyErr = true;
+        console.log(`[webgpu-blit] copyTexture threw: ${e?.message || e}`);
+      }
+    }
+    return;
+  }
+  if (s.format.startsWith("depth") || d.format.startsWith("depth")) return;
+  const pipe = ensureBlitPipeline(d.format);
+  if (!pipe) return;
+  const sw0 = s.tex.width || 1, sh0 = s.tex.height || 1;
+  // 16-byte uniform per blit (a handful/frame) so concurrent blits in
+  // one submit never alias a shared buffer.
+  const ubo = dev.createBuffer({ size: 16, usage: 0x40 | 0x8,
+                                 mappedAtCreation: true });
+  new Float32Array(ubo.getMappedRange()).set(
+    [sw / sw0, sh / sh0, sx / sw0, sy / sh0]);
+  ubo.unmap();
+  try {
+    const view = s.tex.createView({ dimension: "2d-array",
+      baseArrayLayer: sLayer, arrayLayerCount: 1,
+      baseMipLevel: sLevel, mipLevelCount: 1 });
+    const bg = dev.createBindGroup({ layout: blitState.bgl, entries: [
+      { binding: 0, resource: view },
+      { binding: 1, resource: blitState.sampler },
+      { binding: 2, resource: { buffer: ubo } } ] });
+    const dview = d.tex.createView({ dimension: "2d",
+      baseArrayLayer: dLayer, arrayLayerCount: 1,
+      baseMipLevel: dLevel, mipLevelCount: 1 });
+    const rp = enc.beginRenderPass({ label: "wgpu-blit-pass",
+      colorAttachments: [{ view: dview, loadOp: "load", storeOp: "store" }] });
+    rp.setPipeline(pipe);
+    rp.setViewport(dx, dy, Math.max(1, dw), Math.max(1, dh), 0, 1);
+    rp.setBindGroup(0, bg);
+    rp.draw(3);
+    rp.end();
+    if (!self._wgBlitOnce) {
+      self._wgBlitOnce = true;
+      console.log(`[webgpu-blit] first blit ${s.format} ${sw0}x${sh0} ` +
+        `src(${sx},${sy} ${sw}x${sh}) -> ${d.format} ` +
+        `dst(${dx},${dy} ${dw}x${dh})`);
+    }
+  } catch (e) {
+    if (!self._wgBlitErr) {
+      self._wgBlitErr = true;
+      console.log(`[webgpu-blit] render blit threw: ${e?.message || e}`);
     }
   }
 }
@@ -3042,6 +3216,25 @@ function drainWebGpuCmdRing() {
   let passDepthFmt = null;
   let passHasPipe = false;
   let errScope = false;
+  // One-shot present-path diagnostic: per-pass tally of pipeline/bind/
+  // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
+  // passes — tells us whether the present/XFB-copy draw actually runs.
+  let passFbId = -1;
+  let pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };
+  self._wgPassDiag = self._wgPassDiag || {};
+  const flushPassDiag = () => {
+    if (passFbId < 0) return;
+    const key = passFbId === 0 ? "fb0" : "fb" + passFbId;
+    const n = (self._wgPassDiag[key] = (self._wgPassDiag[key] || 0) + 1);
+    if ((passFbId === 0 || passFbId === 47) && n <= 3) {
+      console.log(`[webgpu-exec] pass#${n} fb=${passFbId} ` +
+        `pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} bgOk=${pd.bgOk} ` +
+        `bgMiss=${pd.bgMiss} draw=${pd.draw} drawIdx=${pd.drawIdx} ` +
+        `${passColorFmt}/${passDepthFmt} ${passW}x${passH}`);
+    }
+    passFbId = -1;
+    pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };
+  };
   const ensureEnc = () => {
     if (!enc) {
       dev.pushErrorScope("validation");
@@ -3065,7 +3258,7 @@ function drainWebGpuCmdRing() {
     }
   };
   const endPass = () => {
-    if (pass) { try { pass.end(); } catch (e) {} pass = null; }
+    if (pass) { try { pass.end(); } catch (e) {} pass = null; flushPassDiag(); }
   };
   const heapCopy = (off, len) => heap.slice(off, off + len);
   while (read !== write) {
@@ -3198,6 +3391,7 @@ function drainWebGpuCmdRing() {
           }
           pass = enc.beginRenderPass(desc);
           passHasPipe = false;
+          passFbId = fbId;
           if (fbId !== 0) {
             self._wgEfbN = (self._wgEfbN || 0) + 1;
             if (self._wgEfbN <= 6) {
@@ -3220,14 +3414,14 @@ function drainWebGpuCmdRing() {
           const pid = u32[recWord + 1];
           const p = pass ? resolvePipeline(pid, passColorFmt, passDepthFmt) : null;
           if (pass && p) {
-            pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++;
-          } else webGpuExecStats.missPipe++;
+            pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++; pd.pipeOk++;
+          } else { webGpuExecStats.missPipe++; pd.pipeMiss++; }
           break;
         }
         case WGPU_CMD_OP_SET_BIND_GROUP: {
           const bg = webGpuObjects.bindGroups.get(u32[recWord + 2]);
-          if (pass && bg) { pass.setBindGroup(u32[recWord + 1], bg); webGpuExecStats.setBg++; }
-          else webGpuExecStats.missBg++;
+          if (pass && bg) { pass.setBindGroup(u32[recWord + 1], bg); webGpuExecStats.setBg++; pd.bgOk++; }
+          else { webGpuExecStats.missBg++; pd.bgMiss++; }
           break;
         }
         case WGPU_CMD_OP_SET_VERTEX_BUFFER: {
@@ -3271,13 +3465,13 @@ function drainWebGpuCmdRing() {
           }
           break;
         case WGPU_CMD_OP_DRAW:
-          if (pass && passHasPipe) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; }
+          if (pass && passHasPipe) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; pd.draw++; }
           break;
         case WGPU_CMD_OP_DRAW_INDEXED:
           if (pass && passHasPipe) {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
-            webGpuExecStats.drawIdx++;
+            webGpuExecStats.drawIdx++; pd.drawIdx++;
             if ((self._wgDi = (self._wgDi || 0) + 1) <= 5) {
               console.log(`[webgpu-exec] DRAW_INDEXED#${self._wgDi} ` +
                 `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
@@ -3310,6 +3504,22 @@ function drainWebGpuCmdRing() {
                   : tag === 2 ? webGpuObjects.textures
                   : tag === 3 ? webGpuObjects.bindGroups : null;
           if (m) m.delete(id);
+          break;
+        }
+        case WGPU_CMD_OP_BLIT_TEXTURE: {
+          const s = webGpuObjects.textures.get(u32[recWord + 1]);
+          const d = webGpuObjects.textures.get(u32[recWord + 2]);
+          if (s && d) {
+            endPass();
+            ensureEnc();
+            const a2 = u32[recWord + 3], a3 = u32[recWord + 4];
+            const a4 = u32[recWord + 5], a5 = u32[recWord + 6];
+            const a6 = u32[recWord + 7];
+            blitTexture(enc, s, d,
+              a2 & 0xFFFF, a2 >>> 16, a3 & 0xFFFF, a3 >>> 16,
+              a4 & 0xFFFF, a4 >>> 16, a5 & 0xFFFF, a5 >>> 16,
+              a6 & 0xFF, (a6 >>> 8) & 0xFF, (a6 >>> 16) & 0xFF, (a6 >>> 24) & 0xFF);
+          }
           break;
         }
         default:

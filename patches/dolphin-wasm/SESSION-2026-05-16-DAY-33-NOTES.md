@@ -569,3 +569,69 @@ Remaining is the EFB→XFB GPU-resolve + geometry grind, fully scoped,
 no research left. Late-session the dev environment degraded badly
 (probes/builds ~5min, every shell backgrounds) — the documented grind
 is best continued on a fresh environment.
+
+## Day-33 (cont.) — EFB→XFB hypothesis disproved; utility-layout fix
+
+Fresh environment. Probe-driven, per the method.
+
+### 1. CopyRectangleFromTexture was NOT the EFB→XFB path
+
+Added a real GPU blit opcode (`CmdOp::BlitTexture`=24, `PushBlitTexture`,
+16-bit-packed rects/8-bit layers) and made
+`WebGPUTexture::CopyRectangleFromTexture`/`ResolveFromTexture` emit it
+(consumer: same-format+size → `copyTextureToTexture`; rgba8unorm→
+bgra8unorm → cached sampled fullscreen-triangle render-pass blit). Kept
+the CPU memcpy for incidental readback. Built, probed: the
+`[webgpu-blit]` one-shot **never fired** — `CopyRectangleFromTexture`
+is not the EFB→XFB resolve here. The probe shows the resolve is a
+render pass into `fb=47 (bgra8unorm)`: EFB renders into fb=14
+(rgba8unorm+depth), a utility draw copies it into the fb=47 XFB
+texture, then the backbuffer (fb=0) samples fb=47. The previous
+session's "CopyRectangleFromTexture stub" hypothesis was wrong. The
+opcode is retained (correct for the genuine EFB-copy-to-texture-cache
+paths) but is not the present blocker.
+
+### 2. DECISIVE fix: group-1 fixed layout was missing utility samplers
+
+Probe surfaced exactly ONE failing construct:
+
+    [webgpu-pcfg] variant FAIL 22|rgba8unorm|depth32float
+    (vs=1 fs=21): Binding doesn't exist in "dolphin-bg1-samp"
+     - @group(1) @binding(9) ... While validating the entry-point
+
+Root cause (concrete, in `FramebufferShaderGen.cpp:49-50`): utility/
+framebuffer shaders emit `fbtex{i}`→`SAMPLER_BINDING(i)` (group1 b0-7)
+and `fbsmp{i}`→`SAMPLER_BINDING(i+8)` (group1 **b8-15**).
+`GenerateEFBRestorePixelShader` uses `EmitSamplerDeclarations(0,2)`, so
+`fbsmp1` lands at `@group(1) @binding(9)`. The fixed group-1 layout
+only declared b0-7 (texture) + **b8** (one sampler), so any 2+-sampler
+utility shader fails pipeline-build.
+
+Fix (consumer-only, `upstream-discio-worker.js`):
+- `getFixedLayouts`: group-1 now declares b0-7 texture + **b8-15
+  sampler** (every SHADER_HEADER sampler binding the translator can
+  emit). Declaring bindings a shader omits is allowed; the reverse was
+  the failure.
+- WebGPU requires a bind group to bind *every* layout binding, but the
+  producer blob only carries used bindings → `replayCreateBindGroup`
+  now pads group-1 gaps with persistent dummies (1×1 2d-array texture
+  for b0-7, a default sampler for b8-15). Existing bindings unchanged.
+
+Probe-verified: **`variant FAIL` is GONE** (no pipeline-build failure),
+zero validation/bind-group errors. Added per-pass diagnostics
+(`[webgpu-exec] pass#N fb=… pipeOk/bgOk/draw…`) which prove the present
+chain now executes: `fb=47` XFB-copy pass = pipeOk=1 bgOk=3 draw=1;
+`fb=0` backbuffer pass = pipeOk=1 bgOk=3 draw=1. EFB clears 0,0,0,0.
+
+### 3. State / next
+
+Canvas is still a uniform field (the game's GX clear colour) — the
+present chain is correct end-to-end now, so the remaining problem is
+**geometry not landing in the EFB**, not the resolve/present. The
+dominant probe signal is the bind-group/pipeline miss explosion
+(`missBg` ~1%→24% and climbing as texture churn grows: `bg`≈135k
+created, `tex`≈247; `missPipe` climbing too). That is the bind-group
+LRU / resource-lifetime issue (was task 4) now on the critical path,
+plus geometry/UBO correctness (task 3). Next grind: why GX draws don't
+appear — bind-group/resource lifetime first (it gates whether draws
+even have correct uniforms/textures), then transform/UBO.
