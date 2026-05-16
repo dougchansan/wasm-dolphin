@@ -2897,12 +2897,103 @@ function handleWebGpuCmdRing(event) {
 // Drain + replay pending commands on renderGpu.device. Called every
 // presentation tick. Single-consumer; the producer (video pthread)
 // publishes with a release store on `write`, we acquire-load it.
+// Day-33 A4/A5: WebGPU texture-format codes (matches MapTexFormat in
+// WebGPUTexture.cpp).
+const WGPU_TEX_FORMAT = [
+  "rgba8unorm", "bgra8unorm", "depth24plus", "depth32float",
+  "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
+  "rgb10a2unorm"
+];
+
+// Explicit fixed bind-group layouts mirroring the Day-22 translator
+// SHADER_HEADER: group0 = UBOs b0..3, group1 = textures b0..7 +
+// sampler b8, group2 = bbox storage b0. Created once; replaces
+// layout:"auto" so bind groups are uniform across every TEV config.
+function getFixedLayouts() {
+  if (renderGpu._fixedLayouts) return renderGpu._fixedLayouts;
+  const dev = renderGpu.device;
+  const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
+  const l0 = dev.createBindGroupLayout({
+    label: "dolphin-bg0-ubo",
+    entries: [0, 1, 2, 3].map((b) => ({
+      binding: b, visibility: VF, buffer: { type: "uniform" }
+    }))
+  });
+  const e1 = [];
+  for (let i = 0; i < 8; i++) {
+    e1.push({
+      binding: i, visibility: GPUShaderStage.FRAGMENT,
+      texture: { sampleType: "float", viewDimension: "2d-array" }
+    });
+  }
+  e1.push({
+    binding: 8, visibility: GPUShaderStage.FRAGMENT,
+    sampler: { type: "filtering" }
+  });
+  const l1 = dev.createBindGroupLayout({ label: "dolphin-bg1-samp", entries: e1 });
+  const l2 = dev.createBindGroupLayout({
+    label: "dolphin-bg2-ssbo",
+    entries: [{
+      binding: 0, visibility: GPUShaderStage.FRAGMENT,
+      buffer: { type: "storage" }
+    }]
+  });
+  const pipelineLayout = dev.createPipelineLayout({
+    label: "dolphin-pipeline-layout", bindGroupLayouts: [l0, l1, l2]
+  });
+  renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout };
+  return renderGpu._fixedLayouts;
+}
+
+// Build a GPUBindGroup from a CREATE_BIND_GROUP blob against the fixed
+// layout for its group. blob: u32 magic 'WBG1', group, count, then
+// count×{binding, kind, resId, off, size}. kind 0/3 = buffer,
+// 1 = texture, 2 = sampler.
+function replayCreateBindGroup(id, blobPtr, blobLen) {
+  if (!renderGpu || !blobPtr || webGpuObjects.bindGroups.has(id)) return;
+  const u = new Uint32Array(moduleInstance.HEAPU8.buffer, blobPtr, blobLen >>> 2);
+  if (u[0] !== 0x57424731) return;
+  const group = u[1], count = u[2];
+  const layouts = getFixedLayouts();
+  const layout = group === 0 ? layouts.l0 : group === 1 ? layouts.l1 : layouts.l2;
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    const base = 3 + i * 5;
+    const binding = u[base], kind = u[base + 1], resId = u[base + 2];
+    if (kind === 1) {
+      const t = webGpuObjects.textures.get(resId);
+      if (!t) return;  // resource not ready — skip this frame
+      entries.push({ binding, resource: t.view2dArray ||
+        (t.view2dArray = t.tex.createView({ dimension: "2d-array" })) });
+    } else if (kind === 2) {
+      const s = webGpuObjects.samplers.get(resId);
+      if (!s) return;
+      entries.push({ binding, resource: s });
+    } else {
+      const b = webGpuObjects.buffers.get(resId);
+      if (!b) return;
+      entries.push({ binding, resource: { buffer: b } });
+    }
+  }
+  try {
+    webGpuObjects.bindGroups.set(id,
+      renderGpu.device.createBindGroup({ layout, entries }));
+  } catch (e) {
+    if (!self._webGpuBgErr) {
+      self._webGpuBgErr = true;
+      console.log(`[webgpu-bg] createBindGroup group=${group} threw: ${e?.message || e}`);
+    }
+  }
+}
+
+const webGpuExecStats = {
+  beginFb0: 0, beginFbN: 0, draw: 0, drawIdx: 0, setPipe: 0,
+  setBg: 0, present: 0, missPipe: 0, missBg: 0, lastLog: 0
+};
+
 function drainWebGpuCmdRing() {
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
-  const hdr = ring.headerU32;
-  // Atomics.load on the Int32Array view = acquire of the producer's
-  // release store.
   const write = Atomics.load(ring.headerI32, 0) >>> 0;
   let read = Atomics.load(ring.headerI32, 1) >>> 0;
   if (write === read) return;
@@ -2918,118 +3009,227 @@ function drainWebGpuCmdRing() {
   const heap = moduleInstance.HEAPU8;
   const f32 = new Float32Array(heap.buffer);
   const u32 = new Uint32Array(heap.buffer);
-  let lastClear = null;
-  let lastDrawTest = null;
+  const dev = renderGpu.device;
+  const q = dev.queue;
+  let enc = null;
+  let pass = null;
+  const endPass = () => {
+    if (pass) { try { pass.end(); } catch (e) {} pass = null; }
+  };
+  const heapCopy = (off, len) => heap.slice(off, off + len);
   while (read !== write) {
-    const slot = read % ring.capacity;
-    const recByte = ring.slotsBase + slot * 32;
-    const recWord = recByte >>> 2;
+    const recWord = (ring.slotsBase + (read % ring.capacity) * 32) >>> 2;
     const op = u32[recWord];
-    if (op === WGPU_CMD_OP_CLEAR) {
-      // Coalesce: only the final CLEAR of the batch matters for a
-      // single-clear-per-frame proof.
-      lastClear = {
-        r: f32[recWord + 1],
-        g: f32[recWord + 2],
-        b: f32[recWord + 3],
-        a: f32[recWord + 4]
-      };
-    } else if (op === WGPU_CMD_OP_CREATE_SHADER) {
-      // Day-28: build a real GPUShaderModule from the WGSL blob the
-      // pthread translated (Dolphin GLSL → glslang → Naga → WGSL).
-      // arg: [1]=id [2]=blobPtr [3]=blobLen [4]=stage
-      const id = u32[recWord + 1];
-      const blobPtr = u32[recWord + 2];
-      const blobLen = u32[recWord + 3];
-      const stage = u32[recWord + 4];
-      replayCreateShader(id, blobPtr, blobLen, stage);
-    } else if (op === WGPU_CMD_OP_CREATE_PIPELINE) {
-      // Day-32: build a real GPURenderPipeline from a Dolphin VS+FS
-      // pair (one-shot). arg: [1]=pipelineId [2]=vsId [3]=fsId
-      // [4]=topology
-      replayCreatePipeline(u32[recWord + 1], u32[recWord + 2],
-                           u32[recWord + 3], u32[recWord + 4]);
-    } else if (op === WGPU_CMD_OP_CREATE_PIPELINE_CFG) {
-      // Day-33 A2: build a real GPURenderPipeline from the serialized
-      // AbstractPipelineConfig blob. arg: [1]=id [2]=blobPtr [3]=blobLen
-      replayCreatePipelineCfg(u32[recWord + 1], u32[recWord + 2],
-                              u32[recWord + 3]);
-    } else if (op === WGPU_CMD_OP_DRAW_TEST) {
-      // arg: [1]=pipelineId [2]=vertexCount. Coalesce: one draw per
-      // tick (producer emits one per frame).
-      lastClear = null;
-      lastDrawTest = { pipelineId: u32[recWord + 1], vertexCount: u32[recWord + 2] };
+    try {
+      switch (op) {
+        case WGPU_CMD_OP_CREATE_SHADER:
+          replayCreateShader(u32[recWord + 1], u32[recWord + 2],
+                             u32[recWord + 3], u32[recWord + 4]);
+          break;
+        case WGPU_CMD_OP_CREATE_PIPELINE_CFG:
+          replayCreatePipelineCfg(u32[recWord + 1], u32[recWord + 2],
+                                  u32[recWord + 3]);
+          break;
+        case WGPU_CMD_OP_CREATE_PIPELINE:
+          replayCreatePipeline(u32[recWord + 1], u32[recWord + 2],
+                               u32[recWord + 3], u32[recWord + 4]);
+          break;
+        case WGPU_CMD_OP_CREATE_BUFFER: {
+          const id = u32[recWord + 1];
+          if (!webGpuObjects.buffers.has(id)) {
+            const size = Math.max(16, (u32[recWord + 2] + 3) & ~3);
+            webGpuObjects.buffers.set(id,
+              dev.createBuffer({ size, usage: u32[recWord + 3] }));
+          }
+          break;
+        }
+        case WGPU_CMD_OP_UPLOAD_BUFFER: {
+          const buf = webGpuObjects.buffers.get(u32[recWord + 1]);
+          if (buf) {
+            // writeBuffer requires offset & size multiples of 4
+            // (producer already aligns; round len defensively).
+            const len = (u32[recWord + 4] + 3) & ~3;
+            q.writeBuffer(buf, u32[recWord + 2] & ~3,
+                          heapCopy(u32[recWord + 3], len));
+          }
+          break;
+        }
+        case WGPU_CMD_OP_CREATE_TEXTURE: {
+          const id = u32[recWord + 1];
+          if (!webGpuObjects.textures.has(id)) {
+            const fmt = WGPU_TEX_FORMAT[u32[recWord + 4]] || "rgba8unorm";
+            const tex = dev.createTexture({
+              size: [Math.max(1, u32[recWord + 2]),
+                     Math.max(1, u32[recWord + 3]), 1],
+              format: fmt, usage: u32[recWord + 5]
+            });
+            webGpuObjects.textures.set(id, { tex, format: fmt, view2dArray: null });
+          }
+          break;
+        }
+        case WGPU_CMD_OP_UPLOAD_TEXTURE: {
+          const t = webGpuObjects.textures.get(u32[recWord + 1]);
+          if (t && !t.format.startsWith("depth")) {
+            const src = u32[recWord + 2], bpr = u32[recWord + 3];
+            const w = u32[recWord + 4], h = u32[recWord + 5];
+            q.writeTexture(
+              { texture: t.tex, mipLevel: u32[recWord + 6],
+                origin: { x: 0, y: 0, z: u32[recWord + 7] } },
+              heapCopy(src, bpr * h),
+              { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
+              { width: w, height: h, depthOrArrayLayers: 1 });
+          }
+          break;
+        }
+        case WGPU_CMD_OP_CREATE_SAMPLER: {
+          const id = u32[recWord + 1];
+          if (!webGpuObjects.samplers.has(id)) {
+            webGpuObjects.samplers.set(id, dev.createSampler({
+              magFilter: "linear", minFilter: "linear",
+              mipmapFilter: "linear", addressModeU: "repeat",
+              addressModeV: "repeat"
+            }));
+          }
+          break;
+        }
+        case WGPU_CMD_OP_CREATE_BIND_GROUP:
+          replayCreateBindGroup(u32[recWord + 1], u32[recWord + 2],
+                                u32[recWord + 3]);
+          break;
+        case WGPU_CMD_OP_BEGIN_PASS: {
+          endPass();
+          if (!enc) enc = dev.createCommandEncoder({ label: "dolphin-frame" });
+          const fbId = u32[recWord + 1];
+          const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
+          const depthId = u32[recWord + 7];
+          let colorView;
+          if (fbId === 0) {
+            webGpuExecStats.beginFb0++;
+            colorView = renderGpu.context.getCurrentTexture().createView();
+          } else {
+            webGpuExecStats.beginFbN++;
+            const ct = webGpuObjects.textures.get(fbId);
+            if (!ct) break;
+            colorView = ct.tex.createView();
+          }
+          const desc = {
+            colorAttachments: [{
+              view: colorView,
+              clearValue: { r: f32[recWord + 2], g: f32[recWord + 3],
+                            b: f32[recWord + 4], a: f32[recWord + 5] },
+              loadOp, storeOp: "store"
+            }]
+          };
+          const dt = depthId ? webGpuObjects.textures.get(depthId) : null;
+          if (dt) {
+            const ds = {
+              view: dt.tex.createView(),
+              depthClearValue: 1.0, depthLoadOp: loadOp, depthStoreOp: "store"
+            };
+            if (dt.format.indexOf("stencil") >= 0) {
+              ds.stencilClearValue = 0;
+              ds.stencilLoadOp = loadOp;
+              ds.stencilStoreOp = "store";
+            }
+            desc.depthStencilAttachment = ds;
+          }
+          pass = enc.beginRenderPass(desc);
+          if (!self._webGpuExecFirst) {
+            self._webGpuExecFirst = true;
+            console.log(`[webgpu-exec] first BEGIN_PASS fb=${fbId} depth=${depthId} ` +
+                        `load=${loadOp} — hardware render path live`);
+          }
+          break;
+        }
+        case WGPU_CMD_OP_SET_PIPELINE: {
+          const p = webGpuObjects.pipelines.get(u32[recWord + 1]);
+          if (pass && p) { pass.setPipeline(p); webGpuExecStats.setPipe++; }
+          else webGpuExecStats.missPipe++;
+          break;
+        }
+        case WGPU_CMD_OP_SET_BIND_GROUP: {
+          const bg = webGpuObjects.bindGroups.get(u32[recWord + 2]);
+          if (pass && bg) { pass.setBindGroup(u32[recWord + 1], bg); webGpuExecStats.setBg++; }
+          else webGpuExecStats.missBg++;
+          break;
+        }
+        case WGPU_CMD_OP_SET_VERTEX_BUFFER: {
+          const b = webGpuObjects.buffers.get(u32[recWord + 2]);
+          if (pass && b) pass.setVertexBuffer(u32[recWord + 1], b, u32[recWord + 3]);
+          break;
+        }
+        case WGPU_CMD_OP_SET_INDEX_BUFFER: {
+          const b = webGpuObjects.buffers.get(u32[recWord + 1]);
+          if (pass && b) {
+            pass.setIndexBuffer(b, u32[recWord + 2] === 1 ? "uint32" : "uint16",
+                                u32[recWord + 3]);
+          }
+          break;
+        }
+        case WGPU_CMD_OP_SET_VIEWPORT:
+          if (pass) {
+            pass.setViewport(f32[recWord + 1], f32[recWord + 2],
+                             f32[recWord + 3], f32[recWord + 4],
+                             f32[recWord + 5], f32[recWord + 6]);
+          }
+          break;
+        case WGPU_CMD_OP_SET_SCISSOR:
+          if (pass) {
+            pass.setScissorRect(u32[recWord + 1], u32[recWord + 2],
+                                u32[recWord + 3], u32[recWord + 4]);
+          }
+          break;
+        case WGPU_CMD_OP_DRAW:
+          if (pass) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; }
+          break;
+        case WGPU_CMD_OP_DRAW_INDEXED:
+          if (pass) {
+            pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
+                             u32[recWord + 3], u32[recWord + 4], 0);
+            webGpuExecStats.drawIdx++;
+          }
+          break;
+        case WGPU_CMD_OP_END_PASS:
+          endPass();
+          break;
+        case WGPU_CMD_OP_SUBMIT_PRESENT:
+          endPass();
+          if (enc) { q.submit([enc.finish()]); enc = null; }
+          webGpuExecStats.present++;
+          if (webGpuExecStats.present - webGpuExecStats.lastLog >= 120) {
+            webGpuExecStats.lastLog = webGpuExecStats.present;
+            const s = webGpuExecStats;
+            console.log(
+              `[webgpu-exec] stats present=${s.present} beginFb0=${s.beginFb0} ` +
+              `beginFbN=${s.beginFbN} drawIdx=${s.drawIdx} draw=${s.draw} ` +
+              `setPipe=${s.setPipe} missPipe=${s.missPipe} setBg=${s.setBg} ` +
+              `missBg=${s.missBg} pipes=${webGpuObjects.pipelines.size} ` +
+              `tex=${webGpuObjects.textures.size} buf=${webGpuObjects.buffers.size} ` +
+              `bg=${webGpuObjects.bindGroups.size}`);
+          }
+          break;
+        case WGPU_CMD_OP_DESTROY: {
+          const tag = u32[recWord + 1], id = u32[recWord + 2];
+          const m = tag === 1 ? webGpuObjects.buffers
+                  : tag === 2 ? webGpuObjects.textures
+                  : tag === 3 ? webGpuObjects.bindGroups : null;
+          if (m) m.delete(id);
+          break;
+        }
+        default:
+          break;
+      }
+    } catch (e) {
+      if (!self._webGpuExecErr) {
+        self._webGpuExecErr = true;
+        console.log(`[webgpu-exec] op=${op} threw: ${e?.message || e}`);
+      }
     }
     read = (read + 1) >>> 0;
   }
-  // Publish consumed count (release) so the producer sees free slots.
+  endPass();
+  if (enc) { try { q.submit([enc.finish()]); } catch (e) {} enc = null; }
   Atomics.store(ring.headerI32, 1, read | 0);
-
-  if (lastClear) {
-    try {
-      const gpu = renderGpu;
-      const view = gpu.context.getCurrentTexture().createView();
-      const enc = gpu.device.createCommandEncoder({ label: "webgpu-cmd-clear" });
-      const pass = enc.beginRenderPass({
-        colorAttachments: [{
-          view,
-          clearValue: lastClear,
-          loadOp: "clear",
-          storeOp: "store"
-        }]
-      });
-      pass.end();
-      gpu.device.queue.submit([enc.finish()]);
-      if (!self._webGpuCmdFirst) {
-        self._webGpuCmdFirst = true;
-        postStatus(
-          `webgpu-cmd-ring: first CLEAR replayed (rgba=${lastClear.r.toFixed(2)},` +
-          `${lastClear.g.toFixed(2)},${lastClear.b.toFixed(2)}) — bridge proven`
-        );
-      }
-    } catch (e) {
-      if (!self._webGpuCmdErr) {
-        self._webGpuCmdErr = true;
-        postStatus(`webgpu-cmd-ring replay error: ${e?.message || e}`);
-      }
-    }
-  }
-
-  if (lastDrawTest) {
-    const pipe = webGpuObjects.pipelines.get(lastDrawTest.pipelineId);
-    if (pipe) {
-      try {
-        const gpu = renderGpu;
-        const view = gpu.context.getCurrentTexture().createView();
-        const enc = gpu.device.createCommandEncoder({ label: "webgpu-cmd-draw" });
-        const pass = enc.beginRenderPass({
-          colorAttachments: [{
-            view,
-            clearValue: { r: 0.02, g: 0.02, b: 0.05, a: 1 },
-            loadOp: "clear",
-            storeOp: "store"
-          }]
-        });
-        pass.setPipeline(pipe);
-        pass.draw(lastDrawTest.vertexCount, 1, 0, 0);
-        pass.end();
-        gpu.device.queue.submit([enc.finish()]);
-        if (!self._webGpuDrawFirst) {
-          self._webGpuDrawFirst = true;
-          console.log(
-            `[webgpu-cmd-pipeline] first DRAW replayed (pipeline=` +
-            `${lastDrawTest.pipelineId} verts=${lastDrawTest.vertexCount}) ` +
-            `— GPU pipeline path proven`
-          );
-        }
-      } catch (e) {
-        if (!self._webGpuDrawErr) {
-          self._webGpuDrawErr = true;
-          console.log(`[webgpu-cmd-pipeline] DRAW replay error: ${e?.message || e}`);
-        }
-      }
-    }
-  }
 }
 
 // Day-29: build a real GPURenderPipeline from a bridge-translated
@@ -3209,7 +3409,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
 
   const desc = {
     label: `dolphin-pcfg-${pipelineId}`,
-    layout: "auto",
+    layout: getFixedLayouts().pipelineLayout,
     vertex: {
       module: vs,
       buffers: attrCount > 0

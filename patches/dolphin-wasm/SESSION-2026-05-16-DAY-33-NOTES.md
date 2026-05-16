@@ -311,3 +311,49 @@ layout; mirror that:
 
 This remaining block is the documented multi-session grind; every
 unknown is now a known mechanical fix-loop, no research left.
+
+## CUTOVER LANDED — hardware path live (Day-33 Phase C)
+
+The full block shipped in one coherent build + flip, then ground with
+the probe (user: "build the full block, then flip & iterate" →
+"continue until we retire the software delegation").
+
+`SupportsUtilityDrawing()`→true; `CreateTexture/CreateStagingTexture/
+CreateFramebuffer` return WebGPU classes; `VideoBackend::Initialize`
+uses the **hardware** `InitializeShared` (generic HardwareEFBInterface
++ TextureCacheBase) with `WebGPU::VertexManager` — `SWVertexLoader/
+Clipper::Init/Rasterizer::Init/SWEFBInterface/SW::TextureCache` are
+gone (SWBoundingBox kept as the CPU bbox). `WebGPUGfx` records the
+full AbstractGfx surface (SetPipeline/SetFramebuffer*/SetViewport/
+SetScissorRect/SetTexture/Draw/DrawIndexed/BindBackbuffer/
+PresentBackbuffer) + UBO upload + 3 fixed bind groups. Consumer is a
+sequential opcode executor with explicit fixed bind-group layouts
+(group0 UBO b0-3, group1 tex b0-7 + sampler b8, group2 ssbo b0;
+replaces layout:"auto").
+
+Probe-driven grind so far (each = one construct, rebuild, reprobe):
+1. **Upload 4-alignment** — `queue.writeBuffer` needs offset & size
+   ≡0 mod 4; VertexManager now 4-aligns the index region + rounds
+   upload lengths (vertex stride is already 4-aligned). Consumer
+   defensively rounds too. → the only blocking exec error cleared.
+2. **Bind-group explosion** — was 3 new GPUBindGroups *per draw*
+   (1.7M/run). group0(UBO)+group2(ssbo) reference fixed buffers →
+   built once & reused; group1(tex+sampler) rebuilt only when the
+   bound set changes (FNV sig). 1.7M→218k, missBg 43k→24k.
+
+Telemetry (`[webgpu-exec] stats`): emulator runs 100% speed;
+`beginFbN≈8k` EFB passes + `drawIdx≈650k` indexed draws per 50s —
+**EFB rendering executes**; one `beginFb0`/present (backbuffer blit).
+Zero exec/bind-group/validation errors. But canvas = 2 distinct
+hashes (static green): the green is the **EFB clear colour** showing
+through — the GX geometry draws execute into the EFB but don't produce
+visible geometry yet (classic first-light backend bring-up: transforms
+/UBO/state not yet pixel-correct). One pcfg still fails (1/65: a
+utility shader uses a group-1 binding outside the fixed sampler
+layout).
+
+State: `?video=wgpu` is fully off the Software rasteriser and on the
+remote WebGPU hardware renderer end-to-end; the remaining grind is
+render-correctness (why EFB draws don't yield visible geometry) +
+the bind-group LRU + the 1 utility-shader layout. `?video=webgpu`
+hybrid remains a separate untouched shipping path.
