@@ -2076,6 +2076,18 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
   if (!context) {
     throw new Error("OffscreenCanvas could not create a WebGPU context");
   }
+  // Day-33 Phase C: configure the context up-front. Pre-cutover only
+  // drawFrameBytesToWebGpu configured it (on the first XFB frame);
+  // post-cutover that legacy path is dead, so the cmd-ring executor's
+  // backbuffer pass (renderGpu.context.getCurrentTexture()) would
+  // throw "context not configured" — silently swallowed, leaving the
+  // visible canvas unpainted (the green). Idempotent re-configure
+  // elsewhere is fine.
+  try {
+    context.configure({ device, format, alphaMode: "opaque" });
+  } catch (e) {
+    postStatus(`WebGPU context.configure failed: ${e?.message || e}`);
+  }
   const state = {
     bindGroup: null,
     bindGroupLayout,

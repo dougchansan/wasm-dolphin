@@ -470,3 +470,33 @@ or (b) after SUBMIT_PRESENT, push the rendered backbuffer through
 the same presentFrame/ImageBitmap mechanism the legacy path used.
 All GPU rendering itself is now validation-clean; this is plumbing,
 not correctness.
+
+### Present-surface investigation (precise next step)
+
+Added `context.configure({device,format,alphaMode:"opaque"})` in
+`createWebGpuPresenter` (pre-cutover only `drawFrameBytesToWebGpu`
+configured it, on first XFB — dead post-cutover). Correct fix, but
+canvas still green / 2 hashes, no errors. The canvas IS
+`transferControlToOffscreen`'d (core-host.js:134 →
+UpstreamWorkerAdapter). So the open question is **which worker owns
+the transferred visible canvas vs where `renderGpu`
+(createWebGpuPresenter) actually runs**. The discio-worker comment
+(top of upstream-discio-worker.js) says WebGPU objects aren't
+shareable across workers — there is a video pthread AND the discio
+worker. Pre-cutover the wgpu canvas updated because the SW hybrid
+fed `webgpu-show-image` → `drawFrameBytesToWebGpu` → renderGpu.context
+(which therefore WAS visible). Post-cutover that's gone and the
+cmd-ring backbuffer pass renders to renderGpu.context but the magenta
+clear never appears — so either renderGpu's canvas is not the
+transferred/composited one for the `WebGPU-Real` (`?video=wgpu`)
+path, or a second worker holds the visible OffscreenCanvas.
+
+Next session: trace the canvas hand-off for videoBackend
+"WebGPU-Real" specifically (core-host.js / UpstreamWorkerAdapter /
+which worker setupSoftwarePresenter's `canvas` arrives in), and
+either (a) ensure the discio worker's renderGpu uses the transferred
+visible OffscreenCanvas, or (b) post the cmd-ring's finished frame to
+whatever owns it (mirror the legacy presentFrame/ImageBitmap hop).
+This is the *only* thing between "validation-clean hardware frames"
+and "visible GameCube content". Then: bind-group LRU, the 1/65
+utility-shader layout, and the smoothness/comp-play pass (task 8).
