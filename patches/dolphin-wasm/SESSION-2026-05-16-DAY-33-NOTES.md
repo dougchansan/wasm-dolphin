@@ -635,3 +635,53 @@ LRU / resource-lifetime issue (was task 4) now on the critical path,
 plus geometry/UBO correctness (task 3). Next grind: why GX draws don't
 appear — bind-group/resource lifetime first (it gates whether draws
 even have correct uniforms/textures), then transform/UBO.
+
+### 4. Ring overflow was real (not the visual blocker) — fixed
+
+Added `[webgpu-ring] DROPPED` telemetry to `WebGPUCommandStream::Push`.
+Probe: the ring overflowed massively (50k+ records dropped) the moment
+Melee burst-loads textures (`tex` 62→241 around present 480-600).
+Dropping a record permanently loses a resource/state op → the
+consumer's `missBg/missPipe` ratchet up forever (geometry never lands).
+
+Three fixes, each probe-verified:
+- **Producer bind-group-1 sig→id cache** (`WebGPUGfx`, direct-mapped
+  1024): the old single-last-sig slot re-emitted `CREATE_BIND_GROUP`
+  whenever consecutive draws used different texture sets (Melee cycles
+  many/frame). Result: consumer `bg` count **135k → ~4k** (≈40×
+  fewer builds).
+- **Ring 4096 → 65536** records (2 MB; trivial) for burst slack.
+- **Bounded backpressure** in `Push`: instead of silently dropping
+  when full, spin a *bounded* (~500k iters) wait on the consumer's
+  read index — the consumer is a separate worker draining
+  continuously, so space frees in microseconds; correctness over the
+  Day-27 no-stall policy (smoothness is task 8). Small cap so that if
+  `api.runFrame()` (same JS thread as the drain) is itself the thing
+  blocked, it degrades to a drop instead of freezing emulation.
+  Result: **DROPPED 50000+ → 1 total**, speed still ~102% (no
+  deadlock), `missBg` ~14× lower.
+
+**But the canvas is still a uniform field (`distinct=1`).** So the
+ring/bind-group churn was a genuine defect (now fixed) yet NOT why
+geometry is invisible. The present chain demonstrably runs (fb=47
+XFB-copy + fb=0 backbuffer each pipeOk=1/bgOk=3/draw=1), EFB clears,
+~250k indexed GX draws execute into fb=14 — but produce no visible
+pixels. Residual `missBg`≈1.7% / `missPipe`≈2.4% now has a *different*
+cause (replayCreateBindGroup early-returns when a referenced texture
+isn't in the map yet) — minor, not a whole-screen-uniform cause.
+
+### 5. Next: geometry not landing (transform/depth + present scale)
+
+The uniform colour = the game's GX clear (ClearRegion ARGB). Geometry
+draws execute but don't appear. Suspects, in order:
+- **Present/XFB scale mismatch**: fb=47 XFB is **2560×1024**, fb=0
+  backbuffer **320×240**, UI canvas 640×480. The EFB→XFB copy and
+  XFB→backbuffer blit viewport/UV may sample a uniform (clear) region
+  of the oversized XFB — would show only the clear colour even with a
+  fully-rendered EFB. (Overlaps task 2's black-left-margin sub-rect.)
+- **Transform/UBO / depth**: vertices clipped/depth-rejected (the
+  classic first-light cause) — verify only after the present scale is
+  ruled in/out, since a bad present would hide correct EFB geometry.
+The decisive next probe: dump the EFB (fb=14) directly to the
+backbuffer (bypass XFB) — geometry visible ⇒ present-chain bug;
+still uniform ⇒ EFB-content (transform/depth) bug.
