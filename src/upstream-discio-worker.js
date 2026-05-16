@@ -3134,8 +3134,19 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
           const e0 = errs[0];
           console.log(
             `[webgpu-cmd-shader] first WGSL compile error (id=${id} stage=${stage}) ` +
-            `L${e0.lineNum}:${e0.linePos} ${String(e0.message).slice(0, 160)}`
+            `L${e0.lineNum}:${e0.linePos} ${String(e0.message).slice(0, 220)}`
           );
+          // Day-31: dump the offending WGSL so we can see the
+          // cyclic-function pattern Naga emitted. Cap to keep the log
+          // sane; include line numbers for cross-ref with the error.
+          try {
+            const lines = String(wgsl).split("\n");
+            const dump = lines
+              .map((ln, i) => `${i + 1}: ${ln}`)
+              .join("\n")
+              .slice(0, 6000);
+            console.log(`[webgpu-cmd-wgsl] id=${id} (${lines.length} lines):\n${dump}`);
+          } catch (e) { /* best-effort */ }
         }
       }
     }).catch(() => { webGpuObjects.shaderFail += 1; });

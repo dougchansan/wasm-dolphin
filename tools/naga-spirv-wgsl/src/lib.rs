@@ -115,11 +115,31 @@ fn chain(prefix: &str, e: &(dyn std::error::Error)) -> String {
     s
 }
 
+// WGSL keyword / reserved / context-dependent names that Naga's WGSL
+// backend Namer fails to escape when it auto-derives function names
+// from debug-stripped SPIR-V. Concretely it emits `fn function(... :
+// ptr<function, T>)`, and Chrome's stricter resolver reads the
+// `function` identifier against the `function` address space →
+// "cyclic dependency 'function' -> 'function'". We avoid the whole
+// class by giving every helper function an explicit, collision-proof
+// name before the WGSL backend runs (the backend keeps provided
+// names, only auto-generating for `None`). Entry points are named
+// from OpEntryPoint (survives debug stripping) so they're left alone.
+fn sanitize_function_names(module: &mut naga::Module) {
+    let mut idx: u32 = 0;
+    for (_h, f) in module.functions.iter_mut() {
+        f.name = Some(format!("dolphin_fn_{idx}"));
+        idx += 1;
+    }
+}
+
 fn translate(words: &[u32]) -> Result<String, String> {
     let options = naga::front::spv::Options::default();
-    let module = naga::front::spv::Frontend::new(words.iter().copied(), &options)
+    let mut module = naga::front::spv::Frontend::new(words.iter().copied(), &options)
         .parse()
         .map_err(|e| chain("spv-frontend", &e))?;
+
+    sanitize_function_names(&mut module);
 
     // The WGSL backend needs validation info. Allow the full
     // capability set — Dolphin emits a wide range of features and we
