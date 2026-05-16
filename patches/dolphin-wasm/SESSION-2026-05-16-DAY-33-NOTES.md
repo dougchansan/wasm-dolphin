@@ -235,3 +235,79 @@ nailed down for step 3/A4):
   (+ `.dirty`), upload `sizeof(*Constants)` (ConstantManager.h).
 - Auto layout: build bind groups from
   `pipeline.getBindGroupLayout(group)`.
+
+### A3 step 2b landed (producer resources, still dormant)
+
+`WebGPU::VertexManager` no longer overrides `DrawCurrentBatch` — draw
+recording is centralised in `WebGPUGfx::DrawIndexed` (it owns
+pipeline/framebuffer/texture/UBO state); VM exposes
+`GetVertexBufferId()/GetIndexBufferId()` and the base
+`DrawCurrentBatch → g_gfx->DrawIndexed` path is used. `WebGPUTexture`
+gains a bridge id: ctor emits `CREATE_TEXTURE` (format via
+`MapTexFormat`, usage COPY_SRC|DST|TEXTURE_BINDING|RENDER_ATTACHMENT),
+`Load()` emits `UPLOAD_TEXTURE`. Still dormant — `CreateTexture`
+returns `SWTexture`, `SupportsUtilityDrawing()` false → WebGPUTexture/
+VertexManager never instantiated, no opcodes emitted. Compile-verified,
+no regression. Checkpoint committed.
+
+### Remaining: Step 3 + A4 + A5 + C (the grind — exact design)
+
+This is the part that only gets a probe signal post-flip. Decisive
+design decision after analysis: **use explicit fixed bind-group
+layouts, NOT `layout:"auto"`.** With auto layout a bind group must
+match exactly the bindings the shader uses (varies per TEV config) —
+unmanageable. Dolphin's real backends use one fixed descriptor-set
+layout; mirror that:
+
+- Consumer builds 3 fixed `GPUBindGroupLayout`s once:
+  - group 0 (uniforms): b0 PSBlock, b1 VSBlock, b2 CustomShaderBlock,
+    b3 GSBlock — all `buffer:{type:"uniform"}`, visibility
+    VERTEX|FRAGMENT.
+  - group 1 (samplers): b0..7 `texture:{sampleType:"float",
+    viewDimension:"2d-array"}`, b8 `sampler:{type:"filtering"}`,
+    visibility FRAGMENT.
+  - group 2 (ssbo): b0 `buffer:{type:"storage"}`, visibility FRAGMENT.
+  Make one `GPUPipelineLayout` from the 3; pass it as `layout` in
+  `replayCreatePipelineCfg` (drop `"auto"`). Naga-translated WGSL
+  declares a subset of these bindings — explicit layout may declare
+  bindings the shader omits (allowed); the reverse is not.
+- Producer (`WebGPUGfx::DrawIndexed`, centralised): ensure pass open
+  (BEGIN_PASS recorded by SetFramebuffer); upload the 3 GX UBOs from
+  `system.Get*ShaderManager().constants` when `.dirty`
+  (`PushCreateBuffer` once UNIFORM|COPY_DST, `PushUploadBuffer` each
+  frame); assemble 3 `CREATE_BIND_GROUP` blobs (always all bindings —
+  dummy 1x1 texture / 16-byte buffer / shared sampler for absent
+  resources, so groups are uniform) + `SET_BIND_GROUP` 0/1/2;
+  `PushSetPipeline` (pipeline id from
+  `static_cast<WebGPUPipeline*>(m_current_pipeline_object)`);
+  `PushSetVertexBuffer/IndexBuffer` from the VM ids;
+  `PushSetViewport/Scissor` (re-emit after each BEGIN_PASS — WebGPU
+  resets pass state); `PushDrawIndexed`.
+- WebGPUGfx overrides to add: `SetPipeline`, `SetFramebuffer/
+  SetAndDiscard/SetAndClearFramebuffer` (end-prev + BEGIN_PASS with
+  color/depth ids from `WebGPUTexture::GetBridgeId()` of the
+  framebuffer attachments; fbId 0 = backbuffer), `BindBackbuffer`
+  (BEGIN_PASS fbId 0), `PresentBackbuffer` (END_PASS + SUBMIT_PRESENT),
+  `SetViewport`, `SetScissorRect`, `SetTexture` (cache id[8]),
+  `SetSamplerState` (cache → one shared sampler), `DrawIndexed`/`Draw`.
+- Consumer executor: replace the coalesced drain with a **sequential**
+  executor — maintain `encoder`/`pass`; BEGIN_PASS → (end prev)
+  beginRenderPass on EFB color+depth GPUTexture (or canvas for fbId 0)
+  with loadOp/clear; SET_* on the pass; CREATE/UPLOAD_* via
+  `device.queue` (order-safe, FIFO); END_PASS → pass.end();
+  SUBMIT_PRESENT → queue.submit. Keep the old Clear/DrawTest coalesced
+  path for the pre-flip test (unused post-flip).
+- C (flip, same commit as the executor going live): `WebGPUGfx::
+  SupportsUtilityDrawing()`→true; `CreateTexture/CreateStagingTexture/
+  CreateFramebuffer` return WebGPU classes; in `WebGPU::VideoBackend::
+  Initialize` swap `SWVertexLoader`→`std::make_unique<WebGPU::
+  VertexManager>()`, drop `Clipper::Init/Rasterizer::Init/
+  SWBoundingBox/SWEFBInterface/SW::TextureCache` (use the existing
+  `WebGPUEFBInterface`, `PerfQueryBase`, a real bbox). Then **probe →
+  one construct → fix**, repeatedly (expected: bind-group/layout
+  mismatches, UBO std140 sizes, EFB depth format, coordinate Y-flip,
+  XFB present). `?video=webgpu` hybrid stays a separate untouched path
+  throughout.
+
+This remaining block is the documented multi-session grind; every
+unknown is now a known mechanical fix-loop, no research left.
