@@ -745,3 +745,50 @@ PositionMatrix=1 uint4, Color=?, TexCoord0=8 — and format/offset must
 mirror the real PortableVertexDeclaration, skipping disabled attrs).
 Fix that mapping → vertices transform correctly → first geometry.
 All DIAG flags/log sites are gated constants; flip off when done.
+
+### 8. Elimination matrix complete — bug is the translated VS / clip-space
+
+Continued the probe→one-construct method. Each item below was
+probe-verified and is NOT the cause (all DIAG gated, committed off):
+
+| Checked | Method | Result |
+|---|---|---|
+| Present chain | EFB→canvas bypass | raw EFB itself is uniform black |
+| VS UBO data (CPU) | `[webgpu-DIAG-vs]` @corrected offsets | valid steady-state (proj 2.235/3.707, real pnm) |
+| VS UBO data (GPU) | `[webgpu-DIAG-ub]` consumer writeBuffer dump, periodic | id=55 (VS UBO, len=4112) receives valid pnm+proj@128 — GPU buffer is correct |
+| Vertex data | `[webgpu-DIAG-vtx]` + `[webgpu-DIAG-ub]` id=66 | sane positions (27.5,-22.5,-1.0) uploaded |
+| Shader/pcfg interface | `[webgpu-DIAG-wgsl]`+`[-attr]` correlated by vsId | VS `@location` sets match pcfg attrs (WebGPU vec3→vec4 default covers w=1); VSBlock @group(0)@binding(1) ✓ |
+| Depth | `DIAG_DEPTH_ALWAYS` (depthCompare always) | still black |
+| Cull / scissor | `DIAG_RASTER_OPEN` (cullMode none + skip scissor) | still black |
+
+**Everything feeding the GPU vertex stage is verified correct, and
+depth/cull/scissor are ruled out, yet the EFB receives zero geometry
+pixels.** The remaining cause is therefore inside the **Naga-translated
+GX vertex shader itself** — either the translated transform math is
+wrong (clip position degenerate despite correct UBO+attributes) or a
+**clip-space convention mismatch** (Vulkan-dialect shadergen output vs
+WebGPU NDC: the VS does `gl_Position.y = -gl_Position.y` Y-flips and a
+Vulkan depth-range assumption; if the net convention is off every
+primitive lands outside the clip volume → nothing rasterised, which
+looks exactly like this uniform-black-with-everything-else-correct).
+
+Exact next step (no research, mechanical):
+1. Dump a full GX VS body (`[webgpu-DIAG-wgsl]` already has the
+   machinery — widen the slice) and trace how `@builtin(position)` is
+   computed from the position attribute + `global` (VSBlock): confirm
+   the projection multiply and the Y/Z/W handling.
+2. Decisive isolation: in the consumer, for GX pipelines, substitute a
+   trivial hand-written passthrough VS (clip = vec4(pos.xy*k, 0, 1),
+   no UBO) for one probe. Geometry appears ⇒ the translated VS math is
+   the bug (fix in the Naga path / shadergen Vulkan gating); still
+   black ⇒ vertex *fetch* binding (arrayStride/offset at draw time)
+   despite correct buffer contents.
+3. If clip-space: compare the WebGPU-needed convention to Dolphin's
+   Vulkan backend (it sets a negative-height viewport / depth range
+   that the cmd-ring executor's `setViewport` must replicate; the
+   shadergen Y-flip then composes correctly). The `vp=0,0,640,480,0,1`
+   we send may need the Vulkan-style flip the real VK backend applies.
+
+This is the documented multi-session first-light bring-up; the cause
+is now boxed to one component (translated VS / clip-space) with the
+entire rest of the pipeline proven correct and instrumented.

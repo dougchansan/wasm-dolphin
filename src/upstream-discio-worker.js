@@ -3189,6 +3189,11 @@ const DIAG_EFB_TO_CANVAS = false;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;
+// DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
+// primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
+// it was rasterization state (cull/scissor); still black ⇒ VS math /
+// vertex fetch / clip-space.
+const DIAG_RASTER_OPEN = false;
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
@@ -3304,8 +3309,27 @@ function drainWebGpuCmdRing() {
             // writeBuffer requires offset & size multiples of 4
             // (producer already aligns; round len defensively).
             const len = (u32[recWord + 4] + 3) & ~3;
+            const srcP = u32[recWord + 3];
+            // DIAG one-shot per buffer id: dump what we actually write.
+            // The VS UBO is the big one; floats @byte32=posnormalmatrix,
+            // @byte128=projection. Zeros here ⇒ upload path broken;
+            // valid ⇒ the GPU UBO is fine and the bug is VS exec /
+            // vertex fetch.
+            const bid = u32[recWord + 1];
+            self._wgUbN = (self._wgUbN || 0) + 1;
+            // First few + periodic so steady-state UBO uploads are
+            // visible (one-shot only caught the pre-SetConstants zero).
+            if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
+              const ff = new Float32Array(moduleInstance.HEAPU8.buffer,
+                                          srcP, Math.min(len, 160) >>> 2);
+              console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
+                `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
+                `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
+                `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
+                `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
+            }
             q.writeBuffer(buf, u32[recWord + 2] & ~3,
-                          heapCopy(u32[recWord + 3], len));
+                          heapCopy(srcP, len));
           }
           break;
         }
@@ -3469,7 +3493,7 @@ function drainWebGpuCmdRing() {
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
-          if (pass && passW > 0) {
+          if (pass && passW > 0 && !DIAG_RASTER_OPEN) {
             let sx = u32[recWord + 1], sy = u32[recWord + 2];
             let sw = u32[recWord + 3], sh = u32[recWord + 4];
             if (sx > passW) sx = passW;
@@ -3753,7 +3777,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     });
   }
 
-  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 3) {
+  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 24) {
     console.log(`[webgpu-DIAG-attr] pcfg id=${pipelineId} vs=${vsId} fs=${fsId} ` +
       `stride=${stride} attrCount=${attrCount} ` +
       attributes.map((a) => `L${a.shaderLocation}:${a.format}@${a.offset}`).join(" "));
@@ -3795,7 +3819,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     primitive: {
       topology: TOPO[topology] || "triangle-list",
       frontFace: "ccw",
-      cullMode: CULL[cullCode] || "none"
+      cullMode: DIAG_RASTER_OPEN ? "none" : (CULL[cullCode] || "none")
     },
     multisample: { count: 1 }
   };
@@ -3930,21 +3954,18 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
   // can be checked against the producer's group0 layout + pcfg vertex
   // attributes (the suspected black-EFB cause: shader-interface
   // mismatch).
-  if (!self._wgWgslN) self._wgWgslN = {};
-  // Dump the first big vertex shader (GX geometry VS — has vertex
-  // @location inputs + the VSBlock UBO), not the tiny utility/blit VS.
-  const wantDump = (stage === 0 && wgsl.length > 2500 &&
-                    (self._wgWgslN[0] = (self._wgWgslN[0] || 0) + 1) <= 2) ||
-                   (stage === 2 && wgsl.length > 2500 &&
-                    (self._wgWgslN[2] = (self._wgWgslN[2] || 0) + 1) <= 1);
-  if (wantDump) {
-    const vi = wgsl.indexOf("@vertex");
-    const fi = wgsl.indexOf("@fragment");
-    const mi = stage === 0 ? vi : fi;
-    const head = wgsl.slice(0, 900);
-    const around = mi >= 0 ? wgsl.slice(Math.max(0, mi - 700), mi + 700) : "(no entry)";
-    console.log(`[webgpu-DIAG-wgsl] stage=${stage} id=${id} len=${wgsl.length}\n` +
-      `--HEAD--\n${head}\n--ENTRY--\n${around}`);
+  // Compact interface map: for every distinct vertex shader, log just
+  // its `fn main(...)` signature (the @location inputs). Correlate
+  // shader id ↔ [webgpu-DIAG-attr]'s pcfg vs=<id> attrs to find the
+  // vertex-attribute interface mismatch.
+  if (stage === 0 && (self._wgWgslN = (self._wgWgslN || 0) + 1) <= 24) {
+    const mi = wgsl.indexOf("fn main(");
+    let sig = "(no main)";
+    if (mi >= 0) {
+      const end = wgsl.indexOf("{", mi);
+      sig = wgsl.slice(mi, end >= 0 ? end : mi + 240).replace(/\s+/g, " ");
+    }
+    console.log(`[webgpu-DIAG-wgsl] vs id=${id} len=${wgsl.length} ${sig}`);
   }
 
   let module;
