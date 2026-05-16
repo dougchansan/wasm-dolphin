@@ -44,4 +44,47 @@ behavior is identical.
 Verified: build OK (`[6/6] linked`, only the pre-existing unused
 `m_device` warning); probe `?video=wgpu` → 64/64 shaders, pipeline 22
 built, `first DRAW replayed`, zero errors, Melee CSS renders — matches
-baseline. Checkpoint committed.
+baseline. Checkpoint committed (`f9cdc32`).
+
+## A2 — AbstractPipelineConfig → real GPURenderPipeline
+
+User decision: enum mapping lives **producer-side** (C++ pre-maps every
+Dolphin pipeline-state enum to numeric WebGPU codes; consumer just
+indexes). Decisive factor: `BlendingState::ApproximateLogicOpWithBlending()`
+(DESIGN-required LogicOp handling) is a C++ method, and it matches the
+already-established usage/format wire convention.
+
+`WebGPUGfx.cpp`: `SerializePipelineConfig` emits a `'WPL3'` blob —
+topology/strip-index, cull (+All flag), depth test/write/compare,
+FB color+depth formats, blend (logic-op approximated on a local copy
+per DESIGN), write-mask, and the vertex layout mirroring
+`VKVertexFormat::MapAttributes` **exactly** (single binding 0,
+`ShaderAttrib` locations, `VarToWgpuVertexFormat` ≅ `VarToVkFormat`).
+`CreatePipeline` ships it via `PushCreatePipelineCfg`; `WebGPUPipeline`
+carries the consumer pipeline id. Draw path unchanged this increment
+(still the proven `DrawTest`) so it's behavior-preserving and measures
+build coverage like the shader-coverage method.
+
+`upstream-discio-worker.js`: `replayCreatePipelineCfg` parses the blob,
+builds a real `GPURenderPipeline` (real blend/depth/raster/vertex
+layout; `layout:"auto"` until A4 adds bind groups), defers if shader
+modules not yet built, validation-scoped, coverage-counted.
+
+Verified `?video=wgpu`: **64 real pipeline configs build OK, 9 FAIL,
+0 defer**; 64/64 shaders; test `DrawTest` still replays; 41 distinct
+hashes; Melee CSS renders — no regression. Checkpoint committed.
+
+### Next construct (probe-surfaced, the A2→A3 blocker)
+
+The 9 failures are one systematic cause:
+
+    [webgpu-pcfg] build FAIL id=48: Attribute base type
+    (Uint for VertexFormat::Uint8x4) does not match the shader's
+    base type (Float) in location (1)
+
+Location 1 = `ShaderAttrib::PositionMatrix` (posmtx). When
+`decl.posmtx.integer` is set we emit `uint8x4` (Uint base), but the
+Naga-translated WGSL VS declares that input as `Float`. WebGPU's
+vertex base-type match is strict (Vulkan is lax). This is the next
+single-construct fix and is load-bearing for A3 (real vertex buffers
++ draw) — pursue before/with A3.

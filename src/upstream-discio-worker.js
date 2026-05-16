@@ -2949,6 +2949,11 @@ function drainWebGpuCmdRing() {
       // [4]=topology
       replayCreatePipeline(u32[recWord + 1], u32[recWord + 2],
                            u32[recWord + 3], u32[recWord + 4]);
+    } else if (op === WGPU_CMD_OP_CREATE_PIPELINE_CFG) {
+      // Day-33 A2: build a real GPURenderPipeline from the serialized
+      // AbstractPipelineConfig blob. arg: [1]=id [2]=blobPtr [3]=blobLen
+      replayCreatePipelineCfg(u32[recWord + 1], u32[recWord + 2],
+                              u32[recWord + 3]);
     } else if (op === WGPU_CMD_OP_DRAW_TEST) {
       // arg: [1]=pipelineId [2]=vertexCount. Coalesce: one draw per
       // tick (producer emits one per frame).
@@ -3084,6 +3089,184 @@ function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
     if (!self._webGpuPipeErr) {
       self._webGpuPipeErr = true;
       console.log(`[webgpu-cmd-pipeline] createRenderPipeline threw: ${e?.message || e}`);
+    }
+  }
+}
+
+// Day-33 A2: consumer-side WebGPU enum tables. The producer pre-maps
+// every Dolphin pipeline-state enum to these numeric codes (see
+// SerializePipelineConfig), so this side never reasons about GameCube
+// semantics — it just indexes.
+const WGPU_VERTEX_FORMAT = [
+  "float32", "float32x2", "float32x3", "float32x4",
+  "uint8x2", "uint8x4", "sint8x2", "sint8x4",
+  "unorm8x2", "unorm8x4", "snorm8x2", "snorm8x4",
+  "uint16x2", "uint16x4", "sint16x2", "sint16x4",
+  "unorm16x2", "unorm16x4", "snorm16x2", "snorm16x4"
+];
+const WGPU_COMPARE = [
+  "never", "less", "equal", "less-equal",
+  "greater", "not-equal", "greater-equal", "always"
+];
+const WGPU_BLEND_FACTOR = [
+  "zero", "one", "src", "one-minus-src",
+  "src-alpha", "one-minus-src-alpha", "dst", "one-minus-dst",
+  "dst-alpha", "one-minus-dst-alpha"
+];
+const WGPU_BLEND_OP = ["add", "subtract", "reverse-subtract"];
+
+const webGpuPcfg = { ok: 0, fail: 0, defer: 0 };
+
+// Day-33 A2: build a real GPURenderPipeline from the serialized
+// AbstractPipelineConfig blob (replaces the Day-32 layout:"auto" +
+// test-FS proof with Dolphin's real blend/depth/raster/vertex state).
+// Bind-group layout is still derived (layout:"auto") — explicit
+// layouts + vertex/uniform buffers land in A3/A4; this increment
+// measures real-pipeline build coverage. One-shot per pipeline id.
+function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
+  if (!renderGpu || !blobPtr || !blobLen ||
+      webGpuObjects.pipelines.has(pipelineId)) {
+    return;
+  }
+  const u = new Uint32Array(moduleInstance.HEAPU8.buffer, blobPtr,
+                            blobLen >>> 2);
+  if (u[0] !== 0x57504c33) {  // 'WPL3'
+    if (!self._webGpuPcfgMagic) {
+      self._webGpuPcfgMagic = true;
+      console.log(`[webgpu-pcfg] bad magic 0x${u[0].toString(16)} id=${pipelineId}`);
+    }
+    return;
+  }
+  const vsId = u[1], fsId = u[2];
+  const vs = webGpuObjects.shaders.get(vsId);
+  const fs = webGpuObjects.shaders.get(fsId);
+  if (!vs || !fs) {
+    // FIFO guarantees CreateShader drained first; modules build
+    // synchronously at drain, so a miss is rare. Defer this frame.
+    webGpuPcfg.defer += 1;
+    if (!self._webGpuPcfgDefer) {
+      self._webGpuPcfgDefer = true;
+      console.log(
+        `[webgpu-pcfg] defer id=${pipelineId} vs ${vsId}=${vs ? 1 : 0} ` +
+        `fs ${fsId}=${fs ? 1 : 0}`
+      );
+    }
+    return;
+  }
+
+  const topology = u[3];
+  const stripIdxFmt = u[4];
+  const cullCode = u[5];
+  const depthTest = u[7];
+  const depthWrite = u[8];
+  const depthCompare = u[9];
+  const hasDepth = u[10];
+  const depthFmt = u[11];
+  const colorFmt = u[12];
+  const blendEnable = u[13];
+  const writeMask = u[14];
+  const colorOp = u[15];
+  const srcF = u[16];
+  const dstF = u[17];
+  const alphaOp = u[18];
+  const srcFA = u[19];
+  const dstFA = u[20];
+  const stride = u[24];
+  const attrCount = u[25];
+
+  const attributes = [];
+  for (let i = 0; i < attrCount; i++) {
+    const base = 26 + i * 3;
+    attributes.push({
+      shaderLocation: u[base],
+      format: WGPU_VERTEX_FORMAT[u[base + 1]] || "float32x4",
+      offset: u[base + 2]
+    });
+  }
+
+  const TOPO = ["point-list", "line-list", "triangle-list",
+                "triangle-strip"];
+  const CULL = ["none", "back", "front"];
+
+  const target = {
+    format: colorFmt === 1 ? "bgra8unorm" : "rgba8unorm",
+    writeMask: writeMask
+  };
+  if (blendEnable) {
+    target.blend = {
+      color: {
+        srcFactor: WGPU_BLEND_FACTOR[srcF] || "one",
+        dstFactor: WGPU_BLEND_FACTOR[dstF] || "zero",
+        operation: WGPU_BLEND_OP[colorOp] || "add"
+      },
+      alpha: {
+        srcFactor: WGPU_BLEND_FACTOR[srcFA] || "one",
+        dstFactor: WGPU_BLEND_FACTOR[dstFA] || "zero",
+        operation: WGPU_BLEND_OP[alphaOp] || "add"
+      }
+    };
+  }
+
+  const desc = {
+    label: `dolphin-pcfg-${pipelineId}`,
+    layout: "auto",
+    vertex: {
+      module: vs,
+      buffers: attrCount > 0
+        ? [{ arrayStride: stride, stepMode: "vertex", attributes }]
+        : []
+    },
+    fragment: { module: fs, targets: [target] },
+    primitive: {
+      topology: TOPO[topology] || "triangle-list",
+      frontFace: "ccw",
+      cullMode: CULL[cullCode] || "none"
+    },
+    multisample: { count: 1 }
+  };
+  if (topology === 3 && stripIdxFmt === 1) {
+    desc.primitive.stripIndexFormat = "uint16";
+  }
+  if (hasDepth) {
+    desc.depthStencil = {
+      format: depthFmt === 1 ? "depth32float" : "depth24plus",
+      depthWriteEnabled: !!depthWrite,
+      depthCompare: depthTest ? (WGPU_COMPARE[depthCompare] || "always")
+                              : "always"
+    };
+  }
+
+  try {
+    renderGpu.device.pushErrorScope("validation");
+    const pipe = renderGpu.device.createRenderPipeline(desc);
+    renderGpu.device.popErrorScope().then((err) => {
+      if (err) {
+        webGpuPcfg.fail += 1;
+        if (!self._webGpuPcfgFirstErr) {
+          self._webGpuPcfgFirstErr = true;
+          console.log(
+            `[webgpu-pcfg] first build FAIL id=${pipelineId} ` +
+            `(vs=${vsId} fs=${fsId} attrs=${attrCount} blend=${blendEnable} ` +
+            `depth=${hasDepth}): ${String(err.message).slice(0, 260)}`
+          );
+        }
+      } else {
+        webGpuObjects.pipelines.set(pipelineId, pipe);
+        webGpuPcfg.ok += 1;
+        if (webGpuPcfg.ok <= 3 || webGpuPcfg.ok % 64 === 0) {
+          console.log(
+            `[webgpu-pcfg] real pipeline ${pipelineId} built OK ` +
+            `[ok=${webGpuPcfg.ok} fail=${webGpuPcfg.fail} defer=${webGpuPcfg.defer}] ` +
+            `(attrs=${attrCount} stride=${stride} blend=${blendEnable} depth=${hasDepth})`
+          );
+        }
+      }
+    }).catch(() => {});
+  } catch (e) {
+    webGpuPcfg.fail += 1;
+    if (!self._webGpuPcfgThrew) {
+      self._webGpuPcfgThrew = true;
+      console.log(`[webgpu-pcfg] createRenderPipeline threw id=${pipelineId}: ${e?.message || e}`);
     }
   }
 }
