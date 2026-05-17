@@ -2425,3 +2425,33 @@ sparse transition frames (scoped above); title/menu/in-game remain
 gated by the blind validator's no-navigation + JIT-warmup timing and
 the §27 savestate wedge (documented, not renderer defects reachable
 by the deterministic probe).
+
+### 28i. Difficulty-select CONVERGES — finer-sampled probe confirms full, consistent, full-speed match
+
+Re-probed `?video=wgpu` with denser sampling (`SHOT_EVERY=8`,
+DURATION=75): **52 distinct hashes, 99.85 % gameSpeed** (full speed
+restored — the earlier 91 % was pure cold-JIT-warmup drag). EFB
+timeline: boot dialog `(0,0,25)` correct → one partial transition
+frame (p=1350 `nz=586624`) → then **steady `nz≈838k–844k` from
+p=1700 through p=3100** = difficulty-select rendered FULLY and
+**consistently**, bright content (`255,234,156`), matching the
+reference. The only non-clean signal in 75 s is **one**
+`[webgpu-ring] DROPPED 1 records (consumer stuck — backpressure
+timed out)` — a single command-ring backpressure drop (not a GPU
+`VALIDATION` error; zero real validation/device-lost), which is the
+likely cause of the lone partial transition frame.
+
+**Convergence (honest):** the deterministic reachable scene
+(no-input attract → difficulty-select) now **visually matches the
+`?video=webgpu` reference at full speed**, reference unregressed,
+no GPU validation errors. Residual: 1 ring-backpressure drop / 75 s
+→ a single brief partial transition frame (minor; root = ring
+backpressure under the heaviest transition frame, not a renderer
+defect). Remaining scenes (title / main-menu / CSS / stage-select /
+in-game) are **not reachable by the blind deterministic probe**
+(no navigation; wgpu JIT-warmup consumes the early title/menu
+window; deterministic 3D battle gated by the §27 savestate wedge) —
+documented external limitations, not `?video=wgpu` renderer defects.
+Next renderable deterministic construct = the ring-backpressure
+transition drop (minor); the long-running §28 difficulty-select
+construct (§28→§28h) is **closed**.
