@@ -870,3 +870,38 @@ place):
 `?video=webgpu` hybrid remains untouched. The decisive architectural
 unknowns are now all retired — the WebGPU hardware renderer draws real
 GameCube geometry; the rest is the documented fidelity fix-loop.
+
+### 11. Fidelity grind: textures verified good — bug is TEV/PS/texcoord
+
+Instrumented the texture path (`[webgpu-DIAG-bg1]` bind-group texture
+ids, `[webgpu-DIAG-ut]` upload content). Findings:
+
+- Group-1 binds **real game textures**, correct sizes/format
+  (rgba8unorm): e.g. tex#101 32×32, tex#72 512×128 (a white-glyph
+  font/text atlas, px=255,255,255,0), tex#73 88×88, EFB tex#14
+  640×528; unused slots = the 1×1 magenta dummy (tex#58). Sampler ok.
+- Uploaded pixel content is **real and non-zero** (nz 24–77% of
+  sampled bytes) — the Load→`UPLOAD_TEXTURE`→`writeTexture` path works.
+- So texture creation/binding/content are all CORRECT. Black textured
+  geometry is therefore **downstream**: TEV combiner math /
+  PixelShaderConstants (`m_ubo_ps`) / texcoord generation / alpha
+  test. Consistent with the screenshot (the white font-atlas text
+  *does* render — that TEV path works — while textured 3D/backgrounds
+  don't).
+- ⚠ Strong lead: **tex#69 is a 640×480 texture filled solid green
+  `(0,135,0)`** and is bound at **b1 in almost every group-1 bind
+  group**. That is the recurring "green" — likely an EFB-copy / XFB
+  intermediate that is being (a) produced green instead of the EFB
+  contents, and/or (b) TEV-combined into every draw, darkening/black-
+  ing them and being what the broken normal present shows. Tracing
+  why tex#69 is uniform green (its CREATE/render path — is it an
+  EFBCopy target that our pipeline renders nothing into, or the XFB?)
+  is the highest-value next construct for BOTH the textured-black and
+  the green-present symptoms.
+
+Next-construct order: (1) tex#69 — what writes it, why green; (2) PS
+UBO / TEV constants for a known-black draw; (3) texcoord (tex matrix
+in VSBlock member_9 / the `@location(8)` texcoord path). Passive
+`[webgpu-DIAG-bg1|ut|...]` logs are committed (capped one-shots) for
+this grind; behavior-altering DIAG flags stay off (except the interim
+`DIAG_EFB_TO_CANVAS` present).

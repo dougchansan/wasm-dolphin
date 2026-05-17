@@ -2998,6 +2998,23 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
   const group = u[1], count = u[2];
   const layouts = getFixedLayouts();
   const layout = group === 0 ? layouts.l0 : group === 1 ? layouts.l1 : layouts.l2;
+  // DIAG one-shot: for the first few group-1 (texture+sampler) bind
+  // groups, dump each binding's resId and whether that texture exists
+  // / its format+size. Reveals if textured GX draws sample the 1×1
+  // dummy or a never-built id (→ black) vs real game textures.
+  if (group === 1 && (self._wgBg1N = (self._wgBg1N || 0) + 1) <= 10) {
+    let s = `[webgpu-DIAG-bg1] id=${id} count=${count}`;
+    for (let i = 0; i < count; i++) {
+      const b = u[3 + i * 5], k = u[3 + i * 5 + 1], r = u[3 + i * 5 + 2];
+      if (k === 1) {
+        const t = webGpuObjects.textures.get(r);
+        s += ` b${b}:tex#${r}=${t ? `${t.format} ${t.tex.width}x${t.tex.height}` : "MISSING"}`;
+      } else if (k === 2) {
+        s += ` b${b}:samp#${r}=${webGpuObjects.samplers.get(r) ? "ok" : "MISSING"}`;
+      }
+    }
+    console.log(s);
+  }
   const entries = [];
   for (let i = 0; i < count; i++) {
     const base = 3 + i * 5;
@@ -3354,6 +3371,23 @@ function drainWebGpuCmdRing() {
           if (t && !t.format.startsWith("depth") && uz < t.layers) {
             const src = u32[recWord + 2], bpr = u32[recWord + 3];
             const w = u32[recWord + 4], h = u32[recWord + 5];
+            // DIAG one-shot per tex id: confirm uploaded pixels aren't
+            // all-zero (→ black sampling). Dumps first 4 RGBA texels.
+            self._wgUtN = self._wgUtN || {};
+            const tid = u32[recWord + 1];
+            if (!self._wgUtN[tid] &&
+                (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
+              self._wgUtN[tid] = true;
+              const px = new Uint8Array(moduleInstance.HEAPU8.buffer, src,
+                                        Math.min(bpr * h, 16));
+              let nz = 0;
+              const chk = new Uint8Array(moduleInstance.HEAPU8.buffer, src,
+                                         Math.min(bpr * h, 4096));
+              for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
+              console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
+                `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
+                `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
+            }
             q.writeTexture(
               { texture: t.tex, mipLevel: u32[recWord + 6],
                 origin: { x: 0, y: 0, z: uz } },
