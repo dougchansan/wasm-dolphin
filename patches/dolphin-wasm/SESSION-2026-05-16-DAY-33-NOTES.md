@@ -2329,3 +2329,62 @@ elimination* increment (JS-only probes; `?video=webgpu` /
 hypotheses conclusively disproven this arc; construct localised to a
 single mechanism (per-draw vertex-colour fetch). Renderer full speed.
 The boulder continues on the scoped vertex-colour probe.
+
+### 28g. ★★ ROOT CAUSE FOUND & FIXED: back/front cull + reversed winding (VS Y-flip) — difficulty-select now RENDERS FULLY
+
+Abandoned the vertex-colour hypothesis (it was the *symptom* of an
+even earlier reject) and bisected the pipeline raster state with the
+existing revertible JS toggles (no rebuild — served live):
+
+1. **`DIAG_DEPTH_ALWAYS=true`** (force depthCompare "always"):
+   difficulty-select **still black** (`tex#14 nz=9697`). ⇒ depth-test
+   rejection DISPROVEN (also kills the §28c reversed-Z/viewport-swap
+   theory as the cause of the black).
+2. **`DIAG_RASTER_OPEN=true`** (skip scissor + cull "none"):
+   difficulty-select **RENDERS FULLY** — `tex#14 nz≈844337/1351680`,
+   bright content (`255,234,156`), distinct hashes 9→**52**,
+   screenshot = the complete roster/trophy grid + "VERY EASY" +
+   yellow selector arrows + red LEVEL box, matching the
+   `?video=webgpu` reference. ⇒ the cause is **rasterisation state**.
+3. **`DIAG_CULL_NONE_ONLY=true`** (cull "none" but KEEP scissor):
+   still renders fully (`nz≈844132`, 32 distinct). ⇒ **scissor is
+   innocent; back/front CULL is the bug.**
+
+**Root cause:** Dolphin's GX vertex shader negates clip-space Y
+(VertexShaderGen Y-flip, visible in the §28e VS dump as
+`global_5.member.y = -(global_5.member.y)`). Negating Y **reverses
+triangle winding**. The WebGPU pipeline hard-coded
+`frontFace: "ccw"`, so every Dolphin-driven back/front cull removed
+exactly the geometry that should be visible. 2D UI / boot / text use
+GX cull-off (`cullMode "none"`) so they were unaffected and rendered
+all along — which is precisely why boot was correct but the
+cull-enabled difficulty-select roster/scene was 100 % black, and why
+five upstream hypotheses (fog/uniform/konst/texdim/feedback) all
+dead-ended: the fragments were culled before they ever shaded.
+
+**Fix (smallest gated, 1 line):** in `replayCreatePipelineCfg`
+(`src/upstream-discio-worker.js`) `frontFace: "ccw"` → `"cw"` to
+compensate for the VS Y-flip; real `CULL[cullCode]` culling restored
+(diagnostic toggles reverted to false). JS-only — dev server serves
+it live, **no core rebuild**.
+
+**Probe-verified (`?video=wgpu`, no-input attract → difficulty-select):**
+`tex#14` difficulty-select `nz≈833353-845248` (was 9697),
+**distinct hashes 9 → 43**, screenshot renders the FULL
+difficulty-select (roster grid, character portraits, VERY EASY +
+yellow arrows, red LEVEL box) — matches the `?video=webgpu`
+reference. Boot GameCube dialog **unregressed** (`tex#14` p=650/1000
+still `(0,0,25)` uniform, text intact). Renderer still fast (post-JIT
+steady state; the 91 % avg was dragged by the cold-JIT warmup window
+in this run). No `VALIDATION`/DROPPED.
+
+**Status (honest, ralph):** ★ first **rendering** win of the §28 arc
+(not just observability): the long-running difficulty-select-black
+construct (§28→§28f) is RESOLVED by a correct, minimal, gated fix.
+`?video=webgpu` never-break check pending in this same checkpoint
+(frontFace lives only in the `?video=wgpu` pcfg path; the hybrid uses
+the SW renderer + WGSL presenter and does not traverse
+`replayCreatePipelineCfg`, so no regression expected — verifying
+anyway). `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+Next: confirm reference intact, commit, then continue scene-by-scene
+(title / main menu / CSS / stage-select) against the reference.

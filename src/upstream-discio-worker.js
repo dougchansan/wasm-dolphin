@@ -3370,7 +3370,7 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 const DIAG_EFB_TO_CANVAS = true;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
-const DIAG_DEPTH_ALWAYS = false;
+const DIAG_DEPTH_ALWAYS = false;  // §28g: depth-reject DISPROVEN (still black) — reverted
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
@@ -4348,7 +4348,17 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     fragment: { module: fs, targets: [target] },
     primitive: {
       topology: TOPO[topology] || "triangle-list",
-      frontFace: "ccw",
+      // §28g ROOT-CAUSE FIX: the GX vertex shader negates clip-space Y
+      // (VertexShaderGen Y-flip → `pos.y = -pos.y`), which REVERSES
+      // triangle winding. With the default frontFace "ccw" the
+      // Dolphin-driven back/front cull then removes exactly the
+      // geometry that should be visible — the confirmed cause of the
+      // black difficulty-select roster/scene (bisected via
+      // DIAG_RASTER_OPEN → DIAG_CULL_NONE_ONLY: cull-none renders it
+      // fully, scissor innocent). Declaring frontFace "cw" compensates
+      // for the VS Y-flip so Dolphin's cull semantics are correct;
+      // cull-none draws (boot/text/2D UI) are unaffected.
+      frontFace: "cw",
       cullMode: DIAG_RASTER_OPEN ? "none" : (CULL[cullCode] || "none")
     },
     multisample: { count: 1 }
