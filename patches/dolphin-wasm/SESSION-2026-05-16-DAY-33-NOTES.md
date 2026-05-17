@@ -905,3 +905,61 @@ in VSBlock member_9 / the `@location(8)` texcoord path). Passive
 `[webgpu-DIAG-bg1|ut|...]` logs are committed (capped one-shots) for
 this grind; behavior-altering DIAG flags stay off (except the interim
 `DIAG_EFB_TO_CANVAS` present).
+
+### 12. ★ CONCLUSIVE ROOT CAUSE: EFB-copy-to-RAM is stubbed ★
+
+`[webgpu-DIAG-rt]` (logs every texture id ever used as a render
+target) over a full run reports **only two**:
+
+    render-target tex#14 640x528 rgba8unorm depth=15   (the EFB)
+    render-target tex#47 2560x1024 bgra8unorm depth=0  (XFB blit)
+
+So **tex#69 (640×480, uploaded solid green 0,135,0, bound at b1 in
+nearly every group-1 bind group) is NEVER a render target** — it is
+only ever `UPLOAD_TEXTURE`'d, i.e. `WebGPUTexture::Load()`'d from
+emulated GameCube RAM. The game does an EFB-copy expecting the
+rendered framebuffer to be encoded into RAM (its XFB / an EFB-copy
+texture), then samples/présents it from RAM. Our backend never writes
+EFB content back to RAM — `WebGPUStagingTexture::CopyFromTexture/
+CopyToTexture` are no-op stubs and there is no EFB→RAM texture
+encoder/readback — so that RAM stays at its stale init value, decoded
+as the uniform green tex#69.
+
+**This one stub is the root cause of BOTH open symptoms:**
+- the green *normal present* (the game presents its XFB, read from
+  the stale-green RAM), and
+- *textured-black geometry* (draws sample tex#69 = green XFB-from-RAM
+  at b1; TEV combines green×asset → wrong/dark/black). The font-atlas
+  text renders because it doesn't depend on the EFB-copy RAM texture.
+
+The interim `DIAG_EFB_TO_CANVAS` present works precisely because it
+bypasses the RAM round-trip and shows the GPU EFB directly.
+
+#### The real remaining work (design, not research)
+
+Implement EFB-copy-to-RAM so `WebGPUTexture::Load()` of an XFB/EFB-
+copy gets real pixels:
+- Dolphin calls `TextureCacheBase::CopyEFB` / staging
+  `CopyFromTexture` for EFB→texture and EFB→XFB(RAM). Provide a real
+  path: GPU-read the EFB texture region back and write it into
+  emulated RAM at the copy address (and/or keep an EFB-copy GPU
+  texture and have the cmd-ring sample it instead of the RAM texture).
+- Architectural crux (the reason this is the hard part): readback is
+  GPU→CPU and async, but the producer (`WebGPUStagingTexture`) runs on
+  the video **pthread** with no device/event loop; the GPU+
+  `mapAsync` live on the **discio worker**. Needs a cmd-ring
+  request→async-`copyTextureToBuffer`+`mapAsync`→write-into-shared-
+  heap→signal path (mirrors the existing ring; same single-
+  producer/consumer model). An EFB-copy is typically consumed a frame
+  later, so a 1–2 frame readback latency is acceptable (ring it).
+- Simplification worth trying first: many EFB-copies are immediately
+  re-sampled as a *texture* (not needed in CPU RAM). Intercept
+  `TextureCache` EFB-copy so the cmd-ring keeps the EFB-copy as a GPU
+  texture and binds THAT for the matching `SetTexture`, skipping the
+  RAM round-trip entirely (only true XFB→RAM / CPU-read cases need the
+  full readback). That likely fixes most of Melee's visuals without
+  the async-readback machinery.
+
+Everything else (geometry, transforms, UBOs, pipelines, bind groups,
+present-to-canvas) is proven correct and instrumented. This stub is
+the last big construct between "real geometry" and "correct Melee".

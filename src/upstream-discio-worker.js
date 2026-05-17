@@ -3434,6 +3434,16 @@ function drainWebGpuCmdRing() {
             passW = ct.tex.width;
             passH = ct.tex.height;
             passColorFmt = ct.format;
+            // DIAG: which texture ids are ever render targets (+size).
+            // Cross-ref with tex#69 (640x480 green, sampled at b1
+            // everywhere): if 640x480 ids never appear here, they're
+            // pure XFB-from-RAM ⇒ EFB-copy-to-RAM (staging) is stubbed.
+            self._wgRT = self._wgRT || {};
+            if (!self._wgRT[fbId]) {
+              self._wgRT[fbId] = true;
+              console.log(`[webgpu-DIAG-rt] render-target tex#${fbId} ` +
+                `${ct.tex.width}x${ct.tex.height} ${ct.format} depth=${depthId}`);
+            }
           }
           passDepthFmt = (depthId && webGpuObjects.textures.get(depthId))
             ? webGpuObjects.textures.get(depthId).format : null;
