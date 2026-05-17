@@ -2840,6 +2840,11 @@ const WGPU_CMD_OP_CREATE_PIPELINE = 3;
 const WGPU_CMD_OP_DRAW_TEST = 4;
 // Phase A (Day-33): full AbstractGfx opcode set. Wire form fixed by
 // DESIGN-webgpu-command-protocol; consumer handlers land per-increment.
+// §16: reused scratch for SET_BIND_GROUP dynamic offsets so the
+// per-draw hot path (~1.5M calls/run) allocates nothing — a fresh
+// array here stalled the consumer → ring backpressure → JIT
+// catastrophic. Non-shared so no engine rejects it (cf. TextDecoder).
+const WGPU_DYN_OFF_SCRATCH = new Uint32Array(4);
 const WGPU_CMD_OP_CREATE_BUFFER = 5;
 const WGPU_CMD_OP_UPLOAD_BUFFER = 6;
 const WGPU_CMD_OP_CREATE_TEXTURE = 7;
@@ -2933,10 +2938,14 @@ function getFixedLayouts() {
   if (renderGpu._fixedLayouts) return renderGpu._fixedLayouts;
   const dev = renderGpu.device;
   const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
+  // §16: the 4 group-0 UBOs are dynamic-offset — one bind group over
+  // the per-draw uniform ring, the draw's slice selected by the offsets
+  // on SET_BIND_GROUP. Fixes every draw seeing only the last upload.
   const l0 = dev.createBindGroupLayout({
     label: "dolphin-bg0-ubo",
     entries: [0, 1, 2, 3].map((b) => ({
-      binding: b, visibility: VF, buffer: { type: "uniform" }
+      binding: b, visibility: VF,
+      buffer: { type: "uniform", hasDynamicOffset: true }
     }))
   });
   // GX pixel path (Day-30 split): texture2DArray tex_0..7 at b0-7 +
@@ -3033,7 +3042,14 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     } else {
       const b = webGpuObjects.buffers.get(resId);
       if (!b) return;
-      entries.push({ binding, resource: { buffer: b } });
+      // §16: group-0 UBO entries carry a class-size window (blob size
+      // field); the per-draw byte offset is a *dynamic* offset applied
+      // at setBindGroup, so the entry itself is {offset:0,size}. size==0
+      // (e.g. the bbox SSBO) ⇒ bind the whole buffer as before.
+      const bsz = u[base + 4];
+      entries.push({ binding, resource: bsz
+        ? { buffer: b, offset: u[base + 3], size: bsz }
+        : { buffer: b } });
     }
   }
   // The fixed group-1 layout declares b0-7 (texture) + b8-15 (sampler)
@@ -3560,7 +3576,21 @@ function drainWebGpuCmdRing() {
               self._wgCopyTargets && self._wgCopyTargets.has(passFbId)) {
             self._wgCpySrc = self._wgBgTex[bgId];
           }
-          if (pass && bg) { pass.setBindGroup(u32[recWord + 1], bg); webGpuExecStats.setBg++; pd.bgOk++; }
+          if (pass && bg) {
+            // §16: arg.u[2]=nDynOff, u[3..6]=per-draw ring offsets
+            // (group0 has 4 dynamic-offset UBO bindings; groups 1/2: 0).
+            const nOff = u32[recWord + 3];
+            if (nOff) {
+              for (let k = 0; k < nOff; k++)
+                WGPU_DYN_OFF_SCRATCH[k] = u32[recWord + 4 + k];
+              // Zero-alloc overload: (slot, bg, data, dataStart, dataLen)
+              pass.setBindGroup(u32[recWord + 1], bg,
+                                WGPU_DYN_OFF_SCRATCH, 0, nOff);
+            } else {
+              pass.setBindGroup(u32[recWord + 1], bg);
+            }
+            webGpuExecStats.setBg++; pd.bgOk++;
+          }
           else { webGpuExecStats.missBg++; pd.bgMiss++; }
           break;
         }

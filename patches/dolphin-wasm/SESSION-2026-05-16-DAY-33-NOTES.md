@@ -1167,3 +1167,48 @@ still renders, 99 % speed, distinct≈12) + all passive
 `DIAG_EFB_TO_CANVAS` present unchanged; `?video=webgpu` hybrid
 untouched. Best continued with fresh context — the design above is
 mechanical, no research left.
+
+### 17. ★ §16 construct LANDED & PROBE-VERIFIED: per-draw uniform ring ★
+
+Implemented the §16 design end-to-end and it works.
+
+- **Producer** (`WebGPUGfx`): one 32 MB persistent uniform ring
+  (`m_ubo_ring`). `AllocUboSlice` bump-allocates a 256-aligned 8 KiB
+  slice (`kUboSliceStride`, ≥ the largest UBO class —
+  VertexShaderConstants ~4112) per **dirty** constant set, copies via
+  the upload arena, returns the byte offset. PS/VS/GS slices reused
+  while their manager is clean (upload rate unchanged from the old
+  dirty model); `UploadUtilityUniforms` takes its own slice. Bind
+  group 0 is built **once** over the ring with per-binding class sizes;
+  the m_ubo_ps/vs/gs/util single buffers and the m_bg0_util variant are
+  gone. Each draw emits 4 dynamic offsets `[b0,vs,b0,gs]`
+  (b0 = util slice in util mode else PS slice) on `SET_BIND_GROUP(0)`.
+- **Protocol**: `PushSetBindGroup(slot,bg,offsets,n)` packs
+  `arg.u[2]=n, u[3..6]=offsets` (spare `CmdRecord` slots; ≤4 fit).
+- **Consumer**: `l0` UBO entries `hasDynamicOffset:true`; group-0
+  bind-group entries `{buffer,offset:0,size}` from the blob size field
+  (size 0 ⇒ whole buffer, e.g. the bbox SSBO); `SET_BIND_GROUP` reads
+  the offsets and uses the **zero-alloc** `pass.setBindGroup(slot,bg,
+  data,start,len)` overload with a reused `Uint32Array(4)` scratch.
+
+**Probe-verified (build 15:43, JS hot-path fix on top):**
+`[webgpu-DIAG-cpy]` EFB-copy targets went **opaque-black →
+populated** (`ctr 0,0,0,255` → `255,255,255,255`). The difficulty
+screen now renders **"VERY EASY" in BLUE** — i.e. per-draw TEV/PS
+*colour* constants are correct (the old single-buffer build clobbered
+them to the last draw → black). 104–109 % speed, **JIT on**, no
+`VALIDATION`, `?video=webgpu` untouched.
+
+Perf gotcha (fixed, do not regress): the consumer `SET_BIND_GROUP`
+hot path runs ~1.5 M×/run; a fresh offsets array per call stalled the
+consumer → ring backpressure → the WASM-JIT **catastrophic** guard
+tripped (speed collapsed 99 % → ~30 %, frame ~976 vs ~1900). Switching
+to the zero-alloc `setBindGroup(...,data,start,len)` overload with a
+module-level reused `Uint32Array` restored full speed. Any future
+per-draw consumer work must stay allocation-free.
+
+State: the conclusive §16 root cause is **fixed and committed**;
+colour-correct TEV text + populated EFB copies at full speed, no
+regression. Residual: full scene/background fidelity (the menu still
+isn't pixel-complete) — the next per-draw grind, now on a correct
+uniform foundation. Interim `DIAG_EFB_TO_CANVAS` present unchanged.
