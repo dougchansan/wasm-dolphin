@@ -2160,3 +2160,40 @@ regression on all reachable content (text/UI/full-speed), so it is
 committed as a forward step with this caveat recorded. §28 JS probes
 kept (gated/one-shot, passive). `?video=webgpu` / `DIAG_EFB_TO_CANVAS`
 / per-draw ring / §26 guard untouched.
+
+### 28d. ★ Invariant verified (shipping hybrid intact) + reference established + remaining gap scoped
+
+Regression-checked the **shipping `?video=webgpu`** Software→WGSL
+hybrid after the §28c shared shadergen/cap change: **64 distinct
+frames / 71 samples, 99.9 % gameSpeed, 60 coreFps — it renders
+Melee's difficulty-select FULLY and correctly** (top roster/trophy
+grid, "VERY EASY" + yellow selector arrows, LEVEL indicator, red
+content box, proper background). **§28c did NOT regress the shipping
+path** — the never-break invariant holds (`InitBackendInfo` only
+affects the `?video=wgpu` backend; the hybrid uses the SW renderer +
+WGSL presenter).
+
+This also yields the **visual reference** for the same screen. Gap
+(`?video=wgpu` hardware renderer vs the hybrid reference) on
+difficulty-select:
+- ✅ now renders: "VERY EASY" (blue, sharp), selection box outline,
+  cursor-dot row, full speed.
+- ❌ still missing: the **top roster/trophy icon grid**, the **yellow
+  selector arrows**, the **red box content**, exact text styling.
+
+So §28c closed the fog-depth class (untextured fogged geometry now
+participates); the remaining difficulty-select elements are a
+**continued per-element fidelity grind** (additional textured/TEV
+draws still absent/black — candidate: EFB-copy feedback chain seeded
+black, or more per-material fog/TEV constructs). Reachable +
+deterministic (no-input parks here) + full-speed, pixel reference in
+hand — the clean continuation point.
+
+**Session status (honest):** renderer = **full speed**, shipping
+hybrid **intact**, hardware path renders menus/text/dialogs +
+(input-reached) 3D + now more of difficulty-select after the §28c
+depth/fog fix. "All scenes perfectly" remains a continued
+per-element fidelity grind; deterministic 3D-battle verification is
+still gated by the §27 savestate core wedge (pinned, deferred). All
+progress committed (`1c3bfd1 → §28d`); next construct scoped above +
+reference captured.
