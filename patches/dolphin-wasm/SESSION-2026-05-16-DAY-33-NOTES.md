@@ -2388,3 +2388,40 @@ the SW renderer + WGSL presenter and does not traverse
 anyway). `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
 Next: confirm reference intact, commit, then continue scene-by-scene
 (title / main menu / CSS / stage-select) against the reference.
+
+### 28h. Post-fix scene survey — difficulty-select STEADY frames match reference; residual = sparse TRANSITION frames
+
+Surveyed the post-§28g `?video=wgpu` run (43 distinct hashes) against
+the `?video=webgpu` reference (63 distinct, 99.89 % gameSpeed,
+unregressed) frame-by-frame:
+
+- **Steady difficulty-select frames** (t=50, t=62, t=69): render
+  **FULLY and correctly** — roster/trophy grid, character portraits,
+  "VERY EASY" + yellow selector arrows, red LEVEL box, blue Melee
+  background — visually matching the reference. ✓
+- **Boot GameCube dialog**: correct, unregressed. ✓
+- **Early frames (t≤~28)**: `?video=wgpu` is still in JIT-warmup
+  (cold-start, canvas black) while the reference — SW renderer, no
+  equivalent warmup — already shows title/menu. This is a
+  validator-timeline/JIT-warmup *timing artifact* (the fixed input
+  schedule drives navigation during wgpu's warmup), not a renderer
+  defect: the deterministic no-input park (difficulty-select) renders
+  correctly.
+- **Residual construct:** brief **post-input transition frames**
+  (t=57/58, right after the validator's Enter at t=56) render
+  **sparse** in wgpu (scattered triangle fragments + the yellow
+  selector-oval *outline* only) while the reference shows the full
+  screen. The steady frames immediately before/after (t=50/62/69) are
+  full. ⇒ a transition/animation-frame fidelity issue (candidate: the
+  EFB-copy ping-pong that builds the animated menu is mid-rebuild on
+  those frames, or a subset of transition draws still
+  culled/dropped). Lower severity than the resolved §28g black; the
+  primary deterministic scene now matches.
+
+**Status (honest, ralph):** §28 core construct RESOLVED & verified
+(steady difficulty-select matches reference, reference unregressed,
+committed `ec01bfe`). The boulder continues: next construct =
+sparse transition frames (scoped above); title/menu/in-game remain
+gated by the blind validator's no-navigation + JIT-warmup timing and
+the §27 savestate wedge (documented, not renderer defects reachable
+by the deterministic probe).
