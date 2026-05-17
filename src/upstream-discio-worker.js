@@ -3375,7 +3375,7 @@ const DIAG_DEPTH_ALWAYS = false;  // §28g: depth-reject DISPROVEN (still black)
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
 // vertex fetch / clip-space.
-const DIAG_RASTER_OPEN = false;
+const DIAG_RASTER_OPEN = false;  // §28k: cull DISPROVEN for intro/title/menu
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
@@ -3485,6 +3485,27 @@ function drainWebGpuCmdRing() {
         `bgOk=${pd.bgOk} bgMiss=${pd.bgMiss} draw=${pd.draw} ` +
         `drawIdx=${pd.drawIdx} ${passColorFmt}/${passDepthFmt} ` +
         `${passW}x${passH}`);
+    }
+    // §28k: where do intro-cutscene / title / main-menu draws go?
+    // Those screens render BLACK with zero draws into tex#14 (the EFB
+    // pass). Tally per-fbId draw totals over the run and dump the full
+    // map periodically so we can see whether they target a different
+    // FB / copy target instead of the depth-attached EFB.
+    if (pd.draw + pd.drawIdx > 0) {
+      self._wgFbDraws = self._wgFbDraws || {};
+      const fk = passFbId === 0 ? "fb0" : "fb" + passFbId;
+      const e = self._wgFbDraws[fk] || { d: 0, passes: 0, efb: 0 };
+      e.d += pd.draw + pd.drawIdx; e.passes += 1;
+      if (passFbId === self._wgEfbColorId) e.efb = 1;
+      self._wgFbDraws[fk] = e;
+    }
+    self._wgFbDumpN = (self._wgFbDumpN || 0) + 1;
+    if ((self._wgFbDumpN % 600) === 0) {
+      const rows = Object.entries(self._wgFbDraws || {})
+        .map(([k, v]) => `${k}${v.efb ? "*EFB" : ""}=${v.d}/${v.passes}p`)
+        .join(" ");
+      console.log(`[s28k-fbdraws] p=${webGpuExecStats.present} ` +
+        `efbId=${self._wgEfbColorId} ${rows}`);
     }
     passFbId = -1;
     pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };

@@ -2505,3 +2505,55 @@ draws go — different FB id? ShowImage fallback? — instrument
 BEGIN_PASS fb-ids + draw targets across p≈300-1314 vs the
 `?video=webgpu` reference for the same screens). `?video=webgpu` /
 `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+
+### 28k. ★ Title / main-menu / cutscene black ROOT-CAUSED: present path blits the RAW EFB, which is stale for screens not redrawn every frame
+
+Confirmed the construct is REAL (not loading, not warmup, not cull):
+- `?video=webgpu` reference at t=15 (`12-t15-down-x.png`) renders the
+  **Melee Main Menu fully** ("Main Menu / 1-P Mode / VS. Mode /
+  Trophies / Options / Data / Solo Smash", blue bg). `?video=wgpu`
+  at the same point: EFB `tex#14 nz=0` → BLACK. Matches the user's
+  "main menu isn't rendering" + cutscene flashing.
+- `DIAG_RASTER_OPEN=true` (cull none + no scissor) does **NOT**
+  un-black the title/menu window (still `nz=0` at p=1000) ⇒ NOT a
+  cull/winding issue (distinct from the §28g difficulty-select fix,
+  which stands).
+- Only ONE depth-attached RT ever exists (`tex#14`,
+  `[webgpu-DIAG-rt]`), so it's not "renders to a different EFB".
+- `[webgpu-DIAG-efbpass]` in the menu window: `drawIdx=1`/sparse;
+  `tex#14 nz=0`. Difficulty-select: `drawIdx≈244`/frame, `nz≈844k`.
+
+**Root cause:** the present path (`SUBMIT_PRESENT` →
+`DIAG_EFB_TO_CANVAS`) blits the **raw live EFB `tex#14`** to the
+canvas every frame. Melee redraws the EFB every frame only for
+**animated** screens (difficulty-select → EFB always fresh → the
+EFB-blit shows it). For **static** screens (title, main menu,
+between cutscene keyframes) Melee renders the screen once, copies
+EFB→XFB, then re-presents the XFB for many frames **without
+redrawing the EFB**; our raw-EFB blit then samples a cleared/empty
+EFB → black, and the user sees "mostly black, occasional flash"
+(the flashes = the rare frames Melee does touch the EFB). This is
+exactly the PLAN's Phase-C "present the XFB to the canvas" gap;
+`DIAG_EFB_TO_CANVAS` was always an interim shortcut.
+
+**Fix design (next iteration — contained, gated, low-risk):**
+maintain a persistent `_wgEfbSnapshot` GPUTexture (640×528
+rgba8unorm). When an EFB colour pass ends with `drawIdx+draw > 0`
+(real content this frame), render `tex#14 → _wgEfbSnapshot` via the
+existing blit pipeline; on `SUBMIT_PRESENT` blit **`_wgEfbSnapshot`**
+(the most-recent rendered EFB) instead of the live EFB. Animated
+screens: snapshot refreshes every frame ⇒ identical to today (no
+difficulty-select regression). Static screens: snapshot holds the
+last rendered menu/title ⇒ no longer black. Fallback to live-EFB
+blit until the first snapshot. Verify difficulty-select unchanged +
+title/menu now render + `?video=webgpu` unregressed; commit.
+
+**Status (honest, ralph):** §28g difficulty-select fix stands; §28j
+guard + correction committed; §28k now CONCLUSIVELY root-caused via
+direct reference comparison (main menu proven rendering in the
+reference, black in wgpu) — it is a present-path (raw-EFB vs XFB)
+limitation, fix designed above. Reverted the `DIAG_RASTER_OPEN`
+bisection toggle; kept the `[s28k-fbdraws]` probe + the §28j
+`bgValid` poison-guard (both correct, gated, harmless). `?video=webgpu`
+/ per-draw ring / §26 guard untouched. The boulder continues on the
+snapshot-present fix.
