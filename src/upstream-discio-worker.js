@@ -3009,6 +3009,13 @@ const WGPU_TEX_FORMAT = [
   "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
   "rgb10a2unorm"
 ];
+// §26: formats compatible with the fixed group-1 texture layout
+// (sampleType:"float", filterable). Anything else bound there —
+// r32float (EFB depth, unfilterable-float), r16uint (uint), depth* —
+// is a validation error that poisons the whole frame submit.
+const FILTERABLE_TEX_FORMATS = new Set([
+  "rgba8unorm", "bgra8unorm", "rgba16float", "rgb10a2unorm"
+]);
 
 // Explicit fixed bind-group layouts mirroring the Day-22 translator
 // SHADER_HEADER: group0 = UBOs b0..3, group1 = textures b0..7 +
@@ -3113,8 +3120,21 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
       if (binding === 0 && srcTexId < 0) srcTexId = resId;
       const t = webGpuObjects.textures.get(resId);
       if (!t) return;  // resource not ready — skip this frame
-      entries.push({ binding, resource: t.view2dArray ||
-        (t.view2dArray = t.tex.createView({ dimension: "2d-array" })) });
+      // §26: the fixed group-1 layout declares sampleType:"float"
+      // (filterable). Binding a non-filterable / non-float texture
+      // (the battle samples the EFB DEPTH as r32float; also uint /
+      // depth formats) is a WebGPU validation error that poisons the
+      // WHOLE frame's submit → black battle. Substitute the filterable
+      // rgba8unorm dummy so the bind group stays layout-valid and the
+      // frame renders (the one depth-sample effect is lost, not the
+      // scene). Filterable-float formats l1 accepts:
+      const FILTERABLE = FILTERABLE_TEX_FORMATS;
+      if (!FILTERABLE.has(t.format)) {
+        entries.push({ binding, resource: getFixedLayouts().dummyTexView });
+      } else {
+        entries.push({ binding, resource: t.view2dArray ||
+          (t.view2dArray = t.tex.createView({ dimension: "2d-array" })) });
+      }
     } else if (kind === 2) {
       const s = webGpuObjects.samplers.get(resId);
       if (!s) return;

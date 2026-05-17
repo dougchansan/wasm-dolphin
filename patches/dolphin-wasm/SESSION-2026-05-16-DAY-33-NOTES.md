@@ -1539,3 +1539,38 @@ constructs for the next session (deterministic now — just
 `?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched. The deterministic
 observability tool the grind needed now exists and works; the battle
 black-after-load is the precise, well-scoped next construct.
+
+### 26. Battle-black: validation-poison guard fixed (real bug) — but root cause is savestate-load backend desync
+
+Probed the deterministic repro (`LoadStateFile
+.omx/savestates/battle-state.sav`, `rc=1`). Found a real frame-poison
+bug: **`VALIDATION: ... [Texture 640x528 R32Float] ... expected
+sample types (Float)`** — the battle samples the **EFB depth**
+(r32float; Melee Z-texture/depth effects) but the fixed group-1
+layout declares `sampleType:"float"` (filterable). r32float is
+`unfilterable-float` in WebGPU → bind-group/pipeline invalid → "one
+bad GPU op poisons the whole frame submit" → black. Menus don't
+sample depth, hence they render. **Fixed (§26):** in
+`replayCreateBindGroup`, any group-1 texture whose format isn't in
+`FILTERABLE_TEX_FORMATS` (rgba8unorm/bgra8unorm/rgba16float/
+rgb10a2unorm) is substituted with the filterable rgba8unorm
+`dummyTexView`, so the bind group stays layout-valid and the frame is
+not poisoned (the single depth-sample effect is lost, not the scene).
+No `VALIDATION` after the fix; menus/pre-load frames unchanged (no
+regression — normal GX draws sample rgba8unorm).
+
+**But the battle STILL renders black & static post-load** (frame
+counter advances, 72 % speed, zero new distinct hashes for the whole
+post-load window). So §26 removed a genuine poison but is **not** the
+battle-black root cause. This **confirms §25's primary hypothesis**:
+`State::Load` swaps all GC RAM + BP/XF/CP video registers in one shot,
+but the remote command-ring backend's state is pre-load stale —
+producer (`WebGPUGfx`) id allocators + `m_bg*`/`m_ubo_ring`/shadow
+caches, consumer `webGpuObjects`/pipe caches, and the
+`DIAG_EFB_TO_CANVAS` `self._wgEfbColorId` present tracking — so
+nothing coherent presents. This is the **next construct**: a post-load
+backend resync (hook `State::SetOnAfterLoadCallback` and/or the worker
+`loadStateFile` to reset/invalidate the command-ring caches + re-derive
+the EFB present id + drain/realign the ring), deterministically
+testable now via the committed `battle-state.sav`. `?video=webgpu` +
+`DIAG_EFB_TO_CANVAS` untouched.
