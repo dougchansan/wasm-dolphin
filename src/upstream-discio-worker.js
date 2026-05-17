@@ -1123,7 +1123,15 @@ function framePayload() {
       ppcWasmHelperStats,
       videoStats,
       ppcProfileStats,
-      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}`
+      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}` +
+      // §28v: extra on-screen telemetry for the user's screenshots —
+      // JIT cache size/new-compiles (compile-burst visibility) +
+      // WebGPU executor draw/miss/skip counters (render-health: is
+      // geometry flowing into the EFB, are pipes/bind-groups missing,
+      // are draws being poison-guard-skipped).
+      ` jitc:${dolphinJitCacheMap.size}/${dolphinJitNewCompileCount}` +
+      ` wgx:d${webGpuExecStats.drawIdx}/mp${webGpuExecStats.missPipe}` +
+      `/mb${webGpuExecStats.missBg}/sk${webGpuExecStats.skipDraw}`
     ),
     frameProfileStats,
     presentedFrame,

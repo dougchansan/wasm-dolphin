@@ -3032,3 +3032,31 @@ the fix is logically sound (the cap was the only blocker; the
 persist+pre-warm path is pre-existing and tested) and manifests on
 live full-game play across runs. `?video=webgpu` / per-draw ring /
 §26 guard untouched.
+
+### 28v. On-screen HUD: added render/JIT debug badges for richer screenshots
+
+User asked for more on-screen debug metrics so their screenshots
+carry more diagnostic signal. Added 6 HUD badges (index.html spans +
+app.js parsing of the worker `ppcWasmHelperStats` string; worker
+appends two new segments to that string):
+
+- **draw** `prim/draw` — GX primitives/draws submitted this frame
+  (the decisive black-screen signal: >0 + black = render-path bug;
+  0 = no geometry).
+- **nz** — XFB non-zero pixel count (0 ⇒ black output).
+- **u/d** — present underrun/drop counts (pipeline health).
+- **q** `queue/limit:signal` — present queue depth + wait/poll.
+- **jitc** `cacheSize/newCompiles` — JIT cache occupancy & compile
+  burst (directly shows the §28u compile-burst situation; e.g.
+  whether the cache is still climbing toward the 49152 cap).
+- **wgx** `d<drawIdx> mp<missPipe> mb<missBg> sk<skipDraw>` — WebGPU
+  executor health (geometry into EFB, pipeline/bind-group misses,
+  §28j poison-guard skips).
+
+JS-only (worker helper string + app.js + index.html), served live,
+no rebuild. Verified: HUD renders denser, difficulty-select still
+renders correctly, regex parsers have safe `?? "0"` fallbacks (no
+breakage if a field is absent). These make the user's live
+screenshots self-diagnosing for the remaining 3D-black /
+compile-burst constructs. `?video=webgpu` / per-draw ring / §26
+guard untouched.

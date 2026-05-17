@@ -63,6 +63,12 @@ const elements = {
   hudWatchdog: document.querySelector("#hudWatchdog"),
   hudGap: document.querySelector("#hudGap"),
   hudGlError: document.querySelector("#hudGlError"),
+  hudDraw: document.querySelector("#hudDraw"),
+  hudNz: document.querySelector("#hudNz"),
+  hudUnderDrop: document.querySelector("#hudUnderDrop"),
+  hudQueue: document.querySelector("#hudQueue"),
+  hudJitCache: document.querySelector("#hudJitCache"),
+  hudWgx: document.querySelector("#hudWgx"),
   hudStatus: document.querySelector("#hudStatus"),
   inputSource: document.querySelector("#inputSource"),
   loadButton: document.querySelector("#loadButton"),
@@ -588,6 +594,31 @@ function updateScreenHud(info) {
 
   const glerr = Number(info.oglGlError) || 0;
   elements.hudGlError.textContent = `0x${glerr.toString(16)}`;
+
+  // §28v: richer diagnostic badges parsed from the worker helper
+  // string so screenshots carry render/JIT health at a glance.
+  const prim = /\bprim:(\d+)/.exec(helper)?.[1] ?? "0";
+  const draw = /\bdraw:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudDraw.textContent = `${prim}/${draw}`;
+
+  const nz = /\bnz:(\d+)/.exec(helper)?.[1];
+  elements.hudNz.textContent = nz == null ? "n/a" : nz;
+
+  const under = /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "0";
+  const drop = /\bdrop:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudUnderDrop.textContent = `${under}/${drop}`;
+
+  const q = /\bqueue:(\d+)\/(\d+)/.exec(helper);
+  const sig = /\bsignal:(\w+)/.exec(helper)?.[1] ?? "?";
+  elements.hudQueue.textContent = q ? `${q[1]}/${q[2]}:${sig}` : `-:${sig}`;
+
+  const jitc = /\bjitc:(\d+)\/(\d+)/.exec(helper);
+  elements.hudJitCache.textContent = jitc ? `${jitc[1]}/${jitc[2]}` : "0/0";
+
+  const wgx = /\bwgx:d(\d+)\/mp(\d+)\/mb(\d+)\/sk(\d+)/.exec(helper);
+  elements.hudWgx.textContent = wgx
+    ? `d${wgx[1]} mp${wgx[2]} mb${wgx[3]} sk${wgx[4]}`
+    : "-";
 
   if (elements.statusPill && elements.hudStatus) {
     const txt = elements.statusPill.textContent || "";
