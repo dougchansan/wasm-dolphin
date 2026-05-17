@@ -2954,3 +2954,52 @@ removed: the JIT now stays engaged through heavy scenes at full
 speed. **Status (honest, ralph):** verified renderer/perf win
 directly targeting the user's cutscene report. §28g/§28j/§28o/§28s
 stand. `?video=webgpu` / per-draw ring / §26 guard untouched.
+
+### 28t. ★ Full-playthrough synthesis: 2D menus RENDER, 3D-heavy scenes BLACK + JIT compile-burst stalls
+
+User played the whole attract/Classic flow and sent 18 live
+screenshots. Decisive consolidated picture:
+
+**Renders correctly (2D menu screens):**
+- **Character Select FULLY renders** (img15: full Classic roster
+  Mario…Link + P1 panel + LEVEL/VERY EASY/STOCK/HIGH SCORE/BACK,
+  101 % speed) — a genuine §28g win. imgs17/18 = CSS *transition*
+  frames (mid-animation glitch → settles to 15; §28h minor class).
+- Difficulty-select (verified deterministically, §28g/o).
+
+**Black (every instance is a 3D-heavy scene):**
+- Intro cutscene (img10, flashing), 2nd cutscene (img12, audio-only),
+  title (img13), main menu (img14), in-game battle (img19,
+  audio-only). All black; all 3D-heavy.
+
+**The defining split:** 2D menu screens render; 3D-heavy scenes are
+black. CSS/difficulty-select escape the bug *because they are 2D*.
+The §28k/§28p/§28q "non-cull present/render-path construct" is
+therefore specifically a **3D-scene render construct** (the 3D scene
+→ EFB / EFB-copy composite path), not a menu bug.
+
+**Second, compounding issue — JIT compile-burst stalls:** the black
+3D scenes correlate with `jit-cache: discio recorded N new compiles
+(cache size=…)` climbing 2100→5200 (cache 5035→8135) and **speed
+collapsing** (img12 34 %, img19 57 %). Entering new-code scenes
+(cutscene/battle) triggers thousands of JIT block compiles that
+block emulation+present until the cache warms. The moment
+compilation plateaus (cache 8135, ~frame 7800) **CSS immediately
+renders (img15)**. §28s (kept JIT engaged) removed the *thrash* but
+not the *first-encounter compile-burst* stall — a distinct
+perf/infra construct (persistent cross-run JIT cache would amortise
+it; the build already has "pre-warmed cache hit" infra).
+
+**Honest state (ralph):** the §28g cull fix is broad and real — all
+deterministically-reachable 2D menus (difficulty-select, CSS)
+render correctly at full speed, flash-free (§28g/j/o/s). The
+remaining open work is two distinct, hard, *non-renderer-or-deep*
+constructs: (1) **3D-heavy scenes render black** (a 3D EFB/EFB-copy
+render-path construct — every reachable instance is either
+nav-gated [cutscene/title/main-menu] or §27-savestate-blocked
+[battle], so it can't be deterministically bisected with current
+tooling); (2) **JIT compile-burst stalls** on first scene entry
+(perf/JIT-cache infra, orthogonal to the renderer). Both are
+precisely characterized here for a focused future effort. All
+session wins committed (§28g/j/o/s); `?video=webgpu` /
+per-draw ring / §26 guard untouched.
