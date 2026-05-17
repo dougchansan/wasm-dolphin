@@ -1977,3 +1977,36 @@ pre-load). Battle still black post-load — but the cause is now
 HW-device savestate desync**, a precise and different next construct.
 `?video=webgpu` / `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard
 untouched.
+
+### 27g. Wedge characterized: PE_FINISH|VI|DSP pending+unmasked but unserviced (game spins with EE off) — + STRATEGIC PIVOT
+
+Added PI cause/mask to `[s27-coretiming]`. Pre-load: `picause=0x10000`
+(RST_BUTTON only — normal), `pc` varies. Post-load wedge (73/75
+samples): **`pc=0x80335e98 picause=0x10540 pimask=0xffc`**.
+`0x10540 = RST_BUTTON|PE_FINISH(0x400)|VI(0x100)|DSP(0x40)`; `pimask
+0xffc` un-masks all three. So three interrupts are **asserted and
+unmasked yet never serviced** while the PowerPC sits frozen at
+`0x80335e98` — i.e. the game is spinning with `MSR[EE]=0` polling a
+memory/device flag that an interrupt handler (or a stranded DMA /
+un-rescheduled CoreTiming completion) would set. Classic GC-core
+**savestate HW-restore desync** (PE draw-done / DSP mailbox / VI). The
+renderer/ring/CoreTiming are all proven healthy; this is a
+Dolphin-core savestate-compat defect, **orthogonal to the WebGPU
+renderer**.
+
+**STRATEGIC PIVOT (ralph, goal = "full game rendering all scenes full
+speed"):** the savestate-load path is only a *deterministic test
+harness* (§22–24) for an in-battle scene — it is **not** the game's
+normal code path and not a renderer defect. Sinking further unbounded
+iteration into a deep PowerPC/HW savestate-desync (now precisely
+pinpointed for a future dedicated session: re-arm the stranded
+PE/DSP/VI completion in the after-load callback / `HW::DoState`
+post-fixup) does not advance the actual product goal. The renderer
+already renders menus, dialogs, and **textured 3D Melee via the
+attract demo** (§16–§24), which auto-reaches real CPU-vs-CPU gameplay
+with **no savestate and no navigation**. The highest-value
+continuation toward "all scenes render full speed" is to drive/grind
+the **attract-demo battle** directly. The §27 savestate infra +
+resync + diagnostics stay committed (reusable once the core bug is
+fixed). Switching the active grind to the attract-demo battle render
+path now.
