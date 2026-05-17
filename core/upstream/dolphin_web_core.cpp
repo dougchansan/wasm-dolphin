@@ -56,6 +56,7 @@ extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#include <pthread.h>
 
 extern "C" const char* DolphinWeb_GetAudioCommonStats();
 
@@ -563,7 +564,14 @@ void EnsureRuntime()
   // self-rederive once commands flow again, so no consumer reset is
   // needed for this construct.
   State::SetOnAfterLoadCallback([]() {
-    EM_ASM({ console.log("[after-load] cb fired — RunGpu() wake"); });
+    // §27b disambiguator: which pthread runs the after-load callback
+    // (= the LoadAsFromCore context)? Compare to the long-lived CPU
+    // pthread tid ([s27-GPB]) and GPU pthread tid ([s27-gate]). A
+    // *third* tid confirms the load runs off the emulation CPU thread
+    // → the CPU↔GPU CP-FIFO incoherence is the RunOnCPUThread-job
+    // context hop (§27b hypothesis 2).
+    EM_ASM({ console.log("[after-load] cb fired tid=" + ($0 >>> 0)); },
+           static_cast<unsigned>(pthread_self()));
     Core::System::GetInstance().GetFifo().RunGpu();
   });
 

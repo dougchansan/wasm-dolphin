@@ -1678,3 +1678,108 @@ change to the render path; `?video=webgpu`, `DIAG_EFB_TO_CANVAS`, the
 per-draw uniform ring and §26 guard all untouched. Battle still
 renders black post-load (root cause now precisely named, not yet
 fixed) — verified by probe screenshots; not claiming done.
+
+### 27b. Next-construct probe: CP-FIFO is CPU↔GPU-INCOHERENT only post-load (the precise mechanism)
+
+Ran the §27 next probe — extended `[s27-GPB]` (CPU thread) and
+`[s27-gate]` (GPU thread) to log `CPReadPointer/CPWritePointer/
+SafeCPReadPointer/CPBase/CPEnd`, plus a **fresh** seq_cst re-read of
+`CPReadWriteDistance` via `m_system.GetCommandProcessor().GetFifo()`
+(`rwd2`) to rule out a stale cached `fifo` reference. Conclusive
+aggregate over the deterministic repro:
+
+- **GPU thread (`[s27-gate]`), PRE-load:** 1303 samples `rwd=0`, **but
+  also `rwd=32`×13, `rwd=64`×2, `rwd=1312`×1, `rwd=0 rwd2=32`×1** —
+  i.e. the GPU thread **does** observe `CPReadWriteDistance > 0`,
+  drains it, and the battle/menus render.
+- **GPU thread, POST-load:** **ALL 38 samples `rwd=0 rwd2=0`** — the
+  GPU thread **never once** observes a non-zero distance (the fresh
+  seq_cst `rwd2` is 0 too → not a stale-ref / relaxed-load artifact).
+  It therefore never enters the drain `while`, never runs
+  `OpcodeDecoder::RunFifo`, never feeds `WebGPUGfx` → ring frozen →
+  black.
+- **CPU thread (`[s27-GPB]`), POST-load:** sees `CPReadWriteDistance`
+  reach `99264` (and 32/128/192/288/640) — the CPU genuinely fills
+  the CP FIFO. Its `CPWritePointer` (`wr=6517216`) and the GPU
+  thread's `wr` (6419488 / 6534400 / 6621056, moving) are **different
+  values at the same wall-clock** — the two pthreads have
+  **incoherent views of the same `SCPFifoStruct` atomics** post-load.
+
+**Conclusive root cause (final):** `State::Load` breaks the dual-core
+CPU↔GPU CP-FIFO **shared-atomic coherence**. Post-load the CPU thread
+advances `CPReadWriteDistance`/`CPWritePointer`; the GPU-FIFO thread,
+reading the *same* atomic addresses (even a fresh seq_cst load),
+observes a constant 0 / its own divergent pointer values and never
+drains. Pre-load the same atomics ARE coherent (GPU sees rwd 32/64/
+1312 and renders). Numeric equality of `&m_system`/`&CPReadWriteDistance`
+across the threads is **not** proof of shared memory — it is exactly
+what two same-layout, *separately-backed* memories would also print;
+combined with the post-load divergence this indicates the GPU-FIFO
+pthread and the post-load CPU/`RunOnCPUThread`-job context are
+operating on **non-coherent memory for the CP struct** after the
+load's `PauseAndLock`→`AddCPUThreadJob`→`RestoreStateAndUnlock` cycle.
+
+**Why this is the hard part / next direction:** the bug is not in the
+WebGPU backend at all (it freezes purely downstream). It is a
+wasm-dual-core savestate-load thread/memory-coherence defect in
+`Core::RunOnCPUThread` + `VideoBackendBase::DoState`'s
+`AsyncRequests::PushBlockingEvent` path. Candidate fixes to try next,
+each smallest-gated, in the already-wired `State::SetOnAfterLoadCallback`
+(CPU thread, post-DoState) — re-probe between each, don't batch:
+1. After load, force the FIFO through the CPU thread instead of the
+   broken cross-thread handshake: temporarily drive
+   `FifoManager::RunGpuOnCpu()` / a `SyncGPU(SyncGPUReason::Other)` +
+   explicit drain so the GPU work is produced by the coherent CPU
+   context until the next natural resync.
+2. Make `LoadStateFile` run the whole `State::LoadAs` **on the CPU
+   pthread itself** (so DoState + the resumed game share one
+   coherent context) rather than via the discio-worker→
+   `RunOnCPUThread` job hop (test: does the incoherence vanish if the
+   load is issued from the CPU thread?).
+3. Post-load, hard-reset+re-publish the CP/GPU sync: `ResetVideoBuffer`
+   + re-arm `m_gpu_mainloop` + re-issue `EmulatorState(true)` from the
+   after-load callback so the GPU thread re-acquires the restored CP
+   pointers under a fresh release/acquire.
+Decisive disambiguator before fixing: log `pthread_self()` of the
+thread that runs `LoadAsFromCore`/the after-load callback and compare
+to the long-lived CPU pthread tid (`[s27-GPB] tid=18081640`) and GPU
+tid (`309005240`) — if the load runs on a *third* tid, hypothesis 2
+is confirmed and dictates the fix.
+
+State: §27b adds only richer gated diagnostics (no render-path change).
+Battle still black post-load; root cause now fully characterized at
+the thread/memory-coherence level. `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+
+### 27c. Disambiguator: hypothesis 2 REFUTED — load runs on the real CPU pthread; fix = post-load GPU-thread CP resync
+
+Added `pthread_self()` to the `[after-load]` callback log. Result:
+
+- `[after-load] cb fired tid=18081640`
+- `[s27-GPB] tid=18081640` (CPU thread / post-load game)
+- `[s27-gate] tid=309005216` (GPU FIFO thread, distinct, stable)
+
+⇒ `LoadAsFromCore` + the after-load callback run on the **same
+pthread** as the post-load CPU emulation — **not** a third
+discio-worker thread. §27b hypothesis 2 (the load runs off the
+emulation CPU thread) is **refuted**. The CPU thread and GPU-FIFO
+thread are two normal, stable dual-core pthreads that *should* share
+memory; pre-load they do (renders), post-load the GPU thread is
+stranded on a pre-load CP-FIFO snapshot and never observes the CPU
+thread's restored/advancing `CPReadWriteDistance`.
+
+**So the fix is §27b hypothesis 1/3, issued from the already-wired
+`State::SetOnAfterLoadCallback` (confirmed running on the CPU thread,
+tid 18081640):** an explicit post-load resync of the GPU thread's
+CP-FIFO consumer so it re-acquires the restored CP state under a
+fresh release/acquire — e.g. `SyncGPU(SyncGPUReason::Other)` +
+`ResetVideoBuffer` + re-publish via `EmulatorState(true)` /
+`RunGpu()` (the lone `RunGpu()` there is insufficient — proven §27).
+The exact next session: replace the after-load `RunGpu()` body with
+that resync sequence, smallest-first (try `SyncGPU` alone → reprobe;
+then add `ResetVideoBuffer`; then the EmulatorState re-publish), and
+confirm `[s27-gate]` starts observing `rwd>0` post-load (it currently
+never does — §27b) and the battle renders. Pre-load rendering
+verified unregressed this checkpoint (12/12 distinct pre-load).
+`?video=webgpu` / `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard
+untouched.
