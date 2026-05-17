@@ -963,3 +963,37 @@ copy gets real pixels:
 Everything else (geometry, transforms, UBOs, pipelines, bind groups,
 present-to-canvas) is proven correct and instrumented. This stub is
 the last big construct between "real geometry" and "correct Melee".
+
+### 13. copy-to-vram cap fixed (prerequisite, necessary not sufficient)
+
+`g_backend_info.bSupportsCopyToVram` was false (Software clone) →
+`TextureCacheBase.cpp:2194-2197` forced `copy_to_ram` for EVERY EFB
+copy (the stubbed encoder/staging path → green tex#69). Set it
+**true** (one line; same "revisit InitBackendInfo caps" gotcha class
+as `bSupportsClipControl`/`bSupportsDualSourceBlend`). WebGPU has real
+render-to-texture, so the `copy_to_vram` path is correct.
+
+Probe-verified the path flipped: `[webgpu-DIAG-rt]` now reports new
+**640×480 rgba8unorm EFB-copy render targets** (tex#52, #67, #153) in
+addition to the EFB (tex#14) and XFB-blit (tex#47) — EFB copies now
+render into real GPU textures, the RAM round-trip / staging stub is
+out of the path. No regression (font text still renders, distinct≈12
+animating, 99% speed). Committed.
+
+**But the visible output is unchanged** (white "Select" text on
+black; textured 3D / backgrounds still black). So copy-to-vram is a
+necessary prerequisite (correct EFB-copy plumbing) but NOT the whole
+fix — textured-black is a genuinely separate, deeper construct:
+**TEV / PixelShaderConstants / texcoord generation**. Evidence: the
+font-atlas text (a simple texture→colour TEV path) renders, while
+texture+vertex-colour+lighting TEV configs and texcoord-matrix
+(VSBlock member_9 / `@location(8)`) draws don't.
+
+Next construct (probe→one): pick ONE known-black textured draw and
+dump its PixelShaderConstants (`m_ubo_ps`, like the `[webgpu-DIAG-ub]`
+VS dump) + its generated FS WGSL (the `[webgpu-DIAG-wgsl]` machinery,
+stage=2) + its texcoords (VS output `@location` / the tex-matrix path)
+and trace why the TEV output is 0. Suspects in order: texcoord gen
+(tex matrices in VSBlock not uploaded / wrong → sample one texel →
+black-ish), PS-UBO/TEV constants, alpha test discarding all fragments,
+vertex-colour attribute (`@location(5)` unorm8x4) reading zero.
