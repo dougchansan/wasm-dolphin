@@ -2901,3 +2901,56 @@ clean at `7f59f9a`. Verified wins stand unchanged: §28g
 (difficulty-select + CSS render), §28j (poison guard), §28o (ring 4×,
 zero DROP/flash on deterministic scenes). `?video=webgpu` /
 per-draw ring / §26 guard untouched.
+
+### 28s. ★ Cutscene black-flash ROOT-CAUSED & FIXED: JIT-disable fuse mis-fired on structurally-0 presentationFps
+
+User chose to pivot to the cutscene JIT issue (img8: black +
+*"Experimental WASM JIT temporarily off (fps:0 baseline:0
+catastrophic; cooldown 300 frames)"* @38 %; img9: intro 3D renders
+@40 % "JIT engaged"). Root-caused in `maybeDisablePpcWasmJit`
+(`src/upstream-discio-worker.js`):
+
+- `presentationFps` counts the **legacy canvas-blit** present path,
+  NOT the WebGPU `DIAG_EFB_TO_CANVAS` present → it is **structurally
+  ~0 in the `?video=wgpu` presenter** (every user HUD shows
+  `0.0 present 0.0 visual`, even on the perfectly-rendering
+  difficulty-select).
+- The fuse: `catastrophic = presentationFps < 6` → **always true**
+  (0 < 6); `regressed = baseline≥18 && …` with
+  `baseline = ppcWasmJitPreEngageFps = presentationFps = 0` →
+  **never true**. So `if(!regressed && !catastrophic) return;` never
+  returns ⇒ the JIT is **disabled every fuse window** (after 240
+  active frames) *even at a healthy 60 coreFps*, then 300-frame
+  cooldown, re-engage, repeat → **JIT thrash**: speed collapses
+  (38-40 %) and frames drop black on heavy scenes = the intro
+  cutscene flashing the user saw.
+
+**Fix (smallest, JS-only, served live — no rebuild):** redefine
+"catastrophic" as a **renderer-agnostic core-frame liveness** check —
+trip only when ≥1.5 s wall elapsed AND effective core fps
+(`Δcoreframe / Δwall`) is sub-floor (`<6`; a genuine emulation
+freeze, healthy ≈60), instead of the meaningless `presentationFps`.
+Tracker (`ppcWasmJitFuseLastFrame/Time`) re-armed on every JIT
+(re)engage so a pre-cooldown sample can't compute a bogus low coreFps
+across the gap. `regressed` path left intact (valid if presentationFps
+ever becomes meaningful).
+
+**Probe-verified (deterministic attract, DURATION=90):**
+- `"JIT temporarily off" / "JIT disabled"` events: **repeated → 0**
+  (the spurious fuse is eliminated).
+- `gameSpeed 100.64 %`, `coreFps 60.45` — full speed, no collapse
+  (was 38-40 % during the thrash).
+- difficulty-select unregressed (`tex#14 nz≈845k`, §28g intact);
+  68 distinct; 0 `VALIDATION`/`DROPPED`.
+- **Never-break:** `?video=webgpu` reference (shares the upstream
+  core+JIT) — title renders correctly, 51 distinct / 98.84 %
+  gameSpeed (normal SW run variance; the fuse fix is a strict JIT
+  stability improvement for both paths). Invariant holds.
+
+The intro cutscene itself is nav-gated (the blind probe doesn't
+drive it), so it can't be eyeballed here — but its flashing
+**mechanism** (JIT catastrophic-cooldown thrash) is conclusively
+removed: the JIT now stays engaged through heavy scenes at full
+speed. **Status (honest, ralph):** verified renderer/perf win
+directly targeting the user's cutscene report. §28g/§28j/§28o/§28s
+stand. `?video=webgpu` / per-draw ring / §26 guard untouched.

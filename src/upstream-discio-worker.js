@@ -97,6 +97,15 @@ let ppcWasmJitEnabledAtFrame = 0;
 // regressed materially below this baseline (i.e. the JIT itself hurt),
 // not merely because the renderer is slow.
 let ppcWasmJitPreEngageFps = 0;
+// §28s: renderer-agnostic core-liveness tracker for the JIT fuse.
+// presentationFps is structurally ~0 in the WebGPU-presenter path
+// (it counts the legacy canvas-blit, not DIAG_EFB_TO_CANVAS), so the
+// old `catastrophic = presentationFps < FLOOR` net mis-fired every
+// fuse window even at a healthy 60 coreFps → JIT thrash → cutscene
+// black-flash. The real "JIT froze emulation" signal is the core
+// frame counter not advancing in wall-clock time.
+let ppcWasmJitFuseLastFrame = -1;
+let ppcWasmJitFuseLastTime = 0;
 let ppcWasmJitTier = "guarded";
 let ppcWasmJitWarmupFrames = 3600;
 let pacedPresentationActive = false;
@@ -1436,6 +1445,10 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
   ppcWasmJitEnabledAtFrame = coreFrame >>> 0;
+  // §28s: re-arm the core-liveness tracker on every (re)engage so a
+  // pre-cooldown (frame,time) pair can't compute a bogus low coreFps
+  // across the cooldown gap on the first post-re-engage fuse check.
+  ppcWasmJitFuseLastFrame = -1;
   const reason = dolphinJitCachePreWarmed && effectiveWarmup === MINIMUM_PRE_JIT_FRAMES
     ? `pre-warmed cache hit, JIT engaged at frame ${coreFrame}`
     : `JIT enabled after ${coreFrame} stable video frames`;
@@ -1484,7 +1497,31 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   const regressed =
     baseline >= WASM_JIT_REGRESSION_MIN_BASELINE_FPS &&
     presentationFps < baseline * WASM_JIT_REGRESSION_FRACTION;
-  const catastrophic = presentationFps < WASM_JIT_ABSOLUTE_FLOOR_FPS;
+
+  // §28s: "catastrophic" = the JIT genuinely FROZE emulation, judged
+  // by the core frame counter vs wall-clock — NOT presentationFps
+  // (structurally ~0 in the WebGPU presenter, which made the old
+  // floor fire every window at a healthy 60 coreFps and thrash the
+  // JIT, collapsing the intro cutscene into a black flash). Only
+  // trip when ≥1.5 s of wall time elapsed AND effective core fps is
+  // sub-floor (a true freeze; healthy ≈ 60).
+  const nowMs = (typeof performance !== "undefined" ? performance.now()
+                 : Date.now());
+  const cf = coreFrame >>> 0;
+  let catastrophic = false;
+  if (ppcWasmJitFuseLastFrame >= 0) {
+    const dtMs = nowMs - ppcWasmJitFuseLastTime;
+    if (dtMs >= 1500) {
+      const dFrames = (cf - ppcWasmJitFuseLastFrame) >>> 0;
+      const coreFps = (dFrames * 1000) / dtMs;
+      catastrophic = coreFps < WASM_JIT_ABSOLUTE_FLOOR_FPS;
+      ppcWasmJitFuseLastFrame = cf;
+      ppcWasmJitFuseLastTime = nowMs;
+    }
+  } else {
+    ppcWasmJitFuseLastFrame = cf;
+    ppcWasmJitFuseLastTime = nowMs;
+  }
 
   if (!regressed && !catastrophic) {
     return;
