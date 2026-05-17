@@ -1574,3 +1574,107 @@ backend resync (hook `State::SetOnAfterLoadCallback` and/or the worker
 the EFB present id + drain/realign the ring), deterministically
 testable now via the committed `battle-state.sav`. `?video=webgpu` +
 `DIAG_EFB_TO_CANVAS` untouched.
+
+### 27. ★ Battle-black ROOT CAUSE conclusively isolated: post-load CPU↔GPU CP-FIFO atomic desync (NOT consumer caches, NOT a sleeping GPU loop)
+
+This is the decisive arc. §26's "consumer cache desync" hypothesis is
+**DISPROVEN**. Six instrumented probes (deterministic `battle-state.sav`,
+`SAVE_STATE_AT=42`) drove a clean evidence chain. **Don't re-test the
+disproven hypotheses — start from the pinned construct below.**
+
+**Probe 1 (JS-only watchdog, no rebuild).** Added a post-load
+watchdog in `drainWebGpuCmdRing` logging ring head/tail + exec
+counters. At load: `ring write=5488263 read=5487370 pend=893`
+(consumer drains the final pre-load batch). Then for 35 s:
+`write=5488263 read=5488263 pend=0` — **the producer ring `write`
+index never advances again**; every exec counter frozen. Yet
+`samples.json` shows post-load `frame` 2369→4646, `coreFps≈44`,
+`gameSpeed≈72%` — **the CPU/core keeps running the battle**. ⇒ the
+producer (the dual-core GPU FIFO mainloop that records WebGPU
+opcodes) emits zero records post-load while the CPU runs. Consumer
+caches are irrelevant when no commands flow → §26 disproven.
+
+**Probe 2 (Fifo.cpp gpuloop + RunGpu heartbeats).** The GPU mainloop
+body is **NOT asleep** — `[s27-gpuloop]` increments ~12 M iterations
+over the post-load window (it spins ~300 k/s) with `emu=1 gpren=1
+rwd=0`. `[s27-RunGpu]` also fires post-load. ⇒ the "GPU left asleep
+by `GpuMaySleep()`; RunGpu() will wake it" theory is **also wrong** —
+the loop is wide awake and spinning. (The §27 after-load
+`State::SetOnAfterLoadCallback`→`RunGpu()` hook was added and
+**confirmed to fire** (`[after-load] cb fired`) but did **not** fix
+the black screen, consistent with this.)
+
+**Probe 3 (GatherPipeBursted heartbeat).** Post-load the CPU thread
+**is** producing GP FIFO data: `[s27-GPB] link=1 gpren=1` and
+`CPReadWriteDistance` **grows unbounded** 704 → 230 000+ (monotonic,
+never drained). So: CPU fills the CP FIFO; the GPU loop never drains
+it.
+
+**Probe 4 + 6 (pointer / tid / System identity).** The smoking gun:
+both threads print **identical** `&CommandProcessor` and
+**identical** `&m_fifo.CPReadWriteDistance` (e.g. `rwdAddr=15061888`)
+and **identical** `&m_system` (`sys=9608368`) — same singleton, same
+atomic object, same shared wasm memory — but on **different pthreads**
+(`[s27-GPB] tid=18081448` = CPU thread, stable pre/post; `[s27-gate]
+tid=309004936` = GPU thread). The CPU thread's `fetch_add` (seq_cst)
+drives that atomic to 230 000+, while the GPU thread's relaxed
+`load()` of the **same address** reads **0 forever**.
+
+**Probe 5 (the 4 drain gates).** Logging right after
+`SetCPStatusFromGPU()`: post-load `[s27-gate] intw=0 gpren=1 rwd=0
+atbp=0` — interrupt-wait clear, GP-read enabled, no breakpoint; the
+**only** closed gate is `CPReadWriteDistance==0` *as seen by the GPU
+thread*. So the GPU loop's `while(... && fifo.CPReadWriteDistance ...)`
+never enters → `ReadDataFromFifo`/`OpcodeDecoder::RunFifo` never runs
+→ `WebGPUGfx` records nothing → producer ring frozen → black.
+
+**ROOT CAUSE (pinned, the ONE construct):** after `State::Load`, the
+CPU pthread and the GPU-FIFO pthread **observe divergent values for
+the same `std::atomic<u32> CommandProcessor::m_fifo.CPReadWriteDistance`
+at the same shared-memory address** (CPU sees it grow; GPU
+permanently sees 0). Pre-load both read ≈0 and the game renders
+(GPU drains promptly); the savestate load breaks the CPU→GPU
+visibility of that CP-FIFO counter specifically. This is a post-load
+CP-FIFO producer/consumer **sync** break in the wasm dual-core model,
+upstream of the entire WebGPU command-ring backend — the ring
+freezes purely as a consequence.
+
+**Next construct (exact, for a fresh session):** find *why* the GPU
+pthread's atomic load of `CPReadWriteDistance` doesn't observe the CPU
+pthread's `fetch_add` after a state load (it does pre-load). Leads,
+in order: (a) `CommandProcessor::SetCPStatusFromGPU()` /
+`SetCPStatusFromCPU()` recompute/zero `CPReadWriteDistance` from
+`CPReadPointer`/`CPWritePointer` — if `State::Load` restores those
+pointers inconsistently between the two threads' views (or
+`SafeCPReadPointer`/`m_video_buffer_*` desync vs the restored CP
+regs), the GPU side keeps zeroing the distance it should see; inspect
+`SetCPStatusFromGPU` and `SCPFifoStruct::DoState` (it `p.Do`s
+CPReadWriteDistance + the pointers) for a read/write-pointer ordering
+or recompute that strands the GPU view at 0. (b) Whether the
+post-load `GatherPipeBursted` runs via the linked path (it logs
+`link=1`) but updates `ProcessorInterface.m_fifo_cpu_write_pointer`
+while the GPU loop reads a stale `CPReadPointer`, so
+`SetCPStatusFromGPU` recomputes distance=0. (c) A genuine missing
+acquire/release or a stale shared-memory view for that atomic across
+the dual-core threads only after the load's PauseAndLock/Restore
+cycle. Decisive next probe: extend `[s27-gate]`/`[s27-GPB]` to also
+log `CPReadPointer`, `CPWritePointer`, `SafeCPReadPointer`, `CPBase`,
+`CPEnd` from both threads right around the load — the pointer that
+diverges (or that `SetCPStatusFromGPU` uses to derive distance=0)
+names the exact fix. The fix likely belongs in the
+`State::SetOnAfterLoadCallback` (already wired, fires on the CPU
+thread post-DoState): re-derive/realign the CP read/write pointers so
+both threads agree, rather than waking a loop that's already awake.
+
+**State committed this checkpoint:** the `State::SetOnAfterLoadCallback`
+hook scaffold (correct hook point; `RunGpu()` body is a confirmed
+no-op for *this* construct — left in, harmless, the real resync goes
+here); the JS post-load watchdog (`drainWebGpuCmdRing`, 35 s window);
+and gated, **sparse** (`& 0x3FFFFF` / `& 0x7FFF`) passive
+`[s27-gpuloop|gate|RunGpu|GPB]` + `[after-load]` EM_ASM diagnostics in
+Fifo.cpp/CommandProcessor.cpp (all `#ifdef __EMSCRIPTEN__`, captured
+only in the rebuilt wasm — vendor/ is gitignored). No functional
+change to the render path; `?video=webgpu`, `DIAG_EFB_TO_CANVAS`, the
+per-draw uniform ring and §26 guard all untouched. Battle still
+renders black post-load (root cause now precisely named, not yet
+fixed) — verified by probe screenshots; not claiming done.

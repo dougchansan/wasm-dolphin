@@ -324,6 +324,13 @@ async function handleMessage(type, payload) {
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
       const afterState = api?.getCoreStateName?.() ?? "";
+      // §27 diagnostic (JS-only, served live, no rebuild): open a
+      // post-load watchdog window so drainWebGpuCmdRing logs whether
+      // the producer ring keeps advancing (producer alive) vs the
+      // consumer going stale, to localize the savestate-load desync.
+      self._postLoadProbeT0 = Date.now();
+      self._postLoadProbeUntil = self._postLoadProbeT0 + 35000;
+      self._postLoadProbeLast = 0;
       console.log(`[loadStateFile] path=${path} rc=${rc} ` +
         `before='${beforeState}' after='${afterState}' ` +
         `frame=${api?.getFrame?.() ?? -1}`);
@@ -3350,6 +3357,26 @@ function drainWebGpuCmdRing() {
   if (!ring || !renderGpu) return;
   const write = Atomics.load(ring.headerI32, 0) >>> 0;
   let read = Atomics.load(ring.headerI32, 1) >>> 0;
+  // §27 post-load watchdog: log BEFORE the empty-ring early return so
+  // we see whether `write` keeps advancing (producer alive) after
+  // State::Load, or freezes (producer/video-pthread stalled).
+  if (self._postLoadProbeUntil && Date.now() < self._postLoadProbeUntil) {
+    const nowMs = Date.now();
+    if (nowMs - (self._postLoadProbeLast | 0) >= 1000) {
+      self._postLoadProbeLast = nowMs;
+      const s = webGpuExecStats;
+      console.log(`[postload-probe] dt=` +
+        `${((nowMs - self._postLoadProbeT0) / 1000).toFixed(1)}s ` +
+        `ring write=${write} read=${read} pend=${(write - read) >>> 0} ` +
+        `present=${s.present} draw=${s.draw} drawIdx=${s.drawIdx} ` +
+        `beginFb0=${s.beginFb0} beginFbN=${s.beginFbN} ` +
+        `setPipe=${s.setPipe} missPipe=${s.missPipe} ` +
+        `setBg=${s.setBg} missBg=${s.missBg} ` +
+        `efbId=${self._wgEfbColorId} tex=${webGpuObjects.textures.size} ` +
+        `pipes=${webGpuObjects.pipelines.size} ` +
+        `bg=${webGpuObjects.bindGroups.size}`);
+    }
+  }
   if (write === read) return;
 
   // NOTE (Day-27 audit): the Atomics.load(write) above is seq-cst.

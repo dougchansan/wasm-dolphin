@@ -45,6 +45,7 @@
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
@@ -542,6 +543,29 @@ void EnsureRuntime()
   Pad::Initialize();
   Pad::InitializeGBA();
   Keyboard::Initialize();
+
+  // §27 savestate-load backend resync. Probe evidence: after
+  // State::Load the WebGPU command-ring producer (the dual-core GPU
+  // FIFO mainloop, which is what records opcodes) freezes — the ring
+  // `write` index stops advancing the instant the load lands and never
+  // resumes (CPU/core keeps running the battle at ~44fps, frame
+  // counter advances, but zero GPU commands flow → black & static).
+  // Root cause: in dual-core, VideoBackendBase::DoState() ends with
+  // FifoManager::GpuMaySleep() (m_gpu_mainloop.AllowSleep()) on the
+  // explicit assumption that "the next GP burst will wake it up
+  // again". In this wasm remote-backend model that burst-wake does
+  // not re-park-wake the asleep BlockingLoop, so the GPU thread stays
+  // asleep forever. The after-load callback fires on the CPU thread at
+  // the very end of LoadAsFromCore (after DoState's GpuMaySleep), so
+  // re-issuing RunGpu() here force-wakes the GPU mainloop; it then
+  // drains the FIFO the now-running game is filling and the producer
+  // resumes. Consumer caches (texture/bind-group ids, _wgEfbColorId)
+  // self-rederive once commands flow again, so no consumer reset is
+  // needed for this construct.
+  State::SetOnAfterLoadCallback([]() {
+    EM_ASM({ console.log("[after-load] cb fired — RunGpu() wake"); });
+    Core::System::GetInstance().GetFifo().RunGpu();
+  });
 
   s_runtime_initialized = true;
   s_core_status = "Runtime initialized";
