@@ -3576,11 +3576,24 @@ function drainWebGpuCmdRing() {
                                           srcP + 432, 8);   // fogcolor+fogi
                 const fb = new Float32Array(moduleInstance.HEAPU8.buffer,
                                             srcP + 464, 4);  // fogf
+                // §28e: TEV color registers — I_COLORS @0 (int4[4]),
+                // I_KCOLORS @64 (int4[4]), I_ALPHA @128 (int4). If the
+                // untextured backdrop TEV reads these and they're 0,
+                // that's why it's black (vs a fog problem).
+                const cb = new Int32Array(moduleInstance.HEAPU8.buffer,
+                                          srcP, 36);  // colors+kcolors+alpha
                 console.log(`[s28-fog] id=${bid} len=${len} ` +
                   `fogcolor=${ib[0]},${ib[1]},${ib[2]},${ib[3]} ` +
                   `fogi=${ib[4]},${ib[5]},${ib[6]},${ib[7]} ` +
                   `fogf=${fb[0]?.toFixed(4)},${fb[1]?.toFixed(4)},` +
                   `${fb[2]?.toFixed(4)},${fb[3]?.toFixed(4)}`);
+                console.log(`[s28-creg] id=${bid} ` +
+                  `c0=${cb[0]},${cb[1]},${cb[2]},${cb[3]} ` +
+                  `c1=${cb[4]},${cb[5]},${cb[6]},${cb[7]} ` +
+                  `c2=${cb[8]},${cb[9]},${cb[10]},${cb[11]} ` +
+                  `c3=${cb[12]},${cb[13]},${cb[14]},${cb[15]} ` +
+                  `k0=${cb[16]},${cb[17]},${cb[18]},${cb[19]} ` +
+                  `alpha=${cb[32]},${cb[33]},${cb[34]},${cb[35]}`);
               }
             }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
@@ -3878,15 +3891,39 @@ function drainWebGpuCmdRing() {
                 // samples), discards/alpha-test, and the final
                 // @location(0) output assignment.
                 const flat = w.replace(/\s+/g, " ");
-                const fi = flat.indexOf("fn dolphin_fn_4_");
-                console.log(`[s28-bdfsX] fn4At=${fi} len=${flat.length} ` +
+                // §28e: dump the WHOLE TEV chain (every dolphin_fn_*),
+                // not just fn_4_, to see which TEV input (vertex color
+                // vs I_COLORS / konst / I_KCOLORS UBO reg) collapses
+                // the untextured backdrop to black. Start at the first
+                // "fn dolphin_fn_" so fn_0..fn_4 are all captured.
+                const fi = flat.indexOf("fn dolphin_fn_");
+                console.log(`[s28-bdfsX] fnAt=${fi} len=${flat.length} ` +
                   `nSample=${(flat.match(/textureSample/g) || []).length}`);
-                // dolphin_fn_4_ computes global_4 (the output). Dump it
-                // so we see which TEV inputs / vertex colors / uniforms
-                // collapse the untextured backdrop to black.
+                // Capture the global UBO struct decl too (member_N ↔
+                // I_COLORS/I_KCOLORS/konst byte mapping).
+                const sd = flat.indexOf("struct type_");
+                if (sd >= 0)
+                  console.log(`[s28-bdfsS] ${flat.slice(sd, sd + 900)}`);
                 if (fi >= 0)
                   for (let o = fi; o < flat.length; o += 700)
                     console.log(`[s28-fn4 ${o - fi}] ${flat.slice(o, o + 700)}`);
+                // §28e: dump the paired VS — trace how color0 (the
+                // location(0) varying the FS returns) is produced: a
+                // per-vertex @location(5) attr, or a lighting/material
+                // UBO constant (which would be 0 ⇒ black backdrop).
+                if (self._wgVsSrc &&
+                    self._wgVsSrc[tpl.vsId] !== undefined) {
+                  const v = self._wgVsSrc[tpl.vsId].replace(/\s+/g, " ");
+                  const vm = v.indexOf("fn main(");
+                  console.log(`[s28-vs] vs#${tpl.vsId} len=${v.length} ` +
+                    `sig=${v.slice(vm, v.indexOf("{", vm))}`);
+                  // The VS color-channel synthesis: log lines that
+                  // write the colour varying / read material lights.
+                  const ci = v.indexOf("fn dolphin_fn_");
+                  if (ci >= 0)
+                    for (let o = ci; o < v.length; o += 700)
+                      console.log(`[s28-vsfn ${o - ci}] ${v.slice(o, o + 700)}`);
+                }
               }
               const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;
               self._wgEfbDraws = self._wgEfbDraws || new Map();
@@ -4310,7 +4347,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   const s28dbg = `fs#${fsId} vs#${vsId} wm${writeMask}` +
     ` blend${blendEnable ? `1:${srcF}/${dstF}` : "0"}` +
     ` depth${hasDepth ? `${depthTest ? 1 : 0}/${depthWrite ? 1 : 0}/${depthCompare}` : "off"}`;
-  webGpuObjects.pipeTpl.set(pipelineId, { desc, target, depthBase, s28dbg, fsId });
+  webGpuObjects.pipeTpl.set(pipelineId, { desc, target, depthBase, s28dbg, fsId, vsId });
   // Build the default (pcfg-format) variant now so the map is warm.
   resolvePipeline(pipelineId, target.format, depthBase ? desc.depthStencil.format : null,
                   { vsId, fsId, attrCount, stride, blendEnable, hasDepth });
@@ -4461,6 +4498,17 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     if (self._wgFsSrc[id] === undefined &&
         Object.keys(self._wgFsSrc).length < 80) {
       self._wgFsSrc[id] = wgsl;
+    }
+  }
+  // §28e: also stash vertex-shader WGSL by id — the backdrop FS = pure
+  // vertex-colour pass-through, so the black comes from the VS colour
+  // output. Dump the backdrop VS alongside its FS to see how color0 is
+  // synthesised (per-vertex attr vs lighting/material UBO constants).
+  if (stage === 0) {
+    self._wgVsSrc = self._wgVsSrc || {};
+    if (self._wgVsSrc[id] === undefined &&
+        Object.keys(self._wgVsSrc).length < 80) {
+      self._wgVsSrc[id] = wgsl;
     }
   }
 

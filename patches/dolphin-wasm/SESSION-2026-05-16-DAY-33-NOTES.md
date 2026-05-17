@@ -2197,3 +2197,73 @@ per-element fidelity grind; deterministic 3D-battle verification is
 still gated by the §27 savestate core wedge (pinned, deferred). All
 progress committed (`1c3bfd1 → §28d`); next construct scoped above +
 reference captured.
+
+### 28e. Difficulty-select black NARROWED: not fog/stale/depth/attr — boot renders correctly, difficulty-select is an EFB-copy-feedback construct
+
+Drove the §28d grind with JS-only probe extensions (served live, no
+rebuild): added `[s28-creg]` (live I_COLORS/I_KCOLORS/I_ALPHA PS-UBO
+bytes), `[s28-vs]`/`[s28-vsfn]` (the backdrop's paired VS body),
+widened the one-shot backdrop dump to the WHOLE TEV chain
+(`fn dolphin_fn_0..4`) + the UBO struct decl, and added `vsId` to
+`pipeTpl` so the VS can be correlated. Decisive chain:
+
+1. **The backdrop FS = a pure vertex-colour pass-through.** Full TEV
+   decompile (`[s28-fn4]`): `dolphin_fn_2_` combine inputs
+   local_17/18/19 = all 0, so out.rgb = local_20 = round(color0*255);
+   `dolphin_fn_4_` fog: `fogf.x(member_9[0])=0` ⇒ `ze=0` ⇒
+   `fog=clamp(0−fogf.y=1,0,1)=0` ⇒ `ifog=0` ⇒
+   `prev = (prev*256 + fogcolor*0)>>8 = prev`. **Fog is NOT applied
+   (factor 0); §28b/c "fogged to black" is superseded — the backdrop
+   output is exactly the interpolated vertex colour.** `nSample=0`
+   (untextured) confirmed.
+2. **The backdrop VS** (`[s28-vsfn]`, `vs#…` sig
+   `main(@location(5) colour, @location(0) pos)`): color0 =
+   `@location(5)` per-vertex colour through channel-0 lighting
+   (`dolphin_fn_1_` ≈ identity, white material, no lights); color1
+   forced 0 (numColorChans≤1). So screen colour == the vertex colour
+   attribute.
+3. **Not uniform-staleness / not a UBO mis-map.** `[s28-creg]`:
+   I_COLORS c1=`128,64,85,…` c2=`128,78,230,178`, I_KCOLORS k0
+   non-zero; the UBO struct decl confirms member_7=I_FOGCOLOR (offset
+   map correct). Constants are live and correct.
+4. **Boot renders CORRECTLY.** EFB readback over time: p=650/1000
+   `tex#14 = (0,0,25,0)` uniform — and screenshot `hash-6e0b2600-t4`
+   is the GameCube *"Game Data has been created…"* dialog: white text
+   on the correct dark-blue field. Untextured vertex-colour geometry
+   + text render right. p≥1700 (difficulty-select) `tex#14 nz=9697`
+   (text/box only) — everything else black.
+5. The difficulty-select content (textured backdrop, roster icon
+   grid, red box) are **textured draws that sample the 640×480
+   EFB-copies `tex#{52,65,151}` — which read pure black**
+   (`px0=0,0,0,255`). The trophy *source* textures DO have content
+   (`[webgpu-DIAG-ut] tex#98/100/… nz≈1000/4096`, alpha border).
+   Blend is `1:4/5` = src-alpha/one-minus-src-alpha (standard).
+
+**Precisely-scoped construct (supersedes §28b/c framing):** NOT a
+fog, uniform-staleness, depth, or vertex-attr-mapping bug. The
+difficulty-select scene is composited through a **640×480 EFB-copy
+feedback chain that is seeded/stuck BLACK** (the §28d candidate #1):
+the copies are black because `tex#14` is black at difficulty-select,
+and every dependent draw samples a black copy → stays black →
+re-copies black (self-perpetuating). Boot avoids this (no
+copy-feedback) and renders correctly. The bootstrap that must break
+the circle = the first difficulty-select scene draw that produces
+colour *independent* of a prior copy (Melee's 3D trophy/character
+backdrop render → first EFB-copy). **Next probe:** instrument the
+difficulty-select EFB-colour pass *before* the first 640×480
+`cpypass` — dump the distinct (pipe,fs,vs,bind-group,blend,depth) of
+the draws that target `tex#14` there and read back `tex#14` content
+immediately pre-copy, to find which scene draw should seed colour
+and why it produces nothing (candidate: 3D backdrop draw
+depth/alpha/texcoord, or it targets a different FB id than the copy
+source). Smallest gated fix, reprobe, verify boot + `?video=webgpu`
+unbroken, commit.
+
+**Status (honest, ralph):** verified *observability* increment
+(probe extensions — JS-only, gated/one-shot, served live, no
+rebuild, `?video=webgpu` / `DIAG_EFB_TO_CANVAS` / per-draw ring /
+§26 guard untouched). Root cause materially narrowed: the long-held
+fog hypothesis is **disproven for the current build** (factor 0);
+the construct is the EFB-copy feedback chain, not a per-material
+shader-math bug. Renderer still full speed (~100 % gameSpeed, 60
+coreFps). Continuing the loop on the scoped feedback-chain probe.
