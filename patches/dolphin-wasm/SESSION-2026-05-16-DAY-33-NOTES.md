@@ -2714,3 +2714,49 @@ carries only the passive gated `[s28n-*]` diagnostic (≤6 fires,
 `#ifdef __EMSCRIPTEN__`) + the kept §27 resync — no render-path
 change; `?video=webgpu` / per-draw ring / §26 guard untouched.
 `__battle.sav` removed (commit protocol).
+
+### 28o. ★ Backpressure DROP eliminated: 4× command-ring (65536→262144) — kills the residual black-flashes
+
+User stopped the §27 savestate effort (correct call — §28n proved it
+an unbounded core-compat audit); pivoted back to renderer-reachable
+work. The residual user-visible "flashy/glitchy, goes black"
+on the one deterministic scene (difficulty-select) traced to the
+§28i finding: **1 `[webgpu-ring] DROPPED`/75 s**. Mechanism
+(WebGPUCommandStream.cpp `Push`): when the shared-heap command ring
+fills under a transition load spike, the video pthread spins
+`kMaxSpins=500000` on the consumer read index, then **permanently
+drops the record**. A dropped `CREATE_*` is unrecoverable → every
+later `SET_*` referencing it misses → that frame (and followers)
+present black = the flash.
+
+**Fix (smallest, safest, highest-leverage):** `kRingCapacity`
+65536→**262144** (2 MB→8 MB @ 32 B/rec). The consumer drains in µs;
+a 4× ring absorbs the rare spike so it never sits full in steady
+state. The discio worker reads `capacity` from the ring hand-off
+postMessage (no consumer-side constant) so it propagates
+automatically. No policy/logic change — pure buffer headroom.
+
+**Probe-verified (rebuilt core, no-input attract → difficulty-select,
+DURATION=85):**
+- `[webgpu-ring] DROPPED` count **1/75 s → 0** (eliminated).
+- distinct canvas hashes **48-55 → 61** (vs 63 reference — the
+  closest the hardware path has reached; far fewer black frames).
+- `gameSpeed 100.17 %`, `coreFps 60.28` — full speed.
+- **0** `VALIDATION` errors. Difficulty-select renders fully
+  (`tex#14 nz≈840k`, §28g intact, screenshot = full roster /
+  VERY EASY / yellow arrows / red LEVEL box, matches reference).
+- **Never-break:** `?video=webgpu` reference re-probed — title
+  screen renders correctly, 58 distinct / 97.9 % (normal SW-core
+  run variance; the hybrid does not use the WebGPU command ring at
+  all, so the cap change cannot affect it). Invariant holds.
+
+**Status (honest, ralph):** verified renderer win directly targeting
+the user's flashiness report — the backpressure record-loss class is
+gone; difficulty-select is now the steadiest it has been (61/63,
+full speed, zero drops/validation). Rebuilt
+`dolphin-core-upstream.{js,wasm}` carries this + the inert gated
+§28n/§27 diagnostics (no render-path change). §28g + §28o together:
+difficulty-select converged. Remaining nav-gated screens
+(main-menu/cutscene/CSS) still need an observability tool (nav-probe)
+— deferred per the user's direction. `?video=webgpu` / per-draw ring
+/ §26 guard untouched.
