@@ -1501,3 +1501,41 @@ the input script), then `LoadStateFile` it deterministically every
 iteration of the per-screen 3D-fidelity grind — no re-navigation, no
 foreign-build version lock. `?video=webgpu` + `DIAG_EFB_TO_CANVAS`
 untouched.
+
+### 25. DL/UL State UI buttons + battle state loads but renders BLACK (next construct)
+
+Added permanent **DL State** / **UL State** transport buttons
+(index.html + app.js, served live) wired to the working
+`SaveStateFile`/`LoadStateFile` path (the old slot Save/Load are
+stubbed in the discio core). User navigated to a real in-game battle
+and captured `battle-state.sav` (21.2 MB, version-matched, this
+build) via DL State — preserved at `.omx/savestates/battle-state.sav`
+(gitignored) for the grind.
+
+Loaded it via the validator: `loadStateFile rc=1`,
+`afterState=Running`, **no version rejection** (vs the foreign §22
+sav). Metrics post-load show a real battle: `prim:1112 draw:273`
+(geometry-heavy, vs ~159 for a menu) — the core IS running the battle
+and submitting geometry. **But the canvas is BLACK and stays black**
+(no new distinct hashes for the entire post-load window; frame counter
+advances, 56 % speed).
+
+So: geometry is submitted but nothing presents. Two candidate
+constructs for the next session (deterministic now — just
+`LoadStateFile .omx/savestates/battle-state.sav` each iteration):
+1. **Savestate-load desync of the WebGPU backend** (most likely):
+   `State::Load` swaps all GC RAM + BP/XF/CP video registers, but our
+   command-ring backend's GPU-object cache (EFB/texture bridge ids,
+   `self._wgEfbColorId` for DIAG_EFB_TO_CANVAS, pipeline/bind-group
+   caches, the producer's id allocators) is from the pre-load session
+   and is now stale/desynced → black. Likely needs a post-load
+   backend reset (invalidate caches / re-derive EFB id / reset the
+   command stream) hooked off `State::SetOnAfterLoadCallback` or the
+   worker's loadStateFile.
+2. In-game 3D battle genuinely renders black (a per-draw fidelity
+   construct) — less likely given menus/trophies/dialogs render and
+   geometry is flowing, but not yet ruled out.
+
+`?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched. The deterministic
+observability tool the grind needed now exists and works; the battle
+black-after-load is the precise, well-scoped next construct.

@@ -66,6 +66,8 @@ const elements = {
   hudStatus: document.querySelector("#hudStatus"),
   inputSource: document.querySelector("#inputSource"),
   loadButton: document.querySelector("#loadButton"),
+  dlStateButton: document.querySelector("#dlStateButton"),
+  ulStateInput: document.querySelector("#ulStateInput"),
   mountNote: document.querySelector("#mountNote"),
   muteButton: document.querySelector("#muteButton"),
   overlayToggle: document.querySelector("#overlayToggle"),
@@ -155,6 +157,32 @@ window.__saveStateFile = async () => {
     for (let i = 0; i < u8.length; i += CH)
       bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
     return { saved: r.saved, size: r.size, b64: btoa(bin) };
+  } catch (e) {
+    return { saved: false, error: String(e?.message || e) };
+  }
+};
+
+// One-call: capture a version-matched state and download it as a
+// .sav file from the browser. Run window.__downloadSaveState() in the
+// devtools console while in the battle scene. The downloaded file is
+// loadable by this exact build via the validator's SAVE_STATE_URL.
+window.__downloadSaveState = async (name) => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.saveStateFile !== "function")
+      return { saved: false, error: "adapter has no saveStateFile" };
+    const r = await a.saveStateFile();
+    if (!r || !r.bytes) return { saved: false, error: r?.error || "no bytes" };
+    const blob = new Blob([r.bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "battle-state.sav";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { saved: true, size: r.size, file: link.download };
   } catch (e) {
     return { saved: false, error: String(e?.message || e) };
   }
@@ -283,6 +311,56 @@ function wireTransport() {
   elements.loadButton.addEventListener("click", () => {
     host.loadState();
     syncGameInfo(host.game);
+  });
+
+  // Working save-state path (the slot Save/Load above are stubbed in
+  // the discio core): DL State captures a version-matched .sav via
+  // SaveStateFile and downloads it; UL State loads a .sav via
+  // LoadStateFile. Both go through the real State::SaveToFileSync /
+  // State::LoadAs path that §24 made functional.
+  elements.dlStateButton.addEventListener("click", async () => {
+    const btn = elements.dlStateButton;
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    setStatus("Capturing save state… (a few seconds)");
+    try {
+      const r = await window.__downloadSaveState("battle-state.sav");
+      setStatus(
+        r && r.saved
+          ? `Save state downloaded (${r.size} B) — battle-state.sav`
+          : `Save state failed: ${r?.error || "unknown"}`,
+        r && r.saved ? undefined : "error");
+    } catch (e) {
+      setStatus(`Save state failed: ${e?.message || e}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  });
+
+  elements.ulStateInput.addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    setStatus(`Loading save state ${file.name}…`);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const a = host.adapter;
+      if (!a || typeof a.loadStateFile !== "function") {
+        setStatus("Upload state: adapter has no loadStateFile", "error");
+        return;
+      }
+      const r = await a.loadStateFile(bytes);
+      setStatus(
+        r && r.loaded
+          ? `Save state loaded (${r.afterState || "running"})`
+          : `Save state load failed (rc=${r?.rc ?? "?"}${
+              r?.error ? " " + r.error : ""})`,
+        r && r.loaded ? undefined : "error");
+    } catch (e) {
+      setStatus(`Upload state failed: ${e?.message || e}`, "error");
+    }
   });
 
   elements.muteButton.addEventListener("click", async () => {
