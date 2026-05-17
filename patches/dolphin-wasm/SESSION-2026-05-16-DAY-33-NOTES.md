@@ -831,3 +831,42 @@ margin", task #2) and then revisit colour/TEV/texture fidelity.
 Remaining DIAG flags (`DIAG_DEPTH_ALWAYS`, `DIAG_RASTER_OPEN`) are
 committed off; the passive `[webgpu-DIAG-*]` logs stay for the next
 fidelity grind.
+
+### 10. Post-first-light fidelity assessment (probe screenshots)
+
+Validator navigated menus with the interim EFB→canvas present. Real
+geometry renders and animates (`distinct` 1→13) but fidelity is
+**partial**: solid/untextured geometry shows (large white "Select"
+title text, mode box outlines) while textured geometry + backgrounds
+do **not** appear (black). Classic next-stage cause: TEV / texture
+sampling not yet correct — textured draws output black/transparent so
+only flat-colour primitives are visible; also some scale/placement
+offset (title text large, bottom-left) likely from the interim
+full-EFB→full-canvas blit not matching Dolphin's intended
+viewport/aspect.
+
+This is the expected post-first-light state. Prioritised remaining
+grind (each a probe→one-construct→fix, instrumentation already in
+place):
+
+1. **Texture/TEV colour fidelity** — why textured GX draws render
+   black. Suspects: `SetSamplerState` is a no-op (one shared sampler,
+   no per-index wrap/filter); `WebGPUTexture::Load` upload format vs
+   `MapTexFormat`; the group-1 split (tex b0-7 / sampler b8) binding
+   the dummy where a real texture is expected (`resolve_tex` dummy
+   substitution may be over-eager now that geometry is correct);
+   PixelShaderConstants (`m_ubo_ps`) contents. Use the existing
+   `[webgpu-DIAG-*]` + a one-shot PS-UBO / bound-texture-id dump.
+2. **Promote the interim present to a clean path** — make the
+   EFB→canvas blit a real present (correct source rect = the game's
+   XFB region, dest aspect-correct, no DIAG gating) OR fix Dolphin's
+   XFB-copy→backbuffer chain (why fb=47/fb=0 draws produce green).
+   The EFB-direct present is the simpler, robust choice for this
+   remote architecture.
+3. **Comp-play verification** (was task #4 tail) — once colour lands:
+   stable ~57-60 fps, low frame-time variance, responsive input vs
+   the `?video=webgpu` hybrid baseline.
+
+`?video=webgpu` hybrid remains untouched. The decisive architectural
+unknowns are now all retired — the WebGPU hardware renderer draws real
+GameCube geometry; the rest is the documented fidelity fix-loop.
