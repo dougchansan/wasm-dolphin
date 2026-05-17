@@ -1269,3 +1269,52 @@ Then the smallest gated fix + reprobe (menu must show real geometry;
 `?video=webgpu` hybrid + `DIAG_EFB_TO_CANVAS` untouched. The §16/§17
 architectural win stands; this is the next localized fidelity grind,
 well-narrowed and instrumented for a fresh cycle.
+
+### 19. §18 root cause CONFIRMED + fixed (backend-local): projection-change re-slice
+
+Confirmed hypothesis (a). `CPUCull::AreAllVerticesCulled`
+(`CPUCull.cpp:156`, called per vertex-batch *before* the draw's
+`SetConstants`) calls `VertexShaderManager::SetProjectionMatrix`
+(`VertexShaderManager.cpp:122`), which `memcpy`s the new matrix into
+`constants.projection` **and** consumes `DidProjectionChange()` via
+`ResetProjection()` — but never sets `dirty`. So the later
+`SetConstants` projection block (`:414`, the one that *does* set
+`dirty`) is skipped. Upstream tolerates this (other per-frame changes
+mark the UBO dirty → full re-upload); the §17 per-draw uniform ring
+re-slices the VS constants **only on `vsm.dirty`**, so a static 2D
+menu (projection changes, nothing else) reused a stale 3D/zero
+projection slice → every menu quad collapsed to the clip origin (the
+observed centre cross).
+
+**Attempt 1 (rejected):** set `dirty = true` inside
+`SetProjectionMatrix`. Built, probed — **regressed the 3D demo**
+(trophy → outline+name only, no model). Cause: that path runs the
+cull-time projection and skips `SetConstants`' graphics-mod /
+draw-time projection handling, so marking dirty there pins the wrong
+matrix. Reverted (VideoCommon untouched).
+
+**Attempt 2 (landed):** backend-local. `WebGPUGfx::
+PrepareDrawResources` now also re-slices the VS UBO when
+`memcmp(constants.projection, cached, 64) != 0` — detected at *draw
+time*, from the same `constants.projection` the shader reads, so no
+cull-vs-draw mismatch and no shared-logic perturbation
+(`m_last_vs_proj` / `m_vs_proj_valid`).
+
+**Probe-verified:** EFB tex#14 during the affected frames went
+**uniform `0,0,0,0` → real varying content** (`25,25,51` base,
+`51,51,103` at the 200,150 sample, nz≈68 %). 3D demo/trophy **still
+renders perfectly — no regression** (unlike attempt 1). present≈9360
+in 140 s (full speed), no `VALIDATION`, 1 transient ring drop.
+
+**Verification gap (honest):** the blind X+Enter validator does not
+deterministically reach/hold Melee's title (`t≈90–110 s`), main menu
+or CSS — runs go boot→attract-demo, or to a black/static attract
+timeout — so a *direct screenshot* of those exact screens rendering
+correctly is not yet captured. Evidence is indirect-but-strong: the
+EFB now receives real geometry where it was previously empty during
+non-3D frames, the fix logically closes the §18-confirmed root cause,
+and there is no regression. **Next:** drive the menu deterministically
+(a fixed INPUT_SCRIPT that reaches the title/menu, or a save-state) to
+capture the title/menu/CSS visually; if any still collapse, dump
+`constants.projection` + `xfmem.projection.type` per menu draw to find
+the residual. `?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched.
