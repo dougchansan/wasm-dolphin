@@ -3587,6 +3587,12 @@ function drainWebGpuCmdRing() {
                   `fogi=${ib[4]},${ib[5]},${ib[6]},${ib[7]} ` +
                   `fogf=${fb[0]?.toFixed(4)},${fb[1]?.toFixed(4)},` +
                   `${fb[2]?.toFixed(4)},${fb[3]?.toFixed(4)}`);
+                // §28f: I_TEXDIMS @144 (int4[8]); the textured-draw FS
+                // normalises texcoords by f32(I_TEXDIMS[map].xy*128).
+                // If these are 0 ⇒ div-by-0 ⇒ NaN uv ⇒ sample 0 ⇒
+                // black despite a valid texture+konst.
+                const td = new Int32Array(moduleInstance.HEAPU8.buffer,
+                                          srcP + 144, 16);  // texdims[0..3]
                 console.log(`[s28-creg] id=${bid} ` +
                   `c0=${cb[0]},${cb[1]},${cb[2]},${cb[3]} ` +
                   `c1=${cb[4]},${cb[5]},${cb[6]},${cb[7]} ` +
@@ -3594,6 +3600,11 @@ function drainWebGpuCmdRing() {
                   `c3=${cb[12]},${cb[13]},${cb[14]},${cb[15]} ` +
                   `k0=${cb[16]},${cb[17]},${cb[18]},${cb[19]} ` +
                   `alpha=${cb[32]},${cb[33]},${cb[34]},${cb[35]}`);
+                console.log(`[s28-texdim] id=${bid} ` +
+                  `td0=${td[0]},${td[1]},${td[2]},${td[3]} ` +
+                  `td1=${td[4]},${td[5]},${td[6]},${td[7]} ` +
+                  `td2=${td[8]},${td[9]},${td[10]},${td[11]} ` +
+                  `td3=${td[12]},${td[13]},${td[14]},${td[15]}`);
               }
             }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
@@ -3924,6 +3935,30 @@ function drainWebGpuCmdRing() {
                     for (let o = ci; o < v.length; o += 700)
                       console.log(`[s28-vsfn ${o - ci}] ${v.slice(o, o + 700)}`);
                 }
+              }
+              // §28f: also dump the dominant TEXTURED difficulty-select
+              // draw — b0 a REAL texture (not the 1x1 dummy), big idx
+              // (the backdrop/roster composite), binding a 640x480
+              // EFB-copy at b1. This is the draw that outputs ~0 into
+              // tex#14 while sampling the black copy; dump its FS
+              // textureSample* calls + final return to see if it
+              // multiplies the (black) b1 copy (feedback) or collapses
+              // via alpha/texcoord.
+              if (tpl && idx >= 40 && !self._wgTexFsDone &&
+                  allb.indexOf(" b0=tex#57(1x1)") !== 0 &&
+                  allb.indexOf("(640x480)") >= 0 &&
+                  self._wgFsSrc && self._wgFsSrc[tpl.fsId] !== undefined) {
+                self._wgTexFsDone = true;
+                const w = self._wgFsSrc[tpl.fsId];
+                const flat = w.replace(/\s+/g, " ");
+                console.log(`[s28-texfs] pipe=${self._wgCurPipe} ` +
+                  `fs#${tpl.fsId} vs#${tpl.vsId} len=${w.length} ${pdbg} ` +
+                  `bg1=${allb} nSample=` +
+                  `${(flat.match(/textureSample/g) || []).length}`);
+                const fi = flat.indexOf("fn dolphin_fn_");
+                if (fi >= 0)
+                  for (let o = fi; o < flat.length; o += 700)
+                    console.log(`[s28-tfn ${o - fi}] ${flat.slice(o, o + 700)}`);
               }
               const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;
               self._wgEfbDraws = self._wgEfbDraws || new Map();

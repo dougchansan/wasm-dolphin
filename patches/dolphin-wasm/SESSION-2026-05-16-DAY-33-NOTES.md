@@ -2267,3 +2267,65 @@ fog hypothesis is **disproven for the current build** (factor 0);
 the construct is the EFB-copy feedback chain, not a per-material
 shader-math bug. Renderer still full speed (~100 % gameSpeed, 60
 coreFps). Continuing the loop on the scoped feedback-chain probe.
+
+### 28f. EFB-copy-feedback DISPROVEN too — narrowed to: difficulty-select per-vertex COLOUR reaches the VS as 0 (boot reaches correctly)
+
+Extended the probe (`[s28-texfs]`/`[s28-tfn]` = the dominant TEXTURED
+difficulty-select draw's FS; `[s28-texdim]` = live I_TEXDIMS).
+Systematically eliminated every remaining non-vertex hypothesis:
+
+- **EFB colour pass is clean.** `[webgpu-DIAG-efbpass]` at
+  difficulty-select: `fb=14 pipeMiss=0 bgMiss=0` with ~100 indexed
+  draws; **no VALIDATION/device errors anywhere**. The
+  `missBg=105738`/`missPipe=10929` in `[webgpu-exec]` are in *other*
+  passes (copy/offscreen), NOT the EFB pass → the
+  "poisoned-frame-submit" idea is disproven for the EFB pass.
+- **Textured draw = `konst(I_KCOLORS[0]) × sampled_tex`** (`fs#78`
+  decompiled: `dolphin_fn_1_` samples texmap 0 = b0 = the REAL
+  texture, NOT the black b1 copy; `dolphin_fn_2_` modulates by
+  konst). `[s28-creg]`: konst k0 is *mostly white* (`255,255,255,*`,
+  308×) ⇒ konst-zero is NOT the cause. `[s28-texdim]`: I_TEXDIMS is
+  valid (`32,24`/`64,56`/`88,88`) ⇒ the texcoord-normalisation
+  divisor is non-zero, texture sampling is fine ⇒ **texcoord-collapse
+  disproven**. So the textured elements should render; they are
+  small overlays — the dominant black is the *untextured* backdrop.
+- **EFB-copy feedback chain disproven as the root.** The dominant
+  difficulty-select draw is the b0=1×1 *untextured* backdrop
+  (`fs#12256`), whose output (§28e) = the interpolated **vertex
+  colour** — it does NOT sample the black 640×480 copy. The copies
+  are black *because* the EFB is black, not vice-versa; the seed is
+  the untextured vertex-colour backdrop.
+- **Boot vs difficulty-select is the whole story.** EFB readback:
+  p=650/1000 `tex#14=(0,0,25,0)` uniform = the GameCube
+  *"Game Data…"* dialog, **correct** (screenshot confirms white text
+  on dark-blue). p≥1700 (difficulty-select) `tex#14` black except
+  ~9697 px (text). Same VS shape (`@location(5)` colour →
+  channel-0 identity lighting → colour0), same FS (colour
+  passthrough). The ONLY difference: at boot the per-vertex colour
+  attribute arrives non-zero; at difficulty-select it arrives **0**.
+
+**Precisely-scoped construct (final narrowing):** NOT fog, NOT
+uniform-staleness, NOT konst, NOT I_TEXDIMS, NOT missing
+bind-groups/pipelines, NOT validation poison, NOT the EFB-copy
+feedback chain. The difficulty-select untextured backdrop's
+**per-vertex colour (`@location(5)`, unorm8x4) reaches the VS as 0**,
+while the boot dialog's identical-shape draw reaches correctly ⇒ a
+**per-draw vertex-COLOUR attribute fetch/format/offset issue specific
+to difficulty-select geometry** (candidate: the pcfg vertex layout
+[stride / colour offset / unorm8x4] for these draws doesn't match the
+actual vertex-buffer contents Dolphin writes, so the colour fetch
+reads zero; or Dolphin emits colour 0 here and GX sources it from a
+material/colour register our shadergen path doesn't honour for this
+uid). **Next probe:** at the difficulty-select EFB pass, for the
+backdrop draw (`fs#12256`/its VS) dump the BOUND vertex buffer bytes
+at the pcfg colour offset + that pipeline's exact pcfg
+(stride/attr/format), and the same for the *boot* dialog draw —
+diff them. Smallest gated fix, reprobe, verify boot + `?video=webgpu`
+unbroken, commit.
+
+**Status (honest, ralph):** another verified *observability +
+elimination* increment (JS-only probes; `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched). Five
+hypotheses conclusively disproven this arc; construct localised to a
+single mechanism (per-draw vertex-colour fetch). Renderer full speed.
+The boulder continues on the scoped vertex-colour probe.
