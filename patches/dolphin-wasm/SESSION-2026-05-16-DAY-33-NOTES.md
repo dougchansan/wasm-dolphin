@@ -2653,3 +2653,64 @@ honest corrections. Boot logos / save dialog render correctly
 issues remain not-deterministically-observable without either the
 §27 fix (enables battle) or a navigation-scripted probe.
 `?video=webgpu` / per-draw ring / §26 guard untouched.
+
+### 28n. ★ §27 wedge DECISIVELY characterized: game self-halts in an infinite loop post-load (NOT a re-armable interrupt) — savestate state-fidelity defect
+
+User chose to take on the §27 core fix. Added `[s28n-wedge]`/
+`[s28n-gpr]` to CoreTiming (MSR[EE], the 6 instr words at the wedge
+pc, decoded poll target, GPRs); rebuilt the core
+(`dolphin-core-upstream.{js,wasm}`, 0 errors); loaded
+`battle-state.sav` via the validator. Decoded the wedge:
+
+```
+0x80335E90: 4e800020  blr
+0x80335E94: 7c0004ac  sync
+0x80335E98: 60000000  nop          <- PPC wedged here (eeBit=0)
+0x80335E9C: 38600000  li   r3, 0
+0x80335EA0: 60000000  nop
+0x80335EA4: 4bfffff4  b    0x80335E98
+```
+
+`[s28n-wedge] eeBit=0 … op=24 polledAddr=0x0 polledVal=0x0` — it
+polls **nothing**; it is a **pure infinite halt loop** (`nop; li r3,0;
+nop; b .`) running with **`MSR[EE]=0`**. So §27g's "polling a
+stranded PE/DSP/VI completion" model is **wrong**: the game is not
+waiting on a device flag — its PowerPC has **deliberately branched
+into a dead-loop with interrupts disabled** (Melee's
+hang/`OSDeadLoop`/exception-tail). The PE_FINISH|VI bits in
+`picause=0x10540` accumulate *because* it already hung (ISRs can't
+run with EE=0), not as the cause.
+
+PC trajectory (`[s27-coretiming]`): post-load the game runs **real
+code for several seconds** (PCs cycling 0x8034b164 / 0x80361bb8 /
+0x803447fc / 0x801a4dac / 0x8034738c — the §27d "burst", pimask 0xffc,
+interrupts live) → then transitions to `0x80335e98` and stays. So
+Melee executes normally for seconds post-load, then **its own code
+trips a fault/assertion/exception path and self-halts**.
+
+**Decisive root cause (final, supersedes §27/§27g):** the
+savestate-load defect is a **state-fidelity** problem — the wasm
+Dolphin core's HW/PPC `DoState` restores RAM/PPC/device state subtly
+inconsistently; Melee runs a few seconds on it, then its own
+sanity/exception code detects the inconsistency and jumps to its
+infinite hang loop. This is **not** fixable from the after-load video
+resync callback and **not** a re-armable interrupt/DMA completion. It
+is a deep, open-ended PowerPC/OS/HW savestate-compatibility audit
+(which DoState sub-state — MMU/BAT, cache, PPC SPRs/MSR, DSP/EXI/SI/
+DI/IPC — diverges enough to trip Melee's check), with **no bounded
+path** — exactly the effort the §27g strategic pivot deliberately
+deferred as out-of-scope for the renderer goal.
+
+**Honest verdict (ralph):** §27/§28n is now *conclusively* a
+savestate state-fidelity core defect, materially harder than the
+"re-arm a completion" framing the user authorized against — the game
+self-halts, it is not waiting on anything we can poke. Continuing
+would mean an unbounded multi-rebuild PPC/OS savestate audit with no
+guaranteed convergence. Recommend NOT sinking further unbounded
+iteration here (consistent with §27g); the deterministic-3D-battle
+goal is better served by a navigation-scripted attract/CSS probe (no
+savestate) or accepting the verified renderer wins. The rebuilt core
+carries only the passive gated `[s28n-*]` diagnostic (≤6 fires,
+`#ifdef __EMSCRIPTEN__`) + the kept §27 resync — no render-path
+change; `?video=webgpu` / per-draw ring / §26 guard untouched.
+`__battle.sav` removed (commit protocol).
