@@ -2455,3 +2455,53 @@ documented external limitations, not `?video=wgpu` renderer defects.
 Next renderable deterministic construct = the ring-backpressure
 transition drop (minor); the long-running §28 difficulty-select
 construct (§28→§28h) is **closed**.
+
+### 28j. CORRECTION + poison-submit guard: intro-cutscene / title / main-menu render BLACK (zero EFB draws) — NOT a JIT-warmup artifact
+
+User feedback on the live build (`?video=wgpu`): "flashy/glitchy,
+goes black most of the time, flashes of the character-select screen,
+the initial save prompt renders but not perfectly, the initial
+cutscene loads but lags/flashes, the main menu isn't rendering." This
+**falsifies the §28h/§28i "JIT-warmup timing artifact" conclusion** —
+those were wrong. Re-probe evidence (`SHOT_EVERY=6`):
+
+- `[webgpu-DIAG-efbpass]` p=1..1314 (t≈10-27, **post-JIT, 100 %
+  speed**, screenshot `15-t18-down-Enter` fully black): **`draw=0
+  drawIdx=0 pipeOk=0 bgOk=0`** — the EFB colour pass receives **zero
+  draws** through the entire intro-cutscene / title / main-menu
+  window. Boot logos (Nintendo/HAL, t8) and the GameCube save dialog
+  (`(0,0,25)`, p=650/1000) render; then a **no-draw black window**;
+  then difficulty-select draws begin (~p=1464, drawIdx≈244) and it
+  renders (the §28g win stands).
+- So intro/title/main-menu black = **no geometry reaches `tex#14`
+  in that window** (NOT poison, NOT present failure, NOT warmup):
+  draws are either issued to a different FB/target, or taken by the
+  VideoCommon ShowImage / utility-draw fallback the PLAN Phase A
+  flags (`WebGPUGfx::SupportsUtilityDrawing()==false` ⇒ VideoCommon
+  never issues real Draw/Pipeline for those screens), or the
+  attract's intro/menu uses a render path (EFB-copy-only / XFB-blit /
+  3D-movie) our executor doesn't drive yet.
+
+**Defensive guard added (§28j, JS-only, served live):** the whole
+frame is one command encoder; one invalid op makes `queue.submit()`
+throw → the ENTIRE frame presents black (the user's "mostly black,
+occasional flash"). Added per-pass bind-group validity tracking
+(`bgValid[0..2]`, reset on BEGIN_PASS, set on SET_BIND_GROUP
+success/fail) and gated `DRAW`/`DRAW_INDEXED` on
+pipeline + all-3-bind-groups valid, with a `skipDraw` stat. Probe:
+`skipDraw=0` ⇒ missing-bind-groups at draw time is **not** the
+current poison source (the 122 k `missBg` are recovered before the
+draw or in draw-less contexts) — but the guard is a correct, harmless
+robustness net against the poison class and stays. The real
+construct is the **zero-draw intro/title/menu window** (next).
+
+**Status (honest, ralph):** §28g difficulty-select fix stands &
+verified; §28h/i over-claimed convergence by trusting EFB-readback
+over the user-visible presented canvas + mislabelling the black
+intro/title/menu as a warmup artifact — corrected here. Next
+construct precisely scoped: **why the EFB pass gets zero draws during
+intro-cutscene / title / main-menu** (probe: where do those screens'
+draws go — different FB id? ShowImage fallback? — instrument
+BEGIN_PASS fb-ids + draw targets across p≈300-1314 vs the
+`?video=webgpu` reference for the same screens). `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.

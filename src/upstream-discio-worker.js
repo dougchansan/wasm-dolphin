@@ -3383,7 +3383,7 @@ const DIAG_RASTER_OPEN = false;
 let cmdRingOwnsCanvas = false;
 const webGpuExecStats = {
   beginFb0: 0, beginFbN: 0, draw: 0, drawIdx: 0, setPipe: 0,
-  setBg: 0, present: 0, missPipe: 0, missBg: 0, lastLog: 0
+  setBg: 0, present: 0, missPipe: 0, missBg: 0, skipDraw: 0, lastLog: 0
 };
 
 function drainWebGpuCmdRing() {
@@ -3436,6 +3436,16 @@ function drainWebGpuCmdRing() {
   let passColorFmt = null;
   let passDepthFmt = null;
   let passHasPipe = false;
+  // §28j: per-pass bind-group validity. The fixed pipeline layout
+  // declares 3 groups (l0/l1/l2); WebGPU requires ALL declared groups
+  // to hold a valid bind group at draw time. If replayCreateBindGroup
+  // skipped one (a referenced texture wasn't ready) the SET_BIND_GROUP
+  // misses and the slot is unbound/stale → the draw is invalid → the
+  // whole frame's queue.submit() throws → the ENTIRE frame presents
+  // BLACK (the user-visible "mostly black, occasional flash"). Track
+  // which slots currently hold a valid bind group and SKIP draws that
+  // aren't fully bound, so one bad draw no longer poisons the frame.
+  const bgValid = [false, false, false];
   let errScope = false;
   // One-shot present-path diagnostic: per-pass tally of pipeline/bind/
   // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
@@ -3765,6 +3775,7 @@ function drainWebGpuCmdRing() {
           }
           pass = enc.beginRenderPass(desc);
           passHasPipe = false;
+          bgValid[0] = bgValid[1] = bgValid[2] = false;  // §28j
           passFbId = fbId;
           // The EFB colour pass is the only one with a depth
           // attachment (the fb=47 XFB has none) — track its id so the
@@ -3798,8 +3809,10 @@ function drainWebGpuCmdRing() {
           break;
         }
         case WGPU_CMD_OP_SET_BIND_GROUP: {
+          const bgSlot = u32[recWord + 1];
           const bgId = u32[recWord + 2];
           const bg = webGpuObjects.bindGroups.get(bgId);
+          if (bgSlot < 3) bgValid[bgSlot] = !!(pass && bg);  // §28j
           if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
               self._wgBgTex[bgId] != null &&
@@ -3865,10 +3878,17 @@ function drainWebGpuCmdRing() {
           }
           break;
         case WGPU_CMD_OP_DRAW:
-          if (pass && passHasPipe) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; pd.draw++; }
+          // §28j: require pipeline + ALL 3 bind groups valid, else
+          // skipping prevents an invalid draw poisoning the whole
+          // frame submit (→ black frame).
+          if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2]) { pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0); webGpuExecStats.draw++; pd.draw++; }
+          else if (pass && passHasPipe) { webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1; }
           break;
         case WGPU_CMD_OP_DRAW_INDEXED:
-          if (pass && passHasPipe) {
+          if (pass && passHasPipe &&
+              !(bgValid[0] && bgValid[1] && bgValid[2])) {
+            webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
+          } else if (pass && passHasPipe) {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
@@ -4103,7 +4123,8 @@ function drainWebGpuCmdRing() {
               `[webgpu-exec] stats present=${s.present} beginFb0=${s.beginFb0} ` +
               `beginFbN=${s.beginFbN} drawIdx=${s.drawIdx} draw=${s.draw} ` +
               `setPipe=${s.setPipe} missPipe=${s.missPipe} setBg=${s.setBg} ` +
-              `missBg=${s.missBg} pipes=${webGpuObjects.pipelines.size} ` +
+              `missBg=${s.missBg} skipDraw=${s.skipDraw} ` +
+              `pipes=${webGpuObjects.pipelines.size} ` +
               `tex=${webGpuObjects.textures.size} buf=${webGpuObjects.buffers.size} ` +
               `bg=${webGpuObjects.bindGroups.size}`);
           }
