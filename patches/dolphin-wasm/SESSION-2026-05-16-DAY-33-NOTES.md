@@ -1858,3 +1858,65 @@ unregressed (12/12 distinct pre-load; menus/3D still render). Battle
 still black post-load (re-freeze after the 3 s burst — next
 construct precisely scoped above). `?video=webgpu` /
 `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+
+### 27e. ★ Re-scoped: the WHOLE emulation halts after the post-load backlog (not a GPU-wake bug) — resync primitive is irrelevant
+
+Tested §27d candidate (a): replaced the blocking `FlushGpu()` with
+non-blocking `fifo.EmulatorState(true); fifo.RunGpu();` in the
+after-load callback. Result is the **same shape** as FlushGpu:
+
+- Post-load **burst** — backlog drains over ~7 s (`write` 5210931→
+  5305807 ≈ +95 k records, `read` tracks, `present` 2366→2389,
+  `draw` 7104→7217, `[s27-decode]` +7 samples) — then **hard
+  re-freeze** from dt≈7 s onward (every counter pinned).
+- Crucially, **after the freeze ALL Dolphin EM_ASM goes silent**:
+  post-freeze `[s27-gpuloop]`=5, `[s27-GPB]`=1, `[s27-decode]`=0,
+  `[s27-RunGpu]`=0 — i.e. **both the CPU and GPU pthreads stop**, not
+  just the GPU consumer. Only the JS drain/`postload-probe` keep
+  running (frozen values). (Verified the FlushGpu run too: zero
+  Dolphin lines after the freeze line.)
+
+**Re-scoped root cause:** this is **not** a GPU-thread wake/visibility
+bug and **not** the WebGPU backend. The one-shot after-load resync
+successfully drains the load-time FIFO **backlog** (3–7 s of fully
+correct end-to-end pipeline flow — proof the renderer + ring + the
+restored state are all fine), then **the entire emulation halts**
+(CPU PowerPC thread + GPU thread both stop). The resync primitive
+(`FlushGpu` vs `EmulatorState(true)+RunGpu`) only changes burst
+length, not the halt. So the construct is: *after a savestate load,
+once the backlog is consumed, the Dolphin core cannot sustain
+emulation* — the CPU/PowerPC side stalls (likely a HW/IPC/DSP/EXI/
+CoreTiming or dual-core CPU↔GPU sync state restored inconsistently by
+DoState, or a JIT/idle-skip deadlock), which then starves the FIFO
+and everything stops. The original §27 "CPU runs forever at 44 fps"
+was VI/CoreTiming idle ticks, *not* real game progress — with the
+resync we now see real progress for the backlog then a true halt.
+
+**Next construct (different layer — CPU/core, not video):**
+instrument the CPU/PowerPC + CoreTiming side across the post-burst
+halt: log PC / `CoreTiming` advancing / `CPU::GetState` / whether the
+CPU thread is in idle-skip or blocked on an `AsyncRequests` /
+`Event::Wait` / DSP/EXI sync. Compare a *fresh* (no-load) attract run
+vs the post-load halt at the same scene. Smallest-first fix
+candidates once localized: (i) post-load, force `CPU` out of any
+stale wait/idle-skip (`CoreTiming::ForceExceptionCheck`, clear
+`m_syncing_suspended` — note `Fifo::DoState` restores
+`m_syncing_suspended` from the sav: if saved `true`, the SyncGPU
+CoreTiming event is never rescheduled → a strong lead); (ii)
+re-`ScheduleEvent` the sync-GPU/idle events after load; (iii) audit
+which `HW::DoState` sub-state (DSP/EXI/SI/IPC) leaves the CPU waiting.
+**The `m_syncing_suspended` restore in `Fifo::DoState` (Fifo.cpp:72,
+`p.Do(m_syncing_suspended)`) is the prime suspect** — if the state
+was captured with the sync-GPU event suspended, post-load nothing
+ever reschedules it.
+
+**Committed this checkpoint:** the after-load resync switched to the
+**non-blocking** `EmulatorState(true)+RunGpu` (drop `FlushGpu` — its
+`m_gpu_mainloop.Wait()` on the CPU thread risks a hard deadlock and
+gave no benefit; EmulatorState gives a longer clean burst, no
+CPU-block). Same diagnostics; JS `[postload-probe]` throttle fix
+confirmed (console 6082 lines vs 9928). Pre-load rendering
+unregressed (10/10 distinct pre-load). Battle still black post-load
+(burst-then-total-halt; root cause re-scoped to the CPU/core layer
+with `m_syncing_suspended` as prime suspect). `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.

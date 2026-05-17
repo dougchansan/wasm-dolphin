@@ -591,8 +591,15 @@ void EnsureRuntime()
     // share memory post-load (architecture defect, no Dolphin-level
     // resync can fix it); if it does, the CP desync is logical state.
     Fifo::g_s27_sentinel.store(0xABCD1234u, std::memory_order_seq_cst);
+    // §27d candidate (a): the blocking FlushGpu()/m_gpu_mainloop.Wait()
+    // version drained the load-time FIFO backlog for ~3 s then TOTALLY
+    // halted both Dolphin pthreads (CPU+GPU silent) — Wait() on the CPU
+    // thread is a regression. Use the non-blocking EmulatorState(true)
+    // (m_emu_running_state.Set + m_gpu_mainloop.Wakeup() + clears
+    // AllowSleep) so the GPU consumer re-engages for the steady state,
+    // then RunGpu() re-kicks it. No CPU-thread blocking.
     auto& fifo = Core::System::GetInstance().GetFifo();
-    fifo.FlushGpu();
+    fifo.EmulatorState(true);
     fifo.RunGpu();
   });
 
