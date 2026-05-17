@@ -1920,3 +1920,60 @@ unregressed (10/10 distinct pre-load). Battle still black post-load
 (burst-then-total-halt; root cause re-scoped to the CPU/core layer
 with `m_syncing_suspended` as prime suspect). `?video=webgpu` /
 `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+
+### 27f. ★ PINPOINTED: post-load the PowerPC wedges spinning at PC=0x80335E98 (HW-poll idle loop); CoreTiming is healthy
+
+Instrumented `CoreTimingManager::Advance()` with `[s27-coretiming]`
+(global_timer + event-queue depth + **`ppc_state.pc`**). Decisive:
+
+- **`m_syncing_suspended` lead RETIRED** (red herring for async
+  dual-core): `MAIN_SYNC_GPU` is unset ⇒ Dolphin default **false** ⇒
+  pure async dual-core; in that mode `SyncGPUCallback` is inert and
+  the CPU never blocks on the GPU. Not the cause.
+- **CoreTiming is fully alive post-load**: `[s27-coretiming]` fires
+  83× across the whole post-load window; `gt` (global_timer)
+  monotonically advances (wrapping the u32 print as expected);
+  `evq=6` events stay queued and are serviced. The CPU thread is
+  **not** blocked, paused, or halted, and CoreTiming is not stuck.
+- **The PowerPC PC is FROZEN**: pre-load `pc` varies (0x8034B164,
+  0x8033D224, …); the first post-load samples show it moving
+  (0x8034BF…), then it **locks to `pc=0x80335E98` for the entire
+  remaining post-load window** (every one of ~80 samples). The decode
+  counter fires only 6× (the backlog burst) then stops.
+
+**Pinpointed root cause:** after the post-load FIFO backlog drains,
+Melee's PowerPC enters a tight **idle/poll loop at `0x80335E98`**
+(MEM1 game code) and never leaves — it is busy-waiting on a
+hardware/memory condition that the savestate restore left permanently
+unsatisfiable. CoreTiming, the CPU thread, the GPU thread, and the
+WebGPU backend are all *fine*; the game itself is wedged polling. No
+new GP commands ⇒ FIFO empty ⇒ GPU idle ⇒ black. This is a classic
+Dolphin **HW-device savestate-restore** defect (an in-flight async
+transfer / interrupt that never completes post-load): the game spins
+on a DSP/AI mailbox, SI (controller), EXI (memory card), or DVD
+"transfer done" / VI flag whose completion event was not re-armed by
+`HW::DoState`.
+
+**Exact next construct (different, well-scoped):** identify what
+`0x80335E98` polls. Smallest-first: (1) in `[s27-coretiming]`, when
+`pc==0x80335E98`, also dump a few candidate MMIO/interrupt-status
+words (DSP `DSP_CONTROL`/mailbox, `ProcessorInterface` INTSR/INTMR,
+SI/EXI status, VI) — the one whose live value differs from what the
+spin expects names the device. (2) Compare against a *fresh* attract
+run that reaches the same scene (no load) — same PC region but not
+wedged ⇒ confirms it's the restored device state. (3) Likely fix in
+the after-load callback or a targeted `HW::DoState` post-fixup:
+re-arm/complete the stranded transfer (e.g. force the pending
+DSP/AI/SI/EXI interrupt or reschedule its CoreTiming completion
+event). The §27d/e resync stays (harmless, still drains the backlog);
+the real fix is device-state, not video.
+
+**Committed this checkpoint:** `[s27-coretiming]` diagnostic (sparse
+`& 0x3FFF`, `#ifdef __EMSCRIPTEN__`, baked into the rebuilt wasm) +
+the non-blocking `EmulatorState(true)+RunGpu` resync (kept). No
+render-path change. Pre-load rendering unregressed (10/10 distinct
+pre-load). Battle still black post-load — but the cause is now
+**pinpointed to a single PowerPC spin address (0x80335E98) from a
+HW-device savestate desync**, a precise and different next construct.
+`?video=webgpu` / `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard
+untouched.
