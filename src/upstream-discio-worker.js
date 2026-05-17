@@ -319,8 +319,10 @@ async function handleMessage(type, payload) {
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       const rc = api.loadStateFile(path) | 0;
-      // Advance a handful of frames so the restored state presents.
-      for (let i = 0; i < 8; i++) { try { api?.runFrame?.(); } catch (e) {} }
+      // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
+      // step the core) — wait real wall-clock time so the restore
+      // actually takes effect before we sample/screenshot.
+      await new Promise((r) => setTimeout(r, 1200));
       const afterState = api?.getCoreStateName?.() ?? "";
       console.log(`[loadStateFile] path=${path} rc=${rc} ` +
         `before='${beforeState}' after='${afterState}' ` +
@@ -329,11 +331,13 @@ async function handleMessage(type, payload) {
                ...framePayload() };
     }
     case "saveStateFile": {
-      // SaveStateFile is async (CPU thread + compress/dump worker), so
-      // call it, pump frames while polling the FS for a stable
-      // non-zero file, then read the bytes back. A state captured here
-      // is version-matched to this build → LoadStateFile can restore
-      // it deterministically.
+      // SaveStateFile queues SaveToFileSync onto the autonomous Dolphin
+      // CPU pthread (the discio worker's RunFrame does NOT step the
+      // core — it's just a present tick). So we must WAIT real
+      // wall-clock time for that pthread to run the job + write the
+      // file; pumping runFrame did nothing and returned in <10 ms
+      // (§24 size=0). handleMessage is async → await real timeouts so
+      // the CPU/dump pthreads get scheduled.
       if (!api?.saveStateFile || !moduleInstance?.FS) {
         return { saved: false, error: "no saveStateFile/FS" };
       }
@@ -341,12 +345,14 @@ async function handleMessage(type, payload) {
       try { moduleInstance.FS.unlink(path); } catch (e) {}
       const rc = api.saveStateFile(path) | 0;
       let prev = -1, stable = 0, size = 0;
-      for (let i = 0; i < 240; i++) {
-        try { api?.runFrame?.(); } catch (e) {}
+      // up to ~8 s real time (40 × 200 ms); a Melee state is ~tens of
+      // MB so allow generous time for DoState + zstd on the pthread.
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 200));
         try {
           const st = moduleInstance.FS.stat(path);
           size = st.size | 0;
-          if (size > 0 && size === prev) { if (++stable >= 6) break; }
+          if (size > 0 && size === prev) { if (++stable >= 3) break; }
           else stable = 0;
           prev = size;
         } catch (e) { /* not written yet */ }

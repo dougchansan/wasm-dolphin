@@ -1464,3 +1464,40 @@ verified against the attract **demo match** (input-driven; no
 savestate needed — the engine already proved it renders full correct
 screens + textured 3D trophies). `?video=webgpu` +
 `DIAG_EFB_TO_CANVAS` untouched.
+
+### 24. ★ Deterministic save/load WORKS — the observability unblock ★
+
+Two root causes behind §23's `size=0`, both fixed:
+
+1. **`State::SaveAs` is doubly-async.** `RunOnCPUThread` only *queues*
+   `SaveAsFromCore` (doesn't block), which then hands the buffer to
+   the async `s_compress_and_dump_thread` WorkQueueThread. Added
+   `State::SaveToFileSync` (State.cpp/.h) — same as `SaveAsFromCore`
+   but calls `CompressAndDumpState` **inline** (no `EmplaceItem`), so
+   the file is fully written within the single CPU-thread job, no
+   dump-thread scheduling. `dolphin_web_core.cpp:SaveStateFile` now
+   calls it.
+2. **The discio worker's `RunFrame()` does NOT step the core** — it's
+   just `++s_frame; PublishFrameSignal()`. The Dolphin core runs on
+   its own autonomous pthreads (dual-core). So §23's "pump 240×
+   runFrame" poll was a <10 ms no-op that returned before the
+   autonomous CPU pthread could run the queued job. Fix: the
+   (already-`async`) worker `saveStateFile`/`loadStateFile` handlers
+   now `await` **real wall-clock** timeouts (`setTimeout`) so the
+   autonomous CPU/save pthreads get scheduled.
+
+**Probe-verified:** `[saveStateFile] rc=1 size=18880078` — a **18.9
+MB version-matched** state written + persisted to
+`outDir/core-native-state.sav`; `loadStateFileFs` → `rc=1`
+(no rejection, unlike the foreign §22 `.sav`). Deterministic
+version-matched save/load **now functions** — the observability tool
+the whole fidelity grind needs. (The test scene was the idle
+difficulty menu, so the rewind isn't visually distinct frame-to-frame;
+mechanism proven by size + `rc=1` + version match.)
+
+**This is the unblock.** Next: capture a state during a 3D scene
+(navigate once to the attract demo match / a real match, or extend
+the input script), then `LoadStateFile` it deterministically every
+iteration of the per-screen 3D-fidelity grind — no re-navigation, no
+foreign-build version lock. `?video=webgpu` + `DIAG_EFB_TO_CANVAS`
+untouched.

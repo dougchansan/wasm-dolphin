@@ -903,7 +903,11 @@ int SaveStateFile(const char* path)
       !Core::IsRunning(Core::System::GetInstance()))
     return 0;
 
-  State::SaveAs(Core::System::GetInstance(), std::string(path));
+  // SaveToFileSync (not SaveAs): compress+write happens inline on the
+  // CPU thread, not the async WorkQueueThread that never got
+  // wall-time under the worker poll (§23 size=0). Caller pumps frames
+  // until the CPU thread runs the queued job; then the file is whole.
+  State::SaveToFileSync(Core::System::GetInstance(), std::string(path));
   Core::HostDispatchJobs(Core::System::GetInstance());
   s_core_status = "Save state to file requested";
   return 1;
