@@ -1783,3 +1783,78 @@ never does — §27b) and the battle renders. Pre-load rendering
 verified unregressed this checkpoint (12/12 distinct pre-load).
 `?video=webgpu` / `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard
 untouched.
+
+### 27d. ★ Memory IS coherent (sentinel proof) + resync is a PARTIAL fix: permanent freeze → 3 s post-load burst then re-freeze
+
+Two decisive results this round; the picture changed materially.
+
+**1. Cross-thread sentinel test → §27b "incoherent memory" REFUTED.**
+Added a single global `Fifo::g_s27_sentinel`; the after-load callback
+(CPU pthread, tid 18081640) stores `0xABCD1234`; the GPU-thread gate
+logs it. Result: pre-load `sent=0`, **post-load `sent=2882343476`
+(=0xABCD1234) in 9/9 samples**. The GPU pthread *does* observe the
+CPU pthread's store → **the two dual-core pthreads share coherent
+memory**. So §27/§27b's "non-coherent memory / two Systems" framing
+is wrong. The CP-FIFO desync is **logical state**, and the earlier
+`[s27-gate] rwd=0` was a *sampling artifact* (the gate samples at the
+top of the loop; the GPU drains rwd→0 fast).
+
+**2. The GPU thread DOES decode the FIFO; the resync is a partial
+fix.** Added `[s27-decode]` (counter right after
+`OpcodeDecoder::RunFifo` in the GPU drain `while`). With the after-load
+resync = `g_s27_sentinel.store(...) ; FlushGpu() ; RunGpu()` (the
+proven sentinel + the canonical CPU↔GPU rendezvous + re-kick;
+`ResetVideoBuffer` dropped — it added nothing in attempt 2):
+- `[s27-decode]` **keeps incrementing post-load** (3.80M→3.92M) — the
+  GPU thread genuinely drains+decodes the FIFO.
+- `[postload-probe]` (throttle bug fixed — never `| 0` a `Date.now()`):
+  for the **first ~3 s** post-load the producer ring **advances**
+  (`write` 5113535→5210373, ~97 k records), the consumer keeps up
+  (`read` tracks `write`), `present` 2318→2341, `draw` 6955→7070,
+  `drawIdx` 506039→514846 — i.e. **the whole pipeline flows
+  end-to-end for ~3 s** (vs the original §27 *permanent* freeze with
+  `write` frozen and zero opcodes).
+- Then at **dt≈3.2 s everything re-freezes**: `write`/`read`/`present`
+  /`draw` all pinned for the remaining 31 s. No new distinct canvas
+  hash post-load (the 3 s burst drains the load-time FIFO **backlog**
+  but doesn't yield a new visible frame / re-freezes before one).
+
+**Reframed root cause (current best, evidence-backed):** the
+savestate-load defect is **not** memory incoherence and **not** the
+WebGPU backend. The after-load resync successfully drains the FIFO
+**backlog** that piled up during the load (one-shot works → 3 s of
+real pipeline flow), but the **steady-state CPU→GPU FIFO hand-off
+re-breaks** once the backlog clears: post-burst, new
+`GatherPipeBursted`→`RunGpu()`→`m_gpu_mainloop.Wakeup()` no longer
+re-engages the GPU consumer (it goes idle and never re-wakes for the
+*next* GP burst). This is the original "GpuMaySleep / BlockingLoop
+wake after AllowSleep" suspicion, now precisely scoped to the
+**post-backlog steady state** (the §27 "loop spins 300k/s" reading
+was pre-burst; need to recheck whether it sleeps after the burst).
+
+**Exact next construct:** instrument the GPU `m_gpu_mainloop`
+sleep/wake across the dt≈3.2 s re-freeze — log `m_gpu_mainloop`
+running/asleep state + whether `RunGpu()`/`Wakeup()` is invoked by
+post-burst `GatherPipeBursted` and whether the loop body still
+executes after the freeze. If the loop sleeps and `Wakeup()` no
+longer revives it post-load, the fix is a steady-state wake repair
+(e.g. keep the GPU loop from `AllowSleep` after a state load, or make
+the after-load resync periodic/until-first-present rather than
+one-shot). Smallest-first candidates: (a) in the after-load callback
+also `EmulatorState(true)` (forces `m_gpu_mainloop.Wakeup()` + clears
+AllowSleep) instead of bare `RunGpu()`; (b) suppress the dual-core
+`GpuMaySleep()` for the first N frames post-load; (c) drive the
+post-load catch-up on the CPU thread (`RunGpuOnCpu`) until the first
+present.
+
+**Committed this checkpoint:** the partial-fix resync
+(`g_s27_sentinel.store + FlushGpu + RunGpu` in
+`State::SetOnAfterLoadCallback`) — a genuine improvement (permanent
+freeze → 3 s of correct post-load pipeline flow), plus the
+`[s27-decode]`/sentinel diagnostics and the **fixed** JS
+`[postload-probe]` throttle (≤1 s cadence; was spamming every drain
+tick due to a `Date.now() | 0` truncation bug). Pre-load rendering
+unregressed (12/12 distinct pre-load; menus/3D still render). Battle
+still black post-load (re-freeze after the 3 s burst — next
+construct precisely scoped above). `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.

@@ -57,6 +57,11 @@ extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <pthread.h>
+#include <atomic>
+
+// §27d: defined in VideoCommon/Fifo.cpp — the after-load callback (CPU
+// pthread) stores a sentinel; the GPU-thread gate reads it back.
+namespace Fifo { extern std::atomic<std::uint32_t> g_s27_sentinel; }
 
 extern "C" const char* DolphinWeb_GetAudioCommonStats();
 
@@ -572,7 +577,23 @@ void EnsureRuntime()
     // context hop (§27b hypothesis 2).
     EM_ASM({ console.log("[after-load] cb fired tid=" + ($0 >>> 0)); },
            static_cast<unsigned>(pthread_self()));
-    Core::System::GetInstance().GetFifo().RunGpu();
+    // §27c fix attempt 1 (smallest, non-blocking rendezvous). The
+    // GPU-FIFO pthread is stranded on a pre-load CP snapshot: post-load
+    // it reads CPReadWriteDistance==0 forever while this CPU thread
+    // sees it grow (§27b). FlushGpu() does m_gpu_mainloop.Wait() — the
+    // canonical CPU↔GPU rendezvous — which forces a happens-before
+    // edge so the GPU thread re-acquires the restored CP state; then
+    // RunGpu() re-kicks it. (The GPU loop is idle/spinning with no
+    // pending work, so Wait() returns promptly — no hang.)
+    // §27d definitive shared-memory test: store a sentinel from THIS
+    // (CPU) pthread; the GPU-thread gate logs it (`sent=`). If the GPU
+    // thread never reads 0xABCD1234, the two dual-core pthreads do not
+    // share memory post-load (architecture defect, no Dolphin-level
+    // resync can fix it); if it does, the CP desync is logical state.
+    Fifo::g_s27_sentinel.store(0xABCD1234u, std::memory_order_seq_cst);
+    auto& fifo = Core::System::GetInstance().GetFifo();
+    fifo.FlushGpu();
+    fifo.RunGpu();
   });
 
   s_runtime_initialized = true;

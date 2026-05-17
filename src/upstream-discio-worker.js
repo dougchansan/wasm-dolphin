@@ -3362,7 +3362,10 @@ function drainWebGpuCmdRing() {
   // State::Load, or freezes (producer/video-pthread stalled).
   if (self._postLoadProbeUntil && Date.now() < self._postLoadProbeUntil) {
     const nowMs = Date.now();
-    if (nowMs - (self._postLoadProbeLast | 0) >= 1000) {
+    // NOTE: do NOT `| 0` a Date.now() timestamp — it truncates to a
+    // garbage 32-bit value and the throttle never fires (spam). Plain
+    // Number compare, ~1 s cadence.
+    if (nowMs - (self._postLoadProbeLast || 0) >= 1000) {
       self._postLoadProbeLast = nowMs;
       const s = webGpuExecStats;
       console.log(`[postload-probe] dt=` +
