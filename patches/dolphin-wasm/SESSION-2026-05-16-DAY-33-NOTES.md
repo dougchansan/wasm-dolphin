@@ -1306,15 +1306,32 @@ cull-vs-draw mismatch and no shared-logic perturbation
 renders perfectly — no regression** (unlike attempt 1). present≈9360
 in 140 s (full speed), no `VALIDATION`, 1 transient ring drop.
 
-**Verification gap (honest):** the blind X+Enter validator does not
-deterministically reach/hold Melee's title (`t≈90–110 s`), main menu
-or CSS — runs go boot→attract-demo, or to a black/static attract
-timeout — so a *direct screenshot* of those exact screens rendering
-correctly is not yet captured. Evidence is indirect-but-strong: the
-EFB now receives real geometry where it was previously empty during
-non-3D frames, the fix logically closes the §18-confirmed root cause,
-and there is no regression. **Next:** drive the menu deterministically
-(a fixed INPUT_SCRIPT that reaches the title/menu, or a save-state) to
-capture the title/menu/CSS visually; if any still collapse, dump
-`constants.projection` + `xfmem.projection.type` per menu draw to find
-the residual. `?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched.
+**Verification (gap now CLOSED).** Drove the game deterministically
+with a continuous-Start `INPUT_SCRIPT` (`down/up Enter` every 1.5 s +
+occasional A, `DURATION=190 SHOT_EVERY=10`) — **118 distinct frames**
+(vs 7 with the blind default), reaching title (~t99), main menu
+(~t121), CSS (~t220). Direct screenshots confirm the §19 fix is a
+real, visible win **and** isolate the next residual:
+
+- **Backgrounds/gradients now render** on title / main menu / CSS —
+  where pre-§19 they were pure black `0,0,0,0`. The large background
+  quads get a correct per-draw projection now.
+- **Foreground UI still collapses/absent** — title logo & "PRESS
+  START", menu item text, CSS character grid/portraits don't appear
+  (residual centre green/red cross on some menu frames). 3D
+  trophy/demo unaffected (no regression).
+
+So §19 correctly fixed the §18 projection-staleness root cause (menus
+went black→backgrounds), but a **second, UI-specific construct**
+remains: Melee's small 2D UI quads still degenerate while the big
+background quad renders. Likely class: per-vertex **posmtx / texture-
+matrix** (or the UI vertex format / a texmtx-collapse) for UI draws —
+same "constant updated on a path that doesn't set `dirty` ⇒ §17
+per-draw slice keeps a stale value" family as the projection bug, but
+for the model/tex matrices, OR UI quads zero-area'd by a texmtx /
+posmtx. **Exact next construct:** on a confirmed menu frame
+(INPUT_SCRIPT above), dump per-UI-draw `constants.transformmatrices` /
+`constants.texMatrices` (and `posmtx` attribute) vs the background
+quad's; find which transform the UI draws read stale/zero and extend
+the §19 draw-time re-slice guard (or fix the dirty path) to cover it.
+`?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched.
