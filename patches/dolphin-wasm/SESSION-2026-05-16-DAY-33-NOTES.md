@@ -2804,3 +2804,57 @@ transition-frame sparseness (minor, §28h). Reverted the §28p
 `DIAG_RASTER_OPEN` toggle (false; not the main-menu fix). §28o
 ring-capacity win + §28g/§28j stand; difficulty-select converged &
 flash-free. `?video=webgpu` / per-draw ring / §26 guard untouched.
+
+### 28q. ★ DETERMINISTIC main-menu repro achieved (user-captured sav loads RUNNING) — black main menu definitively NOT cull
+
+User captured a main-menu savestate via DL State (under
+`?video=webgpu` so it was visible) → `battle-state(1).sav` (18.4 MB);
+copied to `.omx/savestates/main-menu-state.sav`, served as
+`/__mainmenu.sav`, loaded via the validator under `?video=wgpu`.
+
+**Major unblock — it does NOT hit the §27 hard-wedge:** unlike the
+live battle (§28m: collapsed to 2 % speed, PPC self-halt), the
+near-idle main-menu state loads **`afterState:Running`, ~57 % speed,
+JIT on, frame 1327** and keeps running for the post-load window
+(it does eventually drift to the 0x80335e98 loop much later, but
+runs long enough to observe). So a menu savestate is a **viable
+deterministic harness** where the battle one wasn't — exactly the
+user's hypothesis.
+
+**Deterministically reproduced the user's bug:** post-load the
+canvas is **BLACK** (screenshots t30-45 all ~109 KB; user img1
+confirmed). And the EFB pass is **healthy**: `[webgpu-DIAG-efbpass]`
+post-load `fb=14 drawIdx≈87-102 pipeMiss=0 bgMiss=0` — the main menu
+submits ~100 valid indexed draws/frame into `tex#14`, zero misses,
+**0 `VALIDATION`** — yet black. (Same shape as difficulty-select
+*before* §28g.)
+
+**Cull DEFINITIVELY ruled out:** re-ran the load with
+`DIAG_RASTER_OPEN=true` (cull off + scissor off) — main menu
+**stayed black** (5 distinct, ~109 KB). Unlike difficulty-select
+(which cull-off rendered fully → §28g `frontFace cw`), the main menu
+is a **distinct non-cull construct**: ~100 valid draws → black EFB,
+not cull, not missing bind-groups, not validation poison.
+
+**Scoped next construct (a fresh §28e→g-style grind, now
+deterministic):** the main-menu draws produce black despite being
+valid — candidates: the §28d EFB-copy-feedback chain (the main
+menu's animated 3D backdrop built via EFB-copy ping-pong, seeded
+black), or a per-draw TEV/material/uniform construct specific to
+main-menu materials. The existing `[s28-*]`/`[DIAG-cpy]` probes are
+**p-(present)-gated** and don't fire in the post-savestate-load
+window (presents stall/slow post-load); the next iteration must
+re-gate them time/after-load-based, then run the same bisection
+(dump the dominant post-load EFB draw's FS/VS, EFB-copy contents)
+that took difficulty-select §28e→§28g. `main-menu-state.sav`
+preserved (gitignored) as the deterministic harness.
+
+**Status (honest, ralph):** big unblock — the user's main-menu bug
+is now **deterministically reproducible** (menu sav loads Running,
+no §27 wedge) and cull is conclusively eliminated. The actual
+root-cause bisect is a fresh multi-iteration construct (re-gate
+probes post-load → dump the black draw → smallest gated fix), not
+completed this checkpoint. Reverted `DIAG_RASTER_OPEN`; `__mainmenu.sav`
+removed (commit protocol). §28g/§28j/§28o stand (difficulty-select +
+CSS converged). `?video=webgpu` / per-draw ring / §26 guard
+untouched.
