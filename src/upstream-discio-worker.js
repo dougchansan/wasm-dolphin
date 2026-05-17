@@ -3561,6 +3561,28 @@ function drainWebGpuCmdRing() {
                 `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
                 `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
             }
+            // §28b: PixelShaderConstants has fogcolor (int4 @byte432),
+            // fogi (int4 @448), fogf (float4 @464). The backdrop FS
+            // lerps to fogcolor by a fogf-driven factor → if fogcolor
+            // is ~0 the untextured backdrop goes black. Dump fog for
+            // PS-sized uploads (len ≥ 480) so we can see if fogcolor
+            // is zero / fogf forces full fog at difficulty-select.
+            // PixelShaderConstants is ~1536 bytes (VS ~4112, GS small);
+            // the per-draw uniform ring writes the PS slice at that len.
+            if (len >= 1500 && len <= 1700) {
+              self._wgFogN = (self._wgFogN || 0) + 1;
+              if (self._wgFogN <= 6 || (self._wgFogN % 1500) === 0) {
+                const ib = new Int32Array(moduleInstance.HEAPU8.buffer,
+                                          srcP + 432, 8);   // fogcolor+fogi
+                const fb = new Float32Array(moduleInstance.HEAPU8.buffer,
+                                            srcP + 464, 4);  // fogf
+                console.log(`[s28-fog] id=${bid} len=${len} ` +
+                  `fogcolor=${ib[0]},${ib[1]},${ib[2]},${ib[3]} ` +
+                  `fogi=${ib[4]},${ib[5]},${ib[6]},${ib[7]} ` +
+                  `fogf=${fb[0]?.toFixed(4)},${fb[1]?.toFixed(4)},` +
+                  `${fb[2]?.toFixed(4)},${fb[3]?.toFixed(4)}`);
+              }
+            }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
             // + src_size(.xy) from this UBO. If src_size≈0 every vertex
             // gets the same uv ⇒ samples one EFB texel ⇒ uniform black.

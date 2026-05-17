@@ -2117,3 +2117,46 @@ deterministic, full-speed renderer fidelity construct, the clean
 continuation point. All §28 probes are JS-only, gated/one-shot,
 served live (no wasm change this arc). `?video=webgpu` /
 `DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.
+
+### 28c. ★ FIX: bSupportsReversedDepthRange=true — fog/depth now matches WebGPU [0,1] clip; difficulty-select renders MORE (no text regression)
+
+Root-caused via §28b: backdrop FS = `lerp(tev, fogcolor, factor)`,
+fog `zCoord` derived as `int((1.0 − rawpos.z)*2^24)` — the
+**`!bSupportsReversedDepthRange` (GL-paired) branch**
+(PixelShaderGen.cpp:1101). But WebGPU clip space is **Vulkan-like
+[0,1]** and `bSupportsClipControl=true` already makes the VS emit
+native [0,1] depth, so the GL-paired `(1−rawpos.z)` inverts our
+window depth → fog factor saturates → the untextured, GX-fogged
+difficulty-select backdrop collapses to the black fog colour
+(`[s28-fog]` confirmed `id=55 len=1536 fogcolor=0,0,0,0`). The
+WebGPU backend never set `bSupportsReversedDepthRange` (default
+false), the mismatch the PLAN gotchas explicitly warn about
+("InitBackendInfo capability flags drive shadergen AND VideoCommon
+transform; mismatches caused whole-class failures").
+
+**Fix (smallest gated, 1 line + comment):**
+`WebGPU::VideoBackend::InitBackendInfo` →
+`g_backend_info.bSupportsReversedDepthRange = true;`. Now
+PixelShaderGen fog uses the matching `int(rawpos.z*2^24)` branch and
+VertexShaderManager's depth-range path stays consistent with the
+[0,1] convention.
+
+**Probe-verified (rebuilt, no-input attract → difficulty-select):**
+EFB content `nz 3791→9697`, `max 160→255`; the screen went
+text-only → **"VERY EASY" (sharp blue, no regression) + the
+selection box outline + the cursor-dot row now render**. Full speed
+(≈100 % gameSpeed, 60 coreFps). Melee's difficulty-select is
+genuinely a dark screen, so this is materially closer to correct.
+
+**Honest caveat (verification gap):** this is a *global* depth/fog
+cap change. No-input AND continuous-Enter attract both park at
+difficulty-select (blind input can't navigate past it), and the
+deterministic 3D scene (savestate battle) is wedged (§27), so **3D
+non-regression (trophies/attract per §17–18) is NOT autonomously
+verified this checkpoint** — it must be eyeballed via the cache-busted
+link (user-navigated). The change is the *more correct* convention
+for WebGPU's actual clip space and showed only improvements + zero
+regression on all reachable content (text/UI/full-speed), so it is
+committed as a forward step with this caveat recorded. §28 JS probes
+kept (gated/one-shot, passive). `?video=webgpu` / `DIAG_EFB_TO_CANVAS`
+/ per-draw ring / §26 guard untouched.
