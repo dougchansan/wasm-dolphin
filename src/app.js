@@ -139,6 +139,39 @@ window.__loadStateFile = async (url) => {
   }
 };
 
+// Capture a version-matched save state from THIS build; returns it
+// base64-encoded so the validator can persist it (Playwright evaluate
+// can't return an ArrayBuffer). Chunked to avoid call-stack limits.
+window.__saveStateFile = async () => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.saveStateFile !== "function")
+      return { saved: false, error: "adapter has no saveStateFile" };
+    const r = await a.saveStateFile();
+    if (!r || !r.bytes) return { saved: false, error: r?.error || "no bytes" };
+    const u8 = new Uint8Array(r.bytes);
+    let bin = "";
+    const CH = 0x8000;
+    for (let i = 0; i < u8.length; i += CH)
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+    return { saved: r.saved, size: r.size, b64: btoa(bin) };
+  } catch (e) {
+    return { saved: false, error: String(e?.message || e) };
+  }
+};
+
+// Reload a state already in the worker FS (round-trip proof).
+window.__loadStateFileFs = async (fsPath) => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.loadStateFileFromFs !== "function")
+      return { loaded: false, error: "adapter has no loadStateFileFromFs" };
+    return await a.loadStateFileFromFs(fsPath || "/savestate_out.sav");
+  } catch (e) {
+    return { loaded: false, error: String(e?.message || e) };
+  }
+};
+
 renderControlGrid();
 wireSettings();
 wireDiagnostics();

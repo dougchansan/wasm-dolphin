@@ -303,14 +303,19 @@ async function handleMessage(type, payload) {
       if (!api?.loadStateFile || !moduleInstance?.FS) {
         return { loaded: false, error: "no loadStateFile/FS" };
       }
-      const path = "/savestate.sav";
-      try {
-        const bytes = payload.bytes instanceof Uint8Array
-          ? payload.bytes
-          : new Uint8Array(payload.bytes);
-        moduleInstance.FS.writeFile(path, bytes);
-      } catch (e) {
-        return { loaded: false, error: `FS.writeFile: ${e?.message || e}` };
+      // payload.fsPath: load an existing FS file in place (e.g. the
+      // one SaveStateFile just wrote) — proves a version-matched
+      // round-trip with zero serving. Else write payload.bytes first.
+      const path = payload.fsPath || "/savestate.sav";
+      if (!payload.fsPath) {
+        try {
+          const bytes = payload.bytes instanceof Uint8Array
+            ? payload.bytes
+            : new Uint8Array(payload.bytes);
+          moduleInstance.FS.writeFile(path, bytes);
+        } catch (e) {
+          return { loaded: false, error: `FS.writeFile: ${e?.message || e}` };
+        }
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       const rc = api.loadStateFile(path) | 0;
@@ -322,6 +327,44 @@ async function handleMessage(type, payload) {
         `frame=${api?.getFrame?.() ?? -1}`);
       return { loaded: rc === 1, rc, beforeState, afterState,
                ...framePayload() };
+    }
+    case "saveStateFile": {
+      // SaveStateFile is async (CPU thread + compress/dump worker), so
+      // call it, pump frames while polling the FS for a stable
+      // non-zero file, then read the bytes back. A state captured here
+      // is version-matched to this build → LoadStateFile can restore
+      // it deterministically.
+      if (!api?.saveStateFile || !moduleInstance?.FS) {
+        return { saved: false, error: "no saveStateFile/FS" };
+      }
+      const path = "/savestate_out.sav";
+      try { moduleInstance.FS.unlink(path); } catch (e) {}
+      const rc = api.saveStateFile(path) | 0;
+      let prev = -1, stable = 0, size = 0;
+      for (let i = 0; i < 240; i++) {
+        try { api?.runFrame?.(); } catch (e) {}
+        try {
+          const st = moduleInstance.FS.stat(path);
+          size = st.size | 0;
+          if (size > 0 && size === prev) { if (++stable >= 6) break; }
+          else stable = 0;
+          prev = size;
+        } catch (e) { /* not written yet */ }
+      }
+      let bytes = null;
+      try {
+        if (size > 0) bytes = moduleInstance.FS.readFile(path); // Uint8Array
+      } catch (e) {
+        return { saved: false, rc, error: `readFile: ${e?.message || e}` };
+      }
+      console.log(`[saveStateFile] path=${path} rc=${rc} size=${size} ` +
+        `frame=${api?.getFrame?.() ?? -1}`);
+      const ab = bytes ? bytes.buffer.slice(bytes.byteOffset,
+                                            bytes.byteOffset + bytes.byteLength)
+                       : null;
+      return ab
+        ? { saved: true, rc, size, bytes: ab, transfer: [ab] }
+        : { saved: false, rc, size, error: "empty/no state file" };
     }
     case "mixAudio": {
       if (!api?.mixAudio || !api?.audioBuffer || !moduleInstance?.HEAPU8) {
@@ -694,6 +737,7 @@ function bindApi(module) {
     saveState: cwrap("SaveState", "number", ["number"]),
     loadState: cwrap("LoadState", "number", ["number"]),
     loadStateFile: optionalCwrap("LoadStateFile", "number", ["string"]),
+    saveStateFile: optionalCwrap("SaveStateFile", "number", ["string"]),
     getFrame: cwrap("GetFrame", "number", []),
     getFrameSignalPtr: optionalCwrap("GetFrameSignalPtr", "number", []),
     getGameId: cwrap("GetGameId", "string", []),

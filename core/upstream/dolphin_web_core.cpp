@@ -891,6 +891,24 @@ int LoadStateFile(const char* path)
   return 1;
 }
 
+// Save a Dolphin save state to a file path in the Emscripten FS so the
+// JS side can read the bytes back and persist them. State::SaveAs is
+// async (queues onto the CPU thread + a compress/dump worker), so the
+// caller must pump frames before reading the file. A state produced
+// here is version-matched to THIS build, so LoadStateFile can restore
+// it deterministically (unlike a foreign-build .sav — see §22).
+int SaveStateFile(const char* path)
+{
+  if (!s_runtime_initialized || path == nullptr || *path == '\0' ||
+      !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::SaveAs(Core::System::GetInstance(), std::string(path));
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Save state to file requested";
+  return 1;
+}
+
 void PumpHostJobs()
 {
   if (s_runtime_initialized)

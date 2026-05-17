@@ -443,6 +443,43 @@ export class UpstreamWorkerAdapter {
       });
   }
 
+  // Capture a version-matched Dolphin save state from THIS build.
+  // Returns { saved, size, bytes (ArrayBuffer) } so the caller can
+  // persist it for deterministic reuse across rebuilds.
+  saveStateFile() {
+    if (!this.loaded) {
+      return Promise.resolve({ saved: false, error: "not loaded" });
+    }
+    return this.request("saveStateFile", {}, [])
+      .then((r) => {
+        this.onStatus(
+          r.saved
+            ? `Save state captured (${r.size} B)`
+            : `Save state capture failed (${r.error || "?"})`);
+        return r;
+      })
+      .catch((e) => ({ saved: false, error: e.message }));
+  }
+
+  // Reload a state already present in the worker FS (e.g. the one
+  // saveStateFile just wrote) — a zero-serving version-matched
+  // round-trip.
+  loadStateFileFromFs(fsPath) {
+    if (!this.loaded) {
+      return Promise.resolve({ loaded: false, error: "not loaded" });
+    }
+    return this.request("loadStateFile", { fsPath })
+      .then((response) => {
+        this.applyFrame(response);
+        this.onStatus(
+          response.loaded
+            ? `Save state reloaded (${response.afterState || "?"})`
+            : `Save state reload failed (rc=${response.rc ?? "?"})`);
+        return response;
+      })
+      .catch((e) => ({ loaded: false, error: e.message }));
+  }
+
   request(type, payload = {}, transfer = []) {
     if (!this.worker) {
       throw new Error("Upstream worker has not been created");

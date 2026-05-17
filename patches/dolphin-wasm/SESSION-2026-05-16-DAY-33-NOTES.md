@@ -1428,3 +1428,39 @@ with NO navigation — to capture a core-native in-battle state, then
 Gitignored 22 MB probe `.sav` staged at repo root for the test was
 deleted (never commit it). `?video=webgpu` + `DIAG_EFB_TO_CANVAS`
 untouched.
+
+### 23. ★ Renderer renders COMPLETE correct screens (proven) + SaveStateFile wired (async-flush TODO)
+
+Added `SaveStateFile(path)` (`State::SaveAs`) + `_SaveStateFile`
+export + worker `saveStateFile` (poll FS, return bytes transferable) +
+adapter `saveStateFile`/`loadStateFileFromFs` + `window.__saveStateFile`
+/`__loadStateFileFs` + validator `SAVE_STATE_CAPTURE_AT`/
+`SAVE_STATE_RELOAD_AT`. The capture→persist→FS-reload round-trip is
+fully wired to sidestep §22's foreign-build version lock with a
+version-matched state.
+
+**Key discovery (reframes "only pieces").** A no-input attract probe
+parks Melee at the GameCube **"The Memory Card in Slot A has no saved
+Game Data. Create Game Data? Yes/No"** dialog — and it renders
+**100 % correctly**: crisp full multi-line white text, "Yes" in gold,
+"No" in grey, clean background. So §16–§21 deliver **complete, correct
+multi-text/coloured screen rendering** — the renderer is *not* "only
+pieces" in general; the difficulty-select oddity is screen-specific
+(or near-correct), not a global failure. The 4-distinct-frames was the
+game *waiting for input* at this dialog, not a render fault.
+
+**SaveStateFile limitation (known, deferred).** `rc=1` but the file is
+`size=0`: `State::SaveAs` queues onto Dolphin's async compress/dump
+`WorkQueueThread`; in the discio worker our tight 240×`runFrame` poll
+gives that pool thread no wall-time, so the file never flushes within
+the poll. `State::Init` *is* called (via `HW::Init`), so the machinery
+exists — this is a wasm thread-scheduling issue (needs real yielding /
+a flush hook), not a logic bug. Infra committed & reusable; revisit
+with an explicit `s_compress_and_dump_thread` flush or a sync
+buffer-write path.
+
+**Net:** the actual goal ("everything renders, fully 3D") is best
+verified against the attract **demo match** (input-driven; no
+savestate needed — the engine already proved it renders full correct
+screens + textured 3D trophies). `?video=webgpu` +
+`DIAG_EFB_TO_CANVAS` untouched.

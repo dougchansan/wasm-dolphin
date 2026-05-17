@@ -88,6 +88,13 @@ const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScr
 const saveStateUrl = process.env.SAVE_STATE_URL || "";
 const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
 let saveStateDone = false;
+// Capture a version-matched state at SAVE_STATE_CAPTURE_AT (write the
+// .sav into outDir for reuse), then reload it from the worker FS at
+// SAVE_STATE_RELOAD_AT to prove a deterministic round-trip.
+const ssCaptureAt = Number(process.env.SAVE_STATE_CAPTURE_AT || 0);
+const ssReloadAt = Number(process.env.SAVE_STATE_RELOAD_AT || 0);
+let ssCaptureDone = false;
+let ssReloadDone = false;
 
 const { chromium, firefox } = await importPlaywright();
 const browserName = (process.env.BROWSER || "chromium").toLowerCase();
@@ -473,6 +480,39 @@ try {
       }
       await page.waitForTimeout(1500);
       await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+    }
+
+    if (ssCaptureAt > 0 && !ssCaptureDone && elapsed >= ssCaptureAt) {
+      ssCaptureDone = true;
+      console.log(`[menu-progress] capturing save state at t=${elapsed.toFixed(1)}…`);
+      await capture(page, `pre-savestate-t${Math.round(elapsed)}.png`);
+      try {
+        const r = await page.evaluate(() => window.__saveStateFile());
+        if (r && r.saved && r.b64) {
+          const buf = Buffer.from(r.b64, "base64");
+          const outPath = path.join(outDir, "core-native-state.sav");
+          await writeFile(outPath, buf);
+          console.log(`[menu-progress] saved state -> ${outPath} (${buf.length} B, rc ok)`);
+        } else {
+          console.log(`[menu-progress] saveStateFile failed: ${JSON.stringify(r)}`);
+        }
+      } catch (e) {
+        console.log(`[menu-progress] saveStateFile threw: ${e?.message || e}`);
+      }
+    }
+
+    if (ssReloadAt > 0 && !ssReloadDone && elapsed >= ssReloadAt) {
+      ssReloadDone = true;
+      console.log(`[menu-progress] reloading captured state (FS) at t=${elapsed.toFixed(1)}…`);
+      await capture(page, `pre-reload-t${Math.round(elapsed)}.png`);
+      try {
+        const r = await page.evaluate(() => window.__loadStateFileFs("/savestate_out.sav"));
+        console.log(`[menu-progress] loadStateFileFs -> ${JSON.stringify(r)}`);
+      } catch (e) {
+        console.log(`[menu-progress] loadStateFileFs threw: ${e?.message || e}`);
+      }
+      await page.waitForTimeout(1500);
+      await capture(page, `savestate-reloaded-t${Math.round(elapsed)}.png`);
     }
 
     const sample = await readSample(page, elapsed);
