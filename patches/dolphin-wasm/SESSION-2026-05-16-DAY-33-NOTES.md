@@ -1078,3 +1078,92 @@ copy-to-vram) are landed and committed; everything structural is
 ruled out and instrumented. The remaining work is a careful
 per-draw TEV-fidelity grind best continued with fresh context, not a
 single mechanical fix. `?video=webgpu` hybrid untouched throughout.
+
+### 16. ★ CONCLUSIVE UNIFYING ROOT CAUSE: per-draw UBOs clobbered by batched submit ★
+
+The §15 "fine-grained per-draw TEV correctness, NOT a single global
+construct" framing was wrong — there **is** one global construct, and
+§14/§15's "UBO verified valid" only ever checked the UBO *at upload
+time*, never *at draw time*. The per-draw grind found it.
+
+**Chain of evidence (this session):**
+1. `[webgpu-DIAG-cpy]` (new): EFB-copy color targets tex#52/67/153 are
+   uniformly **opaque black** (`0,0,0,255`, nz=25 % = alpha only) — the
+   copy *draw into them* transfers nothing.
+2. `[webgpu-DIAG-cpypass]` (new): those copy passes **do** run
+   correctly — valid pipeline, 3 bind groups, 1 fullscreen `draw`,
+   sampling the *correct* EFB (`srcTex=tex#14`). Good input, black out.
+3. Source trace: every EFB-copy / texture-conversion shader
+   (`TextureConverterShaderGen`, `TextureConversionShader`) reads its
+   params from `UBO_BINDING(std140, 1) uniform PSBlock`
+   → `WebGPUShaderTranslator.cpp:55` maps `UBO_BINDING(p,x)` to
+   `binding=(x-1)` → **group0/binding0** (same slot the GX PS uses).
+   Those params arrive via `g_vertex_manager->UploadUtilityUniforms`,
+   which was the **empty `VertexManagerBase` no-op** (never overridden
+   for WebGPU). So utility shaders ran with whatever stale bytes sat in
+   `m_ubo_ps`. **Fixed** (this commit): implemented
+   `WebGPU::VertexManager::UploadUtilityUniforms` → forwards to new
+   `WebGPUGfx::UploadUtilityUniforms` (uploads into a dedicated util
+   UBO; a util-variant bind-group-0 binds it at binding0 in place of
+   m_ubo_ps; armed per-upload, cleared per-draw incl. skipped-draw
+   early-returns; util UBO sized 4096 ≥ GX PSBlock so binding0 size is
+   valid for any pcfg). Necessary + correct, **but EFB copies stayed
+   black** → not the whole cause.
+4. `[webgpu-DIAG-util]` (new, JS): dumped the small utility shaders'
+   full WGSL. The EFB-copy VS (id=2) is translated **correctly** —
+   `@group(0)@binding(0) var<uniform> {src_offset,src_size}`,
+   `v_tex0 = src_offset + src_size*raw`, vertex_index fullscreen-tri
+   (one harmless extra y-flip, nets out). The copy FS (id=4) reduces to
+   a plain `textureSample(EFB, uv.xy, i32(uv.z))`. Both fine.
+5. `[webgpu-DIAG-utilubo]` + `[webgpu-DIAG-ub]` (new, JS) — **the
+   smoking gun**: the GX VS UBO (id=57, len=4112) is re-uploaded
+   **per draw** with different values every time (pnm@32 changes each
+   line); the GX PS UBO (id=56, len=1536) likewise; the util UBO
+   (id=55) is overwritten by *several different* utility structs per
+   frame (len 16/48/140). They all write the **same buffer id**.
+
+**Root cause:** the discio-worker consumer batches the *entire frame*
+into one `GPUCommandEncoder` + one `queue.submit()`. `queue.writeBuffer`
+is queue-ordered and all of a frame's writeBuffers therefore complete
+**before** any of that frame's encoded render passes execute. With one
+shared buffer per UBO class re-written per draw, **every draw in the
+frame reads only the *last* upload's uniforms** — per-draw
+posnormalmatrix / projection / TEV-PS constants / EFB-copy src-rect are
+all clobbered to the final draw's values. First-light "works" only
+because the menu's dominant geometry happens to tolerate the last
+frame-constant set (stable projection); per-material textured/TEV draws
+and the EFB-copy src-rect do not → exactly the "textured-black,
+per-draw, not-global" symptom. This is the construct §14/§15 believed
+eliminated.
+
+**The real remaining work (design, not research):** per-draw uniform
+versioning — mirror Vulkan's uniform stream buffer + descriptor
+dynamic offsets (and Dolphin's GX constant streaming). Concretely:
+- One large persistent UNIFORM ring buffer per UBO class (or one
+  shared). Each `UploadBuffer`/`UploadUtilityUniforms` **bump-allocates
+  an aligned slice** (256-byte `minUniformBufferOffsetAlignment`) and
+  records the slice **offset** with the draw.
+- Consumer fixed group-0 layout entries become
+  `buffer:{type:"uniform", hasDynamicOffset:true}`; `SET_BIND_GROUP`
+  carries the per-draw dynamic offsets → `pass.setBindGroup(i, bg,
+  offsets)`. One bind group per layout (offsets vary per draw) — keeps
+  the bg cache tiny.
+- Producer (`WebGPUGfx::PrepareDrawResources`,
+  `WebGPUVertexManager`): allocate the ring slice at upload, thread the
+  offset through a widened `SET_BIND_GROUP` (add a dynamic-offset
+  triple) or a new `SET_DYNAMIC_OFFSETS` opcode. Ring sized so the
+  consumer (≤2 frames behind) never reads a recycled slice (same
+  reasoning as the vertex/upload arenas).
+- The util UBO then naturally gets its own per-draw slice too (no
+  separate m_bg0_util needed once binding0 is a dynamic-offset slice).
+
+This is the last big construct between "real geometry + text" and
+"correct Melee". Everything else (geometry, transforms-at-upload,
+pipelines, bind groups, textures, EFB-copy plumbing, utility-uniform
+upload) is proven correct and instrumented. Committed this checkpoint:
+the utility-uniform-upload prerequisite (no regression — "Select"
+still renders, 99 % speed, distinct≈12) + all passive
+`[webgpu-DIAG-cpy|cpypass|util|utilubo]` instrumentation. Interim
+`DIAG_EFB_TO_CANVAS` present unchanged; `?video=webgpu` hybrid
+untouched. Best continued with fresh context — the design above is
+mechanical, no research left.

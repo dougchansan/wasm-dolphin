@@ -3016,10 +3016,12 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     console.log(s);
   }
   const entries = [];
+  let srcTexId = -1;
   for (let i = 0; i < count; i++) {
     const base = 3 + i * 5;
     const binding = u[base], kind = u[base + 1], resId = u[base + 2];
     if (kind === 1) {
+      if (binding === 0 && srcTexId < 0) srcTexId = resId;
       const t = webGpuObjects.textures.get(resId);
       if (!t) return;  // resource not ready — skip this frame
       entries.push({ binding, resource: t.view2dArray ||
@@ -3048,6 +3050,12 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         ? { binding: b, resource: layouts.dummyTexView }
         : { binding: b, resource: layouts.dummySampler });
     }
+  }
+  // Sidecar: bgId → its group-1 binding-0 source texture id, so the
+  // [webgpu-DIAG-cpypass] probe can name what the EFB-copy draw samples.
+  if (group === 1 && srcTexId >= 0) {
+    self._wgBgTex = self._wgBgTex || {};
+    self._wgBgTex[id] = srcTexId;
   }
   try {
     webGpuObjects.bindGroups.set(id,
@@ -3259,6 +3267,18 @@ function drainWebGpuCmdRing() {
     if (passFbId < 0) return;
     const key = passFbId === 0 ? "fb0" : "fb" + passFbId;
     const n = (self._wgPassDiag[key] = (self._wgPassDiag[key] || 0) + 1);
+    // [webgpu-DIAG-cpypass] EFB-copy target passes (the 640x480
+    // rgba8unorm depth-less RTs found opaque-black, §15a): does the
+    // copy draw actually run, and with a pipeline+bind group?
+    const isCopyTgt = self._wgCopyTargets &&
+      self._wgCopyTargets.has(passFbId);
+    if (isCopyTgt && n <= 6) {
+      console.log(`[webgpu-DIAG-cpypass] pass#${n} fb=${passFbId} ` +
+        `pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} bgOk=${pd.bgOk} ` +
+        `bgMiss=${pd.bgMiss} draw=${pd.draw} drawIdx=${pd.drawIdx} ` +
+        `srcTex=${self._wgCpySrc != null ? "tex#" + self._wgCpySrc : "?"} ` +
+        `${passColorFmt}/${passDepthFmt} ${passW}x${passH}`);
+    }
     if ((passFbId === 0 || passFbId === 47) && n <= 3) {
       console.log(`[webgpu-exec] pass#${n} fb=${passFbId} ` +
         `pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} bgOk=${pd.bgOk} ` +
@@ -3317,6 +3337,11 @@ function drainWebGpuCmdRing() {
             const size = Math.max(16, (u32[recWord + 2] + 3) & ~3);
             webGpuObjects.buffers.set(id,
               dev.createBuffer({ size, usage: u32[recWord + 3] }));
+            // The utility UBO is the unique 4096-byte uniform buffer
+            // (kUtilUboSize). Track its id so we can dump what
+            // UploadUtilityUniforms actually writes (src_offset/size
+            // for the EFB-copy VS).
+            if (u32[recWord + 2] === 4096) self._wgUtilBuf = id;
           }
           break;
         }
@@ -3344,6 +3369,22 @@ function drainWebGpuCmdRing() {
                 `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
                 `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
                 `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
+            }
+            // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
+            // + src_size(.xy) from this UBO. If src_size≈0 every vertex
+            // gets the same uv ⇒ samples one EFB texel ⇒ uniform black.
+            if (bid === self._wgUtilBuf &&
+                (self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8) {
+              const uf = new Float32Array(moduleInstance.HEAPU8.buffer,
+                                          srcP, Math.min(len, 64) >>> 2);
+              const ui = new Uint32Array(moduleInstance.HEAPU8.buffer,
+                                         srcP, Math.min(len, 64) >>> 2);
+              console.log(`[webgpu-DIAG-utilubo] id=${bid} len=${len} ` +
+                `src_offset=${uf[0]?.toFixed(4)},${uf[1]?.toFixed(4)} ` +
+                `src_size=${uf[2]?.toFixed(4)},${uf[3]?.toFixed(4)} ` +
+                `filt=${ui[4]},${ui[5]},${ui[6]} gamma_rcp=${uf[7]?.toFixed(3)} ` +
+                `clamp=${uf[8]?.toFixed(4)},${uf[9]?.toFixed(4)} ` +
+                `pxh=${uf[10]?.toFixed(5)}`);
             }
             q.writeBuffer(buf, u32[recWord + 2] & ~3,
                           heapCopy(srcP, len));
@@ -3444,6 +3485,16 @@ function drainWebGpuCmdRing() {
               console.log(`[webgpu-DIAG-rt] render-target tex#${fbId} ` +
                 `${ct.tex.width}x${ct.tex.height} ${ct.format} depth=${depthId}`);
             }
+            // [webgpu-DIAG-cpy] EFB-copy color targets: depth-less
+            // rgba8unorm RTs that aren't the bgra8 XFB. These are the
+            // textures textured draws later SAMPLE — if they are empty
+            // post-copy-to-vram, every consumer is black (§15a).
+            if (!depthId && ct.format === "rgba8unorm" &&
+                ct.tex.width <= 1024) {
+              self._wgCopyTargets = self._wgCopyTargets || new Set();
+              self._wgCopyTargets.add(fbId);
+              self._wgCpySrc = null;
+            }
           }
           passDepthFmt = (depthId && webGpuObjects.textures.get(depthId))
             ? webGpuObjects.textures.get(depthId).format : null;
@@ -3502,7 +3553,13 @@ function drainWebGpuCmdRing() {
           break;
         }
         case WGPU_CMD_OP_SET_BIND_GROUP: {
-          const bg = webGpuObjects.bindGroups.get(u32[recWord + 2]);
+          const bgId = u32[recWord + 2];
+          const bg = webGpuObjects.bindGroups.get(bgId);
+          if (u32[recWord + 1] === 1 && self._wgBgTex &&
+              self._wgBgTex[bgId] != null &&
+              self._wgCopyTargets && self._wgCopyTargets.has(passFbId)) {
+            self._wgCpySrc = self._wgBgTex[bgId];
+          }
           if (pass && bg) { pass.setBindGroup(u32[recWord + 1], bg); webGpuExecStats.setBg++; pd.bgOk++; }
           else { webGpuExecStats.missBg++; pd.bgMiss++; }
           break;
@@ -3605,6 +3662,59 @@ function drainWebGpuCmdRing() {
                   self._wgDiagErr = true;
                   console.log(`[webgpu-DIAG] threw: ${e?.message || e}`);
                 }
+              }
+            }
+          }
+          // [webgpu-DIAG-cpy] One-shot readback of EFB-copy color
+          // targets' content (§15a). Encoded into `enc` before submit;
+          // mapAsync after. Gated past warm-up so copies are
+          // steady-state. COPY_SRC is set on all textures (kTexUsage).
+          if (self._wgCopyTargets && webGpuExecStats.present > 400) {
+            self._wgCpyDone = self._wgCpyDone || {};
+            const pending = [];
+            for (const cid of self._wgCopyTargets) {
+              if (self._wgCpyDone[cid]) continue;
+              const ct = webGpuObjects.textures.get(cid);
+              if (!ct) continue;
+              self._wgCpyDone[cid] = true;
+              try {
+                ensureEnc();
+                const w = ct.tex.width, h = ct.tex.height;
+                const bpr = Math.ceil(w * 4 / 256) * 256;
+                const rb = dev.createBuffer({ size: bpr * h,
+                  usage: 0x1 | 0x8 });           // MAP_READ | COPY_DST
+                enc.copyTextureToBuffer(
+                  { texture: ct.tex },
+                  { buffer: rb, bytesPerRow: bpr, rowsPerImage: h },
+                  { width: w, height: h, depthOrArrayLayers: 1 });
+                pending.push({ rb, bpr, w, h,
+                  tag: `tex#${cid} ${w}x${h} ${ct.format}` });
+              } catch (e) {
+                console.log(`[webgpu-DIAG-cpy] ${cid} enc threw ` +
+                  `${e?.message || e}`);
+              }
+            }
+            if (pending.length) {
+              submitEnc();
+              for (const p of pending) {
+                p.rb.mapAsync(0x1).then(() => {
+                  const a = new Uint8Array(p.rb.getMappedRange());
+                  const N = a.length;
+                  let nz = 0, mx = 0;
+                  for (let i = 0; i < N; i++) {
+                    if (a[i]) { nz++; if (a[i] > mx) mx = a[i]; }
+                  }
+                  const cy = p.h >> 1, cx = p.w >> 1;
+                  const o = cy * p.bpr + cx * 4;
+                  const o2 = (p.h >> 2) * p.bpr + (p.w >> 2) * 4;
+                  console.log(`[webgpu-DIAG-cpy] ${p.tag} ` +
+                    `nz=${nz}/${N} max=${mx} ` +
+                    `px0=${a[0]},${a[1]},${a[2]},${a[3]} ` +
+                    `ctr=${a[o]},${a[o+1]},${a[o+2]},${a[o+3]} ` +
+                    `q=${a[o2]},${a[o2+1]},${a[o2+2]},${a[o2+3]}`);
+                  p.rb.unmap(); p.rb.destroy();
+                }).catch((e) => console.log(
+                  `[webgpu-DIAG-cpy] map ${p.tag} err ${e?.message || e}`));
               }
             }
           }
@@ -4031,6 +4141,20 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     self._wgFsFull = true;
     for (let o = 0; o < wgsl.length; o += 1600) {
       console.log(`[webgpu-DIAG-fsfull id=${id} ${o}] ` +
+                  wgsl.slice(o, o + 1600));
+    }
+  }
+
+  // [webgpu-DIAG-util] Full body of the small utility shaders (EFB-copy
+  // VS/FS, screen-quad, color/copy FS — all < 4 KB; GX TEV shaders are
+  // far bigger so the length cap excludes them). The EFB-copy targets
+  // are still opaque-black after the utility-uniform fix, so trace the
+  // copy VS (vertex_index fullscreen-tri + src_offset/src_size from the
+  // PSBlock UBO) and the copy FS (SampleEFB → ocol0) for the real cause.
+  if (wgsl.length < 4000 &&
+      (self._wgUtilN = (self._wgUtilN || 0) + 1) <= 8) {
+    for (let o = 0; o < wgsl.length; o += 1600) {
+      console.log(`[webgpu-DIAG-util id=${id} s${stage} ${o}] ` +
                   wgsl.slice(o, o + 1600));
     }
   }
