@@ -1335,3 +1335,38 @@ posmtx. **Exact next construct:** on a confirmed menu frame
 quad's; find which transform the UI draws read stale/zero and extend
 the §19 draw-time re-slice guard (or fix the dirty path) to cover it.
 `?video=webgpu` + `DIAG_EFB_TO_CANVAS` untouched.
+
+### 20. ★ Menu UI renders: generalized the draw-time re-slice to the whole VS block ★
+
+Rather than chase the specific stale matrix, generalized the
+**verified-safe** §19 pattern: `WebGPUGfx::PrepareDrawResources` now
+re-slices the per-draw VS UBO whenever the **entire
+`VertexShaderConstants` block** differs from the last upload
+(`memcmp` at draw time; `m_vs_shadow` shadow copy), not relying on
+`vsm.dirty` at all. This is precisely the §16/§17 per-draw-versioning
+intent — `dirty` was only ever an upload-skip optimisation, and the
+content diff achieves the same skip while being immune to **every**
+missed-`dirty` path (projection §19, posmtx/texmtx for 2D UI, …).
+Cost: one ~4 KB `memcmp` per draw (negligible). Subsumes the §19
+projection-only guard. `static_assert(sizeof(VertexShaderConstants)
+<= kUboSliceStride)`.
+
+**Probe-verified (continuous-Start INPUT_SCRIPT, build 17:33):** the
+difficulty-select **UI text "VERY EASY" now renders sharp & correctly
+coloured** across many frames (t45→t215) where pre-§20 it collapsed
+to the centre cross. present≈15480/190 s (full speed), no
+`VALIDATION`, 1 transient ring drop. No regression: §20 only *adds*
+re-slice triggers over the §19 build (which was verified not to
+regress the 3D demo), and the sharp textured/coloured "VERY EASY"
+itself proves GX-TEV textured draws still render. (Validator RNG kept
+landing on difficulty-select, so the main-menu-items / CSS-portraits /
+title-logo screens weren't individually re-screenshotted this run —
+but the collapse cause is now structurally removed for *all* VS
+draws, not a per-screen patch.)
+
+Trajectory this session: black → white "Select" → real textured 3D
+Melee (§16/§17) → menu backgrounds (§19) → **menu UI rendering
+(§20)**. Residual fidelity (exact backgrounds, per-texture sampler
+state, proper XFB present) remains the ongoing grind, now on a fully
+correct per-draw uniform foundation. `?video=webgpu` +
+`DIAG_EFB_TO_CANVAS` untouched.
