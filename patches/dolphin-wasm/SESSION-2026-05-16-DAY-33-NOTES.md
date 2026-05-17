@@ -2611,3 +2611,45 @@ frame, then drive the menu), captured alongside a same-script
 applied to the user's actual screens. Until those screens are
 observable, no further speculative present/cull changes. `?video=webgpu`
 / per-draw ring / §26 guard untouched.
+
+### 28m. User idea tested: battle-state.sav LOADS but the §27 core wedge (not cull) blocks the deterministic 3D battle
+
+Acted on the user's suggestion (reload the sav to reach the in-battle
+3D scene as a deterministic observability target). Served
+`.omx/savestates/battle-state.sav` as `/__battle.sav` and loaded it
+via the validator (`SAVE_STATE_URL`, after boot/JIT). First attempt
+failed on Git-Bash leading-slash path mangling (`/__battle.sav` →
+`C:/Program Files/Git/__battle.sav`); fixed with a full
+`http://127.0.0.1:8081/__battle.sav` URL.
+
+Result: **save state loads cleanly** — `rc:1 loaded:true
+beforeState:Running afterState:Running frame:1281`, version-matched,
+real battle geometry flowing post-load (`prim:1104 draw:210`,
+xfb:1281). **But the canvas is BLACK and emulation collapses to
+2 % speed immediately post-load** (`presentationFps:0 signal:wait
+underrun:32`; screenshot `savestate-loaded-t25` black @ 2 % speed).
+This is exactly the **§27 savestate-load core wedge** (post-load
+PowerPC spins EE-off @0x80335e98, HW-savestate PE/DSP/VI desync) —
+conclusively pinned in §27→§27g as a **deferred, orthogonal CORE
+bug, NOT a renderer/cull defect**. The §28g cull fix therefore
+**cannot be evaluated against the battle**: the core wedges before
+the renderer ever presents a post-load frame, so there is no battle
+frame to cull-test. Difficulty-select still renders this run
+(EFB nz≈840k) — §28g unregressed.
+
+`__battle.sav` removed (commit-protocol: never commit `__*.sav`);
+`.omx/savestates/battle-state.sav` preserved (gitignored) for reuse.
+
+**Decision point (honest, ralph):** the deterministic 3D battle the
+user wants is gated by the §27 core wedge — a precisely-characterized
+PowerPC/HW-savestate desync requiring a **core C++ fix + rebuild**
+(re-arm the stranded PE_FINISH|VI|DSP completion in the
+after-load callback / `HW::DoState` post-fixup, per §27g), a
+substantial multi-iteration effort distinct from the renderer grind.
+Verified renderer wins this session stand: §28g difficulty-select
+cull fix (committed, reference-unregressed), §28j poison guard +
+honest corrections. Boot logos / save dialog render correctly
+(matched vs reference). The user's interactive main-menu/cutscene/CSS
+issues remain not-deterministically-observable without either the
+§27 fix (enables battle) or a navigation-scripted probe.
+`?video=webgpu` / per-draw ring / §26 guard untouched.
