@@ -2557,3 +2557,57 @@ bisection toggle; kept the `[s28k-fbdraws]` probe + the §28j
 `bgValid` poison-guard (both correct, gated, harmless). `?video=webgpu`
 / per-draw ring / §26 guard untouched. The boulder continues on the
 snapshot-present fix.
+
+### 28l. CORRECTION: §28k was a cross-core timestamp mis-comparison; snapshot-present fix reverted (unverified)
+
+Implemented the §28k snapshot-present design (persistent `_wgEfbSnap`,
+present last-good EFB). Probe14: title/menu window **still ~110 KB
+black**, difficulty-select still ~410 KB (no regression) — the fix
+did **not** move the metric. Root of the mis-diagnosis:
+
+- The `?video=wgpu` no-input probe timeline is: boot logos → GameCube
+  **save-data dialog** (`tex#14 (0,0,25)` + text — renders
+  CORRECTLY) → difficulty-select (`nz≈840k`, renders since §28g).
+  The p≈650-1000 "menu window" is the **save dialog**, not the Melee
+  main menu.
+- The `?video=webgpu` reference at the same wall-clock (t=15) shows
+  the Melee **main menu** because the SW core's no-input attract
+  advances on a **different timeline** (faster pre-JIT / auto-steps
+  differently). Comparing the two cores **by timestamp is invalid** —
+  at any given t they are at different game states. §28k's "main menu
+  black in wgpu" was an artifact of that invalid comparison; the
+  blind probe never actually reaches the Melee main menu under
+  `?video=wgpu`.
+- The snapshot-present change was therefore unverifiable with the
+  deterministic probe and added present-path risk for zero shown
+  benefit → **reverted** (per method: no speculative changes kept
+  without a probe proving improvement). `git checkout` restored the
+  tree to `67315e3` (§28g fix + §28j guard + `[s28k-fbdraws]` probe
+  intact, difficulty-select still renders).
+
+**What is solid (verified, committed):** §28g difficulty-select cull
+fix (`frontFace cw`) — confirmed vs reference, reference unregressed;
+§28j poison-submit `bgValid` guard + honest corrections. The boot
+logos and the GameCube save dialog render correctly.
+
+**The user's live reports** (save prompt "not perfectly", intro
+cutscene "lagging/flashing", main menu "not rendering", CSS
+"flashes") are REAL but occur on screens reached by **interactive
+navigation** (press Start past the dialog → intro → title → main
+menu → CSS). The blind validator's fixed input schedule deterministically
+lands at difficulty-select and **cannot reproduce those screens**, so
+they can't be root-caused with the current probe. CSS "flashes" /
+difficulty-select-class working but main-menu not is consistent with
+either (a) a winding subset `frontFace cw` doesn't cover, or (b) the
+heavier 3D/cutscene stressing ring backpressure — both need those
+screens **observable** to bisect.
+
+**Next (scoped):** build a navigation-scripted probe that
+deterministically reaches main-menu / CSS / cutscene under
+`?video=wgpu` (press Start to clear the save dialog at the right
+frame, then drive the menu), captured alongside a same-script
+`?video=webgpu` reference, so the same cull/winding bisection
+(`DIAG_RASTER_OPEN` / `DIAG_CULL_NONE_ONLY`) used for §28g can be
+applied to the user's actual screens. Until those screens are
+observable, no further speculative present/cull changes. `?video=webgpu`
+/ per-draw ring / §26 guard untouched.
