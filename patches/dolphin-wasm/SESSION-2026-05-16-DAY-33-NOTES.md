@@ -1040,3 +1040,41 @@ texcoord-matrix upload.
 This is the documented post-first-light TEV/fidelity fix-loop;
 instrumentation (`[webgpu-DIAG-fsfull|vsfull|bg1|ut|rt|ub|attr|wgsl]`)
 is all in place and committed for the next iteration.
+
+### 15. Interstage-mismatch DISPROVEN — residual is TEV-computation, not structural
+
+Relaxed the variant-FAIL one-shot guard to log up to 24 distinct
+failures, full run. Result: **0 `variant FAIL`** (6 `variant OK`).
+`[webgpu-exec] stats` at present=1800: `setPipe=84156 missPipe=1475`
+(1.7%), `setBg=1106064 missBg=12642` (1.1%), `drawIdx=363285`. So:
+- **No pipelines fail to build** — the VS↔FS interstage-mismatch
+  hypothesis (§14) is wrong; all variants compile/link.
+- missPipe/missBg are small and transient (resource-not-ready), not
+  the textured-black cause.
+
+Structural causes are now **exhaustively eliminated**: present chain,
+clip-space/geometry (first light), UBO (VS verified valid), textures
+(created, bound, real content), EFB-copy path (copy-to-vram), depth,
+cull, scissor, pipeline build, bind groups — all verified correct.
+The residual textured-black is therefore a **fine-grained TEV /
+texcoord / sampled-content correctness** issue for specific GX TEV
+configs (the simple font→colour TEV path works; multi-stage
+texture+colour+lighting configs don't). It is NOT a single global
+construct — it needs per-draw analysis: capture ONE specific
+known-black draw and check its actual sampled texel range (is the
+EFB-copy GPU texture it samples actually populated post-copy-to-vram?
+verify by dumping that texture id's content like `[webgpu-DIAG-ut]`
+but for a render-target/copy texture), its texcoord varying values
+(VS texgen / tex-matrix in VSBlock), and hand-trace its TEV chain
+against its PS UBO at correct `PixelShaderConstants` offsets. Likely
+sub-causes: texgen matrices (VSBlock `member_9/10`) not populated →
+degenerate UVs; EFB-copy GPU texture content (now a render target —
+is the EFB-copy *draw* into it actually correct?); per-texture
+sampler state (`SetSamplerState` is a no-op → wrong wrap/filter).
+
+**Session boundary:** the decisive architectural breakthrough (first
+light) and the conclusive remaining root cause (EFB-copy-to-RAM →
+copy-to-vram) are landed and committed; everything structural is
+ruled out and instrumented. The remaining work is a careful
+per-draw TEV-fidelity grind best continued with fresh context, not a
+single mechanical fix. `?video=webgpu` hybrid untouched throughout.

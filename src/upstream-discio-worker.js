@@ -3930,11 +3930,13 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
       if (err) {
         webGpuObjects.pipeVar.set(key, null);
         webGpuPcfg.fail += 1;
-        if (!self._webGpuPcfgFirstErr) {
-          self._webGpuPcfgFirstErr = true;
+        // DIAG: log the first ~24 distinct variant failures (not just
+        // the first ever) — silent per-pipeline VS↔FS interstage
+        // mismatches are the leading textured-black suspect (§14).
+        if ((self._wgPcfgFailN = (self._wgPcfgFailN || 0) + 1) <= 24) {
           console.log(`[webgpu-pcfg] variant FAIL ${key}` +
             (dbg ? ` (vs=${dbg.vsId} fs=${dbg.fsId} attrs=${dbg.attrCount})` : "") +
-            `: ${String(err.message).slice(0, 240)}`);
+            `: ${String(err.message).slice(0, 220)}`);
         }
       } else {
         webGpuPcfg.ok += 1;
