@@ -3432,7 +3432,7 @@ const DIAG_DEPTH_ALWAYS = false;  // §28g: depth-reject DISPROVEN (still black)
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
 // vertex fetch / clip-space.
-const DIAG_RASTER_OPEN = false;  // §28q: cull DEFINITIVELY ruled out for the main menu (deterministic-sav test)
+const DIAG_RASTER_OPEN = false;  // §28w: cull CONCLUSIVELY ruled out for the 3D region (clean A-only running repro)
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit

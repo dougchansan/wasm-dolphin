@@ -3060,3 +3060,48 @@ breakage if a field is absent). These make the user's live
 screenshots self-diagnosing for the remaining 3D-black /
 compile-burst constructs. `?video=webgpu` / per-draw ring / §26
 guard untouched.
+
+### 28w. ★ DETERMINISTIC main-menu/3D-black repro (user's A-only idea) + §28u CONFIRMED + cull conclusively ruled out
+
+User insight: send only A (no Start) — the save prompt/intro advance
+on A, the main menu needs Start to leave, so an A-only script
+*dwells* in the post-save 3D region. `INPUT_SCRIPT` = 4 A presses
+then silence, DURATION≥95, dense capture. This is the **first
+deterministic repro of the user's #1 bug** (the blind validator
+otherwise blasts to difficulty-select).
+
+**Decisive findings (via the §28v HUD badges, read off the
+screenshots):** at frame 3341, 99 % speed, **black** —
+- `152/39 draw` — geometry IS flowing (prim 152 / draw 39).
+- **`0 nz`** — XFB genuinely black (zero non-zero pixels).
+- `d791917 mp38533 mb480888 sk0 wgx` — drawIdx 791917, missPipe
+  38533, **missBg 480888**, skipDraw 0 (§28j guard not the cause).
+- **`16734/16734 jitc`** — **§28u CONFIRMED WORKING**: the JIT cache
+  now grows to 16 734 (far past the old 8 192 cap that plateaued at
+  ~8135) and persists (`IDB writes` 17 500). The compile-burst speed
+  collapse (23-50 %) is the *first-encounter* cost; it now caches +
+  persists so subsequent runs pre-warm (the §28u intent, live-proven).
+- `DROPPED 0` — §28o ring fix holds (misses are not ring drops;
+  `missBg` grows at a steady ~18 %, structural — high even when
+  difficulty-select rendered fine in §28o).
+
+**Cull CONCLUSIVELY ruled out (clean repro):** re-ran the A-only
+script with `DIAG_RASTER_OPEN=true` (cull+scissor off) — the 3D
+region **stayed black** (distinct 5, stuck hash 0x2b7edc0, game
+frame-advancing). Unlike §28p/q (tested on the save-dialog window /
+the §27-frozen savestate — both inconclusive), this is a *clean
+running* repro, so it's now **definitive**: the black main-menu/3D
+construct is NOT cull/winding (distinct from the §28g
+difficulty-select fix).
+
+**Precisely-scoped construct (deterministic + instrumented):** the
+3D scenes submit geometry (`prim/draw > 0`) but output `nz=0`,
+not-cull, not-ring-drop, §28j-guard-clear. Same "valid draws → black"
+shape difficulty-select had pre-§28g, but cull is excluded — so it's
+a per-draw TEV/material, depth/blend, or EFB-copy-feedback construct
+specific to the 3D path (the §28d-class candidate), now reproducible
+on demand via the A-only `INPUT_SCRIPT` and readable from the §28v
+badges. Reverted `DIAG_RASTER_OPEN`. **Status:** §28u verified live;
+the user's main-menu bug is now deterministically reproducible &
+self-instrumented for a focused §28e→g-style render bisect (next).
+§28g/j/o/s/u/v stand; `?video=webgpu` / per-draw ring / §26 untouched.
