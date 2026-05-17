@@ -2858,3 +2858,46 @@ completed this checkpoint. Reverted `DIAG_RASTER_OPEN`; `__mainmenu.sav`
 removed (commit protocol). §28g/§28j/§28o stand (difficulty-select +
 CSS converged). `?video=webgpu` / per-draw ring / §26 guard
 untouched.
+
+### 28r. CORRECTION: §28q misread — the main-menu sav ALSO hits the §27 ring-freeze (savestate path is §27-blocked for ALL states)
+
+Re-gated DIAG-cpy/s28-efbdraws to fire in the post-savestate-load
+window, re-ran the main-menu sav. The post-load readback **never
+fired** — and `[postload-probe]` shows why, decisively:
+
+```
+[postload-probe] dt=0.0s … write=1856738 read=1856738 present=1061 drawIdx=189995
+[postload-probe] dt=12.1s… write=1856738 read=1856738 present=1061 drawIdx=189995
+```
+
+Every counter is **frozen identically from dt=0 to dt=12 s** — the
+command-ring producer stops post-load, `present` is pinned at 1061,
+`drawIdx` at 189995. This is the **original §27 permanent
+ring-freeze**. §28q's "loads Running, no §27 wedge, ~57 % speed" was
+a **misread**: the 57 % was CoreTiming/VI idle ticks (the §27e
+finding — "CPU runs forever at 44 fps was VI/CoreTiming idle ticks,
+not real progress"), not real emulation; `present` never advances
+post-load so DIAG-cpy (per-SUBMIT_PRESENT) never ran (p stuck at
+300). The `efbpass drawIdx≈100` in §28q was the pre-load / load-moment
+backlog, not sustained post-load rendering.
+
+**Decisive correction:** the savestate-load path is **§27-blocked
+for ALL state types** — the near-idle main-menu state freezes the
+ring post-load exactly like the live battle (§28m). It is **not** a
+usable deterministic harness, and §28q's "definitively not cull /
+distinct construct" conclusion is **unsupported** (it was observing
+a frozen post-load ring, not the main menu rendering). The black
+main menu the user sees during **normal live play** (img1, no
+savestate) is a separate phenomenon that the savestate cannot
+reproduce (savestate-load wedges before anything renders).
+
+**Honest state:** the only paths to the live black main menu are
+(a) fix §27 (unbounded core-compat audit — user explicitly stopped
+this, §28n), or (b) a navigation-scripted **dwell** probe that
+reaches the main menu under normal play and stops, so it's captured
+for many frames without the spam blasting past it. Probe changes
+reverted (moot — nothing to read in a frozen post-load ring); tree
+clean at `7f59f9a`. Verified wins stand unchanged: §28g
+(difficulty-select + CSS render), §28j (poison guard), §28o (ring 4×,
+zero DROP/flash on deterministic scenes). `?video=webgpu` /
+per-draw ring / §26 guard untouched.
