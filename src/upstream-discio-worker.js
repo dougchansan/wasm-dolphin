@@ -4022,6 +4022,16 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
                   wgsl.slice(o, o + 1600));
     }
   }
+  // Full body of the first big GX fragment shader (TEV) — trace
+  // texture sampling, TEV combiner, alpha test, ocol0 output to find
+  // why textured draws output black.
+  if (stage === 2 && wgsl.length > 4000 && !self._wgFsFull) {
+    self._wgFsFull = true;
+    for (let o = 0; o < wgsl.length; o += 1600) {
+      console.log(`[webgpu-DIAG-fsfull id=${id} ${o}] ` +
+                  wgsl.slice(o, o + 1600));
+    }
+  }
 
   let module;
   try {

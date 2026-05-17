@@ -997,3 +997,46 @@ and trace why the TEV output is 0. Suspects in order: texcoord gen
 (tex matrices in VSBlock not uploaded / wrong → sample one texel →
 black-ish), PS-UBO/TEV constants, alpha test discarding all fragments,
 vertex-colour attribute (`@location(5)` unorm8x4) reading zero.
+
+### 14. GX fragment-shader (TEV) dump — structure understood, no single smoking gun yet
+
+Added a full GX FS dump (`[webgpu-DIAG-fsfull]`, stage=2, one-shot).
+FS id=64 structure (Naga-translated, sound):
+- `fn main(@builtin(position) param: vec4<f32>, @location(0) param_1:
+  vec3<f32>) -> @location(0) vec4<f32>` — receives the interpolated
+  texcoord varying at `@location(0)` (vec3).
+- Samples `textureSample(global, global_1, uv.xy, i32(uv.z))` where
+  the texcoord is `vec3(x, clamp(y,…), 0f)` — **`.z` is a constant
+  `0f`**, so the array-layer index is 0 (NOT the suspected
+  out-of-range-layer bug; ruled out).
+- TEV runs in integer `[0,255]` then `/ 255f` (standard Dolphin TEV);
+  uses `global: type_27` = the **PixelShaderConstants UBO** for the
+  TEV register/konst colours.
+- No obvious unconditional `discard`; output via the TEV chain.
+
+VS↔FS varying note: different VS emit different `VertexOutput`
+`@location` layouts (some `@location(0)=vec3` texcoord, others
+`@location(0)=vec4`); the FS expects `@location(0)=vec3`. WebGPU
+requires inter-stage `@location` types to match — a mismatched vs+fs
+pcfg pair fails `createRenderPipeline`, and the consumer only logs the
+**first** variant error (`self._webGpuPcfgFirstErr`), so later
+failures are **silent** (→ that pipeline null → `missPipe` → that
+draw black). This is now the leading suspect for "some textured draws
+black": silent per-pipeline varying-interface failures, not one global
+bug. (`missPipe` was ~2% overall but the *textured* subset may be
+much higher.)
+
+Decisive next probe (one construct): remove the `firstErr` one-shot
+guard on the `[webgpu-pcfg] variant FAIL` log (or count fails per
+vs+fs) so EVERY silent variant failure is visible, and read which
+vs/fs pairs fail and why (varying type/location mismatch vs binding).
+Then fix the producer's VS `VertexOutput` / FS input generation (or
+the pcfg pairing) so interstage locations/types agree. Also still
+open: PS-UBO (`m_ubo_ps`) steady-state validity at the correct
+`PixelShaderConstants` offsets (the VS UBO is confirmed valid; the
+DIAG-ub dump used VS-layout offsets so PS was inconclusive) and
+texcoord-matrix upload.
+
+This is the documented post-first-light TEV/fidelity fix-loop;
+instrumentation (`[webgpu-DIAG-fsfull|vsfull|bg1|ut|rt|ub|attr|wgsl]`)
+is all in place and committed for the next iteration.
