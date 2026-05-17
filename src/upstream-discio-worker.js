@@ -3126,7 +3126,22 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     if (kind === 1) {
       if (binding === 0 && srcTexId < 0) srcTexId = resId;
       const t = webGpuObjects.textures.get(resId);
-      if (!t) return;  // resource not ready — skip this frame
+      if (!t) {
+        // §28 diag: which texture ids are missing (→ whole draw
+        // skipped → screen-specific black, e.g. difficulty-select
+        // background)? Rate-limited tally of the missing resId.
+        self._wgMiss = self._wgMiss || { n: 0, ids: {} };
+        self._wgMiss.n++;
+        self._wgMiss.ids[resId] = (self._wgMiss.ids[resId] || 0) + 1;
+        if ((self._wgMiss.n & 0x3FFF) === 0) {
+          const top = Object.entries(self._wgMiss.ids)
+            .sort((a, b) => b[1] - a[1]).slice(0, 8)
+            .map(([k, v]) => `tex#${k}:${v}`).join(" ");
+          console.log(`[s28-missbg] n=${self._wgMiss.n} b${binding} ` +
+            `top-missing=${top}`);
+        }
+        return;  // resource not ready — skip this frame
+      }
       // §26: the fixed group-1 layout declares sampleType:"float"
       // (filterable). Binding a non-filterable / non-float texture
       // (the battle samples the EFB DEPTH as r32float; also uint /

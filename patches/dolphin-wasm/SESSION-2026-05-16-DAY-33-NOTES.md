@@ -2010,3 +2010,55 @@ the **attract-demo battle** directly. The §27 savestate infra +
 resync + diagnostics stay committed (reusable once the core bug is
 fixed). Switching the active grind to the attract-demo battle render
 path now.
+
+### 28. Attract-demo render survey: FULL SPEED + UI correct; difficulty-select backdrop construct precisely scoped
+
+Long no-input attract survey (`DURATION=180`, no savestate): **29
+distinct frames, avg gameSpeed 100.3 %, coreFps 60.2** — the renderer
+runs at **full native speed**. With no input Melee parks at the
+**difficulty-select** screen (the blind validator can't navigate —
+§23). There: **"VERY EASY" TEV-coloured text renders correctly**
+(blue, sharp) and a partial grey diagonal backdrop element appears,
+but the **main backdrop is black**.
+
+Evidence chain (no rebuilds — mined the survey console + a JS-only
+`[s28-missbg]` diagnostic, served live):
+- `[webgpu-DIAG-efbpass] fb=14 … draw=0 drawIdx≈84-104 pipeMiss=0
+  bgMiss=0` — ~100 indexed draws hit the EFB with valid pipelines +
+  bind groups, **zero misses**.
+- `[webgpu-DIAG-cpy] tex#14(EFB) nz=3791/1351680` — the EFB is
+  **99.7 % black** (only the text). The backdrop draws execute but
+  output black.
+- No `VALIDATION` errors anywhere (no §26-style poison).
+- `[webgpu-DIAG-bg1]`: difficulty-select draws bind 32×32 glyph
+  atlases (b0) + **EFB-copy `tex#65` 640×480 (b1)**; `[s28-missbg]`
+  (new) produced **zero** output ⇒ the `replayCreateBindGroup`
+  missing-texture skip is **NOT** the cause (decisive negative).
+- `[webgpu-DIAG-cpy] tex#65(copy) px0=0,0,0,255` — the EFB-copy the
+  backdrop composites from is itself **opaque black**.
+
+**Precisely-scoped construct (the §21-deferred residual):** the
+difficulty-select backdrop is composited from an EFB-copy (`tex#65`);
+that copy is black because the **first EFB pass that renders the
+backdrop produces black** — a per-draw **TEV / texture-sample /
+alpha** fidelity bug specific to that backdrop material (NOT uniform
+staleness — that family is closed §16-§21; NOT missing textures —
+§28; NOT validation poison — §26; NOT transform collapse — §19/§20;
+geometry+pipelines+bind-groups all valid with zero misses). Next
+construct: dump the backdrop draw's fragment-shader/TEV stages +
+which texture id it samples in that first EFB pass (extend
+`[webgpu-DIAG-fsfull]`/`[webgpu-DIAG-bg1]` to the pre-copy backdrop
+draw, not the post-copy text draws), find the TEV stage / sampler
+that yields black, smallest gated fix, reprobe.
+
+**Honest status (ralph):** renderer = **full speed**, and renders
+menus / multi-line text / coloured UI / GameCube dialogs / textured
+3D attract+trophies (§16-§24) correctly. Open residuals, both deep
+multi-iteration grinds: (1) savestate-load core wedge (§27 — pinned,
+orthogonal to renderer, deferred); (2) per-screen backdrop TEV
+fidelity (§28 — difficulty-select backdrop black; precisely scoped
+above). "Full game rendering perfectly, all scenes" is **not yet
+reached** — it is a continued per-material TEV-fidelity grind on a
+proven-correct, full-speed foundation. `[s28-missbg]` kept (cheap,
+gated, JS-only — useful negative-result probe). `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw uniform ring / §26 guard untouched.
