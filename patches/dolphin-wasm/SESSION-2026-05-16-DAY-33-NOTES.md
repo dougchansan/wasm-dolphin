@@ -1212,3 +1212,60 @@ colour-correct TEV text + populated EFB copies at full speed, no
 regression. Residual: full scene/background fidelity (the menu still
 isn't pixel-complete) — the next per-draw grind, now on a correct
 uniform foundation. Interim `DIAG_EFB_TO_CANVAS` present unchanged.
+
+### 18. Menu/title/CSS-black NARROWED: 2D draws collapse (not skipped, not mis-targeted)
+
+Post-§17 the 3D **attract demo / trophy showcase renders beautifully**
+(recognisable textured Melee — Misty/Kirby/coin trophies, perspective).
+But **title screen, launch cutscene, main menu, character select stay
+black** (a tiny green-vertical / red-horizontal cross at screen centre
+on a flat clear colour). Drove a multi-probe evidence chain (all
+JS-only, committed as passive `[webgpu-DIAG-*]`):
+
+- Periodic readback of EFB tex#14 + EFB-copies + XFB tex#47, tagged
+  `p=<present>`, across boot→title→menu→demo. **EFB tex#14 is
+  uniform clear / `0,0,0,0` during menu frames**; EFB-copies
+  faithfully mirror it; the XFB (tex#47, 2560×1024) is uniform
+  `16,128,16,128` (YUV-black) — **the menu image is in NO target.**
+  Render-target enumeration: only tex#14(EFB+depth),
+  tex#52/65/151(EFB-copies), tex#47(XFB) — no hidden menu target.
+- `[webgpu-DIAG-efbpass]` (EFB colour pass, depth-attached tex#14,
+  sampled every ~240 passes): during menu frames the pass has
+  **pipeOk≈59, bgOk≈700, drawIdx≈240, ZERO pipe/bg misses** — i.e.
+  Melee's menu geometry **is** issued into the EFB with full valid
+  pipeline+bind-group state, but the EFB stays `0,0,0,0`.
+
+**Conclusion (the narrowed construct):** not a missing render target,
+not skipped/missing-pipeline draws, not an XFB-present gap. Melee's
+2D/menu draws execute with correct pipelines/bind groups yet produce
+nothing — they **collapse to the clip origin** (the centre cross =
+~240 quads degenerating to a point/line). The 3D perspective demo
+through the identical path renders. So the residual is a **per-draw
+transform/projection correctness bug specific to Melee's 2D
+(orthographic) menu draws**. `[webgpu-DIAG-vs]` corroborates: most
+draws carry valid perspective `proj0≈2.0,proj3=0,0,-1,0`, but a class
+of draws shows **all-zero projection** (`proj0=0,0,0,0
+proj3=0,0,0,0`) and some valid ortho (`proj0=0.003,0,0,-1
+proj3=0,0,0,1`). The all-zero-projection draws are the prime suspect
+(zero proj ⇒ `clip = proj·pos = 0` ⇒ every vertex at the origin ⇒ the
+observed centre cross).
+
+**Exact next construct (mechanical, needs one C++ instrument+rebuild
+cycle):** in `WebGPUGfx::PrepareDrawResources`, extend the
+`[webgpu-DIAG-vs]` EM_ASM to also log `xfmem.projection.type` and
+whether `constants.projection` is all-zero, *per draw* during a menu
+frame (cap the spam). Decide: (a) Dolphin genuinely has a zero
+`constants.projection` for menu draws (→ a `VertexShaderManager` /
+XFStateManager dirty-path issue: e.g. `SetProjectionMatrix` at
+`VertexShaderManager.cpp:122` updates `constants.projection` WITHOUT
+`dirty=true` — the main `SetConstants` path at :414-429 does set it,
+but a CPU-cull / clip-space path may consume the un-dirtied matrix);
+or (b) the ortho matrix is non-zero but our clip/depth handling
+collapses it (revisit the §9 clip-control fix for the
+**orthographic** case — the §9 reasoning was perspective-centric).
+Then the smallest gated fix + reprobe (menu must show real geometry;
+3D demo must not regress) + checkpoint.
+
+`?video=webgpu` hybrid + `DIAG_EFB_TO_CANVAS` untouched. The §16/§17
+architectural win stands; this is the next localized fidelity grind,
+well-narrowed and instrumented for a fresh cycle.

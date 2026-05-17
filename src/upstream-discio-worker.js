@@ -3301,6 +3301,17 @@ function drainWebGpuCmdRing() {
         `bgMiss=${pd.bgMiss} draw=${pd.draw} drawIdx=${pd.drawIdx} ` +
         `${passColorFmt}/${passDepthFmt} ${passW}x${passH}`);
     }
+    // [webgpu-DIAG-efbpass] The EFB colour pass (depth-attached
+    // tex#14) sampled across the run. Decides menu-black: real draws
+    // but black EFB ⇒ state/shader; ~0 draws ⇒ menu uses another path.
+    if (self._wgEfbColorId && passFbId === self._wgEfbColorId &&
+        (n % 240) === 1) {
+      console.log(`[webgpu-DIAG-efbpass] p=${webGpuExecStats.present} ` +
+        `n=${n} fb=${passFbId} pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} ` +
+        `bgOk=${pd.bgOk} bgMiss=${pd.bgMiss} draw=${pd.draw} ` +
+        `drawIdx=${pd.drawIdx} ${passColorFmt}/${passDepthFmt} ` +
+        `${passW}x${passH}`);
+    }
     passFbId = -1;
     pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };
   };
@@ -3511,6 +3522,13 @@ function drainWebGpuCmdRing() {
               self._wgCopyTargets.add(fbId);
               self._wgCpySrc = null;
             }
+            // The XFB blit target: the large bgra8unorm depth-less RT.
+            // If menu content lives HERE while the EFB is cleared, the
+            // interim DIAG_EFB_TO_CANVAS present (EFB only) shows black.
+            if (!depthId && ct.format === "bgra8unorm" &&
+                ct.tex.width >= 1024) {
+              self._wgXfbId = fbId;
+            }
           }
           passDepthFmt = (depthId && webGpuObjects.textures.get(depthId))
             ? webGpuObjects.textures.get(depthId).format : null;
@@ -3695,18 +3713,26 @@ function drainWebGpuCmdRing() {
               }
             }
           }
-          // [webgpu-DIAG-cpy] One-shot readback of EFB-copy color
-          // targets' content (§15a). Encoded into `enc` before submit;
-          // mapAsync after. Gated past warm-up so copies are
-          // steady-state. COPY_SRC is set on all textures (kTexUsage).
-          if (self._wgCopyTargets && webGpuExecStats.present > 400) {
-            self._wgCpyDone = self._wgCpyDone || {};
+          // [webgpu-DIAG-cpy] PERIODIC readback of the EFB colour tex
+          // (self._wgEfbColorId — what DIAG_EFB_TO_CANVAS shows) AND the
+          // EFB-copy targets, sampled across boot→title→menu→demo so we
+          // can correlate "EFB black during menus" vs "EFB-copy content"
+          // with the screenshot timeline (tag p=<present>). Encoded into
+          // `enc` before submit; mapAsync after. COPY_SRC on all (kTexUsage).
+          {
+            const P = webGpuExecStats.present;
+            const tick = (P >= 300) ? Math.floor((P - 300) / 350) : -1;
+            self._wgCpyTick = (self._wgCpyTick == null) ? -1 : self._wgCpyTick;
+            if (self._wgCopyTargets && tick >= 0 && tick !== self._wgCpyTick
+                && tick < 9) {
+            self._wgCpyTick = tick;
             const pending = [];
-            for (const cid of self._wgCopyTargets) {
-              if (self._wgCpyDone[cid]) continue;
+            const ids = new Set(self._wgCopyTargets);
+            if (self._wgEfbColorId) ids.add(self._wgEfbColorId);
+            if (self._wgXfbId) ids.add(self._wgXfbId);
+            for (const cid of ids) {
               const ct = webGpuObjects.textures.get(cid);
-              if (!ct) continue;
-              self._wgCpyDone[cid] = true;
+              if (!ct || ct.format.startsWith("depth")) continue;
               try {
                 ensureEnc();
                 const w = ct.tex.width, h = ct.tex.height;
@@ -3718,7 +3744,10 @@ function drainWebGpuCmdRing() {
                   { buffer: rb, bytesPerRow: bpr, rowsPerImage: h },
                   { width: w, height: h, depthOrArrayLayers: 1 });
                 pending.push({ rb, bpr, w, h,
-                  tag: `tex#${cid} ${w}x${h} ${ct.format}` });
+                  tag: `p=${P} tex#${cid}` +
+                    (cid === self._wgEfbColorId ? "(EFB)"
+                     : cid === self._wgXfbId ? "(XFB)" : "(copy)") +
+                    ` ${w}x${h}` });
               } catch (e) {
                 console.log(`[webgpu-DIAG-cpy] ${cid} enc threw ` +
                   `${e?.message || e}`);
@@ -3737,15 +3766,22 @@ function drainWebGpuCmdRing() {
                   const cy = p.h >> 1, cx = p.w >> 1;
                   const o = cy * p.bpr + cx * 4;
                   const o2 = (p.h >> 2) * p.bpr + (p.w >> 2) * 4;
+                  // Fixed (200,150) lands inside any plausible 640x480
+                  // menu sub-rect even for the big 2560x1024 XFB.
+                  const sy = Math.min(150, p.h - 1);
+                  const sx = Math.min(200, p.w - 1);
+                  const o3 = sy * p.bpr + sx * 4;
                   console.log(`[webgpu-DIAG-cpy] ${p.tag} ` +
                     `nz=${nz}/${N} max=${mx} ` +
                     `px0=${a[0]},${a[1]},${a[2]},${a[3]} ` +
                     `ctr=${a[o]},${a[o+1]},${a[o+2]},${a[o+3]} ` +
-                    `q=${a[o2]},${a[o2+1]},${a[o2+2]},${a[o2+3]}`);
+                    `q=${a[o2]},${a[o2+1]},${a[o2+2]},${a[o2+3]} ` +
+                    `s200x150=${a[o3]},${a[o3+1]},${a[o3+2]},${a[o3+3]}`);
                   p.rb.unmap(); p.rb.destroy();
                 }).catch((e) => console.log(
                   `[webgpu-DIAG-cpy] map ${p.tag} err ${e?.message || e}`));
               }
+            }
             }
           }
           submitEnc();
