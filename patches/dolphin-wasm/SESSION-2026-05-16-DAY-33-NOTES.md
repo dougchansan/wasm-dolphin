@@ -2760,3 +2760,47 @@ difficulty-select converged. Remaining nav-gated screens
 (main-menu/cutscene/CSS) still need an observability tool (nav-probe)
 — deferred per the user's direction. `?video=webgpu` / per-draw ring
 / §26 guard untouched.
+
+### 28p. User live-nav screenshots: triage — CSS works, main menu black (NOT cull), cutscene flash = JIT catastrophic-cooldown
+
+User navigated manually and sent 9 live screenshots — decisive triage
+of the nav-gated screens (which the blind probe can't dwell on):
+
+- **CSS RENDERS CORRECTLY** (img4: Mario/Bowser/Peach/Yoshi/DK/
+  C.Falcon portraits + "?" + "VERY EASY" + bg, sharp). The §28g cull
+  fix covers CSS too. imgs 2-3 (purple/blue/grey fragments + yellow
+  oval) are *transition/animation* frames — same residual class as
+  the §28h difficulty-select transitions, low severity.
+- **MAIN MENU = totally black** (img1: frame 3781, 103 % speed, JIT
+  on — only the HUD, no menu). The standout failure. Bisected with
+  `DIAG_RASTER_OPEN=true` + dense-capture aggressive-nav run
+  (DURATION=120, 89 distinct, gameSpeed 100 %): the pre-difficulty-
+  select black window (t17-27) **stayed black with cull disabled** ⇒
+  the black main menu is **NOT a cull/winding bug** (distinct from
+  §28g; same class as the §28k intro/title — a present / EFB-copy /
+  render-path construct). The aggressive A+Start spam reaches
+  difficulty-select by t28-30 and never *dwells* on the main menu, so
+  it cannot be bisected further without a tuned navigation-dwell
+  input script (or a main-menu savestate — but §27 wedges loads).
+- **CUTSCENE flash = JIT instability, not a render bug** (img8 black
+  vs img9 rendered): the black frames carry
+  *"Experimental WASM JIT temporarily off (fps:0 baseline:0
+  catastrophic; cooldown 300 frames)"* at 38-40 % speed; the
+  rendered frame (img9, the Melee intro 3D — sky/colosseum/flying
+  trophy) is at 40 % "JIT engaged". So during the heavy intro the
+  WASM JIT trips its *catastrophic* cooldown, speed collapses,
+  frames drop → flashing. This is a JIT/perf-stability construct,
+  orthogonal to the renderer.
+- **SAVE PROMPT** (img5): renders (text + memory-card icon +
+  Yes/No); minor border artifacts only — low severity.
+
+**Net (honest, ralph):** §28g cull fix is broad — difficulty-select
+AND CSS render. Remaining, each a distinct construct needing its own
+observability + iteration: (1) main-menu black = non-cull
+present/render-path construct (needs a nav-dwell probe to bisect);
+(2) cutscene black-flash = WASM-JIT catastrophic-cooldown perf
+instability (orthogonal to video); (3) CSS/difficulty-select
+transition-frame sparseness (minor, §28h). Reverted the §28p
+`DIAG_RASTER_OPEN` toggle (false; not the main-menu fix). §28o
+ring-capacity win + §28g/§28j stand; difficulty-select converged &
+flash-free. `?video=webgpu` / per-draw ring / §26 guard untouched.
