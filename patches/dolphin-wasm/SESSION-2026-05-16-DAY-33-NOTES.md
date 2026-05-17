@@ -2062,3 +2062,58 @@ reached** — it is a continued per-material TEV-fidelity grind on a
 proven-correct, full-speed foundation. `[s28-missbg]` kept (cheap,
 gated, JS-only — useful negative-result probe). `?video=webgpu` /
 `DIAG_EFB_TO_CANVAS` / per-draw uniform ring / §26 guard untouched.
+
+### 28b. ★ Difficulty-select backdrop ROOT CAUSE: untextured geometry fully FOGGED to a zero/black fog colour
+
+Drove the §28 grind with JS-only probes (no rebuilds — served live):
+`[s28-efbdraws]` (per-EFB-draw pipe+bindings+state tally),
+`[s28-bdfs*]`/`[s28-fn4]` (parse + dump the backdrop pipeline's FS).
+Decisive chain:
+
+1. **Backdrop draws** (the dominant EFB draws, idx 18–111) bind
+   `b0=tex#57(1×1 dummy) b1=tex#{52,65,151}(640×480 EFB-copies, all
+   opaque black) b2=tex#…(real, e.g. 320×240/32×32 — *colourful*
+   content `255,109,33` etc.) b3-7=dummy`. Pipelines valid, **zero
+   pipe/bg misses, no VALIDATION**. Texture data is fine.
+2. The black draw's pipeline state is **identical** (`wm7
+   blend{0|1:4/5} depth1/?/3`) to *rendering* textured draws — so
+   **not** blend/depth/writeMask.
+3. **The backdrop FS samples NO texture at all** (`nSample=0`,
+   `hasSample=-1`). `main()` → `dolphin_fn_4_()` → returns `global_4`.
+   So it is **untextured** vertex-colour/TEV geometry; the b0=dummy is
+   irrelevant.
+4. `dolphin_fn_4_` decompiled: TEV combiner runs (`dolphin_fn_3_`),
+   then a **fog** stage: `factor = clamp(depthTerm − global.member_9[1],
+   0,1)*256`; `out.xyz = (tev.xyz*(256−factor) + global.member_7.xyz
+   *factor) >> 8`. I.e. the result is **lerped toward
+   `global.member_7` (the fog colour) by a depth-derived fog factor
+   (`global.member_9` = fog params)**.
+
+**Root cause:** the difficulty-select backdrop is untextured geometry
+that GX fogs; in our backend the **fog PixelShaderConstants are
+wrong/zero** (fog colour `member_7` ≈ 0 and/or fog params `member_9`
+drive the factor to full), so every backdrop pixel collapses to the
+(black) fog colour → black backdrop. Text/foreground render because
+they are textured and/or unfogged. NOT a uniform-*staleness* bug
+(§16–21 closed that, whole-block PS diff) — a fog-constant
+*correctness* bug: either Dolphin's fog `PixelShaderConstants` aren't
+being populated/uploaded for these draws, our `PixelShaderConstants`
+struct layout for the fog members is mis-mapped (Vulkan/Naga
+offset), or the shadergen fog path isn't `api_type==Vulkan`-gated
+correctly.
+
+**Exact next construct:** dump the backdrop draw's PS UBO bytes at
+the fog members — map `PixelShaderConstants` → `member_7` (fog
+colour `vec4`) and `member_9`/`member_? ` (fog `{A,B,C,...}` range
+params) to byte offsets, log their live values via `[webgpu-DIAG-ub]`
+for the backdrop draw. If fog colour == 0 and/or params force
+factor=256 ⇒ confirm; then trace where Dolphin sets fog
+(`PixelShaderManager` fog) vs our upload, smallest gated fix,
+reprobe (backdrop must show Melee's fiery gradient; text/3D unbroken).
+
+**Status:** §28 root cause now precisely identified (untextured
+backdrop fogged to black via wrong fog PS-constants) — a concrete,
+deterministic, full-speed renderer fidelity construct, the clean
+continuation point. All §28 probes are JS-only, gated/one-shot,
+served live (no wasm change this arc). `?video=webgpu` /
+`DIAG_EFB_TO_CANVAS` / per-draw ring / §26 guard untouched.

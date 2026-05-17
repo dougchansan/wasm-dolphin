@@ -3194,6 +3194,25 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
   if (group === 1 && srcTexId >= 0) {
     self._wgBgTex = self._wgBgTex || {};
     self._wgBgTex[id] = srcTexId;
+    // §28: full group-1 texture binding set (b0..b7) so we can see
+    // what the black backdrop draw actually samples at every binding.
+    self._wgBgAll = self._wgBgAll || {};
+    let a = "";
+    for (let i = 0; i < count; i++) {
+      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+      if (kk !== 1) continue;
+      const tt = webGpuObjects.textures.get(rr);
+      a += ` b${bb}=tex#${rr}` +
+        (tt ? `(${tt.tex.width}x${tt.tex.height})` : "(?)");
+      // §28: stash the backdrop's b1/b2 non-dummy textures so the
+      // periodic DIAG-cpy readback dumps their content (is tex#5499
+      // the real backdrop image, or also black?).
+      if ((bb === 1 || bb === 2) && tt && !(tt.tex.width === 1)) {
+        self._wgCpyExtra = self._wgCpyExtra || new Set();
+        if (self._wgCpyExtra.size < 24) self._wgCpyExtra.add(rr);
+      }
+    }
+    self._wgBgAll[id] = a;
   }
   try {
     webGpuObjects.bindGroups.set(id,
@@ -3725,6 +3744,7 @@ function drainWebGpuCmdRing() {
         }
         case WGPU_CMD_OP_SET_PIPELINE: {
           const pid = u32[recWord + 1];
+          self._wgCurPipe = pid;
           const p = pass ? resolvePipeline(pid, passColorFmt, passDepthFmt) : null;
           if (pass && p) {
             pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++; pd.pipeOk++;
@@ -3734,6 +3754,7 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_SET_BIND_GROUP: {
           const bgId = u32[recWord + 2];
           const bg = webGpuObjects.bindGroups.get(bgId);
+          if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
               self._wgBgTex[bgId] != null &&
               self._wgCopyTargets && self._wgCopyTargets.has(passFbId)) {
@@ -3810,6 +3831,54 @@ function drainWebGpuCmdRing() {
                 `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
                 `firstIdx=${u32[recWord + 3]} baseVtx=${u32[recWord + 4]}`);
             }
+            // §28: at difficulty-select the backdrop is black. For the
+            // EFB colour pass, tally the DISTINCT (pipeline, sampled
+            // group-1 texture, size, idxCount) set so we can tell what
+            // the backdrop draw samples vs the glyph/text draws.
+            if (self._wgEfbColorId && passFbId === self._wgEfbColorId) {
+              const idx = u32[recWord + 1];
+              const bg1 = self._wgCurBg1;
+              const allb = (self._wgBgAll && bg1 != null)
+                ? (self._wgBgAll[bg1] || "?") : "?";
+              const tpl = webGpuObjects.pipeTpl.get(self._wgCurPipe);
+              const pdbg = tpl ? (tpl.s28dbg || "?") : "?";
+              // §28: the backdrop draw = b0 is the 1x1 dummy + large
+              // index count. Capture its FS id and dump that FS once.
+              if (tpl && idx >= 40 && allb.indexOf(" b0=tex#57(1x1)") === 0
+                  && !self._wgBdFsDone && self._wgFsSrc &&
+                  self._wgFsSrc[tpl.fsId] !== undefined) {
+                self._wgBdFsDone = true;
+                const w = self._wgFsSrc[tpl.fsId];
+                console.log(`[s28-bdfs] pipe=${self._wgCurPipe} ` +
+                  `fs#${tpl.fsId} len=${w.length} ${pdbg}`);
+                // Parse the WGSL: log only the decisive lines —
+                // textureSample* calls (which binding the backdrop
+                // samples), discards/alpha-test, and the final
+                // @location(0) output assignment.
+                const flat = w.replace(/\s+/g, " ");
+                const fi = flat.indexOf("fn dolphin_fn_4_");
+                console.log(`[s28-bdfsX] fn4At=${fi} len=${flat.length} ` +
+                  `nSample=${(flat.match(/textureSample/g) || []).length}`);
+                // dolphin_fn_4_ computes global_4 (the output). Dump it
+                // so we see which TEV inputs / vertex colors / uniforms
+                // collapse the untextured backdrop to black.
+                if (fi >= 0)
+                  for (let o = fi; o < flat.length; o += 700)
+                    console.log(`[s28-fn4 ${o - fi}] ${flat.slice(o, o + 700)}`);
+              }
+              const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;
+              self._wgEfbDraws = self._wgEfbDraws || new Map();
+              self._wgEfbDraws.set(key, (self._wgEfbDraws.get(key) || 0) + 1);
+              self._wgEfbDrawsN = (self._wgEfbDrawsN || 0) + 1;
+              if ((self._wgEfbDrawsN % 20000) === 0) {
+                const rows = [...self._wgEfbDraws.entries()]
+                  .sort((a, b) => b[1] - a[1]).slice(0, 14)
+                  .map(([k, v]) => `${k}=${v}`);
+                console.log(`[s28-efbdraws] n=${self._wgEfbDrawsN} ` +
+                  rows.join("  "));
+                self._wgEfbDraws.clear();
+              }
+            }
           }
           break;
         case WGPU_CMD_OP_END_PASS:
@@ -3875,6 +3944,8 @@ function drainWebGpuCmdRing() {
             const ids = new Set(self._wgCopyTargets);
             if (self._wgEfbColorId) ids.add(self._wgEfbColorId);
             if (self._wgXfbId) ids.add(self._wgXfbId);
+            // §28: also read back the backdrop's sampled b1/b2 textures.
+            if (self._wgCpyExtra) for (const e of self._wgCpyExtra) ids.add(e);
             for (const cid of ids) {
               const ct = webGpuObjects.textures.get(cid);
               if (!ct || ct.format.startsWith("depth")) continue;
@@ -4211,7 +4282,13 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
         depthCompare: depthTest ? (WGPU_COMPARE[depthCompare] || "always")
                                 : "always" }
     : null;
-  webGpuObjects.pipeTpl.set(pipelineId, { desc, target, depthBase });
+  // §28: persist a compact pipeline-state summary so the EFB-draw
+  // tally can report why the backdrop draw produces black (writeMask
+  // 0? blend dst-only? depth always-fail? which FS to dump?).
+  const s28dbg = `fs#${fsId} vs#${vsId} wm${writeMask}` +
+    ` blend${blendEnable ? `1:${srcF}/${dstF}` : "0"}` +
+    ` depth${hasDepth ? `${depthTest ? 1 : 0}/${depthWrite ? 1 : 0}/${depthCompare}` : "off"}`;
+  webGpuObjects.pipeTpl.set(pipelineId, { desc, target, depthBase, s28dbg, fsId });
   // Build the default (pcfg-format) variant now so the map is warm.
   resolvePipeline(pipelineId, target.format, depthBase ? desc.depthStencil.format : null,
                   { vsId, fsId, attrCount, stride, blendEnable, hasDepth });
@@ -4353,6 +4430,15 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     for (let o = 0; o < wgsl.length; o += 1600) {
       console.log(`[webgpu-DIAG-fsfull id=${id} ${o}] ` +
                   wgsl.slice(o, o + 1600));
+    }
+  }
+  // §28: stash pixel-shader WGSL by id (capped) so the EFB-draw tally
+  // can dump the specific black-backdrop FS on demand.
+  if (stage === 2) {
+    self._wgFsSrc = self._wgFsSrc || {};
+    if (self._wgFsSrc[id] === undefined &&
+        Object.keys(self._wgFsSrc).length < 80) {
+      self._wgFsSrc[id] = wgsl;
     }
   }
 
