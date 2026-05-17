@@ -873,6 +873,24 @@ int LoadCoreState(int slot)
   return 1;
 }
 
+// Load a Dolphin save state from an arbitrary file path in the
+// Emscripten FS (the JS side FS.writeFile's the .sav there first).
+// Mirrors LoadCoreState but uses State::LoadAs(filename). NOTE: Dolphin
+// save states are serialization-version + build locked — a state from
+// a different Dolphin build is rejected by CheckIfStateLoadIsAllowed /
+// version check inside LoadAs; that's expected, not a crash here.
+int LoadStateFile(const char* path)
+{
+  if (!s_runtime_initialized || path == nullptr || *path == '\0' ||
+      !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::LoadAs(Core::System::GetInstance(), std::string(path));
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Load state from file requested";
+  return 1;
+}
+
 void PumpHostJobs()
 {
   if (s_runtime_initialized)

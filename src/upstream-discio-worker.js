@@ -294,6 +294,35 @@ async function handleMessage(type, payload) {
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState":
       return { loaded: Boolean(api?.loadState(payload.slot | 0)), ...framePayload() };
+    case "loadStateFile": {
+      // Write the .sav bytes into the Emscripten FS, then ask the core
+      // to State::LoadAs it. Dolphin save states are build/version
+      // locked — a state from a different Dolphin will be rejected by
+      // LoadAs's version check (logged, not a crash). We pump a few
+      // frames so the loaded state actually renders.
+      if (!api?.loadStateFile || !moduleInstance?.FS) {
+        return { loaded: false, error: "no loadStateFile/FS" };
+      }
+      const path = "/savestate.sav";
+      try {
+        const bytes = payload.bytes instanceof Uint8Array
+          ? payload.bytes
+          : new Uint8Array(payload.bytes);
+        moduleInstance.FS.writeFile(path, bytes);
+      } catch (e) {
+        return { loaded: false, error: `FS.writeFile: ${e?.message || e}` };
+      }
+      const beforeState = api?.getCoreStateName?.() ?? "";
+      const rc = api.loadStateFile(path) | 0;
+      // Advance a handful of frames so the restored state presents.
+      for (let i = 0; i < 8; i++) { try { api?.runFrame?.(); } catch (e) {} }
+      const afterState = api?.getCoreStateName?.() ?? "";
+      console.log(`[loadStateFile] path=${path} rc=${rc} ` +
+        `before='${beforeState}' after='${afterState}' ` +
+        `frame=${api?.getFrame?.() ?? -1}`);
+      return { loaded: rc === 1, rc, beforeState, afterState,
+               ...framePayload() };
+    }
     case "mixAudio": {
       if (!api?.mixAudio || !api?.audioBuffer || !moduleInstance?.HEAPU8) {
         return {
@@ -664,6 +693,7 @@ function bindApi(module) {
     frameBuffer: cwrap("FrameBuffer", "number", []),
     saveState: cwrap("SaveState", "number", ["number"]),
     loadState: cwrap("LoadState", "number", ["number"]),
+    loadStateFile: optionalCwrap("LoadStateFile", "number", ["string"]),
     getFrame: cwrap("GetFrame", "number", []),
     getFrameSignalPtr: optionalCwrap("GetFrameSignalPtr", "number", []),
     getGameId: cwrap("GetGameId", "string", []),

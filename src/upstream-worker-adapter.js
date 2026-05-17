@@ -418,6 +418,31 @@ export class UpstreamWorkerAdapter {
       .catch((error) => this.onStatus(error.message));
   }
 
+  // Load a Dolphin save state from raw .sav bytes (transferred to the
+  // worker, which FS.writeFile's it then State::LoadAs's it). Returns
+  // the worker response so callers (the validator) can await + inspect
+  // rc/before/after core state. Bytes are build/version sensitive.
+  loadStateFile(bytes) {
+    if (!this.loaded) {
+      return Promise.resolve({ loaded: false, error: "not loaded" });
+    }
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    return this.request("loadStateFile", { bytes: u8 }, [u8.buffer])
+      .then((response) => {
+        this.applyFrame(response);
+        this.onStatus(
+          response.loaded
+            ? `Save state loaded (${response.afterState || "?"})`
+            : `Save state load failed (rc=${response.rc ?? "?"}${
+                response.error ? " " + response.error : ""})`);
+        return response;
+      })
+      .catch((error) => {
+        this.onStatus(error.message);
+        return { loaded: false, error: error.message };
+      });
+  }
+
   request(type, payload = {}, transfer = []) {
     if (!this.worker) {
       throw new Error("Upstream worker has not been created");

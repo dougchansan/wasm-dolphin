@@ -81,6 +81,13 @@ function makeAggressiveInputScript() {
 const defaultInputScript = makeAggressiveInputScript();
 
 const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScript);
+// Optional: load a Dolphin .sav (served by the dev server) once the
+// core is running. SAVE_STATE_URL = path under the dev server (e.g.
+// /__savestate_probe.sav); SAVE_STATE_AT = seconds into the run to do
+// it (must be after boot — Core must be running for State::LoadAs).
+const saveStateUrl = process.env.SAVE_STATE_URL || "";
+const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
+let saveStateDone = false;
 
 const { chromium, firefox } = await importPlaywright();
 const browserName = (process.env.BROWSER || "chromium").toLowerCase();
@@ -453,6 +460,19 @@ try {
       const tag = `${String(event.index).padStart(2, "0")}-t${Math.round(elapsed)}-${event.action}-${safeKey(event.key)}.png`;
       await capture(page, tag);
       milestoneLog.push({ t: elapsed.toFixed(1), event: `${event.action} ${event.key}`, screenshot: tag });
+    }
+
+    if (saveStateUrl && !saveStateDone && elapsed >= saveStateAt) {
+      saveStateDone = true;
+      console.log(`[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}…`);
+      try {
+        const r = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
+        console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(r)}`);
+      } catch (e) {
+        console.log(`[menu-progress] loadStateFile threw: ${e?.message || e}`);
+      }
+      await page.waitForTimeout(1500);
+      await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
     }
 
     const sample = await readSample(page, elapsed);

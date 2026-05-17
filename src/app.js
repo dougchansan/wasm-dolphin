@@ -121,6 +121,24 @@ const host = new EmulatorHost({
 });
 audio.setSource((frames) => host.mixAudio(frames));
 
+// Validator/dev hook: fetch a Dolphin .sav by URL and State::LoadAs it
+// through the active adapter (worker → core LoadStateFile). Returns the
+// worker response ({loaded, rc, beforeState, afterState}) so callers
+// can tell a successful load from a build/version rejection.
+window.__loadStateFile = async (url) => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return { loaded: false, error: `fetch ${res.status}` };
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const a = host.adapter;
+    if (!a || typeof a.loadStateFile !== "function")
+      return { loaded: false, error: "adapter has no loadStateFile" };
+    return await a.loadStateFile(bytes);
+  } catch (e) {
+    return { loaded: false, error: String(e?.message || e) };
+  }
+};
+
 renderControlGrid();
 wireSettings();
 wireDiagnostics();

@@ -1370,3 +1370,61 @@ Melee (§16/§17) → menu backgrounds (§19) → **menu UI rendering
 state, proper XFB present) remains the ongoing grind, now on a fully
 correct per-draw uniform foundation. `?video=webgpu` +
 `DIAG_EFB_TO_CANVAS` untouched.
+
+### 21. Per-draw uniform-staleness family completed (PS+GS)
+
+Generalized §20's verified-safe draw-time whole-block re-slice to PS
+(TEV/PixelShaderConstants) and GS too (`m_ps_shadow`/`m_gs_shadow`,
+static_asserted). The §16 per-draw-clobber family is now structurally
+closed for all three constant classes — the per-draw uniform slice is
+re-uploaded whenever any VS/PS/GS block content changed, immune to
+every missed-`dirty` path. No regression (continuous-Start + default
+probes; "VERY EASY" still sharp/coloured; full speed, no
+`VALIDATION`). Did not change the difficulty-select screen's other
+missing elements ⇒ those are a *different* per-draw fidelity construct
+(texture/alpha/TEV-feature), not uniform staleness. Committed
+`e392cc8`.
+
+### 22. Save-state file loading WIRED end-to-end — but desktop states are version-locked
+
+To get a deterministic in-battle scene for the fidelity grind
+(observability was the real blocker: the blind validator can't
+navigate Melee — it sticks on difficulty-select), implemented full
+`.sav` load infrastructure:
+
+- `dolphin_web_core.cpp`: new `int LoadStateFile(const char* path)` →
+  `State::LoadAs` + `HostDispatchJobs` (mirrors `LoadCoreState`; the
+  discio worker's `SaveState`/`LoadState` are hard stubs).
+- `Core/CMakeLists.txt`: added `_LoadStateFile` to
+  `EXPORTED_FUNCTIONS` (CMake auto-reconfigured; export confirmed in
+  the glue JS).
+- worker: `loadStateFile` cwrap + `"loadStateFile"` message
+  (FS.writeFile the bytes → `LoadStateFile` → pump 8 frames → log
+  `[loadStateFile] rc/before/after`).
+- `UpstreamWorkerAdapter.loadStateFile(bytes)` (transfers buffer,
+  returns the worker response); `window.__loadStateFile(url)` in
+  app.js (fetch → adapter); validator `SAVE_STATE_URL` /
+  `SAVE_STATE_AT` env (page.evaluate the hook mid-run + screenshot).
+
+**Probe result:** the pipeline works end-to-end — file fetched
+(dev-server-served), written to the Emscripten FS, `LoadStateFile`
+called, status pill "Save state loaded (Running)", `rc=1`. **But the
+scene did not change** (stayed on the pre-load menu). Root cause
+(confirmed in `State.cpp` `LoadAsFromCore`): `LoadFromBuffer` rejects
+a state whose serialization version / build doesn't match this exact
+Dolphin → `DisplayMessage("The savestate could not be loaded")` (OSD,
+doesn't survive the validator) → `UndoLoadState` restores the prior
+state. The user's `in_battle.sav` was made by a *different* (desktop)
+Dolphin build; Dolphin save states never cross builds. This is the
+upfront-flagged compatibility wall, not a wiring defect.
+
+**The infra is correct & reusable.** The only states it can load are
+ones produced by **this exact wasm core build**. Since the discio
+worker's `SaveState` is also a stub, the realistic next step is a
+sibling `SaveStateFile(path)` (mirror via `State::SaveAs`) used during
+the **attract demo** — which auto-reaches real CPU-vs-CPU gameplay
+with NO navigation — to capture a core-native in-battle state, then
+`LoadStateFile` it deterministically for the per-draw fidelity grind.
+Gitignored 22 MB probe `.sav` staged at repo root for the test was
+deleted (never commit it). `?video=webgpu` + `DIAG_EFB_TO_CANVAS`
+untouched.
