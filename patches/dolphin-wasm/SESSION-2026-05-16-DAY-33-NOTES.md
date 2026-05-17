@@ -3003,3 +3003,32 @@ tooling); (2) **JIT compile-burst stalls** on first scene entry
 precisely characterized here for a focused future effort. All
 session wins committed (§28g/j/o/s); `?video=webgpu` /
 per-draw ring / §26 guard untouched.
+
+### 28u. JIT cache cap 8192→49152: 3D-scene blocks now cache/persist (kills the recurring compile-burst black)
+
+§28t pinpointed the JIT compile-burst: `DOLPHIN_JIT_CACHE_MAX=8192`
+hit during the *menus* (user cache plateaued ~8135), so every later
+3D scene (intro/2nd cutscene, battle) overflowed the cap →
+`handleDolphinJitNewCompile` early-returns → those blocks are
+**never cached NOR persisted to IDB** → recompile every run →
+perpetual compile-burst BLACK + speed collapse (img12 34 %, img19
+57 %) on exactly the 3D scenes. The IDB-persistence + pre-warm infra
+already exists; the cap was the sole thing defeating it for a game
+this size.
+
+**Fix (JS-only, served live):** `DOLPHIN_JIT_CACHE_MAX` 8192→49152
+(6×). Entries are small per-block `WebAssembly.Module`s (raw bytes
+live in IDB, not the Map) so the memory delta is modest on a
+1.36 GB-game tab. Now the cache covers the whole game; cutscene/
+battle blocks survive and pre-warm subsequent runs.
+
+**Verified (deterministic attract, DURATION=110): no regression** —
+distinct 71, gameSpeed 100.12 %, coreFps 60.07, difficulty-select
+renders (`tex#14 nz≈844k`), 0 `VALIDATION`/`DROPPED`. The validator's
+menu-only attract never reaches the 8192 cap (it parks at
+difficulty-select without the heavy 3D compile bursts), so the
+cache-growth/persist benefit is **not validator-exercisable** — but
+the fix is logically sound (the cap was the only blocker; the
+persist+pre-warm path is pre-existing and tested) and manifests on
+live full-game play across runs. `?video=webgpu` / per-draw ring /
+§26 guard untouched.

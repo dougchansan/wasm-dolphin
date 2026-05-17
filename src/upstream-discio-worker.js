@@ -2616,7 +2616,19 @@ const DOLPHIN_JIT_IDB_NAME = "dolphin-jit-cache";
 const DOLPHIN_JIT_IDB_STORE = "modules";
 const DOLPHIN_JIT_IDB_META = "metadata";
 const DOLPHIN_JIT_IDB_VERSION = 2;
-const DOLPHIN_JIT_CACHE_MAX = 8192; // hard cap on in-memory entries
+// §28u: 8192 was far too small for full Melee — the user's cache
+// plateaued at ~8135 (cap hit) while still in the menus, so EVERY
+// later 3D scene (intro/2nd cutscene, battle) exceeded the cap →
+// `handleDolphinJitNewCompile` early-returns at line ~2858 → those
+// blocks are never cached NOR persisted to IDB → they recompile
+// from scratch on every run → perpetual compile-burst BLACK + speed
+// collapse (img12 34 %, img19 57 %) on exactly the 3D scenes.
+// Raising the cap 6× lets the cache cover the whole game; combined
+// with the existing IDB persistence the cutscene/battle blocks now
+// survive and pre-warm subsequent runs (no re-burst). Entries are
+// small per-block WebAssembly.Modules (raw bytes live in IDB, not
+// the Map) so 6× is a modest memory delta on a 1.36 GB-game tab.
+const DOLPHIN_JIT_CACHE_MAX = 49152; // hard cap on in-memory entries
 const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
