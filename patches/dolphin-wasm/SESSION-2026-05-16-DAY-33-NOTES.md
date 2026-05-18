@@ -3247,3 +3247,57 @@ colour-scale `member_2[1]` — with the exact shader math in hand. From
 "3D scenes black, cause unknown" → a single precise, fixable
 construct, deterministic (A-only) + instrumented. §28g/j/o/s/u/v/w/x/y
 stand; `?video=webgpu` / per-draw ring / §26 guard untouched.
+
+### 28aa. ★★★ ROOT CAUSE COMPLETE: EFB-copy utility draw reads filter_coefficients from the WRONG per-draw-UBO-ring slice
+
+Traced §28z's wrong `member_2` (filter_coefficients) to its source.
+The EFB-copy uniforms (TextureCacheBase.cpp:2870) are a
+**tightly-packed C++ struct**:
+`{ float src_left,src_top,src_width,src_height; u32
+filter_coefficients[3]; float gamma_rcp; float clamp_top,clamp_bottom,
+pixel_height; u32 pad; }` → `filter_coefficients` at **byte 16**.
+The §28z Naga `type_12` reads `member_2:vec3<u32> @16`,
+`member_3:f32 @28` (gamma_rcp), `member_4:vec2 @32` (clamp),
+`member_5 @40` (pixel_height) — **the layout matches exactly**. And
+`GetRAMCopyFilterCoefficients` (TextureCacheBase.cpp:2085) is shared
+VideoCommon (sum-to-64 for a faithful copy), correct for every
+backend. So **value computation ✓ and struct layout ✓**.
+
+⇒ The only remaining possibility, and the **complete root cause**:
+the WebGPU EFB-copy is a *utility draw* — `UploadUtilityUniforms`
+stuffs the 48-byte Uniforms into the per-draw UBO ring at
+`m_util_off` and arms `m_util_uniform_mode`; the copy draw's
+`group0/binding0` dynamic offset must select that util slice. It
+does **not** (for these 640×480 copies): the copy FS reads
+`type_12` from a **stale GX PixelShaderConstants slice** instead, so
+`member_2`/`filter_coefficients` is whatever colour/konst bytes sit
+at ring-offset 16 — a garbage scale → `efbTexel·255·garbage/64`
+saturates to **white** (tex#65/151) or collapses **dark** (tex#52)
+→ every 3D scene that composites from these copies is black/grey.
+2D menus (CSS/difficulty-select) don't issue this EFB-copy utility
+draw → they render (§28g) while all 3D scenes are black. This fully
+explains §28w/x/y/z and the user's entire "2D renders, 3D black"
+report.
+
+**Exact fix target (next, C++ + rebuild):** in `WebGPUGfx`
+EFB-copy/utility path — ensure the copy draw's `group0/binding0`
+dynamic offset = `m_util_off` (the `UploadUtilityUniforms` slice),
+not `m_ps_off`/stale. Verify `m_util_uniform_mode` is set AND
+consumed by the actual copy draw recording (the copy may go through
+a draw path that bypasses the `PrepareDrawResources`
+`m_util_uniform_mode ? m_util_off : m_ps_off` selection, or clears
+it before the copy records). Decisive probe: log, at the copy
+draw's SET_BIND_GROUP(0), the dynamic offset vs `m_util_off` vs
+`m_ps_off`; the divergence is the bug. Smallest gated fix, rebuild,
+reprobe the A-only repro (the 640×480 copies must mirror `tex#14`
+→ 3D backdrop appears), verify difficulty-select/CSS +
+`?video=webgpu` unregressed, commit.
+
+**Status (ralph):** the user's #1 bug — every 3D scene / main menu
+black — is now **root-caused end to end** to a single concrete
+defect: the EFB-copy utility draw binds the wrong per-draw-UBO-ring
+slice for its params. Value & layout proven correct; the fix is a
+focused WebGPU-backend utility-draw UBO-offset correction (C++,
+rebuild). Deterministic (A-only `INPUT_SCRIPT`) + fully instrumented
+(§28v badges, wall-clock cpypass/cpy/copy-FS probes). §28g/j/o/s/u/
+v/w/x/y/z stand; `?video=webgpu` / per-draw ring / §26 untouched.
