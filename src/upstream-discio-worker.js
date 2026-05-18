@@ -4158,6 +4158,19 @@ function drainWebGpuCmdRing() {
                 // mismatch here (the §28b/c class) would make the FS
                 // read colors[1]/kcolors[0]/texdims from the wrong
                 // bytes → black menu. JS-only (FS already captured).
+                // §28ak: queue this menu textured draw's b0 (the
+                // sampled UI/glyph texture) for the [webgpu-DIAG-cpy]
+                // readback — decides texture CONTENT empty (upload
+                // bug) vs populated (⇒ texcoord/texdim sampling bug).
+                {
+                  const m = /b0=tex#(\d+)/.exec(allb);
+                  if (m) {
+                    self._wgCpyExtra = self._wgCpyExtra || new Set();
+                    if (self._wgCpyExtra.size < 24)
+                      self._wgCpyExtra.add(parseInt(m[1], 10));
+                    console.log(`[s28ak-b0] fs#${tpl.fsId} b0=tex#${m[1]} queued`);
+                  }
+                }
                 let sd = flat.indexOf("struct type_");
                 for (let k = 0; k < 6 && sd >= 0; k++) {
                   const end = flat.indexOf("}", sd);
@@ -4169,6 +4182,24 @@ function drainWebGpuCmdRing() {
                 // PSBlock vs textures) + the global var lines.
                 const gb = flat.match(/@group\([0-9]\)\s*@binding\([0-9]+\)\s*var<?[^;]*;/g);
                 if (gb) console.log(`[s28aj-bind] ${gb.join(" || ")}`);
+                // §28al: dump the paired menu VS texgen — the FS UV
+                // (param_8/param_9) is a VS output varying. A zero/
+                // wrong texgen here makes a populated texture sample
+                // ≈0 → black menu (§28ak). JS-only (VS WGSL captured).
+                if (self._wgVsSrc && self._wgVsSrc[tpl.vsId] !== undefined) {
+                  const v = self._wgVsSrc[tpl.vsId].replace(/\s+/g, " ");
+                  const vm = v.indexOf("fn main(");
+                  console.log(`[s28al-vs] vs#${tpl.vsId} len=${v.length} ` +
+                    `nLoc=${(v.match(/@location\(/g) || []).length} ` +
+                    `sig=${v.slice(vm, v.indexOf("{", vm) + 1)}`);
+                  // texgen lives in the dolphin_fn chain — dump it +
+                  // the @location output assignments (the varyings the
+                  // FS reads as param_8/param_9 texcoord/layer).
+                  const ci = v.indexOf("fn dolphin_fn_");
+                  if (ci >= 0)
+                    for (let o = ci; o < v.length; o += 700)
+                      console.log(`[s28al-vsfn ${o - ci}] ${v.slice(o, o + 700)}`);
+                }
               }
               const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;
               self._wgEfbDraws = self._wgEfbDraws || new Map();

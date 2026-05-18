@@ -3845,3 +3845,32 @@ sampled-texel / VS-texcoord-varying / texdim readback for a menu
 textured draw (prefer JS-only to keep the JIT cache warm). §28g/
 j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai stand; `?video=webgpu` /
 per-draw ring / §26 untouched.
+
+### 28ak. Menu b0 textures PROVEN populated — dark-content narrowed to VS-texcoord/texgen (a real texture samples ≈0)
+
+JS-only `[webgpu-DIAG-cpy]` readback of the menu `fs#16081`-class
+b0 textures (queued via `[s28ak-b0]`):
+- `tex#83` 32×32 `max=255 px0=255,255,255,255` — real white
+  sprite.
+- `tex#11075..11109` 32×32 `nz≈3700/8192 max=255 ctr=214,28,8 /
+  255,109,33` — real **character-portrait** thumbnails, populated.
+- `tex#76` 88×88 `nz=20760/45056 max=255` — real glyph atlas.
+- EFB `tex#14` itself dark (`ctr=0,10,24`) while its source
+  textures are fine.
+
+⇒ **Texture content/upload is correct**; the menu draws sample
+*populated* textures yet output ≈0. Sixth hypothesis class
+eliminated. With §28ag (not depth/blend), §28ah (PS value
+correct), §28aj (PSBlock layout correct), the sole remaining
+construct is the **texture SAMPLE returning ≈0 from a real
+texture** ⇒ a degenerate **UV / texgen / array-layer**: the FS
+computes `uv = param_8 / (member_3·128)`, `layer = i32(param_9)`
+from VS output varyings; a wrong VS texcoord/texgen varying makes
+a populated texture sample 0 → `out = konst·0 = black`, the
+konst-only "VERY EASY" pill surviving (= the user's image).
+
+**Next:** dump the menu paired VS (`vs#16080`) texgen/texcoord
+output (JS-only, VS WGSL already captured) + read the
+texcoord/layer the FS receives. §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
+ag/ah/ai/aj stand; `?video=webgpu` / per-draw ring / §26
+untouched.
