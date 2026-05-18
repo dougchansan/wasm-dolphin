@@ -4199,6 +4199,19 @@ function drainWebGpuCmdRing() {
                   if (ci >= 0)
                     for (let o = ci; o < v.length; o += 700)
                       console.log(`[s28al-vsfn ${o - ci}] ${v.slice(o, o + 700)}`);
+                  // §28am: dump the VS UBO struct decls so member_9/
+                  // member_12 (the texgen matrices the UV depends on)
+                  // map to VertexShaderConstants fields (texmatrices@
+                  // /posttransformmatrices). JS-only, no rebuild.
+                  let vd = v.indexOf("struct type_");
+                  for (let k = 0; k < 4 && vd >= 0; k++) {
+                    const ve = v.indexOf("}", vd);
+                    console.log(`[s28am-vstruct ${k}] ` +
+                      v.slice(vd, ve >= 0 ? ve + 1 : vd + 700));
+                    vd = v.indexOf("struct type_", vd + 1);
+                  }
+                  const vgb = v.match(/@group\([0-9]\)\s*@binding\([0-9]+\)\s*var<?[^;]*;/g);
+                  if (vgb) console.log(`[s28am-vbind] ${vgb.join(" || ")}`);
                 }
               }
               const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;

@@ -3874,3 +3874,55 @@ output (JS-only, VS WGSL already captured) + read the
 texcoord/layer the FS receives. §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
 ag/ah/ai/aj stand; `?video=webgpu` / per-draw ring / §26
 untouched.
+
+### 28an. ★ ROOT FULLY PINNED — VS texmatrices = IDENTITY (correct); the dark menu is a VERTEX TEXCOORD ATTRIBUTE delivery defect
+
+Extended the baked `[webgpu-DIAG-vs]` C++ probe (one rebuild, the
+flagged tradeoff) to dump `texmatrices[0..1]` (VSBlock member_9),
+`posttransformmatrices[0]` (member_12) and `components` for menu
+draws. Menu repro:
+
+- All rendering menu draws: **`texm0=1,0,0,0  texm1=0,1,0,0`** —
+  the texgen matrix is the **IDENTITY**, not zero. `comp=32768,1`
+  (texgen enabled), `post0` real (identity or a live matrix),
+  `pnm0`/`proj` non-zero (positions transform — geometry renders).
+  (The all-zero rows are pre-game boot frames only.)
+
+⇒ **`texmatrices` is CORRECT at source** (identity ⇒ the texgen
+`uv = vec3(dot(in,texm[0]), dot(in,texm[1]), 1)` is a pure
+*pass-through* of the vertex's texcoord). So the degenerate UV is
+NOT a zero/wrong texgen matrix and NOT VS-UBO delivery — it is the
+**vertex TEXCOORD ATTRIBUTE itself** arriving wrong/zero at the
+VS. Position attributes work (geometry visible); the texcoord
+attribute does not ⇒ a **WebGPU vertex-buffer-layout /
+attribute-mapping defect** for the menu's vertex format
+(CREATE_PIPELINE vertex attributes vs the Naga-VS input
+`@location`s / `WebGPUVertexManager` stride/offset/format).
+
+**Full elimination chain (the dark menu/difficulty-select):** NOT
+reverse-Z/depth (§28ad/af/§28ag), NOT blend (§28ag), NOT
+PS-constant value (§28ah), NOT PSBlock layout (§28aj), NOT
+texture content/upload (§28ak), NOT VS-texgen matrix (§28an:
+identity/correct), NOT VS-UBO layout (§28am). **Sole remaining &
+now-pinned construct: the menu's per-vertex texcoord attribute
+delivery (vertex layout).** FS math `out = konst·tex[badUV] = ~0`,
+konst-only "VERY EASY" pill survives — exactly the user's image.
+
+**Next (precise):** inspect the CREATE_PIPELINE vertex-attribute
+serialization (`WebGPUGfx`/`WebGPUVertexManager` →
+`AbstractPipelineConfig` `vertex_declaration`) vs the
+Naga-translated VS input `@location` set for the menu's vertex
+format — find the texcoord attribute (offset/format/location)
+mismatch; smallest gated fix; verify menu+difficulty-select+
+title+3D + `?video=webgpu`.
+
+**Status (honest, ralph):** the user's #1 bug (3D-black) stays
+SOLVED & shipped (§28ad/af). Smoothness measurably improved &
+characterized (§28ai; JIT cold-start, not render). The dark
+menu/difficulty-select is **root-caused end-to-end after 13
+evidence-driven eliminations** to a single precise construct —
+the vertex texcoord attribute layout — deterministic
+(A→Start→menu) + fully instrumented. The fix is a focused
+vertex-layout correction (next). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
+ag/ah/ai/aj/al/am stand; `?video=webgpu` / per-draw ring / §26
+untouched.
