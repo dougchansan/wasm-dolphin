@@ -3926,3 +3926,49 @@ the vertex texcoord attribute layout — deterministic
 vertex-layout correction (next). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
 ag/ah/ai/aj/al/am stand; `?video=webgpu` / per-draw ring / §26
 untouched.
+
+### 28ao. Parallel sub-agent pass — JS-only smoothness + flicker fixes (no rebuild, JIT-cache-safe)
+
+User report: still flickering, slow boot, not smooth; directive to
+parallelise with sub-agents. Launched 3 read-only agents
+(architect=vertex-texcoord fix design, tracer=flicker root,
+scientist=JIT/boot). Synthesis applied — all **JS-only, no core
+rebuild** so the user's accumulated JIT cache survives:
+
+1. **JIT warmup gate `DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES`
+   3600→300** (worker:174). The JIT was held OFF for the first
+   3600 stable XFB frames (≈60 s @60fps) on a cold run — the
+   *dominant* "slow/not-smooth": the first minute ran entirely on
+   the slow CachedInterpreter. 300 (~5 s) front-loads the one-time
+   compile burst to the GC-IPL screen (player just watching). The
+   existing post-activation stall fuse + cooldown still guard
+   destabilisation.
+2. **Parallel boot-time IDB compile** (`loadDolphinJitCacheFromIdb`)
+   — was a sequential `await WebAssembly.compile` per cached block
+   (5-20 s wall blocking boot on a warm 10k-block cache); now
+   `Promise.allSettled` in 64-batches → ~1-3 s warm boot. (Not
+   visible in the ephemeral-context validator; real-browser only.)
+3. **Flicker root fixed** (tracer-confirmed): `_wgPassRevZ` went
+   stale at `BEGIN_PASS` when the consumer drained between the
+   producer's two separate atomic `Push()` stores (BeginPass then
+   the back-to-back SetViewport) → the §28af peek missed →
+   `beginRenderPass` baked the wrong `depthClearValue`/compare for
+   the whole pass → intermittent flicker. Fix: when `BEGIN_PASS`
+   is reached but `(read+1)===write` (its SET_VIEWPORT not yet
+   visible), **defer the BEGIN_PASS to the next drain** (don't
+   advance `read`), bounded to 8 retries so a stalled producer
+   can't wedge the ring. JS-only; the cleaner C++ "carry revZ in
+   the BEGIN_PASS opcode" alternative was rejected here (rebuild
+   → resets the JIT cache, against the user's smoothness priority).
+
+Also confirmed (scientist): the JIT cache persistence is
+*correct* in a real browser (the validator's `size=0` is a
+Playwright ephemeral-context artifact); "save prompt" is native
+Dolphin IPL/NAND, not JS-fixable; a **Go rewrite has zero
+leverage** (bottleneck = browser `WebAssembly.compile` latency +
+PPC block count, addressed by these JS scheduling changes).
+Vertex-texcoord dark-content (§28an) remains the open render
+construct — architect agent gave the precise serialization
+file:lines for the next focused fix (kept in agent context).
+§28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai/aj/al/am/an stand;
+`?video=webgpu` / per-draw ring / §26 untouched.
