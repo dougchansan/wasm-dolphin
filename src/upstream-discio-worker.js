@@ -3428,9 +3428,12 @@ const DIAG_EFB_TO_CANVAS = true;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;  // §28ad: depth-rejection CONFIRMED the cause on A-only 3D repro (title rendered with this true); real fix = reverse-Z compare flip + clear (below), not disable depth
-// §28ad ROOT FIX: WebGPU can't carry Dolphin's reverse-Z in the
-// viewport (Dawn rejects minDepth>maxDepth), so flip the GX depth
-// compare (less↔greater) + clear depth to far=0.0 in the consumer.
+// §28ad/§28af ROOT FIX: WebGPU can't carry Dolphin's reverse-Z in
+// the viewport (Dawn rejects minDepth>maxDepth). Master enable for
+// the per-PASS reverse-Z compensation (flip GX depth compare
+// less↔greater + clear depth to far=0.0) — applied ONLY to
+// reverse-Z passes (vp near>far); normal-Z menu/UI passes keep the
+// GX compare + clear=1.0. See resolvePipeline / BEGIN_PASS (§28af).
 const REVZ_COMPARE_FLIP = true;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
@@ -3834,6 +3837,19 @@ function drainWebGpuCmdRing() {
           const fbId = u32[recWord + 1];
           const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
           const depthId = u32[recWord + 7];
+          // §28af: the producer emits SET_VIEWPORT immediately after
+          // BEGIN_PASS (cached vp re-emit). Peek it to learn this
+          // pass's reverse-Z BEFORE the depth attachment (whose
+          // depthClearValue is fixed at beginRenderPass and cannot be
+          // changed later) is built. reverse-Z ⇒ clear depth to far
+          // 0.0; normal-Z ⇒ far 1.0 (the GX/Dolphin default). If the
+          // peek isn't available yet, keep the last-seen pass state.
+          if (((read + 1) >>> 0) !== write) {
+            const nrw = (ring.slotsBase + ((read + 1) % ring.capacity) * 32) >>> 2;
+            if (u32[nrw] === WGPU_CMD_OP_SET_VIEWPORT)
+              self._wgPassRevZ = f32[nrw + 5] > f32[nrw + 6];
+          }
+          const dcv = self._wgPassRevZ ? 0.0 : 1.0;
           let colorView;
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
@@ -3892,18 +3908,13 @@ function drainWebGpuCmdRing() {
           if (dt) {
             const ds = {
               view: dt.tex.createView(),
-              // §28ad: Dolphin runs bSupportsReversedDepthRange=true
-              // (VideoBackend.cpp:147) so it does NOT invert its EFB
-              // depth clear (VKGfx.cpp:116-118: clear=z_raw/16M, the
-              // `1.0-` only applies when reverse-Z is UNsupported) and
-              // it does NOT flip the depth compare. WebGPU can't carry
-              // the reversal in the viewport (Dawn rejects
-              // minDepth>maxDepth), so the normal-viewport window depth
-              // here is reverse-Z: near→1, far→0. The depth buffer must
-              // therefore clear to the reverse-Z FAR value 0.0 (was a
-              // hardcoded 1.0, which made every LEQUAL fragment fail vs
-              // the clear → flat black EFB, §28w/x/ac/ad).
-              depthClearValue: 0.0, depthLoadOp: loadOp, depthStoreOp: "store"
+              // §28af: per-pass reverse-Z depth clear (dcv computed
+              // from the peeked SET_VIEWPORT above). reverse-Z 3D
+              // passes clear to far=0.0 (paired with the flipped
+              // GEQUAL compare); normal-Z menu/UI passes clear to
+              // far=1.0 with the unflipped GX compare — the §28ad
+              // global 0.0 wrongly killed the normal-Z menu draws.
+              depthClearValue: dcv, depthLoadOp: loadOp, depthStoreOp: "store"
             };
             if (dt.format.indexOf("stencil") >= 0) {
               ds.stencilClearValue = 0;
@@ -3941,7 +3952,10 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_SET_PIPELINE: {
           const pid = u32[recWord + 1];
           self._wgCurPipe = pid;
-          const p = pass ? resolvePipeline(pid, passColorFmt, passDepthFmt) : null;
+          const p = pass
+            ? resolvePipeline(pid, passColorFmt, passDepthFmt, undefined,
+                              !!self._wgPassRevZ)
+            : null;
           if (pass && p) {
             pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++; pd.pipeOk++;
           } else { webGpuExecStats.missPipe++; pd.pipeMiss++; }
@@ -3998,6 +4012,11 @@ function drainWebGpuCmdRing() {
             if (vy < 0) { vh += vy; vy = 0; }
             vw = Math.max(1, Math.min(vw, passW - vx));
             vh = Math.max(1, Math.min(vh, passH - vy));
+            // §28af: raw near>far ⇒ Dolphin reverse-Z viewport for
+            // this pass. Drives the per-pass compare-flip + depth
+            // clear (set self._wgPassRevZ BEFORE the Dawn-required
+            // mn≤mx swap so the reversal signal isn't lost).
+            self._wgPassRevZ = f32[recWord + 5] > f32[recWord + 6];
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));
@@ -4581,8 +4600,12 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
 
 // Return (building+caching on first use) the pipeline variant whose
 // colour/depth attachment formats match the render pass it'll run in.
-function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
-  const key = `${pipelineId}|${colorFmt}|${depthFmt}`;
+function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
+  // §28af: revZ is per-PASS (from the SET_VIEWPORT near>far that
+  // precedes this draw). Default to the last-seen pass state so the
+  // warm template build (revZ undefined) doesn't pin a wrong variant.
+  if (revZ === undefined) revZ = !!self._wgPassRevZ;
+  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${revZ ? 1 : 0}`;
   const cached = webGpuObjects.pipeVar.get(key);
   if (cached !== undefined) return cached;
   const tpl = webGpuObjects.pipeTpl.get(pipelineId);
@@ -4593,19 +4616,21 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
   if (depthFmt) {
     d.depthStencil = Object.assign({ format: depthFmt },
       tpl.depthBase || { depthWriteEnabled: false, depthCompare: "always" });
-    // §28ad ROOT FIX (3D-black layer (a)): reverse-Z compare flip.
-    // Dolphin runs bSupportsReversedDepthRange=true so it emits the
-    // GX compare UNflipped (VKPipeline inverted_depth=!supported=false)
-    // and relies on a reversed VkViewport to carry reverse-Z. WebGPU
-    // forbids minDepth>maxDepth (Dawn validation), so we keep a normal
-    // viewport and the window depth is reverse-Z (near→1,far→0). The
-    // GX LEQUAL/LESS compare must therefore be flipped to GEQUAL/
-    // GREATER and the depth buffer cleared to far=0.0 (done at
-    // depthClearValue). Without this every 3D fragment failed the
-    // (unflipped) LEQUAL vs the clear → flat black EFB (§28w/x/ac/ad).
-    // never/equal/not-equal/always are self-inverse → 2D depth-off
-    // draws (compare "always") are untouched ⇒ no §28g regression.
-    if (REVZ_COMPARE_FLIP) {
+    // §28ad/§28af ROOT FIX (3D-black layer (a)): reverse-Z compare
+    // flip — but ONLY for reverse-Z passes. Dolphin runs
+    // bSupportsReversedDepthRange=true so it emits the GX compare
+    // UNflipped and relies on a reversed VkViewport to carry
+    // reverse-Z. WebGPU/Dawn forbids minDepth>maxDepth, so we keep a
+    // normal viewport; for the perspective (reversed-viewport) draws
+    // the window depth is reverse-Z (near→1,far→0) and the GX
+    // LEQUAL/LESS compare must be flipped to GEQUAL/GREATER (+ depth
+    // cleared to far=0.0 at depthClearValue). §28ad flipped this
+    // GLOBALLY, which INVERTED occlusion on the normal-Z (vp
+    // near<far) menu/UI/overlay depth draws → menu rendered dark and
+    // the title flickered (user-reported). §28af makes it per-pass:
+    // flip + clear-0 only when revZ; normal-Z passes keep the GX
+    // compare and clear to 1.0 unchanged (no §28g/menu regression).
+    if (REVZ_COMPARE_FLIP && revZ) {
       const F = { "less": "greater", "greater": "less",
                   "less-equal": "greater-equal",
                   "greater-equal": "less-equal" };

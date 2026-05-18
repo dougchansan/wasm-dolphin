@@ -3538,3 +3538,62 @@ scene survey confirms visual parity (§28ae). The only remaining
 gap to "full speed" is the orthogonal, already-mitigated §28u
 JIT compile-burst (perf, not render). §28g/j/o/s/u/v/w/x/ac/ad
 stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28af. §28ad CORRECTION — global compare-flip broke normal-Z draws (user: title flickers, menu dark); fix made per-pass reverse-Z-conditional
+
+User live-test (ground truth) showed §28ad's win was partial: the
+**title flickered / "disappears, not consistent"** and the **main
+menu rendered dark** (image: faint streaks, UI missing) at full
+speed/JIT-warm (so a render bug, not §28u perf).
+
+**Root cause of the §28ad regression:** WebGPU draws mix
+reverse-Z (`vp near>far`) and normal-Z (`vp near<far`) viewports
+(probe `[webgpu-DIAG-vs]`: e.g. `vp …0.0,0.0,320.0,480.0,0.000,
+1.000` normal-Z draws interleaved with `…1.000,0.000` reverse-Z).
+§28ad flipped the depth compare + cleared depth to 0.0
+**globally** for every depth pipeline. That is correct for
+reverse-Z 3D but **inverts occlusion on the normal-Z menu/UI/
+overlay depth draws** → they get depth-rejected → menu dark, and
+the title's normal-Z overlay corrupts the shared depth buffer
+intermittently → flicker.
+
+**Fix (§28af, JS-only `src/upstream-discio-worker.js`,
+served live):** make the reverse-Z compensation **per-pass**:
+- track `self._wgPassRevZ` from each `SET_VIEWPORT`'s raw
+  `near>far` (set before the Dawn-required mn≤mx swap);
+- at `BEGIN_PASS`, peek the immediately-following `SET_VIEWPORT`
+  (the producer always re-emits it next, WebGPUGfx.cpp:768) to
+  pick `depthClearValue = revZ ? 0.0 : 1.0` before the depth
+  attachment is fixed;
+- `resolvePipeline` keys a `|rz0/1` variant and flips the compare
+  **only** for reverse-Z passes; normal-Z passes keep the GX
+  compare + clear 1.0 unchanged.
+
+**Verification (probe + screenshots):**
+- A→Start→dwell repro (`?video=wgpu`): **60 distinct hashes**
+  (was 24 pre-§28af), **90.3 % speed** (was 67 %), noStuck 28 %,
+  **0 validation errors**, continuous menu-region progression.
+  Title screen (t=32) renders **perfectly and stably** (flicker
+  fixed).
+- Regression — difficulty-select/CSS (`?video=wgpu`, default
+  input): **30 hashes, 95.8 % speed, 0 valErr**, full character
+  grid renders crisply (t=68) — §28g intact, *improved* vs §28ad.
+- `?video=webgpu` reference unaffected (separate path).
+
+**Residual (NEW construct, not the reverse-Z class):** the Melee
+**main menu** (post-Start "Classic/Adventure" 1P menu) still
+mis-renders — reference shows a crisp blue-grid menu with yellow
+buttons + text; `?video=wgpu` shows only a faint/dark partial
+background with the UI overlay missing. Distinct from title (which
+is now perfect). Candidates: the menu's UI overlay draws share an
+EFB pass with mixed reverse/normal-Z (single per-pass clear can't
+serve both), or a menu-specific TEV/blend/material producing
+near-zero colour, or the BEGIN_PASS viewport-peek missing across a
+ring-batch boundary (stale revZ inherited from a prior 3D pass).
+
+**Net (honest, ralph):** §28ad corrected — the broad reverse-Z
+class is solid and now regression-safe (title perfect+stable,
+difficulty-select 95.8 %, 3D stages render, 0 valErr). One
+residual per-scene construct remains (the 1P menu dark/UI-missing)
+— the loop continues on it next. §28g/j/o/s/u/v/w/x/ac/ad/ae
+stand; `?video=webgpu` / per-draw ring / §26 untouched.
