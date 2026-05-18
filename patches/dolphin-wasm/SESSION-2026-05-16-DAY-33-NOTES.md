@@ -3692,3 +3692,55 @@ zero'd PS-constant member & its delivery defect, smallest gated
 fix, verify menu renders + no regression (title/3D/
 difficulty-select/`?video=webgpu`). §28g/j/o/s/u/v/w/x/ac/ad/
 ae/af stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ah. ★ DECISIVE — TEV PS-constants are CORRECT AT SOURCE; the dark menu/difficulty-select is a pure DELIVERY/layout defect (NOT value)
+
+User live-test (image): the **difficulty-select** screen renders
+mostly dark — only the gold-framed "VERY EASY" pill visible, the
+character grid gone — i.e. the §28ag-2 dark-content construct
+**also degrades difficulty-select**, not just the 1P menu (the
+earlier §28af "difficulty-select crisp" was a JIT-warm transient;
+honest correction). The `5100 new compiles` in that shot = the
+§28u JIT compile-burst the user feels as "not smooth".
+
+Added a gated C++ probe `[s28ah-ps]` in `WebGPUGfx::Prepare
+DrawResources` (right where `m_ps_off` is set) dumping the live
+`PixelShaderConstants` TEV registers `colors[0..1]` /
+`kcolors[0..1]` + `ps_changed`/`m_ps_off`. One rebuild,
+default-input repro (reaches difficulty-select):
+
+- `col1 = 255,255,255,255` (colors[1] = white), **`kcol0 =
+  255,204,0,176`** (kcolors[0] = the exact gold "VERY EASY"
+  colour), `chg`/`psOff` advancing correctly per §21.
+- `col0 = 0,0,0,0` consistently (colors[0] unused/zero).
+
+⇒ **The TEV colour registers the menu FS reads
+(`global.member[1]`=colors[1], `global.member_1[0]`=kcolors[0])
+are NON-ZERO and CORRECT at source, and the per-draw PS slice is
+correctly allocated/fresh.** The §28ag-2 "PS-constant reaches FS
+≈0" is therefore a **delivery/layout defect, not a value/state
+one** — Dolphin computes them right; the FS still renders dark ⇒
+it is reading the wrong bytes. Decisively rules out the
+source/shadergen hypothesis.
+
+**Narrowed next construct:** (a) a **Naga std140 PSBlock
+member-offset mismatch** (the §28b/c class) — note `colors[0]=0`,
+so an off-by-one/stride error making `member[1]` resolve to
+`colors[0]` (or `member_1[0]` to the wrong reg) yields exactly
+black; or (b) the **texture sample** is dark (degenerate
+texcoord/`texdims` member → wrong UV). Next probe: dump the
+PSBlock `struct type_*` WGSL decl (`[s28-bdfsS]`-style) + the live
+`global.member[1]`/`member_1[0]` *as the FS sees them* vs the
+C++ `colors[1]`/`kcolors[0]` byte offsets, and the sampled
+texcoord, to pick (a)/(b); then the smallest gated fix.
+
+**Status (honest, ralph):** the user's #1 bug (3D-black) stays
+SOLVED & committed (§28ad/af). The dark menu/difficulty-select
+construct is now **decisively narrowed**: value/state excluded
+(§28ah), it is a per-draw PSBlock byte-delivery (layout) or
+texture-sample defect — deterministic + instrumented
+(`[s28ah-ps]` C++ baked in core, `[s28-texfs]` per-fsId).
+Smoothness residual = the orthogonal §28u JIT compile-burst
+(persists/pre-warms across runs; inherent first-encounter JIT
+cost, not the renderer). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag
+stand; `?video=webgpu` / per-draw ring / §26 untouched.
