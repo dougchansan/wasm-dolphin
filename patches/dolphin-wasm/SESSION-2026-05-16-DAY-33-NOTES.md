@@ -3349,3 +3349,65 @@ C++ triple-probe (one rebuild) to pick between the two remaining
 layers, then the fix. No speculative code change made. §28g/j/o/s/
 u/v/w and the deterministic-repro/instrumentation infra stand;
 `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ac. ★★★ DECISIVE PROBE RESULT: copy uniform & binding PROVEN correct — the EFB-copy is fully exonerated; bug is §28ab layer (a) (3D-scene EFB draws produce a flat field)
+
+Implemented the §28ab decisive C++ triple-probe (gated, `#ifdef
+__EMSCRIPTEN__`, in `WebGPUGfx.cpp`): `[s28ac-uu]` in
+`UploadUtilityUniforms` dumps size + the bytes TextureCacheBase
+wrote (filter_coefficients @16, src-rect, gamma, clamp, pxH);
+`[s28ac-bg]` in `PrepareDrawResources` dumps, at every util-mode
+`SET_BIND_GROUP(0)`, `b0` vs `m_util_off`/`m_ps_off`/`m_vs_off` +
+fbColor + viewport. One rebuild, A-only deterministic repro
+(`.omx/menu-progress/2026-05-18T05-28-54-819Z/console.log`).
+
+**Result — both copy-side layers EMPIRICALLY DISPROVEN:**
+- **Uniform VALUE correct.** The genuine EFB→texture copy
+  (`sz=48`, the TextureCacheBase.cpp:2870 struct) uploads
+  **`fc=0,64,0`** every time, including deep in the 3D-black dwell
+  (n=6000…14880, t=42 s→106 s, `srcRect=0,0,0.4,0.4848`
+  gammaRcp=1.0 clamp=0.0009,0.4839). Per §28z
+  `out=efbTexel·255·member_2[1]/64`, `member_2[1]=fc[1]=64` ⇒
+  **faithful ×1 copy**. The §28z/§28aa "wrong colour-scale
+  uniform" hypothesis is **dead**. The `fc=1065353216,…`
+  (=`0x3F800000`=float `1.0` reinterpreted) lines that misled
+  §28z are a *different* utility struct (present/XFB blits, sz=48
+  but not the copy) — not the EFB copy.
+- **Binding correct.** **Every single `[s28ac-bg]` line has
+  `b0 == utilOff`** (never `psOff`) — the util slice is always the
+  one selected, including at `fbColor=14`(EFB)/`fbColor=65/151/52`
+  copy targets, `vp=640x480`. §28aa's "copy draw binds the wrong
+  per-draw-UBO slice" is **dead**. (`AllocUboSlice` 256-aligned,
+  `PrepareDrawResources` `b0=m_util_uniform_mode?m_util_off:m_ps_off`,
+  consumer faithfully replays the 4 dynamic offsets — all confirmed
+  live, matching the §28ab static read.)
+
+**⇒ Per §28ab's own disambiguation rule ("correct fc + correctly
+bound ⇒ the 3D-scene EFB-draw bug, cull excluded §28w"): the
+construct is definitively LAYER (a).** The EFB-copy and its
+uniforms are now *proven* correct end-to-end; the copy faithfully
+copies whatever is in the EFB. §28x already showed that EFB
+(`tex#14`) is a flat field (`38,38,38`), NOT the 3D scene. So the
+remaining (and now sole) defect: **the 3D-scene GX draws submit
+geometry (§28w `prim/draw>0`) but do not rasterise into the EFB —
+the EFB stays at its clear/flat value. Cull is excluded (§28w
+clean repro). 2D menus (CSS/difficulty-select, §28g) render
+because they don't depend on this 3D EFB-draw path.** The
+remaining candidates (cull already gone): per-draw depth-test /
+reversed-Z rejecting all 3D fragments, viewport/scissor zeroing
+the 3D draws, alpha-test/blend collapsing them, or the 3D draws
+targeting a framebuffer other than the copied EFB.
+
+**Net (honest, ralph):** the §28z→§28aa copy-uniform theory
+(2 commits of investigation) is now *empirically falsified* —
+this is load-bearing: it stops the next iteration from shipping
+the §28aa guess or chasing the copy further. The user's #1 bug is
+now pinned to a single concrete layer (the 3D-scene EFB draw not
+rasterising; cull excluded) with the copy proven innocent. Probe
+infra (`[s28ac-uu]`/`[s28ac-bg]`, gated, baked into the rebuilt
+core) kept for the next layer-(a) bisect. §28g/j/o/s/u/v/w/x and
+the deterministic-repro infra stand; `?video=webgpu` / per-draw
+ring / §26 untouched. **Next:** pivot the probe to the 3D-scene
+GX (non-util) EFB draws — log fbColor + viewport(near/far) +
+depth-state vs the rendering 2D draws; smallest gated fix on the
+rejecting construct, rebuild, reprobe, verify.
