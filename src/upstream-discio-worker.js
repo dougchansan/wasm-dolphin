@@ -4284,12 +4284,14 @@ function drainWebGpuCmdRing() {
                 const hasNorm = flat.indexOf("member_3") >= 0 &&
                   flat.indexOf("128") >= 0;
                 const sm = flat.match(/textureSample\w*\s*\([^;]{0,180}/);
-                let tdx = -1, tdy = -1;
+                let tdx = -1, tdy = -1, tdz = -1, tdw = -1;
                 if (self._wgPsSnap && self._wgPsSnapLen >= 160) {
                   const pv = new DataView(self._wgPsSnap.buffer,
                     self._wgPsSnap.byteOffset);
-                  tdx = pv.getInt32(144, true);
-                  tdy = pv.getInt32(148, true);
+                  tdx = pv.getInt32(144, true);   // texdims[0].x = width
+                  tdy = pv.getInt32(148, true);   // texdims[0].y = height
+                  tdz = pv.getInt32(152, true);   // [0].z = tc_scale_s
+                  tdw = pv.getInt32(156, true);   // [0].w = tc_scale_t
                 }
                 let vU = NaN, vV = NaN;
                 if (self._wgVbSnap) {
@@ -4304,29 +4306,41 @@ function drainWebGpuCmdRing() {
                     }
                   }
                 }
-                const dU = tdx > 0 ? tdx * 128 : 1;
-                const dV = tdy > 0 ? tdy * 128 : 1;
-                const nU = vU / dU, nV = vV / dV;
+                // FULL effective sampled UV: texgen multiplies vtxTC by
+                // (tc_scale .zw · 128), FS divides by (texdims .xy · 128)
+                // ⇒ effUV = vtxTC · (.zw / .xy). The 128s cancel.
+                const effU = (tdx > 0) ? vU * (tdz / tdx) : NaN;
+                const effV = (tdy > 0) ? vV * (tdw / tdy) : NaN;
                 console.log(`[s28av-texuv] pipe=${self._wgCurPipe} ` +
                   `fs#${aT.fsId} vs#${aT.vsId} hasNorm=${hasNorm ? 1 : 0} ` +
-                  `td0=(${tdx},${tdy}) vtxTC=(${vU.toFixed(5)},${vV.toFixed(5)}) ` +
-                  `normUV=(${nU.toFixed(8)},${nV.toFixed(8)}) ` +
-                  `sample=${sm ? sm[0].slice(0, 150) : "NONE"}`);
-                if (hasNorm && Math.abs(nU) < 0.01 && Math.abs(nV) < 0.01 &&
-                    !isNaN(vU) && Math.abs(vU) > 0.01) {
-                  console.log(`[s28av-VERDICT] UV-COLLAPSE CONFIRMED: ` +
-                    `vtxTC in [0,1] but FS divides by texdims*128 ` +
-                    `(${tdx}*128=${dU}) → normUV≈0 → atlas-corner → ` +
-                    `dark menu. Root = vertex UVs delivered normalised, ` +
-                    `FS expects texel*128 fixed-point.`);
-                } else if (!hasNorm && !isNaN(vU)) {
-                  console.log(`[s28av-VERDICT] FS does NOT normalise by ` +
-                    `texdims — raw vtxTC is the sample UV. NOT UV-collapse; ` +
-                    `check texture content (i) or FS TEV math.`);
-                } else if (hasNorm && !isNaN(nU)) {
-                  console.log(`[s28av-VERDICT] normUV sane ` +
-                    `(${nU.toFixed(4)},${nV.toFixed(4)}) — not collapse; ` +
-                    `posttransform/sampler-clamp (iii).`);
+                  `td.xy=(${tdx},${tdy}) td.zw_scale=(${tdz},${tdw}) ` +
+                  `vtxTC=(${vU.toFixed(5)},${vV.toFixed(5)}) ` +
+                  `effUV=(${effU.toFixed(6)},${effV.toFixed(6)}) ` +
+                  `sample=${sm ? sm[0].slice(0, 120) : "NONE"}`);
+                if (!isNaN(effU)) {
+                  if (Math.abs(effU) < 0.01 && Math.abs(effV) < 0.01 &&
+                      !isNaN(vU) && Math.abs(vU) > 0.01) {
+                    console.log(`[s28av-VERDICT] UV-COLLAPSE: vtxTC ` +
+                      `(${vU.toFixed(3)},${vV.toFixed(3)}) × (tc_scale ` +
+                      `${tdz},${tdw} / texdim ${tdx},${tdy}) → effUV≈0. ` +
+                      (tdz <= 1 || tdw <= 1
+                        ? `tc_scale .zw≈${tdz},${tdw} is NOT the texsize ` +
+                          `(SetTexCoordChanged not delivering scale=texsize) ` +
+                          `⇒ the .zw/tc-scale path is the defect.`
+                        : `tc_scale present but mismatched vs texdim ` +
+                          `(${tdz},${tdw} vs ${tdx},${tdy}).`));
+                  } else if (Math.abs(effU - vU) < 0.05 &&
+                             Math.abs(effV - vV) < 0.05) {
+                    console.log(`[s28av-VERDICT] effUV≈vtxTC ` +
+                      `(${effU.toFixed(3)},${effV.toFixed(3)}) — round-trip ` +
+                      `OK. Dark root is NOT UV units; check texture ` +
+                      `content / FS TEV / blend.`);
+                  } else {
+                    console.log(`[s28av-VERDICT] effUV=` +
+                      `(${effU.toFixed(3)},${effV.toFixed(3)}) vs vtxTC=` +
+                      `(${vU.toFixed(3)},${vV.toFixed(3)}) — partial ` +
+                      `mismatch; tc_scale=${tdz},${tdw} texdim=${tdx},${tdy}.`);
+                  }
                 }
               }
             }

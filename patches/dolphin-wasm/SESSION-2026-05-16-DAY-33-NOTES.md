@@ -4277,3 +4277,48 @@ root CONFIRMED (§28au) — fix is the next focused effort. Probes
 `[s28av-*]`/`[s28-vtxdata]`/`[s28at-vp]` kept (gated/capped,
 render-inert). §28g…§28at stand; `?video=webgpu`/per-draw ring/
 §26 untouched.
+
+### 28av. ★ HONEST CORRECTION — §28au UV-COLLAPSE was a PARTIAL-pipeline false positive; the FULL effective UV round-trips OK ⇒ dark-menu root is NOT texcoord units
+
+§28au's `[s28av-VERDICT] UV-COLLAPSE CONFIRMED` was computed from an
+INCOMPLETE formula: `normUV = vtxTC / (I_TEXDIMS.xy·128)` — it
+omitted the texgen step that MULTIPLIES the texcoord by the GC
+texcoord scale `I_TEXDIMS.zw·128` BEFORE the FS divides by `.xy·128`.
+`PixelShaderManager::SetTexDims` fills `texdims[i].xy = (w,h)`;
+`SetTexCoordChanged` fills `texdims[i].zw = (tc.s.scale, tc.t.scale)`.
+The probe was extended to read `.zw` (PSBlock bytes 152/156) and
+compute the TRUE effective UV `effUV = vtxTC·(.zw/.xy)` (the two
+·128 cancel). Re-run on the deterministic `__menu.sav`:
+
+- pipe 79 fs#78: `td.xy=(88,88) td.zw_scale=(88,88)` → `effUV =
+  vtxTC·(88/88) = (1.000,0.000)`
+- pipe 86 fs#85: `td.xy=(32,32) td.zw_scale=(32,32)` → `effUV =
+  (0.092,0.000)`
+
+`.zw` MATCHES `.xy` ⇒ the multiply/divide round-trips ⇒ **the
+sampled UV is a valid `[0,1]` coordinate. UV-COLLAPSE is FALSIFIED.**
+§28au (commit 0414501) over-claimed from a partial model — recorded
+honestly here (cf. the §28ab honest-correction precedent). Same
+hard-won ralph lesson, again: measure the FULL pipeline, never
+conclude from a partial derivation.
+
+**Net narrowing (still real progress).** The dark menu is now NOT:
+depth (§28at), zero-texcoord/position-texgen (§28au `[s28-vtxdata]`),
+NOR texcoord-units/UV-collapse (§28av full-pipeline effUV round-trips
+to valid `[0,1]`). Plus a **deterministic repro** is now established
+(`__menu.sav` + `SAVE_STATE_URL`/`AT`) — the multi-session "can't
+reach the menu" blocker is permanently gone. Remaining candidates,
+all reachable via the deterministic repro: (i) texture CONTENT
+(tex#76 88×88 / tex#83 32×32 actually empty in THIS savestate menu —
+§28ak's "populated" was difficulty-select, not verified here),
+(ii) FS TEV/konst collapsing a valid sample to ~0, (iii) the
+`textureSampleBias(param_6, param_7, uv, i32(_e107.z), bias)`
+**array-layer index** `_e107.z` being non-zero on single-layer
+menu textures viewed as `2d-array` ⇒ out-of-range ⇒ 0 (strong
+candidate; the consumer creates ALL texture views as `2d-array`).
+
+**Status.** Flicker SOLVED+committed (§28at 36b32cc), unaffected.
+Dark-menu = the one open construct, narrowed (16+ eliminations),
+deterministic repro in hand. §28au's "CONFIRMED" superseded by this
+correction. Probes render-inert/kept. §28g…§28at stand;
+`?video=webgpu`/per-draw ring/§26 untouched.
