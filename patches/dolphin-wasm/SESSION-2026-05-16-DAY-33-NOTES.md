@@ -4079,3 +4079,51 @@ shipped build = §28ao state (renders, smooth-after-warmup,
 flickers on mixed passes — not black). §28g/j/o/s/u/v/w/x/ac/ad/
 ae/af/ag/ah/ai/aj/al/am/an/ao stand; `?video=webgpu` / per-draw
 ring / §26 untouched.
+
+### 28as. Fog-decouple done but INSUFFICIENT — flag=false has a SECOND coupling (dark + core hang) beyond fog; reverted to verified §28ao
+
+Implemented the §28aq/ar-scoped fix: PixelShaderGen
+fog/depth `zCoord` decoupled from `bSupportsReversedDepthRange`
+for `api_type==APIType::Vulkan` (4 sites: the fog zCoord
+1.0-rawpos.z branch, the two per-pixel-depth branches, and the
+alpha-test-discard depth default) — so the WebGPU/Vulkan
+clip-control `[0,1]` path always uses the non-inverted formula
+regardless of the depth-range flag (OGL/D3D/SW untouched, gated).
+Then re-applied `bSupportsReversedDepthRange=false` +
+`REVZ_COMPARE_FLIP=false` + constant `dcv=0.0`. Rebuild + verify.
+
+**Result:** `[s28aq-MISMATCH] = 0` (flicker mechanism eliminated,
+confirmed again) and 0 valErr — BUT the render is still **dark
+(dark-navy field, not the §28b black fog colour) AND the core
+HANGS** (frozen at frame 781 / t=17, distinctHashes 5/96,
+noStuck 81 %, `560/99 draw` `0 nz`). The fog decouple worked
+(no longer the §28b black-fog), but `flag=false` exposes a
+**SECOND breakage** beyond fog — a depth/projection/clip-control
+convention mismatch under the non-reverse path that both darkens
+the output and stalls game progression. Fog was necessary but not
+sufficient.
+
+**Reverted** to `flag=true` + `REVZ_COMPARE_FLIP=true` + per-pass
+`dcv` (the verified §28ao state: renders + §28ao-smooth,
+flickers). The §28as PixelShaderGen decouple is **kept** — it is
+a NO-OP with `flag=true` (both branches resolve to `rawpos.z`)
+and is correct/ready for the eventual full untangle. Not
+shipping dark/hung; flicker-but-renders is strictly better.
+
+**Honest state after 3 structural attempts (§28ar/§28as):** the
+flicker ROOT is proven (§28aq: mixed reverse/normal-Z in one EFB
+pass — unfixable per-pass on WebGPU). The ONLY structural fix is
+the single non-reverse convention (`flag=false`), but `flag=
+false` has ≥2 couplings: (1) §28b fog branch — now decoupled
+(§28as); (2) an unidentified depth/projection/clip-control
+convention breakage that darkens + hangs. Landing the flicker
+fix requires finding and decoupling coupling (2) as well — a
+focused VertexShaderManager/clip-control/depth-range trace
+(candidate areas: `VertexShaderManager` projection/viewport
+depth-range path, `bSupportsClipControl`×`bSupportsReversed
+DepthRange` interaction, the §28ad reverse-Z viewport reasoning).
+This is the precise next focused effort; the full proof chain
+(§28aq→§28as) is the map. Current shipped = §28ao (renders,
+smooth-after-warmup, flickers). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
+ag/ah/ai/aj/al/am/an/ao stand; `?video=webgpu` / per-draw ring /
+§26 untouched.

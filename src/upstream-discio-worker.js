@@ -3448,10 +3448,10 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // less↔greater + clear depth to far=0.0) — applied ONLY to
 // reverse-Z passes (vp near>far); normal-Z menu/UI passes keep the
 // GX compare + clear=1.0. See resolvePipeline / BEGIN_PASS (§28af).
-// §28ar: REVERTED to true (paired with producer
-// bSupportsReversedDepthRange=true). The false path black-screened
-// (fog coupling, §28ar); true keeps the §28ad/ao render+smooth state
-// (flickers on mixed passes until the fog decoupling lands).
+// §28as REVERTED to true (paired with producer flag=true). flag=
+// false rendered dark + hung even with fog decoupled (a 2nd
+// coupling remains); back to the verified §28ao render+smooth
+// state (flickers on mixed passes, root proven §28aq).
 const REVZ_COMPARE_FLIP = true;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
@@ -3883,10 +3883,9 @@ function drainWebGpuCmdRing() {
             if (u32[nrw] === WGPU_CMD_OP_SET_VIEWPORT)
               self._wgPassRevZ = f32[nrw + 5] > f32[nrw + 6];
           }
-          // §28ar: REVERTED to the §28af/ao per-pass value (paired
-          // with producer flag=true). The §28aq single-constant path
-          // black-screened via the fog coupling; restore the
-          // render+smooth state until the fog decoupling lands.
+          // §28as REVERTED to the §28af/ao per-pass value (flag=true).
+          // flag=false dark+hung even with fog decoupled; restore the
+          // verified render+smooth state (flickers, root proven §28aq).
           const dcv = self._wgPassRevZ ? 0.0 : 1.0;
           // §28aq DISCRIMINATING PROBE: record the revZ baked into
           // this pass's depthClearValue; the SET_VIEWPORT handler
