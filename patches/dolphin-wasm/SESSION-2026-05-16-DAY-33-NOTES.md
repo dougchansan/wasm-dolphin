@@ -3194,3 +3194,56 @@ no misses). Deterministic (A-only `INPUT_SCRIPT`) + instrumented
 capped, precedent §28 probes). The remaining fix is a focused
 copy-shader bisect (next). §28g/j/o/s/u/v/w/x stand; `?video=webgpu`
 / per-draw ring / §26 guard untouched.
+
+### 28z. ★★★ EFB-copy FS decoded: out = clamp(efbTexel·255 · member_2[1] >>6,255)/255 — the copy COLOUR-SCALE uniform is wrong
+
+Dumped the 640×480 EFB-copy FS (`fs#53`, keyed off the copy pipeline
+from `[webgpu-DIAG-cpypass]`, A-only deterministic repro):
+
+```
+@group(1)@binding(0) var global: texture_2d_array<f32>;   // EFB src
+@group(0)@binding(0) var<uniform> global_2: type_12;       // copy params
+type_12 { member:vec2 src_off, member_1:vec2 src_sz,
+          member_2:vec3<u32> COLSCALE, member_3:f32,
+          member_4:vec2 clamp_lo/hi, member_5:f32 }
+fn dolphin_fn_0_(): T = textureSample(EFB,…); return vec4<u32>(T*255);
+fn dolphin_fn_1_(): t255 = T*255;
+   local_4 = t255.xyz * global_2.member_2[1];      // ← colour scale
+   local_5 = local_4 >> 6;                          // /64
+   local_5 = min(local_5, 255);
+   out = vec3<f32>(local_5)/255;
+```
+
+So **`out = clamp( efbTexel·255 · member_2[1] / 64, 0,255 ) / 255`**.
+For a faithful copy `member_2[1]` must be ≈ **64** (×64/64 = ×1).
+The §28x symptom is now fully explained: **`member_2[1]` is
+wrong** — too large ⇒ `t255·scale/64` saturates to 255 ⇒ tex#65/151
+all-**white**; too small ⇒ tex#52 **dark** (16). The 3D scenes
+composite their backdrop from these wrong copies ⇒ uniform
+grey/black (user img11→14). 2D menus don't use this 640×480 copy
+path ⇒ they render (§28g) while every 3D scene is black.
+
+**Root cause (PINNED to a single uniform):** the EFB-copy
+colour-scale `global_2.member_2` (a `vec3<u32>` in the copy-params
+UBO `@group(0)@binding(0)`) holds the wrong value — a §28b/c-class
+**copy-params UBO layout/value bug** (Dolphin's
+`UploadUtilityUniforms` EFB-copy colour-matrix/scale either computed
+wrong for the WebGPU path, or our `type_12` struct byte-layout
+mis-maps `member_2` vs what Dolphin writes — the same Naga/std140
+offset class that bit fog in §28b/c).
+
+**Exact next construct:** dump the live copy-params UBO bytes
+(`global_2`, the 640×480 copy draw's `@group(0)@binding(0)` buffer)
+and read `member_2` — confirm it's ≠ (…,64,…); then map `type_12`
+back to Dolphin's EFB-copy uniform upload
+(`TextureConverter`/`UploadUtilityUniforms` colour-matrix), find the
+layout/value mismatch, smallest gated fix so the copy mirrors
+`tex#14`, reprobe (3D backdrop must appear; difficulty-select/CSS +
+`?video=webgpu` unregressed), commit.
+
+**Status (ralph):** the user's #1 bug (every 3D scene / main menu
+black) is root-caused to **one wrong uniform** — the EFB-copy
+colour-scale `member_2[1]` — with the exact shader math in hand. From
+"3D scenes black, cause unknown" → a single precise, fixable
+construct, deterministic (A-only) + instrumented. §28g/j/o/s/u/v/w/x/y
+stand; `?video=webgpu` / per-draw ring / §26 guard untouched.

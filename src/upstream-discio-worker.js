@@ -3535,11 +3535,26 @@ function drainWebGpuCmdRing() {
       }
     }
     if (isCopyTgt && (n <= 6 || _cpWcOk)) {
+      const _ct = webGpuObjects.pipeTpl.get(self._wgCurPipe);
       console.log(`[webgpu-DIAG-cpypass] pass#${n} fb=${passFbId} ` +
         `pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} bgOk=${pd.bgOk} ` +
         `bgMiss=${pd.bgMiss} draw=${pd.draw} drawIdx=${pd.drawIdx} ` +
         `srcTex=${self._wgCpySrc != null ? "tex#" + self._wgCpySrc : "?"} ` +
+        `pipe=${self._wgCurPipe} ${_ct ? _ct.s28dbg : "?"} ` +
         `${passColorFmt}/${passDepthFmt} ${passW}x${passH}`);
+      // §28z: one-shot dump the 640×480 EFB-copy's FS WGSL — the
+      // shader that outputs white instead of mirroring tex#14. Keyed
+      // off the copy pipeline (not the broken 4096 heuristic).
+      if (passW === 640 && passH === 480 && _ct && !self._wgCpFsDone &&
+          self._wgFsSrc && self._wgFsSrc[_ct.fsId] !== undefined) {
+        self._wgCpFsDone = true;
+        const w = self._wgFsSrc[_ct.fsId].replace(/\s+/g, " ");
+        console.log(`[s28z-cpfs] fb=${passFbId} pipe=${self._wgCurPipe} ` +
+          `fs#${_ct.fsId} vs#${_ct.vsId} len=${w.length} ` +
+          `nSample=${(w.match(/textureSample/g) || []).length}`);
+        for (let o = 0; o < w.length && o < 4200; o += 700)
+          console.log(`[s28z-cpfs ${o}] ${w.slice(o, o + 700)}`);
+      }
     }
     if ((passFbId === 0 || passFbId === 47) && n <= 3) {
       console.log(`[webgpu-exec] pass#${n} fb=${passFbId} ` +
