@@ -4304,6 +4304,21 @@ function drainWebGpuCmdRing() {
                 const hasNorm = flat.indexOf("member_3") >= 0 &&
                   flat.indexOf("128") >= 0;
                 const sm = flat.match(/textureSample\w*\s*\([^;]{0,180}/);
+                // §28ba: which @binding does the menu FS actually
+                // sample? dolphin_fn_1_ is called with (…, global_1,
+                // global_2, …) ⇒ the sampled texture = `global_1`.
+                // Parse its @group/@binding + list all texture_2d_array
+                // bindings, so we can cross-check [s28-texfs]'s b0..b7
+                // (b0=tex#76 atlas, b1=tex#65 640×480 EFB backdrop).
+                const g1m = flat.match(
+                  /@group\((\d+)\)\s*@binding\((\d+)\)\s*var\s+global_1\s*:/);
+                const texBinds = (flat.match(
+                  /@binding\(\d+\)\s*var\s+\w+\s*:\s*texture_2d_array/g)
+                  || []).join(" | ");
+                console.log(`[s28ba-bind] fs#${aT.fsId} ` +
+                  `global_1@group${g1m ? g1m[1] : "?"}` +
+                  `/binding${g1m ? g1m[2] : "?"} ` +
+                  `texDecls=[${texBinds}]`);
                 let tdx = -1, tdy = -1, tdz = -1, tdw = -1;
                 if (self._wgPsSnap && self._wgPsSnapLen >= 160) {
                   const pv = new DataView(self._wgPsSnap.buffer,

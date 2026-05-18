@@ -4456,3 +4456,50 @@ the texture SAMPLE returning ~0 (PS-constants/§28b FALSIFIED;
 ~21 eliminations); deterministic repro + bisection harness in hand.
 `[s28az-creg]` probe kept (render-inert). §28g…§28ay stand;
 `?video=webgpu`/per-draw ring/§26 untouched.
+
+### 28ba. Binding-mismatch FALSIFIED — menu FS samples the correct populated atlas; root is the sample VALUE / UV-atlas-region. Session consolidation.
+
+`[s28ba-bind]` (deterministic `__menu.sav`): menu FS fs#78/85 sample
+`global_1 @group1/binding0`; `[s28-texfs]` shows binding-0 = `b0 =
+tex#76 (88×88)` — the **populated atlas** (nz=3160/4096). So the FS
+samples the **correct, populated texture** at a valid `[0,1]` UV
+with correct PS-constants and geometry that reaches the FB, yet
+`textureSampleBias` yields ~0. **Binding-mismatch (§28aa-class)
+FALSIFIED.**
+
+**Remaining (precisely two, both deterministic-repro-testable next):**
+1. **Sample mechanics** — `CREATE_TEXTURE` sets no `mipLevelCount`
+   (=1) while the sampler is `mipmapFilter:"linear"` and the FS
+   passes a PS-constant LOD `bias` (`extractBits(member_24…)/256`);
+   and/or a texture-format (`WGPU_TEX_FORMAT[code]`) / 2d-array-view
+   interaction making the fetch ~0.
+2. **UV points to the wrong atlas sub-region** — `[s28-vtxdata]`
+   proved the vertex tc is *non-zero* and `[s28av]` proved the
+   units round-trip, but neither validated the tc *values are the
+   ones the game intends*; if the menu texgen/posttransform yields
+   the wrong atlas rect the fetch lands in transparent space
+   (≈0) — the §28an "posttransform" branch, still open.
+
+**SESSION CONSOLIDATION (honest).** Primary objective — the user's
+flicker — **SOLVED, committed (§28at 36b32cc), verified, and
+user-confirmed for title/intro**; `?video=webgpu` reference proven
+unregressed (distinct 82 / 99.4 %). Dark-menu (the residual the
+user perceives as menu/in-game "flicker"): not fixed, but advanced
+decisively — a **deterministic repro** now exists (`__menu.sav` +
+`SAVE_STATE_URL/AT`; the multi-session "can't reach the menu"
+blocker is permanently gone), ~22 hypotheses eliminated with hard
+measurement, two of my own over-claims honestly retracted (§28av,
+§28az), and the root bounded to exactly two testable causes above.
+All experiment flags reverted (`S28AW/AX/AY=false`); the consumer
+is in the verified §28at state (`REVZ_COMPARE_FLIP[_ALL]=true`,
+`dcv=0.0`) + render-inert probes only; nothing dark/experimental
+shipped. Commits this session: §28at(36b32cc) flicker fix +
+core; §28au/av/aw/ax-ay/az/ba diagnostic checkpoints.
+§28g…§28az stand; `?video=webgpu`/per-draw ring/§26 untouched.
+**Next loop:** on the deterministic repro, (a) dump the menu
+draw's sampler descriptor + tex#76 `mipLevelCount`/format + the
+computed LOD bias; (b) gated-experiment force `textureSampleLevel(
+…,0.0)` (no bias/derivative) to isolate sample-mechanics; if that
+renders ⇒ mechanics fix; else the texgen/posttransform atlas-rect
+(§28an) is the root → smallest gated fix; re-verify menu + title +
+`?video=webgpu`.
