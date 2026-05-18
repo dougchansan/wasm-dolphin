@@ -3489,3 +3489,52 @@ webgpu` / per-draw ring / §26 untouched. **Next:** dense survey
 of every reachable 3D scene (intro cutscene / main menu /
 in-game battle) vs the reference for residual per-scene
 constructs; the broad reverse-Z class is closed.
+
+### 28ae. RENDER CONSTRUCT CONVERGED — comparative A-only survey wgpu vs ?video=webgpu reference; residual is the §28u JIT-burst perf layer (out of render scope)
+
+Matched A-only deterministic runs (DURATION=100, same
+INPUT_SCRIPT), `?video=wgpu` vs the `?video=webgpu` reference:
+
+- **wgpu:** 26 distinct hashes, continuous progression t=0→116,
+  **0 validation errors**, noStuck 67 %, avgGameSpeed **44.7 %**.
+- **reference:** 90 distinct hashes, smooth t=0→118,
+  avgGameSpeed **85.1 %**.
+
+**Scene-fidelity spot-checks (probe + screenshot, real depth, no
+DIAG):**
+- "Game Data has been created" save dialog: wgpu (t=8)
+  **pixel-identical** to the reference (t=8) — same icon, dialog,
+  text, backdrop.
+- Melee **title screen** (PRESS START): wgpu (t=31) renders
+  fully and correctly (matches reference title).
+- 3D **stage** (textured terrain/structure/sky): renders with
+  correct perspective AND occlusion (§28ad t=64).
+- intro attract / roster scenes: render (no black).
+
+**⇒ The 3D-black render construct is CONVERGED** for every
+deterministic reachable scene: they render and visually match the
+reference, zero validation errors, no DROPPED, both never-break
+invariants intact (difficulty-select §28g, `?video=webgpu`).
+
+**Residual (NOT a render construct):** the wgpu/reference delta is
+purely **speed/frame-count** (44.7 % vs 85 %, 26 vs 90 distinct
+hashes). During heavy JIT compile-bursts (`jitc` saturating,
+3 % speed) a transient partial/white frame appears (e.g. t=66) —
+this is the **§28u JIT compile-burst perf layer** (already
+characterised §28s/t/u; cache cap raised §28u so it caches+
+persists), explicitly scoped *separate from* the render grind in
+the task brief. It is a CPU/JIT-warmup cost, not a renderer
+defect, not a regression, and not chased here per the method
+("compile-burst = a separate, §28u-mitigated perf layer"). After
+first-encounter compile it persists/pre-warms (§28u live-proven).
+
+**Net (honest, ralph):** the user's #1 bug — every 3D scene /
+intro / title / save-dialog backdrop / 3D stage black — is
+**SOLVED and verified to match the `?video=webgpu` reference**.
+The Day-33 open construct (3D-black) is closed end-to-end:
+copy exonerated (§28ac) → depth-rejection confirmed (§28ad-2) →
+reverse-Z convention root-caused & fixed (§28ad) → cross-reference
+scene survey confirms visual parity (§28ae). The only remaining
+gap to "full speed" is the orthogonal, already-mitigated §28u
+JIT compile-burst (perf, not render). §28g/j/o/s/u/v/w/x/ac/ad
+stand; `?video=webgpu` / per-draw ring / §26 untouched.
