@@ -4221,3 +4221,59 @@ cold-JIT ephemeral validator can't reach the Melee 1P menu in 95 s
 (only boot pipes 86/94 captured); needs a warm/longer reach. Next
 loop: capture menu-pipeline `[s28-vtxdata]` (zero-texcoord vs
 posttransform) and the smallest gated fix.
+
+### 28au. ★★★★ DARK-MENU ROOT CONFIRMED by measurement — UV-COLLAPSE: vertex UVs delivered [0,1] but the menu FS divides by I_TEXDIMS·128 (texel·128 fixed-point convention) → uv≈0 → samples the transparent atlas corner
+
+User ground-truth after §28at: title/intro flicker **FIXED** (matches
+the §28at validator: stable title, MISMATCH=0) but **menu/in-game
+still "flickers"**. Decisive reframe: pre-§28at the menu was *dark*
+(§28af/an); post-§28at the user sees it *flicker* — i.e. the menu
+content now intermittently appears/vanishes. Tasks "menu flicker"
+and "dark menu" are the **same §28an root** (collapsed menu texture
+output; static = dark, animated = flicker), NOT a depth/mixed-pass
+issue (`[s28aq-MISMATCH]=0` everywhere measurable; §28at fully
+solved depth/flicker for 3D/title/attract).
+
+**Deterministic repro found.** `.omx/savestates/main-menu-state.sav`
++ the validator's `SAVE_STATE_URL`/`SAVE_STATE_AT` env support →
+staged `__menu.sav` at repo root (served by `tools/serve.mjs`,
+matches the gitignored `__*.sav` convention). `SAVE_STATE_URL=
+/__menu.sav SAVE_STATE_AT=35` loads the Melee main menu in ~35 s
+and reproduces the dark menu every run — the prior multi-session
+blocker (cold validator never reaching the menu) is gone.
+
+**Measured root (probes, no rebuild).** Generalised `[s28-vtxdata]`
+(any `@location(8) float32x2` texcoord layout, real stride/offset):
+the menu textured draws carry **NON-ZERO valid atlas UVs** (pipe 79
+fs#78 td0=88×88 tc=(1.0,0.43); pipe 86 fs#85 td0=32×32) ⇒
+hypothesis (a) zero-texcoord/position-texgen **FALSIFIED**. New
+`[s28av-texuv]`/`[s28av-VERDICT]` probe (snapshots the PSBlock,
+reads `I_TEXDIMS`=member_3 @byte144, parses the FS, computes the
+effective UV) returned **`UV-COLLAPSE CONFIRMED`** for pipes 79 (88·
+128=11264) and 86 (32·128=4096): `vtxTC∈[0,1]` but the FS computes
+`uv = param_8 / (I_TEXDIMS·128)` ⇒ `normUV≈0.0000888` ⇒ samples the
+atlas (0,0) transparent corner ⇒ `out = konst·0 = ~black`. The
+Naga `dolphin_fn_1_` confirms it: `local = f32(texdims.x*128i);
+uv = param_8 / local`, `param_8: ptr<function, vec2<i32>>`. Dolphin's
+shared GX pipeline delivers texcoords in **texel·128 fixed-point**
+(so `÷(texdims·128)` → `[0,1]`); the WebGPU vertex path instead
+delivers already-normalised `[0,1]` (an i32-truncated round-trip
+via `local_27 = vec2<i32>(uv·(member_3.zw·128))` whose `.zw`≠`.xy`
+doesn't cancel the later `÷.xy·128`). konst-only UI ("VERY EASY"
+pill) survives (no texture multiply); bilinear edge-leak from the
+(0,0) corner = the observed faint blue streaks — exactly the
+symptom across §28ag→§28ap.
+
+**This pins the §28an construct end-to-end** after 13+ eliminations:
+not depth/blend/PS-value/PSBlock/texture-content/texgen-matrix/
+UBO-layout/texcoord-LAYOUT/texcoord-DATA — it is a **texcoord UNITS
+mismatch** ([0,1] delivered vs texel·128 expected). The real fix is
+in the WebGPU vertex texcoord delivery (VertexLoader/format) or a
+gated PixelShaderGen normalization skip — being scoped next; a
+rebuild-class change, so checkpoint the confirmed diagnosis first.
+
+**Status.** Flicker SOLVED+committed (§28at, 36b32cc). Dark-menu
+root CONFIRMED (§28au) — fix is the next focused effort. Probes
+`[s28av-*]`/`[s28-vtxdata]`/`[s28at-vp]` kept (gated/capped,
+render-inert). §28g…§28at stand; `?video=webgpu`/per-draw ring/
+§26 untouched.

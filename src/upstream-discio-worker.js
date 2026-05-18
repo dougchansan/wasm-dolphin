@@ -3784,6 +3784,14 @@ function drainWebGpuCmdRing() {
                   `td2=${td[8]},${td[9]},${td[10]},${td[11]} ` +
                   `td3=${td[12]},${td[13]},${td[14]},${td[15]}`);
               }
+              // [s28av] snapshot the freshest PSBlock (every PS-sized
+              // write, NOT throttled) so the DRAW_INDEXED probe can read
+              // I_TEXDIMS (member_3 @byte144) for the effective-UV calc.
+              if (!self._wgPsSnap || self._wgPsSnap.byteLength < len)
+                self._wgPsSnap = new Uint8Array(len);
+              self._wgPsSnap.set(
+                new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              self._wgPsSnapLen = len;
             }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
             // + src_size(.xy) from this UBO. If src_size≈0 every vertex
@@ -4197,38 +4205,128 @@ function drainWebGpuCmdRing() {
             // dark is degenerate uv≈0 → atlas-corner. Non-zero ⇒ the
             // posttransform screen→UV mapping is the defect.
             if (self._wgVbSnap &&
-                (self._wgVtxProbeN = (self._wgVtxProbeN || 0)) < 30) {
+                (self._wgVtxProbeN = (self._wgVtxProbeN || 0)) < 60) {
               const vtpl = webGpuObjects.pipeTpl.get(self._wgCurPipe);
-              const vb = vtpl && vtpl.desc && vtpl.desc.vertex &&
-                vtpl.desc.vertex.buffers && vtpl.desc.vertex.buffers[0];
-              if (vb && vb.arrayStride === 20) {
-                const tcA = vb.attributes.find((a) =>
-                  a.shaderLocation === 8 && a.format === "float32x2" &&
-                  a.offset === 12);
-                if (tcA) {
-                  const baseVtx = u32[recWord + 4];
-                  const batchOff = baseVtx * 20;
-                  let s = null, sOff = 0;
-                  for (const [doff, sn] of self._wgVbSnap) {
-                    if (batchOff >= doff &&
-                        batchOff < doff + sn.byteLength) { s = sn; sOff = doff; break; }
-                  }
-                  if (s) {
-                    self._wgVtxProbeN++;
-                    const lb = batchOff - sOff;
-                    const nV = Math.min(4,
-                      Math.floor((s.byteLength - lb) / 20));
-                    const fv = new Float32Array(s.buffer,
-                      s.byteOffset + lb, nV * 5);
-                    const tcv = [], pov = [];
-                    for (let v = 0; v < nV; v++) {
-                      tcv.push(`(${fv[v * 5 + 3].toFixed(4)},${fv[v * 5 + 4].toFixed(4)})`);
-                      pov.push(`(${fv[v * 5].toFixed(1)},${fv[v * 5 + 1].toFixed(1)},${fv[v * 5 + 2].toFixed(1)})`);
+              const vbs = vtpl && vtpl.desc && vtpl.desc.vertex &&
+                vtpl.desc.vertex.buffers;
+              // §28-vtxdata GENERALISED: match ANY vertex-buffer layout
+              // carrying a TexCoord0 attr @location(8) float32x2 (the
+              // menu VS texcoord input) — ANY stride/offset (the §28ap
+              // menu pipes vary: stride 20 tc@12, or L5:unorm8x4 + tc@16
+              // etc). Read using the layout's real arrayStride + the
+              // attr's real offset, and pos from @location(0) if present.
+              let vb = null, tcA = null, posA = null;
+              if (vbs) {
+                for (const b of vbs) {
+                  const t = b.attributes.find((a) =>
+                    a.shaderLocation === 8 && a.format === "float32x2");
+                  if (t) { vb = b; tcA = t;
+                    posA = b.attributes.find((a) => a.shaderLocation === 0);
+                    break; }
+                }
+              }
+              if (vb && tcA) {
+                const stride = vb.arrayStride;
+                const baseVtx = u32[recWord + 4];
+                const batchOff = baseVtx * stride;
+                let s = null, sOff = 0;
+                for (const [doff, sn] of self._wgVbSnap) {
+                  if (batchOff >= doff &&
+                      batchOff < doff + sn.byteLength) { s = sn; sOff = doff; break; }
+                }
+                if (s) {
+                  self._wgVtxProbeN++;
+                  const lb = batchOff - sOff;
+                  const nV = Math.min(4,
+                    Math.floor((s.byteLength - lb) / stride));
+                  const dv = new DataView(s.buffer, s.byteOffset + lb);
+                  const tcv = [], pov = [];
+                  for (let v = 0; v < nV; v++) {
+                    const to = v * stride + tcA.offset;
+                    tcv.push(`(${dv.getFloat32(to, true).toFixed(4)},` +
+                      `${dv.getFloat32(to + 4, true).toFixed(4)})`);
+                    if (posA && posA.format.indexOf("float32") === 0) {
+                      const po = v * stride + posA.offset;
+                      pov.push(`(${dv.getFloat32(po, true).toFixed(1)},` +
+                        `${dv.getFloat32(po + 4, true).toFixed(1)},` +
+                        `${dv.getFloat32(po + 8, true).toFixed(1)})`);
                     }
-                    console.log(`[s28-vtxdata] pipe=${self._wgCurPipe} ` +
-                      `fs#${vtpl.fsId} baseVtx=${baseVtx} idx=${u32[recWord + 1]} ` +
-                      `tc=[${tcv.join(",")}] pos=[${pov.join(",")}]`);
                   }
+                  console.log(`[s28-vtxdata] pipe=${self._wgCurPipe} ` +
+                    `fs#${vtpl.fsId} stride=${stride} tcOff=${tcA.offset} ` +
+                    `baseVtx=${baseVtx} idx=${u32[recWord + 1]} ` +
+                    `tc=[${tcv.join(",")}] pos=[${pov.join(",")}]`);
+                }
+              }
+            }
+            // [s28av-texuv] DECISIVE dark-menu probe: the menu FS
+            // computes uv = vtxTC / (I_TEXDIMS*128) (Dolphin texel*128
+            // fixed-point convention). [s28-vtxdata] PROVED the WebGPU
+            // VertexLoader delivers [0,1]-normalised UVs, so this
+            // division collapses uv→~0 → samples the atlas corner →
+            // dark menu. Confirm: parse the FS for the member_3*128
+            // pattern, read live I_TEXDIMS from the PSBlock snapshot,
+            // compute the effective UV. Capped 8.
+            if ((self._wgAvN = (self._wgAvN || 0)) < 8) {
+              const aT = webGpuObjects.pipeTpl.get(self._wgCurPipe);
+              const aB = aT && aT.desc && aT.desc.vertex &&
+                aT.desc.vertex.buffers;
+              let aTc = null, aStride = 0;
+              if (aB) for (const b of aB) {
+                const t = b.attributes.find((a) =>
+                  a.shaderLocation === 8 && a.format === "float32x2");
+                if (t) { aTc = t; aStride = b.arrayStride; break; }
+              }
+              if (aTc && aT && self._wgFsSrc &&
+                  self._wgFsSrc[aT.fsId] !== undefined) {
+                self._wgAvN++;
+                const flat = self._wgFsSrc[aT.fsId].replace(/\s+/g, " ");
+                const hasNorm = flat.indexOf("member_3") >= 0 &&
+                  flat.indexOf("128") >= 0;
+                const sm = flat.match(/textureSample\w*\s*\([^;]{0,180}/);
+                let tdx = -1, tdy = -1;
+                if (self._wgPsSnap && self._wgPsSnapLen >= 160) {
+                  const pv = new DataView(self._wgPsSnap.buffer,
+                    self._wgPsSnap.byteOffset);
+                  tdx = pv.getInt32(144, true);
+                  tdy = pv.getInt32(148, true);
+                }
+                let vU = NaN, vV = NaN;
+                if (self._wgVbSnap) {
+                  const off = u32[recWord + 4] * aStride;
+                  for (const [doff, sn] of self._wgVbSnap) {
+                    if (off >= doff && off + aStride <= doff + sn.byteLength) {
+                      const dv = new DataView(sn.buffer,
+                        sn.byteOffset + (off - doff));
+                      vU = dv.getFloat32(aTc.offset, true);
+                      vV = dv.getFloat32(aTc.offset + 4, true);
+                      break;
+                    }
+                  }
+                }
+                const dU = tdx > 0 ? tdx * 128 : 1;
+                const dV = tdy > 0 ? tdy * 128 : 1;
+                const nU = vU / dU, nV = vV / dV;
+                console.log(`[s28av-texuv] pipe=${self._wgCurPipe} ` +
+                  `fs#${aT.fsId} vs#${aT.vsId} hasNorm=${hasNorm ? 1 : 0} ` +
+                  `td0=(${tdx},${tdy}) vtxTC=(${vU.toFixed(5)},${vV.toFixed(5)}) ` +
+                  `normUV=(${nU.toFixed(8)},${nV.toFixed(8)}) ` +
+                  `sample=${sm ? sm[0].slice(0, 150) : "NONE"}`);
+                if (hasNorm && Math.abs(nU) < 0.01 && Math.abs(nV) < 0.01 &&
+                    !isNaN(vU) && Math.abs(vU) > 0.01) {
+                  console.log(`[s28av-VERDICT] UV-COLLAPSE CONFIRMED: ` +
+                    `vtxTC in [0,1] but FS divides by texdims*128 ` +
+                    `(${tdx}*128=${dU}) → normUV≈0 → atlas-corner → ` +
+                    `dark menu. Root = vertex UVs delivered normalised, ` +
+                    `FS expects texel*128 fixed-point.`);
+                } else if (!hasNorm && !isNaN(vU)) {
+                  console.log(`[s28av-VERDICT] FS does NOT normalise by ` +
+                    `texdims — raw vtxTC is the sample UV. NOT UV-collapse; ` +
+                    `check texture content (i) or FS TEV math.`);
+                } else if (hasNorm && !isNaN(nU)) {
+                  console.log(`[s28av-VERDICT] normUV sane ` +
+                    `(${nU.toFixed(4)},${nV.toFixed(4)}) — not collapse; ` +
+                    `posttransform/sampler-clamp (iii).`);
                 }
               }
             }
