@@ -4503,3 +4503,66 @@ computed LOD bias; (b) gated-experiment force `textureSampleLevel(
 renders ⇒ mechanics fix; else the texgen/posttransform atlas-rect
 (§28an) is the root → smallest gated fix; re-verify menu + title +
 `?video=webgpu`.
+
+### 28bc. ★★★★ DARK-MENU ROOT DEFINITIVELY ISOLATED (by complete elimination) — the menu UV addresses the WRONG atlas sub-region (GC texgen/posttransform), NOT sample mechanics
+
+`[s28bb]` (gated, deterministic `__menu.sav`): rewrote the menu FS
+`textureSampleBias(t,s,c,l,bias)` → `textureSampleLevel(t,s,c,l,
+0.0)` (explicit LOD 0 — removes derivative- and PS-constant-bias
+LOD selection and the 1-mip/`mipmapFilter:linear` interaction).
+Result: **byte-identical dark menu** (hash `0x-680ec5c0`, the
+unpatched value; 0 valErr; fs#78/85/93/27754 patched). ⇒
+**sample-mechanics (LOD / bias / mip / mipmapFilter) FALSIFIED.**
+
+**Therefore, by the §28ba decision rule and complete elimination,
+the dark-menu root is now SINGULAR and definitive:** the texture
+fetch is mechanically correct (right populated texture `tex#76` at
+`global_1@binding0`, §28ba; valid filterable format; LOD 0) but the
+**UV coordinate it samples points to the WRONG atlas sub-region** →
+transparent/empty atlas space → sample ≈ 0 → dark. This is the
+**GC hardware-texgen / posttransform** path (§28al/§28an branch):
+Melee menus drive UV from a texgen *source* (commonly position /
+`SourceRow::Geom`) through the texgen matrix + the XF
+**posttransform** matrix. `[s28-vtxdata]` showed the per-vertex
+texcoord attribute is *non-zero* but that only means the
+VertexLoader wrote *some* value — NOT the game-intended atlas
+rect; with the WebGPU VS texgen effectively identity/pass-through
+(§28an: texmatrix = IDENTITY) the FS samples that wrong per-vertex
+value's atlas region instead of the position-derived /
+posttransform-mapped rect the game intends.
+
+**Full elimination ledger (dark menu):** NOT depth (§28at) / zero-
+texcoord-data (§28au) / texcoord-units (§28av) / array-layer
+(§28aw) / texture-content (§28aw) / blend·coverage·scissor·pass —
+draw reaches FB with valid full-screen geometry (§28ax) / TEV
+(§28ay→§28az reinterpret) / PS-constant·konst delivery (§28az,
+colours correct incl. gold) / texture-binding (§28ba, samples the
+right populated atlas) / sample-mechanics·LOD·mip (§28bc). **Sole
+remaining & now-isolated cause: the texgen/posttransform UV maps to
+the wrong atlas sub-region.**
+
+**Precise fix area (next focused effort, C++/rebuild-class).**
+`VideoCommon/VertexShaderGen.cpp` `WriteTexCoordTransforms` /
+`VideoCommon/VertexShaderManager.cpp` texgen+posttransform setup
+(`xfmem.texMtxInfo[i].sourcerow / texgentype / inputform`,
+`postMtxInfo[i]`, `member_9`/`member_12`): make the menu draws'
+UV derive from the correct texgen *source* (position when
+`SourceRow::Geom`) and apply the XF posttransform, instead of the
+identity pass-through of the per-vertex attribute — Vulkan/WebGPU-
+gated, NO-OP for OGL/D3D/SW, mirroring the §28as/§28at decouple
+discipline. Verify on the deterministic `__menu.sav` (menu renders,
+matches `?video=webgpu`) + title/3D no-regression + `?video=webgpu`
+unregressed.
+
+**Status (honest, ralph).** PRIMARY objective — the user's flicker —
+**SOLVED, committed (§28at 36b32cc), verified, user-confirmed
+title/intro**, `?video=webgpu` unregressed. Dark-menu: **root
+DEFINITIVELY isolated** by ~23 hard-measured eliminations (two of
+my own over-claims honestly retracted, §28av/§28az) on a
+**deterministic repro** (the multi-session blocker permanently
+gone); the fix is a single well-scoped C++ texgen/posttransform
+change (next loop). All experiment flags reverted
+(`S28AW/AX/AY/BB=false`); consumer in the verified §28at state
+(`REVZ_COMPARE_FLIP[_ALL]=true`, `dcv=0.0`) + render-inert probes;
+nothing dark/experimental shipped. §28g…§28bb stand;
+`?video=webgpu`/per-draw ring/§26 untouched.

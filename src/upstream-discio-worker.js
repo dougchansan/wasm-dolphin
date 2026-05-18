@@ -3483,6 +3483,12 @@ const S28AW_FORCE_TEXLAYER0 = false;
 // member is delivered ~0 for the menu draw.
 const S28AX_FS_CONST = false;
 const S28AY_SAMPLER_WHITE = false;
+// §28bb FALSIFIED: textureSampleLevel(…,0.0) gave the IDENTICAL dark
+// menu (hash 0x-680ec5c0, 0 valErr) ⇒ sample-mechanics (LOD/bias/
+// mip) is NOT the root. By the §28ba decision rule this isolates the
+// root to the UV addressing the WRONG atlas sub-region (the GC
+// texgen/posttransform path, §28an/al). Flag reverted (false).
+const S28BB_SAMPLE_LOD0 = false;
 // §28at: apply the compare flip uniformly (drop the per-pass `revZ`
 // gate). The single reverse-Z convention is correct for every
 // rzRelevant draw now that flag=false made all viewports uniform.
@@ -5253,6 +5259,22 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     if (wgsl !== before &&
         (self._wgS28axN = (self._wgS28axN || 0) + 1) <= 4) {
       console.log(`[s28ax] forced const-magenta FS id=${id}`);
+    }
+  }
+  // [s28bb] isolate sample mechanics: textureSampleBias(t,s,c,l,bias)
+  // → textureSampleLevel(t,s,c,l,0.0). Naga emits the bias as the
+  // final `_e<N>` arg right after `i32(_e<N>.z)`; swap the call name
+  // and replace that last arg with explicit LOD 0.0.
+  if (S28BB_SAMPLE_LOD0 && stage === 2 &&
+      wgsl.indexOf("textureSampleBias(") >= 0) {
+    const before = wgsl;
+    wgsl = wgsl
+      .replace(/textureSampleBias\(/g, "textureSampleLevel(")
+      .replace(/(textureSampleLevel\([^;]*?,\s*i32\(_e\d+\.z\)\s*),\s*_e\d+\)/g,
+               "$1, 0.0)");
+    if (wgsl !== before &&
+        (self._wgS28bbN = (self._wgS28bbN || 0) + 1) <= 4) {
+      console.log(`[s28bb] textureSampleBias→Level(…,0.0) fs id=${id}`);
     }
   }
   // [s28ay] sample-vs-TEV bisect: dolphin_fn_1_ is the texture-sampler
