@@ -4127,3 +4127,97 @@ This is the precise next focused effort; the full proof chain
 smooth-after-warmup, flickers). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/
 ag/ah/ai/aj/al/am/an/ao stand; `?video=webgpu` / per-draw ring /
 §26 untouched.
+
+### 28at. ★★★★ FLICKER SOLVED — coupling-(2) found by JS measurement (NOT the tracer's theory); decoupled + single convention → 3D/title render, flicker structurally gone, reference unregressed
+
+The §28aq→§28as map said: the only structural flicker fix is the
+single non-reverse convention (`bSupportsReversedDepthRange=false`),
+blocked by ≥2 couplings — (1) fog (decoupled §28as), (2) an
+unidentified depth/projection breakage that darkened + hung the
+core. §28at finds and decouples (2).
+
+**Method win — measure, don't theorise.** A tracer sub-agent
+argued from first principles that coupling-(2) = `BPFunctions.cpp:
+254-261`'s flag=false `1-x` branch collapsing the 3D viewport to
+zero-width (premised on `zRange<0` + the `bSupportsDepthClamp=
+false`→`UseVertexDepthRange()=false` clamp). Before burning the
+~6-min rebuild on it, a JS-only probe `[s28at-vp]` (in the
+consumer `SET_VIEWPORT`) logged the raw flag=true viewport and the
+*exact* flag=false equivalent — BPFunctions emits
+`near_T=max_depth,far_T=min_depth` at flag=true and `(1-max,1-min)`
+at flag=false ⇒ flag=false viewport = `(1-near_T,1-far_T)`,
+computable with **no rebuild**. Result over 120 viewports:
+**0 zero-width for 3D** (the lone ZEROWIDTH was a pre-existing
+empty init pass, degenerate at flag=true too); every 3D draw →
+healthy `[0,1]`. **The tracer's hypothesis was FALSIFIED by
+measurement — the wasted rebuild was avoided.** (The same
+discipline that the ralph method demands: depth conventions
+reasoned from first principles "have been wrong every time.")
+
+**Coupling-(2) ACTUAL (static analysis = ground truth).** Grep
+proved `VertexShaderGen` has **no** `backend_reversed_depth_range`
+branch and `UseVertexDepthRange()` is always false for WebGPU
+(`bSupportsDepthClamp=false`) ⇒ the **VS geometry depth is NOT
+flag-keyed**. But flag=false flips a whole **depth-INVERSION
+cluster** in C++: `EFBInterface.cpp:99-100/153-154` (peek/poke —
+the *blocking* `PushBlockingEvent` peek inversion = the §28as
+frame-781 **hang**), `AbstractGfx.cpp:84-85` (EFB clear util
+draw), `FramebufferManager.cpp:294/1152` (EFB depth clear value),
+`TextureConversionShader.cpp:140-141` + `TextureConverterShaderGen
+.cpp:125` (EFB-copy depth), `UberShaderPixel.cpp:944/1000` (the
+unpatched §28as twin in fast-depth). At flag=false these invert
+`1-x` while the VS depth does **not** → convention split = **dark**;
+the blocking peek inversion = **hang**. §28as fixed only fog.
+
+**Fix (§28at).** All 7 cluster sites `api_type==APIType::Vulkan`-
+gated exactly like §28as (NO-OP at flag=true — the branches aren't
+taken there; OGL/D3D/SW untouched) so the WebGPU path keeps **one
+non-inverted `[0,1]` depth convention regardless of the flag**,
+identical to the verified flag=true C++ behaviour. Then
+`bSupportsReversedDepthRange=false` (`VideoBackend.cpp:169`). Net
+flag=false effect on WebGPU is then *only* the BPFunctions viewport
+remap → **uniform** viewport (no mixed reverse/normal pass) ⇒ the
+§28aq flicker is **structurally impossible**. Consumer paired to
+the single convention: a measurement-derived insight — flag=true-3D
+already `setViewport(0,1)` (after swapping its raw `(1,0)`) and
+renders with **`dcv=0.0` + GEQUAL**; flag=false delivers that same
+`(0,1)` directly, so the correct single convention =
+**`dcv=0.0` constant + the compare flipped for ALL rzRelevant
+draws** (`REVZ_COMPARE_FLIP=true` + new `REVZ_COMPARE_FLIP_ALL`,
+dropping the per-pass `&& revZ` gate). The §28as experiment's
+`dcv=0.0`-but-**unflipped** and the §28at-first-try
+`dcv=1.0`+unflipped were each half-wrong (→ uniformly black,
+distinct=5); `dcv=0.0`+uniform-flip renders.
+
+**Verified (rebuilt core, JS served live).** A-only repro
+(`?video=wgpu`): the **Melee title screen + "PRESS START" + the 3D
+intro tunnel render correctly and stably** (screenshots t29/t43/
+t48/t49/t51), **`[s28aq-MISMATCH]=0`** (flicker mechanism gone),
+**0 GPU valErr**, distinct **19** vs the `dcv=1.0` dark run's
+uniformly-black **5**. wgpu default-input run: the character/
+difficulty-select region renders content (icons/banner — not the
+§28af black menu). **Never-break `?video=webgpu` UNREGRESSED:
+distinct 82, avgSpeed 99.4 %, renderingHealth PASSED, 0 valErr**
+(separate Software-hybrid path; Vulkan-gating leaves it untouched).
+Cold-JIT validator speed on `wgpu` (~50 %) is the orthogonal
+§28u/§28ae JIT perf layer (ephemeral context = always cold),
+explicitly out of render scope — the 99.4 % reference proves the
+render path is full-speed warm.
+
+**Net (honest, ralph).** The user's flicker — open since §28af,
+root-proven §28aq, blocked through §28ar/§28as — is **SOLVED
+structurally**: single uniform depth convention, no mixed pass,
+title/3D rendering, reference intact, 0 valErr. The §28as
+PixelShaderGen fog decouple + §28at cluster decouple are mutually
+consistent and both NO-OP at flag=true. Probes `[s28at-vp]` /
+`[s28-vtxdata]` kept (gated/capped, render-inert). The
+`[s28aq-MISMATCH]` metric is now moot-by-construction (dcv is
+constant) — flicker is gone by structure, confirmed by stable
+title screenshots, not by that counter. §28g/j/o/s/u/v/w/x/ac/ad/
+ae/af/ag/ah/ai/aj/al/am/an/ao/aq/ar/as stand; `?video=webgpu` /
+per-draw ring / §26 untouched. **Open:** the dark-menu construct
+(§28an/ap, task) — the `[s28-vtxdata]` probe is deployed but the
+cold-JIT ephemeral validator can't reach the Melee 1P menu in 95 s
+(only boot pipes 86/94 captured); needs a warm/longer reach. Next
+loop: capture menu-pipeline `[s28-vtxdata]` (zero-texcoord vs
+posttransform) and the smallest gated fix.

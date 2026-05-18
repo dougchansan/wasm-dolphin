@@ -3452,7 +3452,21 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // false rendered dark + hung even with fog decoupled (a 2nd
 // coupling remains); back to the verified §28ao render+smooth
 // state (flickers on mixed passes, root proven §28aq).
+// §28at: coupling-(2) found & C++-decoupled (the depth-inversion
+// cluster, api_type==Vulkan-gated). Producer flag now false →
+// uniform normal-Z [0,1] viewports, no mixed reverse/normal pass.
+// §28at: SINGLE convention = the reverse-Z one flag=true-3D proved
+// works (dcv=0.0 + GEQUAL). Flip the GX compare for ALL rzRelevant
+// draws (not per-pass-revZ — at flag=false every viewport is the
+// same (0,1), so the §28af `&& revZ` gate never fires; the flip is
+// applied uniformly via REVZ_COMPARE_FLIP_ALL below). One convention
+// for every draw in every pass ⇒ the §28aq mixed-pass flicker is
+// structurally impossible AND 3D/title renders (matches flag=true).
 const REVZ_COMPARE_FLIP = true;
+// §28at: apply the compare flip uniformly (drop the per-pass `revZ`
+// gate). The single reverse-Z convention is correct for every
+// rzRelevant draw now that flag=false made all viewports uniform.
+const REVZ_COMPARE_FLIP_ALL = true;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
@@ -3692,6 +3706,11 @@ function drainWebGpuCmdRing() {
             // UploadUtilityUniforms actually writes (src_offset/size
             // for the EFB-copy VS).
             if (u32[recWord + 2] === 4096) self._wgUtilBuf = id;
+            // §28-vtxdata: the main vertex buffer is the unique 16 MB
+            // buffer (kVertexBufferSize). Track its id so we can read
+            // the uploaded per-vertex texcoord bytes for the dark-menu
+            // probe (zero ⇒ GX position-texgen; non-zero ⇒ posttransform).
+            if (u32[recWord + 2] === 16777216) self._wgVtxBufId = id;
           }
           break;
         }
@@ -3798,6 +3817,18 @@ function drainWebGpuCmdRing() {
                 `clamp=${uf[8]?.toFixed(4)},${uf[9]?.toFixed(4)} ` +
                 `pxh=${uf[10]?.toFixed(5)}`);
             }
+            // §28-vtxdata: snapshot the vertex batch bytes from the
+            // HEAP before they go to the GPU (this is the only window
+            // to read them). Keyed by dst_offset; bounded to 64 batches.
+            if (bid === self._wgVtxBufId) {
+              if (!self._wgVbSnap) self._wgVbSnap = new Map();
+              const dstOff = u32[recWord + 2] & ~3;
+              const snap = new Uint8Array(len);
+              snap.set(new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              self._wgVbSnap.set(dstOff, snap);
+              if (self._wgVbSnap.size > 64)
+                self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
+            }
             q.writeBuffer(buf, u32[recWord + 2] & ~3,
                           heapCopy(srcP, len));
           }
@@ -3883,10 +3914,21 @@ function drainWebGpuCmdRing() {
             if (u32[nrw] === WGPU_CMD_OP_SET_VIEWPORT)
               self._wgPassRevZ = f32[nrw + 5] > f32[nrw + 6];
           }
-          // §28as REVERTED to the §28af/ao per-pass value (flag=true).
-          // flag=false dark+hung even with fog decoupled; restore the
-          // verified render+smooth state (flickers, root proven §28aq).
-          const dcv = self._wgPassRevZ ? 0.0 : 1.0;
+          // §28at: SINGLE non-reverse convention (producer flag=false
+          // + C++ inversion cluster decoupled). Bake a CONSTANT far
+          // depth clear for EVERY pass — a per-pass dcv is exactly
+          // the §28aq flicker mechanism (one baked value can't serve a
+          // mixed pass). With uniform normal-Z [0,1] viewports and the
+          // [s28at-vp] PROVED flag=false makes EVERY viewport arrive
+          // T(near=0,far=1) → consumer setViewport(0,1) for all — the
+          // SAME setViewport flag=true-3D produces after swapping its
+          // raw (1,0). flag=true-3D RENDERS that with dcv=0.0 + GEQUAL
+          // (reverse-Z carried in the projection/VS, which is NOT
+          // flag-keyed). So the single convention = dcv=0.0 + flipped
+          // compare for ALL rzRelevant draws (uniform — see
+          // REVZ_COMPARE_FLIP). dcv=1.0/unflipped was backwards = black;
+          // §28as's dcv=0.0-but-unflipped was the half-right mismatch.
+          const dcv = 0.0;
           // §28aq DISCRIMINATING PROBE: record the revZ baked into
           // this pass's depthClearValue; the SET_VIEWPORT handler
           // logs when a later viewport in the SAME pass disagrees
@@ -4080,6 +4122,28 @@ function drainWebGpuCmdRing() {
                 `${self._wgPassRevZ ? 1 : 0} (dcv stuck at ` +
                 `${self._wgPassRevZAtBegin ? 0.0 : 1.0}, wrong for this draw)`);
             }
+            // §28at DISCRIMINATING PROBE (JS-only, flag=true run):
+            // BPFunctions emits near_T=max_depth,far_T=min_depth at
+            // flag=true; at flag=false it emits (1-max_depth,
+            // 1-min_depth) = exactly (1-near_T,1-far_T) for this SAME
+            // draw. So we can compute the precise flag=false viewport
+            // here without a rebuild and test the tracer's "zero-width
+            // collapse" hypothesis vs "stays healthy [0,1]" (⇒ the real
+            // coupling-(2) is the dcv/compare pairing, not BPFunctions).
+            {
+              const nT = f32[recWord + 5], fT = f32[recWord + 6];
+              const nF = 1.0 - nT, fF = 1.0 - fT;
+              const span = Math.abs(nF - fF);
+              const cls = span < 1e-4 ? "ZEROWIDTH"
+                : (nF > fF ? "inverted(needswap)" : "normal[0,1]");
+              if ((self._wgAtN = (self._wgAtN || 0) + 1) <= 120) {
+                console.log(`[s28at-vp] bp#${self._wgBpSeq} ` +
+                  `vp#${self._wgVpInPass} revZ=${self._wgPassRevZ ? 1 : 0} ` +
+                  `T(near=${nT.toFixed(5)},far=${fT.toFixed(5)}) ` +
+                  `=> F(near=${nF.toFixed(5)},far=${fF.toFixed(5)}) ` +
+                  `span=${span.toFixed(5)} ${cls}`);
+              }
+            }
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));
@@ -4124,6 +4188,49 @@ function drainWebGpuCmdRing() {
               console.log(`[webgpu-exec] DRAW_INDEXED#${self._wgDi} ` +
                 `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
                 `firstIdx=${u32[recWord + 3]} baseVtx=${u32[recWord + 4]}`);
+            }
+            // §28-vtxdata: dark-menu probe — for the menu textured
+            // pipeline (stride 20, TexCoord0 @location(8) float32x2
+            // @offset 12) read the uploaded per-vertex texcoord bytes.
+            // All-zero ⇒ GX position-texgen (VertexLoader writes 0
+            // UVs; UV must come from VS texgen/posttransform) ⇒ the
+            // dark is degenerate uv≈0 → atlas-corner. Non-zero ⇒ the
+            // posttransform screen→UV mapping is the defect.
+            if (self._wgVbSnap &&
+                (self._wgVtxProbeN = (self._wgVtxProbeN || 0)) < 30) {
+              const vtpl = webGpuObjects.pipeTpl.get(self._wgCurPipe);
+              const vb = vtpl && vtpl.desc && vtpl.desc.vertex &&
+                vtpl.desc.vertex.buffers && vtpl.desc.vertex.buffers[0];
+              if (vb && vb.arrayStride === 20) {
+                const tcA = vb.attributes.find((a) =>
+                  a.shaderLocation === 8 && a.format === "float32x2" &&
+                  a.offset === 12);
+                if (tcA) {
+                  const baseVtx = u32[recWord + 4];
+                  const batchOff = baseVtx * 20;
+                  let s = null, sOff = 0;
+                  for (const [doff, sn] of self._wgVbSnap) {
+                    if (batchOff >= doff &&
+                        batchOff < doff + sn.byteLength) { s = sn; sOff = doff; break; }
+                  }
+                  if (s) {
+                    self._wgVtxProbeN++;
+                    const lb = batchOff - sOff;
+                    const nV = Math.min(4,
+                      Math.floor((s.byteLength - lb) / 20));
+                    const fv = new Float32Array(s.buffer,
+                      s.byteOffset + lb, nV * 5);
+                    const tcv = [], pov = [];
+                    for (let v = 0; v < nV; v++) {
+                      tcv.push(`(${fv[v * 5 + 3].toFixed(4)},${fv[v * 5 + 4].toFixed(4)})`);
+                      pov.push(`(${fv[v * 5].toFixed(1)},${fv[v * 5 + 1].toFixed(1)},${fv[v * 5 + 2].toFixed(1)})`);
+                    }
+                    console.log(`[s28-vtxdata] pipe=${self._wgCurPipe} ` +
+                      `fs#${vtpl.fsId} baseVtx=${baseVtx} idx=${u32[recWord + 1]} ` +
+                      `tc=[${tcv.join(",")}] pos=[${pov.join(",")}]`);
+                  }
+                }
+              }
             }
             // §28: at difficulty-select the backdrop is black. For the
             // EFB colour pass, tally the DISTINCT (pipeline, sampled
@@ -4757,7 +4864,13 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
   const _fc = tpl && tpl.depthBase ? tpl.depthBase.depthCompare : null;
   const rzRelevant = !!depthFmt && (_fc === "less" || _fc === "greater" ||
     _fc === "less-equal" || _fc === "greater-equal");
-  const keyRz = (rzRelevant && revZ) ? 1 : 0;
+  // §28at: single convention — flip for every rzRelevant draw
+  // (REVZ_COMPARE_FLIP_ALL), so the variant key no longer depends on
+  // per-pass revZ (which is uniformly false at flag=false anyway).
+  const keyRz = ((typeof REVZ_COMPARE_FLIP_ALL !== "undefined" &&
+                  REVZ_COMPARE_FLIP_ALL)
+                   ? rzRelevant
+                   : (rzRelevant && revZ)) ? 1 : 0;
   const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}`;
   const cached = webGpuObjects.pipeVar.get(key);
   if (cached !== undefined) return cached;
@@ -4782,7 +4895,9 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
     // the title flickered (user-reported). §28af makes it per-pass:
     // flip + clear-0 only when revZ; normal-Z passes keep the GX
     // compare and clear to 1.0 unchanged (no §28g/menu regression).
-    if (REVZ_COMPARE_FLIP && rzRelevant && revZ) {
+    if (REVZ_COMPARE_FLIP && rzRelevant &&
+        ((typeof REVZ_COMPARE_FLIP_ALL !== "undefined" &&
+          REVZ_COMPARE_FLIP_ALL) || revZ)) {
       const F = { "less": "greater", "greater": "less",
                   "less-equal": "greater-equal",
                   "greater-equal": "less-equal" };
