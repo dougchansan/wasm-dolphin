@@ -4129,9 +4129,23 @@ function drainWebGpuCmdRing() {
             const P = webGpuExecStats.present;
             const tick = (P >= 300) ? Math.floor((P - 300) / 350) : -1;
             self._wgCpyTick = (self._wgCpyTick == null) ? -1 : self._wgCpyTick;
-            if (self._wgCopyTargets && tick >= 0 && tick !== self._wgCpyTick
-                && tick < 9) {
-            self._wgCpyTick = tick;
+            // §28x: the present-gated tick caps at <9 so it never
+            // fires deep in the A-only black-3D dwell (P ≫). Add a
+            // WALL-CLOCK periodic trigger (every 6 s, capped 20 fires)
+            // so the EFB/copy readback runs throughout ANY run —
+            // bisects whether the 3D scene's draws sample black
+            // EFB-copies (feedback chain) vs produce black directly.
+            const _wcNow = Date.now();
+            self._wgCpyWcT0 = self._wgCpyWcT0 || _wcNow;
+            const _wcTick = Math.floor((_wcNow - self._wgCpyWcT0) / 6000);
+            self._wgCpyWcTick = (self._wgCpyWcTick == null)
+              ? -1 : self._wgCpyWcTick;
+            const _preOk = tick >= 0 && tick !== self._wgCpyTick
+              && tick < 9;
+            const _wcOk = _wcTick !== self._wgCpyWcTick && _wcTick < 20;
+            if (self._wgCopyTargets && (_preOk || _wcOk)) {
+            if (_preOk) self._wgCpyTick = tick;
+            if (_wcOk) self._wgCpyWcTick = _wcTick;
             const pending = [];
             const ids = new Set(self._wgCopyTargets);
             if (self._wgEfbColorId) ids.add(self._wgEfbColorId);

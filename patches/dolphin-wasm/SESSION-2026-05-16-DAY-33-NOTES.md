@@ -3105,3 +3105,50 @@ badges. Reverted `DIAG_RASTER_OPEN`. **Status:** §28u verified live;
 the user's main-menu bug is now deterministically reproducible &
 self-instrumented for a focused §28e→g-style render bisect (next).
 §28g/j/o/s/u/v stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28x. ★★ 3D-black ROOT PINNED: the 640×480 EFB-copy textures are all-WHITE garbage (not the scene) → composite collapses to grey/black
+
+With the §28w deterministic A-only repro + a new wall-clock-gated
+EFB/copy readback (§28x: present-tick caps <9 so never fires deep in
+the dwell; added a 6 s wall-clock trigger, capped 20×), read the EFB
+and the 640×480 EFB-copies *during* the black 3D region (p=908):
+
+- **`tex#14` (EFB): `nz=921600 max=38 px≈38,38,38,0`** — NOT black:
+  a uniform **dark-grey** field (~0.15), not the 3D scene.
+- **`tex#65` / `tex#151` (640×480 EFB-copies): `255,255,255,255`
+  EVERYWHERE** — pure **WHITE**, fully saturated, not the EFB.
+- `tex#52` (copy): mostly dark `16,16,16`.
+
+The Melee 3D scenes (intro/title/main-menu backdrop/battle)
+composite their backdrop by **sampling these 640×480 EFB-copy
+textures**. The copies are **all-white (or all-dark) garbage instead
+of the captured EFB**, so every dependent composite draw collapses to
+a flat grey/black field — exactly the user's "grey screen" (img11) →
+black (img12-14) sequence. 2D menus (CSS/difficulty-select) don't use
+this 3D backdrop EFB-copy path, which is precisely why they render
+(§28g) while every 3D scene is black.
+
+**Root construct (PINNED, the §28d candidate, now proven for the 3D
+path):** the EFB→640×480 texture copy produces a saturated
+all-white (tex#65/151) / all-dark (tex#52) result instead of copying
+`tex#14`. The copy pass itself is broken for these targets — NOT
+cull (§28w), NOT ring-drop (§28o, DROPPED 0), NOT the §28j guard,
+NOT compile-burst (the grey/white is a render result, not a stall).
+Deterministically reproducible (A-only `INPUT_SCRIPT`) and
+instrumented (§28v badges + this readback).
+
+**Exact next construct:** bisect the EFB-copy pass for tex#65/151 —
+`[webgpu-DIAG-cpypass]` on the A-only repro: does the copy draw run?
+what does it sample (the EFB `tex#14` view? a wrong/uninit view?)?
+is it a format/gamma saturation or a clear-to-white that the copy
+draw never overwrites? Smallest gated fix there, reprobe (the copy
+must capture the real EFB → the 3D backdrop appears), verify
+difficulty-select/CSS + `?video=webgpu` unregressed, commit.
+
+**Status (ralph):** the user's #1 bug (3D scenes / main menu black)
+is now **root-caused to a single concrete mechanism** — the EFB-copy
+producing white garbage — the deepest this construct has ever been
+pinned, deterministic + self-instrumented. The wall-clock readback
+probe is kept (JS-only, gated, capped 20×, load-bearing for this
+construct, precedent: §28 probes). §28g/j/o/s/u/v/w stand;
+`?video=webgpu` / per-draw ring / §26 guard untouched.
