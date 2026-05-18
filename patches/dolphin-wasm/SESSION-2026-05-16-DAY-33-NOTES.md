@@ -4685,3 +4685,52 @@ the user with the numbers; next direction is theirs (JIT throughput
 work / frame-pacing-for-consistency / accept heavy-scene CPU limit).
 Flicker stays SOLVED (§28at 36b32cc); nothing rebuilt or shipped
 this round; `?video=webgpu` reference untouched. §28g…§28bg stand.
+
+### 28bi/bj. ★★★★ Latent JIT-tier coercion bug FOUND & FIXED; but the mixed-tier / short-block thesis FALSIFIED by measurement — `forcejit` is the only real perf lever (battle 30→46 %, a hard PPC-emulation ceiling)
+
+User: link-1 still flickers, link-2 not snappy, "had it after the
+rust refactor." Git archaeology: NO Rust perf refactor exists (only
+the Naga shader transpiler is Rust); the JIT-stall-removal `a4eb8be`
++ `3b11fa7` are already in-branch; `bottleneck-*` branches are old
+base points. The snappy memory = the §28ao ~100 % / hardware-path
+full-speed state.
+
+**§28bi — the latent systemic bug (the user's "simple tweak").**
+`[s28-jittier]` diagnostics proved the JS resolved `mixed` and
+called `setPpcWasmJitEnabled(2)`, and the C++ `SetPpcWasmJitEnabled`
+is correct (`s_wasm_jit_direct_only = enabled < 2`). The break: the
+api wrapper `src/upstream-discio-worker.js:675` did `ccall(...,
+[enabled ? 1 : 0])` — **boolean-coercing the tier, collapsing
+2 (mixed) → 1 (guarded)**, so `s_wasm_jit_direct_only` was ALWAYS
+true ⇒ the mixed tier has been **structurally impossible since the
+code existed**. Fixed → `[enabled | 0]` (0/1/2). Committed `31c3c86`
+(JS-only, no rebuild). Validator patched to honour `FORCEJIT=1` for
+the software path.
+
+**Measured ladder (battle savestate, steady-state warm):**
+guarded+fuse (default) ≈ **30 %**; guarded+`forcejit` ≈ **46 %**
+(but 57 % drop-rate — fast-not-smooth; the post-activation stall
+fuse exists to guard exactly this); mixed-2048-capped+forcejit ≈
+**30 %** (capped, `mixed:2048/2048` while `short:2247` still
+interpreted); **§28bj** raised `MAX_WASM_MIXED_COMPILED_BLOCKS`
+2048→32768 (`CachedInterpreter.cpp:218`, rebuilt) ⇒ mixed now
+compiles **all 6632** battle hot blocks (`tier:mixed compiled:6632
+mixed:6632/32768`) — and battle is **still ≈46 %, identical to
+guarded+forcejit, NOT better**.
+
+**Verdict (honest, measurement over hypothesis).** The §28bh
+short-block-rejection / mixed-tier thesis is **FALSIFIED**: with
+every hot block JIT-compiled in mixed mode the scene is no faster.
+The **only** real lever is `forcejit=1` (keep the JIT continuously
+engaged) — tier-independent, 30→46 % (+53 %) — and its ~46 % battle
+result is a **fundamental PPC→WASM execution-throughput ceiling**
+for Melee's battle code (§28bh), not a config defect. mixed-tier is
+NOT a win and should NOT be defaulted (no gain + historic post-boot
+corruption risk); the §28bi coercion fix is still kept (real latent
+bug — makes the knob honest) and §28bj's higher cap is harmless.
+`forcejit` is a real speed/smoothness TRADEOFF (faster + kills the
+cold-start sawtooth, but bypasses the stall-fuse → heavy-scene
+drop-rate) — a user-facing decision, not a free win; reported as
+such. Flicker §28at intact; `?video=webgpu` untouched; nothing
+shipped as default this round pending the user's forcejit call.
+§28g…§28bh stand.
