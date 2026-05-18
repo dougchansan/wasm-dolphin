@@ -3448,6 +3448,10 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // less↔greater + clear depth to far=0.0) — applied ONLY to
 // reverse-Z passes (vp near>far); normal-Z menu/UI passes keep the
 // GX compare + clear=1.0. See resolvePipeline / BEGIN_PASS (§28af).
+// §28ar: REVERTED to true (paired with producer
+// bSupportsReversedDepthRange=true). The false path black-screened
+// (fog coupling, §28ar); true keeps the §28ad/ao render+smooth state
+// (flickers on mixed passes until the fog decoupling lands).
 const REVZ_COMPARE_FLIP = true;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
@@ -3879,7 +3883,25 @@ function drainWebGpuCmdRing() {
             if (u32[nrw] === WGPU_CMD_OP_SET_VIEWPORT)
               self._wgPassRevZ = f32[nrw + 5] > f32[nrw + 6];
           }
+          // §28ar: REVERTED to the §28af/ao per-pass value (paired
+          // with producer flag=true). The §28aq single-constant path
+          // black-screened via the fog coupling; restore the
+          // render+smooth state until the fog decoupling lands.
           const dcv = self._wgPassRevZ ? 0.0 : 1.0;
+          // §28aq DISCRIMINATING PROBE: record the revZ baked into
+          // this pass's depthClearValue; the SET_VIEWPORT handler
+          // logs when a later viewport in the SAME pass disagrees
+          // (⇒ the bake-time value was wrong = the flicker source).
+          self._wgPassRevZAtBegin = self._wgPassRevZ;
+          self._wgBpSeq = (self._wgBpSeq || 0) + 1;
+          self._wgVpInPass = 0;
+          if (depthId && (self._wgAqN = (self._wgAqN || 0) + 1) <= 60) {
+            console.log(`[s28aq-bp] bp#${self._wgBpSeq} fb=${fbId} ` +
+              `depth=${depthId} dcv=${dcv} revZ=${self._wgPassRevZ ? 1 : 0} ` +
+              `peeked=${(((read + 1) >>> 0) !== write &&
+                u32[(ring.slotsBase + ((read + 1) % ring.capacity) * 32) >>> 2]
+                  === WGPU_CMD_OP_SET_VIEWPORT) ? 1 : 0}`);
+          }
           let colorView;
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
@@ -4047,6 +4069,18 @@ function drainWebGpuCmdRing() {
             // clear (set self._wgPassRevZ BEFORE the Dawn-required
             // mn≤mx swap so the reversal signal isn't lost).
             self._wgPassRevZ = f32[recWord + 5] > f32[recWord + 6];
+            // §28aq: a SET_VIEWPORT inside an open pass whose revZ
+            // disagrees with what BEGIN_PASS baked into depthClearValue
+            // = the flicker mechanism (bake-time guess was wrong).
+            self._wgVpInPass = (self._wgVpInPass || 0) + 1;
+            if (pass && self._wgPassRevZ !== self._wgPassRevZAtBegin &&
+                (self._wgAqMisN = (self._wgAqMisN || 0) + 1) <= 60) {
+              console.log(`[s28aq-MISMATCH] bp#${self._wgBpSeq} ` +
+                `vpInPass=${self._wgVpInPass} bakedRevZ=` +
+                `${self._wgPassRevZAtBegin ? 1 : 0} nowRevZ=` +
+                `${self._wgPassRevZ ? 1 : 0} (dcv stuck at ` +
+                `${self._wgPassRevZAtBegin ? 0.0 : 1.0}, wrong for this draw)`);
+            }
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));

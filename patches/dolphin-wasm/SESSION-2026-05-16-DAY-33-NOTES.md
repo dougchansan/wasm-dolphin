@@ -4020,3 +4020,62 @@ construct, now narrowed to a precise binary (zero-texcoord-data
 vs posttransform) with the exact JS-only probe defined.
 §28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai/aj/al/am/an/ao stand;
 `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28aq/ar. ★ FLICKER ROOT PROVEN = mixed reverse/normal-Z in ONE pass; the depth-range flag is COUPLED to the §28b/c fog branch (flag=false ⇒ flicker gone but BLACK)
+
+User: "still flickering" after §28af+§28ao. Added the tracer's
+discriminating probe `[s28aq-bp]`/`[s28aq-MISMATCH]` (JS-only) on
+the A-only intro/title repro:
+
+- `[s28aq-bp] … peeked=1` everywhere — the §28af/ao consumer-race
+  peek was NOT the problem (it succeeds).
+- **`[s28aq-MISMATCH] ×120`** — e.g. `bp#5 bakedRevZ=0 nowRevZ=1`,
+  `bp#9 bakedRevZ=1 nowRevZ=0`: a SINGLE EFB pass (`fb=14
+  depth=15`) contains BOTH reverse-Z and normal-Z draws. WebGPU
+  bakes `depthClearValue` once per pass at `beginRenderPass` and
+  cannot change it mid-pass ⇒ **no per-pass reverse-Z
+  compensation (§28ad/af/ao) can ever serve a mixed pass.** This
+  is THE flicker root — every JS stopgap was structurally doomed.
+
+**§28ar attempt — single coherent convention:** producer
+`bSupportsReversedDepthRange=false` + consumer
+`REVZ_COMPARE_FLIP=false` + constant `dcv=0.0`. Result: **flicker
+mechanism ELIMINATED** (`[s28aq-MISMATCH] 120→0`, all `revZ=0`,
+0 valErr) — BUT the whole render regressed to **BLACK** (probe
+t=59: geometry flowing `1684/554 draw` yet `nz=0`).
+
+**Decisive coupling discovered:** `bSupportsReversedDepthRange`
+drives TWO things — (1) the viewport/compare/depth convention
+(the flicker driver) AND (2) PixelShaderGen's fog `zCoord`
+branch. `false` ⇒ fog uses `int((1.0-rawpos.z)·2^24)` which
+saturates the fog factor ⇒ every draw fogged to the black fog
+colour — the **exact §28b regression that §28c set the flag
+`true` to fix**. So flicker (mixed-pass depth) and rendering
+(fog branch) are entangled through this one flag: you cannot get
+the single-convention flicker fix without independently fixing
+the fog branch first.
+
+**Reverted** (§28ar) to `flag=true` + `REVZ_COMPARE_FLIP=true` +
+per-pass `dcv` (the §28ao state: renders + §28ao-smooth,
+flickers) — black is worse than flicker; not shipping black.
+
+**The real fix (precise, scoped):** decouple — make
+PixelShaderGen emit the fog `zCoord` that is correct for a
+NON-reverse `[0,1]` window-depth convention **independently of
+`bSupportsReversedDepthRange`** (api_type==APIType::Vulkan-gated;
+the WebGPU/Vulkan path emits native `[0,1]` via clip-control, so
+fog should derive `zCoord = int(rawpos.z·2^24)` there regardless
+of the depth-range flag). Then set `bSupportsReversedDepthRange=
+false` → single non-reverse convention → no mixed passes → the
+flicker is gone STRUCTURALLY with rendering intact. This is the
+next focused effort: a small gated VideoCommon/PixelShaderGen
+change + the §28ar config + rebuild + verify (title/3D render,
+0 MISMATCH, no flicker, difficulty-select fog OK,
+`?video=webgpu` unregressed).
+
+**Status (honest):** flicker is now ROOT-PROVEN (mixed-pass) and
+the fix path is exact (fog-branch decouple → flag=false). Current
+shipped build = §28ao state (renders, smooth-after-warmup,
+flickers on mixed passes — not black). §28g/j/o/s/u/v/w/x/ac/ad/
+ae/af/ag/ah/ai/aj/al/am/an/ao stand; `?video=webgpu` / per-draw
+ring / §26 untouched.
