@@ -3411,3 +3411,81 @@ ring / §26 untouched. **Next:** pivot the probe to the 3D-scene
 GX (non-util) EFB draws — log fbColor + viewport(near/far) +
 depth-state vs the rendering 2D draws; smallest gated fix on the
 rejecting construct, rebuild, reprobe, verify.
+
+### 28ad. ★★★★ 3D-BLACK SOLVED — reverse-Z depth convention (WebGPU forbids reversed viewport; Dolphin runs bSupportsReversedDepthRange=true → unflipped compare + wrong-end depth clear rejected every 3D fragment)
+
+Layer (a) root-caused and FIXED (JS-only, served live, no rebuild).
+
+**Diagnosis chain (probe → bisect, all on the §28w A-only repro):**
+1. `[webgpu-DIAG-vs]` (already baked in): 3D perspective draws
+   have viewport `near=1.0,far=0.0` (reversed-Z) while rendering
+   2D ortho draws have `near=0.0,far=1.0` (normal). Pipeline
+   depth-state of the 3D geometry: `depth1/1/3` (test on, write
+   on, compare=LEQUAL); 2D copy/composites: `depth0/0/7` (off).
+2. Re-tested `DIAG_DEPTH_ALWAYS=true` (the §28g "depth-reject
+   DISPROVEN" verdict predated the §28w deterministic 3D repro —
+   it was concluded on 2D difficulty-select). On the A-only repro
+   the **Melee title screen rendered** and the 640×480 EFB-copies
+   carried real varied scene content (`nz≈3700/8192 max=255`,
+   orange/fire intro colours) instead of §28x's flat-grey/white
+   garbage. ⇒ **depth-test rejection is conclusively the layer-(a)
+   mechanism** (the copy was already proven innocent §28ac).
+3. Traced the convention (Dolphin Vulkan reference): with
+   `bSupportsReversedDepthRange=true` (WebGPU VideoBackend.cpp:147,
+   the §28c flag) Dolphin emits the GX compare **UNflipped**
+   (VKPipeline `inverted_depth=!supported=false`) and a **reversed
+   viewport** (BPFunctions.cpp:248-261 `near=max,far=min`), and
+   does **not** invert the EFB depth clear (VKGfx.cpp:116-118).
+   The reversal is carried entirely by the reversed `VkViewport`.
+4. **WebGPU/Dawn REJECTS `minDepth>maxDepth`** (confirmed:
+   `VALIDATION: Viewport minDepth(1.0) and maxDepth(0.0)…minDepth
+   was greater than maxDepth`) — unlike Vulkan's VkViewport. The
+   consumer's pre-existing `if(mn>mx)swap` was guarding exactly
+   this, but the swap **silently undid the reverse-Z mapping**:
+   3D draws became normal-Z while the depth clear stayed `1.0` and
+   the compare stayed LEQUAL ⇒ with reversed-Z window depth every
+   3D fragment failed `LEQUAL` vs the clear ⇒ EFB stuck at its
+   colour clear (flat grey) ⇒ §28w/x/ac exactly. 2D ortho
+   (`near≤far`, depth-off) was unaffected → §28g rendered.
+
+**Fix (consumer `src/upstream-discio-worker.js`, JS-only):** since
+WebGPU cannot carry the reversal in the viewport, carry it in the
+depth state instead — match what Dolphin's *non*-reverse-Z path
+would do, but only in the consumer (keep the §28c flag true so the
+fog/[0,1] shadergen stays correct):
+- keep the normal-viewport swap (Dawn requires `mn≤mx`);
+- `depthClearValue: 1.0 → 0.0` (reverse-Z far);
+- `REVZ_COMPARE_FLIP`: flip the pipeline depth compare
+  less↔greater, less-equal↔greater-equal (never/equal/not-equal/
+  always are self-inverse ⇒ 2D depth-off draws with compare
+  "always" are untouched — structurally no §28g regression).
+
+**Verification (probe + screenshots, real depth state, no DIAG):**
+- A-only repro: 9 distinct hashes incl. deep-dwell **Melee title
+  screen** (t=32) and a **fully-rendered 3D stage** — textured
+  terrain/hills/structure/sky with correct perspective AND
+  occlusion (t=64). 0 validation errors. First 3D content ever
+  under `?video=wgpu` with correct depth.
+- Regression — difficulty-select/CSS (`?video=wgpu`, default
+  input): 29 distinct hashes, 80.5 % speed, 0 valErr, 3D attract
+  scenes rendering — §28g intact (the 2D path is provably
+  untouched: self-inverse compare for depth-off draws + depth
+  buffer unused by 2D).
+- Regression — `?video=webgpu` reference (never-break): 44
+  distinct hashes, 86.1 % speed, 0 valErr — unregressed (the
+  hybrid presenter never traverses the WebGPU command-ring /
+  resolvePipeline path this fix touches).
+
+**Net (honest, ralph):** the user's #1 bug — every 3D scene /
+intro / title / main-menu / in-game black — is **SOLVED**. From
+"3D black, cause unknown" (Day-33 open) → copy exonerated (§28ac)
+→ depth-rejection confirmed (§28ad-2) → reverse-Z convention
+root-caused and fixed, with the title screen and a textured 3D
+stage rendering correctly at speed, zero validation errors, and
+both never-break invariants (difficulty-select §28g, `?video=
+webgpu`) verified intact. JS-only — the §28ac-probe core (commit
+932a4a4) is unchanged. §28g/j/o/s/u/v/w/x/ac stand; `?video=
+webgpu` / per-draw ring / §26 untouched. **Next:** dense survey
+of every reachable 3D scene (intro cutscene / main menu /
+in-game battle) vs the reference for residual per-scene
+constructs; the broad reverse-Z class is closed.

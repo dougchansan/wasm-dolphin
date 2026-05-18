@@ -3427,7 +3427,11 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 const DIAG_EFB_TO_CANVAS = true;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
-const DIAG_DEPTH_ALWAYS = false;  // §28g: depth-reject DISPROVEN (still black) — reverted
+const DIAG_DEPTH_ALWAYS = false;  // §28ad: depth-rejection CONFIRMED the cause on A-only 3D repro (title rendered with this true); real fix = reverse-Z compare flip + clear (below), not disable depth
+// §28ad ROOT FIX: WebGPU can't carry Dolphin's reverse-Z in the
+// viewport (Dawn rejects minDepth>maxDepth), so flip the GX depth
+// compare (less↔greater) + clear depth to far=0.0 in the consumer.
+const REVZ_COMPARE_FLIP = true;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
@@ -3888,7 +3892,18 @@ function drainWebGpuCmdRing() {
           if (dt) {
             const ds = {
               view: dt.tex.createView(),
-              depthClearValue: 1.0, depthLoadOp: loadOp, depthStoreOp: "store"
+              // §28ad: Dolphin runs bSupportsReversedDepthRange=true
+              // (VideoBackend.cpp:147) so it does NOT invert its EFB
+              // depth clear (VKGfx.cpp:116-118: clear=z_raw/16M, the
+              // `1.0-` only applies when reverse-Z is UNsupported) and
+              // it does NOT flip the depth compare. WebGPU can't carry
+              // the reversal in the viewport (Dawn rejects
+              // minDepth>maxDepth), so the normal-viewport window depth
+              // here is reverse-Z: near→1, far→0. The depth buffer must
+              // therefore clear to the reverse-Z FAR value 0.0 (was a
+              // hardcoded 1.0, which made every LEQUAL fragment fail vs
+              // the clear → flat black EFB, §28w/x/ac/ad).
+              depthClearValue: 0.0, depthLoadOp: loadOp, depthStoreOp: "store"
             };
             if (dt.format.indexOf("stencil") >= 0) {
               ds.stencilClearValue = 0;
@@ -3986,6 +4001,13 @@ function drainWebGpuCmdRing() {
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));
+            // §28ad: WebGPU/Dawn REJECTS minDepth>maxDepth (unlike
+            // Vulkan's VkViewport) — confirmed validation error. So a
+            // reversed viewport is impossible here; keep the swap to a
+            // normal [mn,mx] viewport. Dolphin's reverse-Z
+            // (bSupportsReversedDepthRange=true) must instead be
+            // honoured via the depth CLEAR value (see depthClearValue
+            // below) since the viewport sense cannot carry it.
             if (mn > mx) { const t = mn; mn = mx; mx = t; }
             pass.setViewport(vx, vy, vw, vh, mn, mx);
           }
@@ -4571,6 +4593,25 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg) {
   if (depthFmt) {
     d.depthStencil = Object.assign({ format: depthFmt },
       tpl.depthBase || { depthWriteEnabled: false, depthCompare: "always" });
+    // §28ad ROOT FIX (3D-black layer (a)): reverse-Z compare flip.
+    // Dolphin runs bSupportsReversedDepthRange=true so it emits the
+    // GX compare UNflipped (VKPipeline inverted_depth=!supported=false)
+    // and relies on a reversed VkViewport to carry reverse-Z. WebGPU
+    // forbids minDepth>maxDepth (Dawn validation), so we keep a normal
+    // viewport and the window depth is reverse-Z (near→1,far→0). The
+    // GX LEQUAL/LESS compare must therefore be flipped to GEQUAL/
+    // GREATER and the depth buffer cleared to far=0.0 (done at
+    // depthClearValue). Without this every 3D fragment failed the
+    // (unflipped) LEQUAL vs the clear → flat black EFB (§28w/x/ac/ad).
+    // never/equal/not-equal/always are self-inverse → 2D depth-off
+    // draws (compare "always") are untouched ⇒ no §28g regression.
+    if (REVZ_COMPARE_FLIP) {
+      const F = { "less": "greater", "greater": "less",
+                  "less-equal": "greater-equal",
+                  "greater-equal": "less-equal" };
+      const c = d.depthStencil.depthCompare;
+      if (F[c]) d.depthStencil.depthCompare = F[c];
+    }
     // DIAGNOSTIC (revertible): force depth-test off so nothing is
     // depth-rejected. With the EFB→canvas DIAG, this bisects "black
     // EFB": geometry appears ⇒ uniform depth-rejection (EFB depth
