@@ -3489,6 +3489,13 @@ const S28AY_SAMPLER_WHITE = false;
 // root to the UV addressing the WRONG atlas sub-region (the GC
 // texgen/posttransform path, §28an/al). Flag reverted (false).
 const S28BB_SAMPLE_LOD0 = false;
+// §28bf RESULT: UV-as-colour showed a spatially-VARYING gradient
+// (non-degenerate, not uniformly zero) ⇒ the texgen produces a real
+// varying UV. Combined with §28be (posttransform verified correct at
+// the right offset), every measurable value is correct yet the
+// sample is ~0 — a systemic texgen/atlas/sample mismatch needing
+// reference-texel comparison, not more value-probing. Flag reverted.
+const S28BF_SHOW_UV = false;
 // §28at: apply the compare flip uniformly (drop the per-pass `revZ`
 // gate). The single reverse-Z convention is correct for every
 // rzRelevant draw now that flag=false made all viewports uniform.
@@ -3818,6 +3825,18 @@ function drainWebGpuCmdRing() {
               self._wgPsSnap.set(
                 new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
               self._wgPsSnapLen = len;
+            }
+            // [s28be] snapshot the VS UBO (VertexShaderConstants ~4112B;
+            // PS is ~1536). The §28an baked probe read posttransform at
+            // the WRONG offset (byte 1280 = transformmatrices) so it was
+            // NEVER verified. Correct C++ offsets (ConstantManager.h):
+            // texmatrices@896, posttransformmatrices@2816.
+            if (len >= 4000 && len <= 4200) {
+              if (!self._wgVsSnap || self._wgVsSnap.byteLength < len)
+                self._wgVsSnap = new Uint8Array(len);
+              self._wgVsSnap.set(
+                new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              self._wgVsSnapLen = len;
             }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
             // + src_size(.xy) from this UBO. If src_size≈0 every vertex
@@ -4325,6 +4344,56 @@ function drainWebGpuCmdRing() {
                   `global_1@group${g1m ? g1m[1] : "?"}` +
                   `/binding${g1m ? g1m[2] : "?"} ` +
                   `texDecls=[${texBinds}]`);
+                // [s28be] DECISIVE: read the VS UBO at the CORRECT C++
+                // offsets — texmatrices@896, posttransformmatrices@2816
+                // (the §28an baked probe read byte1280=transformmatrices,
+                // so posttransform was NEVER verified). UV =
+                // posttransform(texmtx·texcoordAttr). If postP0/P1≈0 ⇒
+                // ROOT=A (posttransform delivered zero → UV→0 →
+                // transparent atlas → dark).
+                if (self._wgVsSnap && self._wgVsSnapLen >= 2864) {
+                  const vv = new DataView(self._wgVsSnap.buffer,
+                    self._wgVsSnap.byteOffset);
+                  const r4 = (o) => [0, 4, 8, 12].map((d) =>
+                    vv.getFloat32(o + d, true).toFixed(3));
+                  const p0 = r4(2816), p1 = r4(2832), p2 = r4(2848);
+                  const tm0 = r4(896), tm1 = r4(912);
+                  const pmag = Math.abs(+p0[0]) + Math.abs(+p0[1]) +
+                    Math.abs(+p1[0]) + Math.abs(+p1[1]);
+                  const tmag = Math.abs(+tm0[0]) + Math.abs(+tm0[1]) +
+                    Math.abs(+tm1[0]) + Math.abs(+tm1[1]);
+                  console.log(`[s28be-vsubo] fs#${aT.fsId} ` +
+                    `texm0=[${tm0}] texm1=[${tm1}] ` +
+                    `postP0=[${p0}] postP1=[${p1}] postP2=[${p2}]`);
+                  if (pmag < 0.01)
+                    console.log(`[s28be-VERDICT] ROOT=A: ` +
+                      `posttransformmatrices @byte2816 are ZERO ⇒ ` +
+                      `UV→0 → transparent atlas → dark menu. (§28an's ` +
+                      `"post real" read byte1280=transformmatrices.)`);
+                  else if (tmag < 0.01)
+                    console.log(`[s28be-VERDICT] texmatrices @896 ZERO ` +
+                      `(unexpected — §28an said identity).`);
+                  else
+                    console.log(`[s28be-VERDICT] post+texm BOTH ` +
+                      `populated (pmag=${pmag.toFixed(3)} ` +
+                      `tmag=${tmag.toFixed(3)}) — root is elsewhere; ` +
+                      `dump effective UV next.`);
+                }
+                // §28bd: dump the menu VS texgen — does texture_coord_0
+                // derive from rawpos (SourceRow::Geom) or rawtex0
+                // (SourceRow::Tex)? and is the posttransform (P0/P1/P2,
+                // I_POSTTRANSFORMMATRICES) applied? This pins WHICH
+                // input the wrong-atlas UV (§28bc) comes from.
+                if (self._wgVsSrc && aT.vsId !== undefined &&
+                    self._wgVsSrc[aT.vsId] !== undefined &&
+                    !self._wgBdVs) {
+                  self._wgBdVs = true;
+                  const vf = self._wgVsSrc[aT.vsId].replace(/\s+/g, " ");
+                  console.log(`[s28bd-vs] vs#${aT.vsId} len=${vf.length} ` +
+                    `nTexSampleBiasFS=na — full VS WGSL follows:`);
+                  for (let o = 0; o < vf.length; o += 700)
+                    console.log(`[s28bd-vs ${o}] ${vf.slice(o, o + 700)}`);
+                }
                 let tdx = -1, tdy = -1, tdz = -1, tdw = -1;
                 if (self._wgPsSnap && self._wgPsSnapLen >= 160) {
                   const pv = new DataView(self._wgPsSnap.buffer,
@@ -5259,6 +5328,21 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     if (wgsl !== before &&
         (self._wgS28axN = (self._wgS28axN || 0) + 1) <= 4) {
       console.log(`[s28ax] forced const-magenta FS id=${id}`);
+    }
+  }
+  // [s28bf] visualise the sampled UV: replace textureSampleBias(t,s,
+  // vec2<f32>(UV), layer, bias) with vec4(UV.x, UV.y, 0, 1) so the
+  // TEV carries the texgen UV as colour. Naga form:
+  // textureSampleBias(p6, p7, vec2<f32>(_eN.x, _eN.y), i32(_eN.z), _eM)
+  if (S28BF_SHOW_UV && stage === 2 &&
+      wgsl.indexOf("textureSampleBias(") >= 0) {
+    const before = wgsl;
+    wgsl = wgsl.replace(
+      /textureSampleBias\(\s*\w+\s*,\s*\w+\s*,\s*(vec2<f32>\([^()]*\))\s*,\s*[^,]*,\s*\w+\s*\)/g,
+      "vec4<f32>(($1).x, ($1).y, 0.0, 1.0)");
+    if (wgsl !== before &&
+        (self._wgS28bfN = (self._wgS28bfN || 0) + 1) <= 4) {
+      console.log(`[s28bf] showing UV-as-colour fs id=${id}`);
     }
   }
   // [s28bb] isolate sample mechanics: textureSampleBias(t,s,c,l,bias)

@@ -4566,3 +4566,74 @@ change (next loop). All experiment flags reverted
 (`REVZ_COMPARE_FLIP[_ALL]=true`, `dcv=0.0`) + render-inert probes;
 nothing dark/experimental shipped. §28g…§28bb stand;
 `?video=webgpu`/per-draw ring/§26 untouched.
+
+### 28be/bf/bg. ★ Posttransform VERIFIED CORRECT at the right offset (§28an offset-bug corrected); whole WebGPU texgen chain measures correct yet sample ≈0 — NOT a localizable value/format bug
+
+Continuing the fix attempt on the deterministic `__menu.sav`. An
+architect pass found the **decisive invalidation of §28an**: the
+baked `[webgpu-DIAG-vs]` probe (`WebGPUGfx.cpp:839-855`) read
+`posttransform` at the WRONG byte offset (float idx 320 = byte 1280
+= `transformmatrices`), so §28an's "posttransform real" was never
+actually about posttransform. The C++↔Naga struct layouts MATCH
+(verified field-by-field; `posttransformmatrices` @ byte 2816 in
+both) — NOT a layout bug.
+
+New JS probe `[s28be-vsubo]` reads the VS UBO at the CORRECT
+offsets (`texmatrices`@896, `posttransformmatrices`@2816) on the
+deterministic repro:
+- fs#78: `texm0=[1,0,0,0] texm1=[0,1,0,0]` (identity), `postP0=
+  [1,0,0,0] postP1=[0,1,0,0] postP2=[0,0,1,0]` (identity)
+- fs#85: identity texm; `postP0=[2,0,0,0] postP1=[0,2,0,-1]
+  postP2=[0,0,1,0]` (a REAL game scale+offset matrix)
+⇒ **posttransform IS delivered correctly** (ROOT=A FALSIFIED;
+texmatrices identity reconfirmed at the correct offset too). §28av
+already showed `I_TEXDIMS.zw==xy==88` (ROOT=D falsified).
+
+`[s28bf]` (gated, reverted): replaced the menu FS
+`textureSampleBias(...)` with `vec4(uv.x,uv.y,0,1)` to visualise the
+sampled UV. Result: a **spatially-VARYING red/green gradient**
+(concentrated in an angular region, ~0 elsewhere) — the texgen
+produces a **real, non-degenerate, varying UV**, not a constant or
+zero. `[s28bd]` decoded the full menu VS: texgen `coord =
+(texcoordAttr.x, texcoordAttr.y, 1, 1)` (sourcerow = Tex0, uses the
+`@location(8)` attribute), `result = texm·coord` then
+`posttransform·result` — exactly Dolphin's shared GLSL, correctly
+translated. The WebGPU vertex-declaration serialization
+(`WebGPUGfx.cpp:482-504`) **mirrors Vulkan exactly** (texcoord
+offset/format from the shared `PortableVertexDeclaration`), so
+`[s28-vtxdata]` read the genuine VertexLoader output.
+
+**Honest conclusion (the fix attempt's real outcome).** Every
+measurable element of the WebGPU hardware menu path is now verified
+either correct or byte-identical to the working Vulkan backend:
+texcoord attribute values (non-zero, coherent), vertex-decl
+serialization, texmatrices (identity), posttransform (the game's
+real matrix, at the correct offset), I_TEXDIMS (xy=zw=88), texture
+content (tex#76 populated), binding (samples the right atlas),
+PS-constants (correct incl. gold), sample mechanics (LOD0 identical),
+geometry (reaches FB full-screen), and the texgen UV is
+non-degenerate and varying. Two independent deep architect passes
+concluded no findable code-level defect. ⇒ The dark-menu is **NOT a
+localizable wrong-value / wrong-format bug** amenable to a small
+gated fix. It is a subtle **Naga-WGSL-codegen / Dawn-sampling /
+texgen-edge-case (e.g. the `result.z==0` clamp, q/projection, or a
+Naga 26 translation nuance) difference vs the Software reference**,
+which only a **shader-level reference-value comparison** (capture
+the exact post-texgen UV + sampled texel in the wgpu path and diff
+against the Software path's values for the same draw) can localize —
+NOT further single-value probing. This is the documented honest
+state; no fix is fabricated.
+
+**Status (honest, ralph).** PRIMARY objective — flicker — remains
+SOLVED, committed (§28at 36b32cc), verified, user-confirmed
+title/intro; `?video=webgpu` unregressed. Dark-menu: exhaustively
+root-traced (~24 hard-measured eliminations, §28an's offset-bug
+corrected, posttransform verified correct, vertex-decl verified
+mirroring-Vulkan); it is a subtle shader-translation/sampling
+difference, not a value bug — the next technique is reference-texel
+diffing (documented), not more value probes. Deterministic repro +
+full FS/VS bisection harness preserved for that work. All experiment
+flags reverted (`S28AW/AX/AY/BB/BF=false`); consumer in verified
+§28at state; render-inert probes kept; nothing dark/experimental
+shipped. §28g…§28bd stand; `?video=webgpu`/per-draw ring/§26
+untouched.
