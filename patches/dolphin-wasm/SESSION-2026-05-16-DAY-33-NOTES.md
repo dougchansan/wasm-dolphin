@@ -3791,3 +3791,57 @@ correctness change (the flip is already a no-op there); fewer
 pipeline compiles ⇒ marginally smoother. §28g/j/o/s/u/v/w/x/ac/
 ad/ae/af/ag/ah stand; `?video=webgpu` / per-draw ring / §26
 untouched.
+
+**§28ai churn-reduction verified:** post-fix per-second run
+avgSpeed **84.7 % → 98.9 %**, game-speed check flipped to PASS,
+no-stuck 13.6 → 7.1 %, 0 valErr. The early-warmup dips remain
+(cold JIT in the ephemeral validator context); post-warmup speed
+is a stable 80-111 %. Real, JS-only smoothness gain (no
+fingerprint change → user's cache survives).
+
+### 28aj. Naga PSBlock layout PROVEN correct — dark-content defect narrowed to the TEXTURE side (sample ≈0), not PS value/layout/depth/blend
+
+JS-only struct-decl dump (`[s28aj-struct]`/`[s28aj-bind]`, FS
+already captured — no rebuild, no cache reset). The PSBlock
+(`@group(0)@binding(0) var<uniform> global: type_31`):
+
+```
+member   = array<vec4<i32>,4>   → colors[4]      @0   ✓
+member_1 = array<vec4<i32>,4>   → kcolors[4]     @64  ✓
+member_2 = vec4<i32>            → alpha          @128 ✓
+member_3 = array<vec4<i32>,8>   → texdims[8]     @144 ✓
+member_4..8  zbias/indscale/indmtx/fogcolor/fogi ✓
+member_9..12 fogf/fogrange/zslope/efbscale       ✓
+member_23 pack1[16] member_24 pack2[8]
+member_25 array<vec4<i32>,32>   → konst[32]       ✓
+```
+
+**Exactly matches C++ `PixelShaderConstants`.** The FS reads
+`global.member[1]`=colors[1], `global.member_1[0]`=kcolors[0],
+`global.member_3[t]`=texdims — all correctly mapped. ⇒ the
+**§28b/c Naga std140 member-offset mismatch class is ELIMINATED**
+for the PSBlock.
+
+**Net elimination (rigorous):** the dark menu/difficulty-select
+is NOT reverse-Z depth (§28ad/af solved + §28ag bisect), NOT
+blend mapping (§28ag), NOT PS-constant value (§28ah: colors[1]=
+white, kcolors[0]=gold correct at source), NOT PSBlock layout
+(§28aj). The gold konst-coloured "VERY EASY" pill DOES render
+(konst-driven, texture-light); the TEXTURED portraits/grid go
+dark. ⇒ remaining construct = the **texture sample collapses to
+≈0** for the menu's textured draws: either the bound texture's
+*content* is wrong/empty (upload/format) or the **VS-generated
+texcoord / `member_3` texdim path** yields a degenerate UV. The
+FS math is `out.rgb = konst·tex/256` — a zero `tex` ⇒ exactly the
+observed black with the konst-only UI surviving.
+
+**Status (honest, ralph):** the user's #1 bug (3D-black) stays
+SOLVED & committed (§28ad/af); smoothness measurably improved
+(§28ai, JS-only, cache-safe) and characterized (JIT cold-start,
+not render, aggravated by core-rebuilds). The dark-content
+construct is decisively narrowed by elimination to a
+texture-sample/VS-texcoord defect — the next probe is a per-draw
+sampled-texel / VS-texcoord-varying / texdim readback for a menu
+textured draw (prefer JS-only to keep the JIT cache warm). §28g/
+j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai stand; `?video=webgpu` /
+per-draw ring / §26 untouched.

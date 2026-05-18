@@ -4150,6 +4150,25 @@ function drainWebGpuCmdRing() {
                 if (fi >= 0)
                   for (let o = fi; o < flat.length; o += 700)
                     console.log(`[s28-tfn ${o - fi}] ${flat.slice(o, o + 700)}`);
+                // §28aj: dump the PSBlock UBO struct decls so we can map
+                // Naga member_N → byte offset and compare to the C++
+                // PixelShaderConstants layout (colors@0, kcolors@64,
+                // alpha@128, texdims@144…). The §28ah probe proved the
+                // VALUES are correct at source; a std140 member-offset
+                // mismatch here (the §28b/c class) would make the FS
+                // read colors[1]/kcolors[0]/texdims from the wrong
+                // bytes → black menu. JS-only (FS already captured).
+                let sd = flat.indexOf("struct type_");
+                for (let k = 0; k < 6 && sd >= 0; k++) {
+                  const end = flat.indexOf("}", sd);
+                  console.log(`[s28aj-struct ${k}] ` +
+                    flat.slice(sd, end >= 0 ? end + 1 : sd + 700));
+                  sd = flat.indexOf("struct type_", sd + 1);
+                }
+                // The @group/@binding decls (which binding is the
+                // PSBlock vs textures) + the global var lines.
+                const gb = flat.match(/@group\([0-9]\)\s*@binding\([0-9]+\)\s*var<?[^;]*;/g);
+                if (gb) console.log(`[s28aj-bind] ${gb.join(" || ")}`);
               }
               const key = `pipe${self._wgCurPipe}|idx${idx}|${pdbg}|${allb}`;
               self._wgEfbDraws = self._wgEfbDraws || new Map();
