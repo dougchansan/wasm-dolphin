@@ -128,6 +128,10 @@ if (videoMode === "ogl") {
   url.searchParams.set("wasmjit", process.env.WASMJIT ?? "1");
   url.searchParams.set("queue", process.env.QUEUE_SIZE || "4");
   url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
+  // forcejit keeps the JIT engaged through the post-activation stall
+  // fuse — required to actually exercise the mixed tier (its larger
+  // one-time compile burst otherwise trips the guarded-tuned fuse).
+  if (process.env.FORCEJIT === "1") url.searchParams.set("forcejit", "1");
 }
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");

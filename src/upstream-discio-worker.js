@@ -622,6 +622,9 @@ async function loadCore({
   ppcWasmJitEnabledAtFrame = 0;
   ppcWasmJitTier = requestedPpcWasmJitTier === "mixed" ? "mixed" : "guarded";
   ppcWasmJitWarmupFrames = normalizePpcWasmJitWarmupFrames(requestedPpcWasmJitWarmupFrames);
+  console.log(`[s28-jittier] worker init: requested=${JSON.stringify(requestedPpcWasmJitTier)} ` +
+    `→ resolved ppcWasmJitTier=${ppcWasmJitTier} (engage will call ` +
+    `setPpcWasmJitEnabled(${ppcWasmJitTier === "mixed" ? 2 : 1}))`);
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setCpuOverclock?.(Number(cpuOverclock));
@@ -669,7 +672,13 @@ function bindApi(module) {
         : null,
     setPpcWasmJitEnabled:
       typeof module._SetPpcWasmJitEnabled === "function"
-        ? (enabled) => ccall("SetPpcWasmJitEnabled", null, ["number"], [enabled ? 1 : 0])
+        ? (enabled) =>
+            // §28bi: pass the integer tier through. `enabled ? 1 : 0`
+            // boolean-coerced it, collapsing 2 (mixed) → 1 (guarded),
+            // so the core's `s_wasm_jit_direct_only = enabled < 2` was
+            // ALWAYS true ⇒ the mixed tier has been structurally
+            // impossible. 0=off, 1=guarded, 2=mixed.
+            ccall("SetPpcWasmJitEnabled", null, ["number"], [enabled | 0])
         : null,
     setPpcProfileEnabled:
       typeof module._SetPpcProfileEnabled === "function"
@@ -1456,6 +1465,8 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // itself made presentation worse.
   ppcWasmJitPreEngageFps = presentationFps;
 
+  console.log(`[s28-jittier] ENGAGE: setPpcWasmJitEnabled(${ppcWasmJitTier === "mixed" ? 2 : 1}) ` +
+    `(ppcWasmJitTier=${ppcWasmJitTier}) @frame ${coreFrame}`);
   api.setPpcWasmJitEnabled(ppcWasmJitTier === "mixed" ? 2 : 1);
   ppcWasmJitActive = true;
   ppcWasmJitEnabledAtFrame = coreFrame >>> 0;
