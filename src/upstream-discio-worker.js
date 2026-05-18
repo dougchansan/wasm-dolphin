@@ -171,7 +171,13 @@ const DEFAULT_PRESENTATION_QUEUE = 4;
 const MIN_PRESENTATION_QUEUE = 2;
 const MAX_PRESENTATION_QUEUE = 12;
 const VISUAL_HASH_SAMPLE_STRIDE_BYTES = 256;
-const DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES = 3600;
+// §28ao: was 3600 (=60 s @60fps) → the JIT stayed OFF for the first
+// minute of a cold run, executing all PPC on the slow interpreter —
+// the dominant "not smooth / slow boot" cause (agent-confirmed). 300
+// (~5 s) front-loads the one-time compile burst to the GC IPL screen
+// (player just watching) instead of the menus. The post-activation
+// stall fuse + cooldown already guard against JIT destabilisation.
+const DEFAULT_WASM_JIT_WARMUP_XFB_FRAMES = 300;
 const WASM_JIT_MIN_STABLE_PRESENTATION_FPS = 25;
 const WASM_JIT_MAX_STABLE_PRESENTATION_GAP_MS = 80;
 const WASM_JIT_MIN_ACTIVE_FRAMES_BEFORE_FUSE = 240;
@@ -2741,21 +2747,29 @@ async function loadDolphinJitCacheFromIdb(db) {
     }
   });
   let loaded = 0;
-  // Cached entries are stored as bytes (WebAssembly.Module storage in IDB
-  // proved unreliable across Chromium versions). Compile each on discio
-  // before sending to pthreads — Module is structured-cloneable across
-  // postMessage, so each pthread receives a ready-to-instantiate Module.
-  for (const { key, value } of entries) {
-    if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
-    if (dolphinJitCacheMap.has(key)) continue;
+  // §28ao: was a SEQUENTIAL `await WebAssembly.compile` per entry —
+  // for a warm cache (10k+ blocks) that is a 5-20 s wall blocking the
+  // whole boot ("title takes a while", agent-confirmed). Compile in
+  // PARALLEL batches via Promise.allSettled (browser uses all cores);
+  // warm-boot compile drops to ~1-3 s. Module is structured-cloneable
+  // so each pthread still receives ready-to-instantiate Modules.
+  const COMPILE_BATCH = 64;
+  for (let i = 0; i < entries.length; i += COMPILE_BATCH) {
     if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) break;
-    try {
+    const batch = [];
+    for (const { key, value } of entries.slice(i, i + COMPILE_BATCH)) {
+      if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
+      if (dolphinJitCacheMap.has(key)) continue;
       const buf = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-      const mod = await WebAssembly.compile(buf);
-      dolphinJitCacheMap.set(key, mod);
-      loaded += 1;
-    } catch {
-      // Skip corrupt entries; they'll be re-cached on next miss.
+      batch.push({ key, p: WebAssembly.compile(buf) });
+    }
+    const res = await Promise.allSettled(batch.map((b) => b.p));
+    for (let k = 0; k < res.length; k++) {
+      if (res[k].status === "fulfilled") {
+        dolphinJitCacheMap.set(batch[k].key, res[k].value);
+        loaded += 1;
+      }
+      // rejected = corrupt entry; skipped, re-cached on next miss.
     }
   }
   return loaded;
@@ -3630,9 +3644,25 @@ function drainWebGpuCmdRing() {
     if (pass) { try { pass.end(); } catch (e) {} pass = null; flushPassDiag(); }
   };
   const heapCopy = (off, len) => heap.slice(off, off + len);
+  // §28ao flicker fix: when BEGIN_PASS is reached but its back-to-back
+  // SET_VIEWPORT isn't visible in the ring yet (consumer drained
+  // between the producer's two separate atomic Push() stores), the
+  // §28af peek misses → stale _wgPassRevZ → wrong baked depthClearValue
+  // for the whole pass → intermittent flicker. Defer the BEGIN_PASS to
+  // the next drain (don't advance `read`) so the SET_VIEWPORT is
+  // present and revZ is correct. Bounded so a stalled producer can't
+  // wedge the ring forever.
+  let deferBeginPass = false;
   while (read !== write) {
     const recWord = (ring.slotsBase + (read % ring.capacity) * 32) >>> 2;
     const op = u32[recWord];
+    if (op === WGPU_CMD_OP_BEGIN_PASS && ((read + 1) >>> 0) === write) {
+      self._wgBpDefer = (self._wgBpDefer || 0) + 1;
+      if (self._wgBpDefer <= 8) { deferBeginPass = true; break; }
+      // budget exhausted: fall through and process with last revZ.
+    } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
+      self._wgBpDefer = 0;
+    }
     try {
       switch (op) {
         case WGPU_CMD_OP_CREATE_SHADER:
