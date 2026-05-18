@@ -3972,3 +3972,51 @@ construct — architect agent gave the precise serialization
 file:lines for the next focused fix (kept in agent context).
 §28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai/aj/al/am/an stand;
 `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ap. Vertex texcoord LAYOUT is CORRECT — §28an refined; dark content is zero-texcoord-DATA or position-based-texgen, not the declaration
+
+Raised the existing `[webgpu-DIAG-attr]` cap 24→1200 (JS-only) to
+capture the late menu pipelines. Result for the menu-era textured
+pipelines (id 15xxx, menu vs/fs):
+
+```
+pcfg id=15061 … L0:float32x3@0 L8:float32x2@12 | texcoordAttrs=L8:float32x2@12
+pcfg id=15466 … L0:float32x3@0 L8:float32x2@12 | texcoordAttrs=L8:float32x2@12
+pcfg id=15716 … L0..  L5:unorm8x4@12 L8:float32x2@16 | texcoordAttrs=L8:float32x2@16
+```
+
+The textured menu draws **DO carry a correct TexCoord0 attribute**:
+`@location(8)`, `float32x2`, valid offset within stride — exactly
+what the menu VS (`@location(8) … vec2<f32>`) reads. (The
+`texcoordAttrs=NONE` pipelines are position-only solid-colour
+elements — expected.)
+
+⇒ **§28an's "vertex texcoord attribute layout defect" is REFINED:
+the serialized layout/declaration is CORRECT.** The dark content
+is therefore one of (architect agent's remaining two):
+(a) the uploaded vertex buffer's texcoord **bytes are zero** —
+GX/Melee menus drive UV via hardware texgen from `SourceRow::Geom`
+(position), not relayed per-vertex UVs, so the VertexLoader
+faithfully writes 0 texcoords and the (identity) texgen + missing
+screen→UV posttransform yields uv≈0 → atlas-corner (transparent)
+→ black; or (b) the posttransformmatrices (member_12) don't map
+screen→texture space for these draws.
+
+**Decisive next probe (JS-only, no rebuild, cache-safe):** read
+the uploaded vertex-buffer bytes at the menu draw's texcoord
+offset (e.g. id=15061 → stride 20, texcoord @12) for vtx0..N —
+zero ⇒ (a) GX position-texgen path (fix = ensure the VS texgen
+sourcerow/posttransform matches the game's XF config, or the
+SourceRow::Geom path uses rawpos correctly); non-zero ⇒ (b)
+posttransform/sampler. Then the smallest gated fix.
+
+**Round status (honest):** the user's slow-boot/not-smooth is
+FIXED & VERIFIED (§28ao: avgSpeed 84.7→101.7 %, JIT engages
+60 s→14.7 s, steady 100 % post-warmup, boot-snappy 1994 ms, 0
+valErr, JS-only/cache-safe). Flicker root structurally fixed
+(§28ao BEGIN_PASS-defer). Save-prompt = native Dolphin IPL (not
+JS-fixable, honest). Dark menu/CSS = the one open render
+construct, now narrowed to a precise binary (zero-texcoord-data
+vs posttransform) with the exact JS-only probe defined.
+§28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag/ah/ai/aj/al/am/an/ao stand;
+`?video=webgpu` / per-draw ring / §26 untouched.

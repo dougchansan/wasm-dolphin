@@ -4606,10 +4606,18 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     });
   }
 
-  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 24) {
+  // §28ap: cap 24→1200 so the late-created MENU pipelines (id≈16000+,
+  // fs#16081) are captured — compare their serialized vertex
+  // attributes (esp. the TexCoord0 = @location(8) entry the menu VS
+  // reads) vs the VS @location inputs to settle data-vs-layout for
+  // the dark-content defect (§28an). Tag the texcoord attrs.
+  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 1200) {
+    const tc = attributes.filter((a) => a.shaderLocation >= 8 &&
+      a.shaderLocation <= 15);
     console.log(`[webgpu-DIAG-attr] pcfg id=${pipelineId} vs=${vsId} fs=${fsId} ` +
       `stride=${stride} attrCount=${attrCount} ` +
-      attributes.map((a) => `L${a.shaderLocation}:${a.format}@${a.offset}`).join(" "));
+      attributes.map((a) => `L${a.shaderLocation}:${a.format}@${a.offset}`).join(" ") +
+      ` | texcoordAttrs=${tc.length ? tc.map((a) => `L${a.shaderLocation}:${a.format}@${a.offset}`).join(",") : "NONE"}`);
   }
 
   const TOPO = ["point-list", "line-list", "triangle-list",
