@@ -4411,3 +4411,48 @@ user-confirmed for title/intro. Dark-menu = the one open construct,
 FS-internally bisected (~20 eliminations), deterministic repro +
 bisection harness in hand; `[s28ax]`/`[s28ay]` reverted (false).
 §28g…§28aw stand; `?video=webgpu`/per-draw ring/§26 untouched.
+
+### 28az. ★ Menu PS-constants are CORRECT (§28b FALSIFIED for the menu) ⇒ root re-pointed to the texture SAMPLE returning ~0
+
+`[s28az-creg]` dumped the menu draw's PSBlock TEV registers from the
+`[s28av]` snapshot (I_COLORS@0, I_KCOLORS@64, I_ALPHA@128) on the
+deterministic `__menu.sav`:
+
+- fs#78: `C1=[128,64,85,254] K0=[153,153,255,176]`
+- fs#85: `C1=[128,64,85,254] K0=[255,204,0,176]` (255,204,0 = the
+  menu's gold/yellow — a real, correct menu colour)
+- fs#93: `C1=[255,255,255,255] K0=[255,204,0,176]`
+
+The TEV colour/konst registers are **populated with correct menu
+colours** (C0/C2/C3=0 is normal — unused TEV stages). ⇒ the
+**§28b/§28ah PS-constant-delivery hypothesis is FALSIFIED for the
+menu** (§28ah's "correct" was difficulty-select; now verified for
+the actual savestate menu too). This **re-points the root**: with
+PS-constants correct, geometry reaching the FB (§28ax), a valid
+`[0,1]` UV (§28av) and a populated bound texture (§28aw), the only
+remaining failure is that **`textureSampleBias` itself returns ~0**.
+Reinterpreting §28ay: white-sample turned the dark streaks WHITE ⇒
+the *sampled value* WAS the defect (the "dark-blue, not full grid"
+was simply that white ≠ the real atlas content + correct TEV with
+correct constants over a wrong sample). The dominant-vs-secondary
+read in §28ay is corrected here: **the broken texture SAMPLE is THE
+root**, not the TEV.
+
+**Open root (precise).** `textureSampleBias(tex#76/2d-array,
+sampler, uv∈[0,1], layer0, bias)` returns ~0 for a populated
+texture. Candidates, now narrow: (a) the **mip/LOD bias** — the FS
+computes `bias = extractBits(member_24…)/256`; if it selects a
+non-existent mip on a 1-mip texture the sample is 0/clamped;
+(b) **sampler state** (the command-ring `CREATE_SAMPLER` mapping —
+filter/mipmapFilter/lodMin-Max/compare) wrong for these draws;
+(c) **texture format** (`WGPU_TEX_FORMAT[code]`) or mip-count
+mismatch vs the uploaded RGBA8. Next: probe the menu draw's sampler
+descriptor + tex#76's createTexture format/mipLevelCount, and the
+computed LOD bias, on the deterministic repro; smallest gated fix.
+
+**Status.** Flicker SOLVED+committed (§28at 36b32cc), user-confirmed
+title/intro. Dark-menu = the one open construct, root re-pointed to
+the texture SAMPLE returning ~0 (PS-constants/§28b FALSIFIED;
+~21 eliminations); deterministic repro + bisection harness in hand.
+`[s28az-creg]` probe kept (render-inert). §28g…§28ay stand;
+`?video=webgpu`/per-draw ring/§26 untouched.

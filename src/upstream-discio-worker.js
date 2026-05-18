@@ -4312,6 +4312,19 @@ function drainWebGpuCmdRing() {
                   tdy = pv.getInt32(148, true);   // texdims[0].y = height
                   tdz = pv.getInt32(152, true);   // [0].z = tc_scale_s
                   tdw = pv.getInt32(156, true);   // [0].w = tc_scale_t
+                  // §28az: dump the TEV colour/konst PS-constants the
+                  // menu FS combines the sample with (§28ay proved the
+                  // TEV chain is the dominant collapse). [s28-creg]
+                  // layout: I_COLORS@0 (4×int4), I_KCOLORS@64,
+                  // I_ALPHA@128. If a register the TEV uses is ~0 ⇒
+                  // the §28b-class PS-constant delivery is the root.
+                  const r4 = (o) => `${pv.getInt32(o, true)},` +
+                    `${pv.getInt32(o + 4, true)},${pv.getInt32(o + 8, true)},` +
+                    `${pv.getInt32(o + 12, true)}`;
+                  console.log(`[s28az-creg] fs#${aT.fsId} ` +
+                    `C0=[${r4(0)}] C1=[${r4(16)}] C2=[${r4(32)}] ` +
+                    `C3=[${r4(48)}] K0=[${r4(64)}] K1=[${r4(80)}] ` +
+                    `K2=[${r4(96)}] K3=[${r4(112)}] A=[${r4(128)}]`);
                 }
                 let vU = NaN, vV = NaN;
                 if (self._wgVbSnap) {
