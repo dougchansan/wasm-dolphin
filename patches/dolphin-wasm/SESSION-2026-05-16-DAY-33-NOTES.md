@@ -3152,3 +3152,45 @@ pinned, deterministic + self-instrumented. The wall-clock readback
 probe is kept (JS-only, gated, capped 20×, load-bearing for this
 construct, precedent: §28 probes). §28g/j/o/s/u/v/w stand;
 `?video=webgpu` / per-draw ring / §26 guard untouched.
+
+### 28y. EFB-copy bisect: the copy DRAW runs cleanly yet outputs white → it's the copy shader/format/UV, not misses
+
+Wall-clock-gated `[webgpu-DIAG-cpypass]` (capped 30×) + `[s28x]`
+readback on the A-only deterministic 3D-black repro, deep in the
+dwell (pass#~900-1110):
+
+- fb=52/65/151 (the white/dark copies): **`draw=1 drawIdx=0
+  srcTex=tex#14`** — the EFB→640×480 copy draw **does run**, samples
+  `tex#14`, and on the clean passes **`pipeMiss=0 bgMiss=0`**
+  (pass#943/1011/1110). One earlier pass#784 had `pipeMiss=45
+  bgMiss=513` (compile-burst spillover) but the steady copies are
+  miss-free.
+- Yet the result is uniform **white** (tex#65/151 = 255,255,255) /
+  **dark** (tex#52 = 16,16,16) while `tex#14` itself is dark-grey
+  38,38,38 (§28x).
+
+⇒ The EFB-copy is **not** failing from pipe/bg misses, ring drops
+(§28o, DROPPED 0), the §28j guard, or cull (§28w) — the copy draw
+executes correctly with the right source (`tex#14`) but the **copy
+shader/format/UV produces a saturated wrong result** (≈6× over the
+true 38/255). Classic candidates: degenerate copy-UV (src_size≈0 →
+samples one texel), a gamma/format saturation in the copy FS, or the
+copy sampling the wrong aspect/view of `tex#14`. The
+`[webgpu-DIAG-utilubo]` probe (EFB-copy VS src_offset/src_size) is
+gated on a `size==4096` buffer-ID heuristic that doesn't match these
+copies in the A-only run (didn't fire even wall-clock-regated), so
+the src_size datum is still unconfirmed — the next iteration must
+identify the copy UBO/shader by the copy *pipeline* (from the
+cpypass) rather than the 4096 heuristic, dump that copy FS WGSL +
+its live src_offset/src_size, find the saturation, smallest gated
+fix, reprobe (copies must mirror `tex#14` → 3D backdrop appears),
+verify difficulty-select/CSS + `?video=webgpu` unregressed.
+
+**Status (ralph):** the user's #1 bug is root-caused to one
+concrete mechanism — the EFB→640×480 copy saturating to white — and
+narrowed to the copy shader/format/UV (draw runs, source correct,
+no misses). Deterministic (A-only `INPUT_SCRIPT`) + instrumented
+(§28v badges, wall-clock cpypass/cpy readback kept — gated, JS-only,
+capped, precedent §28 probes). The remaining fix is a focused
+copy-shader bisect (next). §28g/j/o/s/u/v/w/x stand; `?video=webgpu`
+/ per-draw ring / §26 guard untouched.

@@ -3519,7 +3519,22 @@ function drainWebGpuCmdRing() {
     // copy draw actually run, and with a pipeline+bind group?
     const isCopyTgt = self._wgCopyTargets &&
       self._wgCopyTargets.has(passFbId);
-    if (isCopyTgt && n <= 6) {
+    // §28y: also fire on a wall-clock cadence (every 5 s, capped 30×)
+    // so the copy pass is observable DEEP in the A-only black-3D
+    // dwell (n≫6 there) — does the EFB→640×480 copy draw actually
+    // run, with what srcTex/pipe/bg, when the copies read all-white?
+    let _cpWcOk = false;
+    if (isCopyTgt) {
+      const _cn = Date.now();
+      self._wgCpPassT0 = self._wgCpPassT0 || _cn;
+      const _ct = Math.floor((_cn - self._wgCpPassT0) / 5000);
+      self._wgCpPassWc = (self._wgCpPassWc == null) ? -1 : self._wgCpPassWc;
+      if (_ct !== self._wgCpPassWc && _ct < 30) {
+        self._wgCpPassWc = _ct;
+        _cpWcOk = true;
+      }
+    }
+    if (isCopyTgt && (n <= 6 || _cpWcOk)) {
       console.log(`[webgpu-DIAG-cpypass] pass#${n} fb=${passFbId} ` +
         `pipeOk=${pd.pipeOk} pipeMiss=${pd.pipeMiss} bgOk=${pd.bgOk} ` +
         `bgMiss=${pd.bgMiss} draw=${pd.draw} drawIdx=${pd.drawIdx} ` +
@@ -3698,8 +3713,24 @@ function drainWebGpuCmdRing() {
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
             // + src_size(.xy) from this UBO. If src_size≈0 every vertex
             // gets the same uv ⇒ samples one EFB texel ⇒ uniform black.
+            // §28y: also wall-clock-sample (every 5 s, capped 24×) so
+            // the EFB-copy src_size is observable DEEP in the A-only
+            // black-3D dwell (src_size≈0 ⇒ degenerate UV ⇒ uniform
+            // white copy = the §28x root).
+            let _utWcOk = false;
+            if (bid === self._wgUtilBuf) {
+              const _un = Date.now();
+              self._wgUtUbT0 = self._wgUtUbT0 || _un;
+              const _ut = Math.floor((_un - self._wgUtUbT0) / 5000);
+              self._wgUtUbWc = (self._wgUtUbWc == null) ? -1 : self._wgUtUbWc;
+              if (_ut !== self._wgUtUbWc && _ut < 24) {
+                self._wgUtUbWc = _ut;
+                _utWcOk = true;
+              }
+            }
             if (bid === self._wgUtilBuf &&
-                (self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8) {
+                ((self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8
+                 || _utWcOk)) {
               const uf = new Float32Array(moduleInstance.HEAPU8.buffer,
                                           srcP, Math.min(len, 64) >>> 2);
               const ui = new Uint32Array(moduleInstance.HEAPU8.buffer,
