@@ -4637,3 +4637,51 @@ flags reverted (`S28AW/AX/AY/BB/BF=false`); consumer in verified
 §28at state; render-inert probes kept; nothing dark/experimental
 shipped. §28g…§28bd stand; `?video=webgpu`/per-draw ring/§26
 untouched.
+
+### 28bh. ★★★★ PROFILED: smoothness bottleneck is PPC→WASM-JIT CPU-emulation throughput, NOT rendering — GPU-accelerating the SW renderer is a +0.8 % dead end (do NOT build)
+
+User pivoted: "go back to the working Software hybrid and combine
+with the Naga/WebGPU system for best performance" → chose
+"GPU-accelerate the software renderer". Applied the measure-first
+discipline BEFORE the large build. Profiled the **correct Software
+hybrid** (`video=software&presenter=webgpu`) on the deterministic
+savestates (title via default input, `__menu.sav`, `__battle.sav`),
+cold and 300 s-warm. Artifacts: `.omx/menu-progress/
+2026-05-18T19-39-57Z` (title), `…19-43-51Z` (menu), `…19-47-38Z`
+(battle).
+
+Frame-budget breakdown (warm, post-JIT-burst steady state):
+
+| Scene | Speed | Frame | SW-rast+XFB (GPU-offloadable) | PPC-JIT/CPU-emu |
+|-------|-------|-------|-------------------------------|-----------------|
+| Title | 101 % | 16.5 ms | **2.2 ms (13 %)** | 14.3 ms |
+| Menu  |  68 % | 24.4 ms | **2.4 ms (10 %)** | 22.0 ms |
+| Battle|  30 % | 56.5 ms | **2.4 ms ( 4 %)** | 54.1 ms |
+
+`swxfb`/`conv` (the Dolphin SW backend's GPU-offloadable XFB
+encode+convert) = a **constant ~1.2 ms/frame** independent of scene
+(0.9–1.7 ms across all). Battle held **30 % for 300 + s after the
+JIT compile count FROZE** (42→2829 in ~2 s at load, then zero new
+compiles, speed 29–30 % unchanged) ⇒ the steady-state cost is **PPC
+CPU-emulation execution of Melee's battle game-logic**, ~3.4× the
+title code — not cold-start, not the rasterizer, not GPU-offloadable.
+Eliminating ALL SW video CPU at battle ⇒ 30 % → **30.8 %**
+(+0.8 pp). The architect's offload design independently flagged
+every phase "moot if PPC-JIT dominates"; profiling proves it does.
+
+The user-observed 47 %→119 % "JIT warmup" sawtooth = the one-time
+cold-start compile burst (~2 787 PPC→WASM blocks) that §28ao's
+3600→300 warmup gate already front-loads; warm menus measure
+101–119 % (the user's own warm screenshots agree). Neither the
+SW-GPU-accel path NOR the hardware `?video=wgpu` path can fix battle
+smoothness — rendering is only 4 % of the battle frame; the 54 ms is
+the JIT'd PPC code. The real (separate) lever is PPC→WASM **JIT
+codegen/throughput**, not rendering.
+
+**Decision (evidence-based, honest).** Do NOT build the
+GPU-accelerated Software renderer (tasks #5/#6 closed; design kept
+for the record only). It is a measured +0.8 % effort. Reported to
+the user with the numbers; next direction is theirs (JIT throughput
+work / frame-pacing-for-consistency / accept heavy-scene CPU limit).
+Flicker stays SOLVED (§28at 36b32cc); nothing rebuilt or shipped
+this round; `?video=webgpu` reference untouched. §28g…§28bg stand.
