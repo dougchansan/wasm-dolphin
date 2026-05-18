@@ -3301,3 +3301,51 @@ focused WebGPU-backend utility-draw UBO-offset correction (C++,
 rebuild). Deterministic (A-only `INPUT_SCRIPT`) + fully instrumented
 (§28v badges, wall-clock cpypass/cpy/copy-FS probes). §28g/j/o/s/u/
 v/w/x/y/z stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ab. HONEST CORRECTION: §28aa "copy binds wrong slice" NOT confirmed by code; the 3D EFB itself is flat — construct is two-layered
+
+Before implementing §28aa, traced the actual WebGPUGfx code:
+- `AllocUboSlice` uses a 256-aligned `kUboSliceStride` ⇒ `m_util_off`
+  is a valid WebGPU dynamic offset (not the alignment bug).
+- `PrepareDrawResources`: `b0 = m_util_uniform_mode ? m_util_off :
+  m_ps_off; dyn={b0,m_vs_off,b0,m_gs_off}`.
+- `TextureConverterShaderGen` copy shader: **both** the copy VS
+  (`v_tex0 = src_offset + src_size*…`, line 87) and the copy FS
+  (`filter_coefficients`, line 160) read the **same**
+  `UBO_BINDING(std140,1) PSBlock` ⇒ same WGSL `@group(0)@binding(0)`
+  ⇒ both get `b0 = m_util_off` in util mode.
+So on static inspection the util slice IS correctly bound to both
+copy stages, and the C++↔WGSL layout matches (§28aa). **§28aa's
+"copy draw binds the wrong per-draw-UBO slice" is therefore NOT
+code-confirmed** — it was an inference, not verified.
+
+Re-reading §28x's evidence precisely: at the SAME instant (p=908)
+`tex#14` (EFB) = flat grey `38,38,38` AND tex#65/151 = white `255`.
+A faithful copy of 38 is 38, not 255 — so (a) the **EFB itself is
+already a flat field, not the 3D scene** (the 3D scene's draws
+produce flat output — the §28w "prim/draw>0 yet flat" finding, NOT
+cull), and (b) the copy *additionally* saturates. The construct is
+**two-layered**: the 3D-scene EFB draws don't render the scene
+(primary), and/or the EFB→copy saturates (secondary). §28z/aa
+over-focused on the copy alone.
+
+**Decisive probe still needed (C++ instrument + rebuild — the clean
+next task):** on the A-only repro, at a 640×480 copy, log together
+(i) the copy draw's actual `SET_BIND_GROUP(0)` dynamic offsets vs
+`m_util_off`/`m_ps_off`/`m_vs_off`, (ii) the live util-slice bytes at
+`m_util_off+16` (filter_coefficients) vs what TextureCacheBase wrote,
+and (iii) `tex#14` content immediately pre-copy. That triple
+disambiguates: garbage fc ⇒ uniform-binding bug; correct fc + flat
+`tex#14` ⇒ the 3D-scene EFB-draw bug (a per-draw TEV/depth/blend
+construct, cull already excluded §28w). Smallest gated fix on
+whichever it is, rebuild, reprobe A-only (3D backdrop must appear),
+verify difficulty-select/CSS + `?video=webgpu` unregressed.
+
+**Status (honest, ralph):** the 3D-black bug is deeply narrowed and
+deterministically reproducible+instrumented, but the precise defect
+is NOT yet a confirmed one-line fix — §28aa was an unverified
+inference; corrected here. The next step is the single decisive
+C++ triple-probe (one rebuild) to pick between the two remaining
+layers, then the fix. No speculative code change made. §28g/j/o/s/
+u/v/w and the deterministic-repro/instrumentation infra stand;
+`?video=webgpu` / per-draw ring / §26 untouched.
