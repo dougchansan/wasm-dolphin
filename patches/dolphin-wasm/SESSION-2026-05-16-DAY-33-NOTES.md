@@ -4734,3 +4734,40 @@ drop-rate) — a user-facing decision, not a free win; reported as
 such. Flicker §28at intact; `?video=webgpu` untouched; nothing
 shipped as default this round pending the user's forcejit call.
 §28g…§28bh stand.
+
+### 28bk. ★★★ SHIPPED: forcejit=1 is now the default (user-chosen "max snappy") — verified +53 % battle, JS-only, renders correct
+
+User chose "Default forcejit=1 (max snappy)" from the §28bi/bj
+tradeoff. Applied JS-only (no rebuild): `core-host.js:871`
+`requestedPpcWasmJitForce()` now returns `get("forcejit") !== "0"`
+(default ON, opt-out `?forcejit=0`); `settings.js`
+DEFAULT_SETTINGS + PLAYABLE_PRESET `forcejit "0"→"1"` and the param
+parse honours an explicit `forcejit=0`. OGL's JIT-off safety is
+**preserved** — `core-host.js:852/883` read the raw `forcejit`
+param directly, so an absent param keeps OGL safe-off; the new
+default only affects paths where the JIT is already on
+(software/wgpu/explicit).
+
+**Verified (pure defaults, no env overrides, battle savestate,
+`video=software&presenter=webgpu`):** `tier:guarded compiled:6493
+jit:on`; `[s28-jittier] ENGAGE setPpcWasmJitEnabled(1) @frame 700`
+**once** — the post-activation stall fuse no longer disables the
+JIT (forcejit early-returns in `maybeDisablePpcWasmJit`); battle
+steady **~45-46 %** (was ~30 %), `averageGameSpeed 49.6 %`,
+distinct 28, **0 valErr** (renders correctly). The cold-start
+"JIT warmup" sawtooth the user reported is eliminated (JIT engages
+once and stays).
+
+**Net.** The user's "not snappy" is materially fixed for the
+correct Software hybrid: heavy scenes +53 %, title/menu (already
+~100 %) now stutter-free on cold start. Accepted tradeoff (user
+decision): bypassing the stall-fuse means heavy compile-burst
+scenes can drop frames (worst-case 57 % drop in the battle
+savestate) — opt out with `?forcejit=0`. The §28bh ~46 % battle
+ceiling (fundamental PPC→WASM throughput) is unchanged — no flag
+reaches full speed in heavy battle; that is an emulation limit,
+not a defect. §28bi coercion fix + §28bj cap kept (latent-bug
+correctness; mixed still NOT defaulted — no gain + corruption
+risk). Flicker §28at intact; `?video=webgpu` reference untouched.
+§28g…§28bj stand. Open: the user-reported link-1 (`?video=wgpu`)
+residual flicker — next.
