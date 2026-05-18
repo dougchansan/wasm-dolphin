@@ -3427,7 +3427,7 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 const DIAG_EFB_TO_CANVAS = true;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
-const DIAG_DEPTH_ALWAYS = false;  // §28ad: depth-rejection CONFIRMED the cause on A-only 3D repro (title rendered with this true); real fix = reverse-Z compare flip + clear (below), not disable depth
+const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT depth (still dark with depth bypassed) ⇒ blend/TEV/material/texture construct
 // §28ad/§28af ROOT FIX: WebGPU can't carry Dolphin's reverse-Z in
 // the viewport (Dawn rejects minDepth>maxDepth). Master enable for
 // the per-PASS reverse-Z compensation (flip GX depth compare

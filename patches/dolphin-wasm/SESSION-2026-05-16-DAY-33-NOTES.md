@@ -3597,3 +3597,49 @@ difficulty-select 95.8 %, 3D stages render, 0 valErr). One
 residual per-scene construct remains (the 1P menu dark/UI-missing)
 — the loop continues on it next. §28g/j/o/s/u/v/w/x/ac/ad/ae
 stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ag. Dark 1P-menu construct — depth-bisect RULES OUT depth; it is a blend/TEV/fragment-alpha (or backdrop-EFB-copy-content) construct
+
+Continued the loop on the §28af residual (Melee 1P
+"Classic/Adventure" menu dark vs the crisp reference).
+
+**Bisect (JS-only, decisive — same method as §28ad-2):**
+`DIAG_DEPTH_ALWAYS=true` on the A→Start→menu repro. The menu
+**stayed dark/faint** (t=67, 85.7 % speed, 0 valErr) — bypassing
+the depth test did NOT restore it. ⇒ **the dark menu is NOT a
+depth construct** (distinct from §28ad/§28af reverse-Z; those
+stand). Reverted the DIAG.
+
+**Evidence narrowing (menu-region `[s28-efbdraws]`):** the menu
+issues *many* draws on `pipe16082 fs#16081 vs#16080 wm7
+blend1:4/5 depth1/0/3` with real textures bound
+(`b0=tex#16099/16120/16097` small UI/glyph sprites,
+`b1=tex#52/65/151(640×480)` the EFB-copy backdrop or
+`tex#16092(64×4)`, `b2..b4=tex#14112/14586/14126(256×256)` menu
+art) and hundreds of verts/draw — **geometry + textures are
+present and bound**, not missed. Blend is `src=4 dst=5`
+→ WGPU_BLEND_FACTOR[4/5] = `src-alpha`/`one-minus-src-alpha` =
+**standard alpha blend, correctly mapped**. depth `1/0/3`
+(test on, write off, LEQUAL).
+
+⇒ Construct: the menu's blended draws execute with correct
+geometry/textures/blend/depth but produce **near-zero coverage**
+— output collapses to the (dark) destination. Leading candidates:
+(a) the menu fragment **alpha is ≈0** (a TEV/alpha-combiner or
+texture-alpha defect on `fs#16081`) so `src·a + dst·(1-a)` ≈ dst;
+or (b) the menu **backdrop EFB-copy content** (`tex#52/65/151`)
+is itself dark for this scene (the menu's 3D grid rendered dim
+into the EFB — a per-scene TEV/material, NOT the §28ac copy
+mechanics which are proven correct). Title is opaque (`blend0`)
+→ unaffected, which is why title is perfect while the
+alpha-blended menu is dark.
+
+**Status (honest, ralph):** the user's #1 bug (3D scenes black)
+remains SOLVED & committed (§28ad/§28af: title perfect+stable,
+difficulty-select 95.8 %, 3D stages render, 0 valErr). The 1P
+menu is a **separate, now precisely-scoped** construct: depth
+excluded, blend/textures/geometry confirmed present — next probe
+is an `fs#16081` FS/TEV dump + a per-draw fragment-alpha / menu
+EFB-copy-content readback to pick between candidates (a)/(b),
+then the smallest gated fix. §28g/j/o/s/u/v/w/x/ac/ad/ae/af
+stand; `?video=webgpu` / per-draw ring / §26 untouched.
