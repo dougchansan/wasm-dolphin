@@ -3643,3 +3643,52 @@ is an `fs#16081` FS/TEV dump + a per-draw fragment-alpha / menu
 EFB-copy-content readback to pick between candidates (a)/(b),
 then the smallest gated fix. §28g/j/o/s/u/v/w/x/ac/ad/ae/af
 stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ag-2. Menu FS `fs#16081` DECODED — output collapses because a TEV colour/alpha register (PixelShaderConstants) reaches the FS ≈0 (§28b-class PS-constant delivery)
+
+Made `[s28-texfs]` dump per-distinct-fsId (capped 8, JS-only) and
+dumped the menu pipeline FS on the A→Start→menu repro. Decoded
+`fs#16081` (`[s28-tfn]`):
+
+- Texture sample (`dolphin_fn_1_`): `tex = textureSampleBias(...)
+  ·255` → `local_25` (the menu sprite/glyph/backdrop texel). This
+  is **non-zero** (textures are bound & sampled, §28ag).
+- TEV combine (`dolphin_fn_2_`):
+  `out.rgb = clamp( local_24.xyz·local_25.xyz / 256 )` where
+  `local_24 = (global.member_1[0].xyz , global.member[1].w) & 255`
+  — i.e. a **TEV colour/konst register from the PS-constants UBO**.
+  `out.a` similarly = `(tevAlphaReg · texAlpha)/256`, then the
+  final write `out.a = (a>>2)/63` with an `if(a==1)→0` alpha-test.
+- Final: `@location(0) = vec4(out.rgb/255, out.a)` and the draw
+  blends `src·a + dst·(1−a)` (`blend1:4/5`, §28ag).
+
+⇒ If the TEV register `global.member_1[0]` / `global.member[1]`
+(a `PixelShaderConstants` I_COLORS/konst entry) arrives **≈0**,
+BOTH the menu RGB (`reg·tex/256`) and the menu alpha collapse →
+the alpha-blended menu draws contribute ≈nothing → the dark/faint
+menu the user sees. Geometry/textures/blend/depth are all correct
+(§28ag) — the defect is the **PS-constant (TEV colour/konst)
+value delivery for the menu's specific TEV config**.
+
+**Construct class:** the §28b/e/f per-draw PixelShaderConstants
+family (a TEV/konst input reaching the FS as 0) — NOT the
+reverse-Z depth class (§28ad/af, solved) and NOT the EFB-copy
+mechanics (§28ac, proven correct). Title/difficulty-select render
+because their TEV configs don't depend on the zero'd register the
+same way. The §21 PS-shadow content-diff re-slice covers the GX
+`PixelShaderConstants` block; the next probe must pin WHICH UBO
+member (I_COLORS vs I_KCOLORS vs konst) is zero at a menu draw and
+whether it's a slice-staleness (per-draw ring) or a
+C++↔WGSL `type_*` member-offset mismatch (the §28b/c Naga/std140
+offset class) for the menu's TEV constant layout.
+
+**Status (honest, ralph):** the user's #1 bug (3D-black) stays
+SOLVED & committed (§28ad/af). The dark 1P menu is now
+**root-caused to a single concrete mechanism** — a TEV
+colour/alpha PS-constant reaching `fs#16081` as ≈0 — fully
+decoded, deterministic (A→Start→menu) + instrumented
+(`[s28-texfs]`/`[s28-tfn]`, per-fsId, kept). Next: identify the
+zero'd PS-constant member & its delivery defect, smallest gated
+fix, verify menu renders + no regression (title/3D/
+difficulty-select/`?video=webgpu`). §28g/j/o/s/u/v/w/x/ac/ad/
+ae/af stand; `?video=webgpu` / per-draw ring / §26 untouched.

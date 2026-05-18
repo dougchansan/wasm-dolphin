@@ -4129,11 +4129,17 @@ function drainWebGpuCmdRing() {
               // textureSample* calls + final return to see if it
               // multiplies the (black) b1 copy (feedback) or collapses
               // via alpha/texcoord.
-              if (tpl && idx >= 40 && !self._wgTexFsDone &&
+              // §28ag: dump each DISTINCT textured EFB FS once (capped),
+              // not one-shot — so the MENU pipeline (fs#16081, dark 1P
+              // menu) is captured too, not just difficulty-select's.
+              self._wgTexFsSet = self._wgTexFsSet || new Set();
+              if (tpl && idx >= 40 &&
                   allb.indexOf(" b0=tex#57(1x1)") !== 0 &&
                   allb.indexOf("(640x480)") >= 0 &&
-                  self._wgFsSrc && self._wgFsSrc[tpl.fsId] !== undefined) {
-                self._wgTexFsDone = true;
+                  self._wgFsSrc && self._wgFsSrc[tpl.fsId] !== undefined &&
+                  !self._wgTexFsSet.has(tpl.fsId) &&
+                  self._wgTexFsSet.size < 8) {
+                self._wgTexFsSet.add(tpl.fsId);
                 const w = self._wgFsSrc[tpl.fsId];
                 const flat = w.replace(/\s+/g, " ");
                 console.log(`[s28-texfs] pipe=${self._wgCurPipe} ` +
