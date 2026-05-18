@@ -4611,10 +4611,22 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
   // precedes this draw). Default to the last-seen pass state so the
   // warm template build (revZ undefined) doesn't pin a wrong variant.
   if (revZ === undefined) revZ = !!self._wgPassRevZ;
-  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${revZ ? 1 : 0}`;
+  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
+  // §28ai SMOOTHNESS: the rz0/rz1 split only changes the descriptor
+  // when there's a depth attachment AND a FLIPPABLE compare
+  // (less/greater/less-equal/greater-equal). For depthless pipelines
+  // (copies/composites/most UI) and depth pipelines with
+  // always/equal/never/not-equal, rz1 builds a byte-identical
+  // pipeline → a wasted second WebGPU compile (stutter). Collapse
+  // those to a single rz0 variant — zero correctness change (the
+  // §28af flip is already a no-op there), fewer pipeline compiles.
+  const _fc = tpl && tpl.depthBase ? tpl.depthBase.depthCompare : null;
+  const rzRelevant = !!depthFmt && (_fc === "less" || _fc === "greater" ||
+    _fc === "less-equal" || _fc === "greater-equal");
+  const keyRz = (rzRelevant && revZ) ? 1 : 0;
+  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}`;
   const cached = webGpuObjects.pipeVar.get(key);
   if (cached !== undefined) return cached;
-  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
   if (!tpl) { webGpuObjects.pipeVar.set(key, null); return null; }
   const d = Object.assign({}, tpl.desc);
   d.fragment = { module: tpl.desc.fragment.module,
@@ -4636,7 +4648,7 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
     // the title flickered (user-reported). §28af makes it per-pass:
     // flip + clear-0 only when revZ; normal-Z passes keep the GX
     // compare and clear to 1.0 unchanged (no §28g/menu regression).
-    if (REVZ_COMPARE_FLIP && revZ) {
+    if (REVZ_COMPARE_FLIP && rzRelevant && revZ) {
       const F = { "less": "greater", "greater": "less",
                   "less-equal": "greater-equal",
                   "greater-equal": "less-equal" };

@@ -3744,3 +3744,50 @@ Smoothness residual = the orthogonal §28u JIT compile-burst
 (persists/pre-warms across runs; inherent first-encounter JIT
 cost, not the renderer). §28g/j/o/s/u/v/w/x/ac/ad/ae/af/ag
 stand; `?video=webgpu` / per-draw ring / §26 untouched.
+
+### 28ai. Smoothness CHARACTERIZED — JIT cold-start sawtooth (NOT render); worsened by core-rebuild cache invalidation. + pipeline-variant churn reduction
+
+User: "still not smooth … screenshots every second to verify."
+Ran a per-second capture (`SHOT_EVERY=1`, default input):
+
+- 55/66 distinct hashes, drop-rate **0**, no-stuck 13.6 % — the
+  **render progresses fine, frames are not dropped**.
+- avgSpeed 84.7 % but per-sample gameSpeed sawtooths
+  100-117 %↔10-30 % (a 0 % stall at t=33.5), `long-anim-frames
+  18.92` — classic **JIT compile-burst**: PowerPC→wasm JIT
+  compilation blocks the worker, collapsing emulation speed in
+  bursts. The renderer is NOT the bottleneck (it keeps producing
+  distinct frames; drop-rate 0).
+
+**Root of the persistent stutter:** `reconcileJitCacheWithBuild`
+(worker:2846) correctly **clears the JIT IDB cache whenever the
+core build fingerprint changes** (line 2850). This session shipped
+multiple rebuilt cores (§28ac, §28ah) — each one **invalidates the
+user's accumulated JIT cache**, so their next runs are cold and
+re-compile thousands (`received cache (size=0)` at boot). The
+validator additionally runs in an ephemeral Playwright context →
+IDB always empty → it can NEVER show pre-warming (worst-case cold
+every run; a harness artifact, not a defect). On a *stable* build
+in a real browser the cache persists and repeated runs smooth out
+(the §28u intent — mechanism is correct, just reset by rebuilds).
+
+**Honest:** smoothness is a JIT cold-start cost, NOT a renderer
+defect, and is *aggravated by iterating with core rebuilds*.
+Mitigation in-scope: prefer JS-only fixes (served live, no
+fingerprint change → cache survives) and minimise rebuilds so the
+user's cache can warm. A genuine first-run smoothness fix would
+need JIT-cache pre-population — a different subsystem than this
+render grind.
+
+**Render-side churn reduction (§28ai, JS-only, no rebuild):**
+`resolvePipeline` now only creates the `rz1` variant when the
+pipeline actually has a depth attachment AND a flippable compare
+(less/greater/less-equal/greater-equal). Depthless pipelines
+(copies/composites/most UI) and depth pipelines with
+always/equal/never/not-equal collapse to a single `rz0` variant —
+the §28af `|rz0/1` split was building byte-identical second
+pipelines for those (wasted WebGPU compiles → stutter). Zero
+correctness change (the flip is already a no-op there); fewer
+pipeline compiles ⇒ marginally smoother. §28g/j/o/s/u/v/w/x/ac/
+ad/ae/af/ag/ah stand; `?video=webgpu` / per-draw ring / §26
+untouched.
