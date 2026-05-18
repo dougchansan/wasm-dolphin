@@ -4322,3 +4322,45 @@ Dark-menu = the one open construct, narrowed (16+ eliminations),
 deterministic repro in hand. §28au's "CONFIRMED" superseded by this
 correction. Probes render-inert/kept. §28g…§28at stand;
 `?video=webgpu`/per-draw ring/§26 untouched.
+
+### 28aw. Two more dark-menu eliminations (array-layer, texture-content) on the deterministic repro — root narrowed to FS-sample / TEV
+
+Both tested on `__menu.sav` (deterministic):
+
+- **Array-layer FALSIFIED.** Strong candidate: the FS samples
+  `textureSampleBias(param_6, param_7, uv, i32(_e<n>.z), bias)` and
+  the consumer binds every texture as a `2d-array` view; a non-zero
+  texgen layer on single-layer menu textures ⇒ out-of-range ⇒ 0.
+  Gated JS experiment `S28AW_FORCE_TEXLAYER0` rewrote the menu FS
+  `textureSampleBias` layer arg → `0i` (`[s28aw]` applied to fs#78
+  & fs#85). Result: the menu stayed **identically dark** (hash
+  unchanged `0x-680ec5c0`, distinct=2). ⇒ array-layer is NOT the
+  root. Flag kept inert (`false`) as a documented negative.
+- **Texture-content FALSIFIED.** The baked `[webgpu-DIAG-ut]`
+  (non-zero-byte count at UPLOAD_TEXTURE) on the deterministic menu
+  shows the menu textures **populated**: `tex#76 88×88 nz=3160/4096`,
+  `tex#83 32×32 nz=2428/4096 px0=255,255,255,255`, plus #91/96/98/
+  100/102/104/106 (32×32) all with substantial nz. The §28ak
+  "populated" claim now verified for the *actual* menu textures, not
+  just difficulty-select.
+
+**Where it stands.** Dark menu is NOT depth / zero-texcoord /
+UV-units / array-layer / texture-content. The menu draw has a
+**valid `[0,1]` sampled UV** AND a **populated bound texture**, yet
+outputs ~black with faint streaks. The defect is therefore between a
+correct texel fetch and the fragment output: the **sampler state**
+(filter/address — `effUV=(1.0,0.0)` is an atlas edge), the
+**texture format/swizzle**, the **bind-group mapping** (FS samples a
+binding other than the populated `b0`), or the **TEV/PS-constant**
+chain collapsing a valid sample to ~0 (`[s28-creg]` only caught the
+boot PSBlock id=55, throttle missed the menu draw — needs the
+`[s28av]`-snapshot PSBlock dumped for the menu draw's c0..3/konst/
+alpha). Next decisive step: bisect sample-vs-TEV — force the menu FS
+to emit the raw `textureSampleBias` result (or a constant colour) on
+the deterministic repro: textured ⇒ TEV/PS-constant collapse;
+still-black ⇒ sampler/format/binding.
+
+**Status.** Flicker SOLVED+committed (§28at 36b32cc), unaffected.
+Dark-menu narrowed to FS-sample/TEV (18+ eliminations), deterministic
+repro in hand, `[s28aw]` reverted. §28g…§28av stand; `?video=webgpu`
+/per-draw ring/§26 untouched.

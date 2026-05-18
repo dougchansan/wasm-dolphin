@@ -3463,6 +3463,15 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // for every draw in every pass ⇒ the §28aq mixed-pass flicker is
 // structurally impossible AND 3D/title renders (matches flag=true).
 const REVZ_COMPARE_FLIP = true;
+// §28aw: decisive dark-menu experiment — force FS textureSampleBias
+// array-layer to 0 (menu textures are single-layer, bound 2d-array;
+// a non-zero texgen layer ⇒ out-of-range sample ⇒ black). Gated so
+// it's toggleable/revertible; kept only if menu renders AND title/3D
+// does not regress.
+// §28aw FALSIFIED: forcing menu FS textureSampleBias layer→0 left the
+// menu identically dark (hash unchanged) ⇒ array-layer is NOT the
+// root. Flag kept inert (false) as a documented negative result.
+const S28AW_FORCE_TEXLAYER0 = false;
 // §28at: apply the compare flip uniformly (drop the per-pass `revZ`
 // gate). The single reverse-Z convention is correct for every
 // rzRelevant draw now that flag=false made all viewports uniform.
@@ -5175,6 +5184,24 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     }
   }
 
+  // [s28aw] DECISIVE dark-menu experiment (JS-only, gated, revertible):
+  // §28av proved the menu sampled UV is valid [0,1]; the remaining
+  // strong candidate is the textureSampleBias array-LAYER index. The
+  // menu textures are single-layer but bound as 2d-array views; if the
+  // texgen 3rd coord makes i32(_eN.z) ≥ 1 the sample is out-of-range ⇒
+  // 0 ⇒ black. Force the layer to 0 in FS textureSampleBias calls and
+  // see if the menu renders. Verified against BOTH the menu (must
+  // render) and title/3D (must NOT regress) before keeping.
+  if (S28AW_FORCE_TEXLAYER0 && stage === 2 &&
+      wgsl.indexOf("textureSampleBias(") >= 0) {
+    const before = wgsl;
+    wgsl = wgsl.replace(/(textureSampleBias\([^;]*?,\s*)i32\(_e\d+\.z\)/g,
+                        "$1" + "0i");
+    if (wgsl !== before &&
+        (self._wgS28awN = (self._wgS28awN || 0) + 1) <= 4) {
+      console.log(`[s28aw] forced textureSampleBias layer→0 in fs id=${id}`);
+    }
+  }
   let module;
   try {
     module = renderGpu.device.createShaderModule({
