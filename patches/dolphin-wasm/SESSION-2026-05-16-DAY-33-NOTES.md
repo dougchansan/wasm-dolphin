@@ -4364,3 +4364,50 @@ still-black ⇒ sampler/format/binding.
 Dark-menu narrowed to FS-sample/TEV (18+ eliminations), deterministic
 repro in hand, `[s28aw]` reverted. §28g…§28av stand; `?video=webgpu`
 /per-draw ring/§26 untouched.
+
+### 28ax/ay. ★ Dark-menu BISECTED FS-internally — draws reach the FB (full-screen geometry); the TEV/PS-constant chain is the DOMINANT collapse, a ~0 texture sample secondary
+
+Two gated JS-only experiments on the deterministic `__menu.sav`
+(both reverted after — diagnostic shader rewrites never ship):
+
+- **§28ax — const-colour.** Replaced the textured-FS entry body
+  (`-> @location(0) vec4<f32> { … }`, no nested braces in Naga's
+  `main`) with `return vec4(1,0,1,1)`. Result: the **whole menu
+  canvas filled solid MAGENTA** (`[s28ax]` fs#78/85/93/27041; hash
+  changed `0x-680ec5c0`→`0x-1a3eb240`). ⇒ the menu draws **DO reach
+  the framebuffer** with **valid full-screen geometry** — NOT
+  blend / coverage / scissor / pass-level, and NOT degenerate
+  geometry (the earlier faint streaks were collapsed *output*, not
+  bad geometry). The dark is **purely FS-internal**.
+
+- **§28ay — sample bisect.** Forced the texture-sampler helper
+  `dolphin_fn_1_` (`-> vec4<i32> { … return _eN; }`, no nested
+  braces) to `return vec4<i32>(255,255,255,255)` (perfect white
+  sample), letting the real TEV run. Result: only **sparse white
+  diagonal lines + a dark-blue region** (NOT the full bright
+  character grid). ⇒ TWO findings: (1) the texture **sample WAS ~0**
+  (those streak positions went white) — a real but *secondary*
+  contributor; (2) even with a perfect sample the TEV output is
+  **mostly dark** ⇒ the **TEV / PS-constant chain is the DOMINANT
+  collapse**. The menu FS (`[s28-tfn]`) combines the sample with
+  `global.member_1[0i]` / `global.member[0i..3i]` (TEV colour/konst
+  inputs from the PSBlock UBO); a register delivered ~0 there
+  collapses the bulk output regardless of the sample (the §28b /
+  §28ag-2 / §28ah class — but §28ah's "PS-constants correct" was
+  difficulty-select, NOT verified for this savestate menu).
+
+**Net.** Dark menu fully bisected: draws reach FB (geometry good) →
+FS-internal → dominant = TEV/PS-constant ~0 delivery + secondary =
+~0 texture sample. ~20 eliminations; a deterministic repro AND a
+clean FS-surgery bisection harness now exist. Next focused step:
+dump the menu draw's PSBlock TEV colour/konst members from the
+`[s28av]` snapshot (map Naga `member`/`member_1` ↔ PSBlock byte
+offsets via the struct decl) — find the ~0 register, then the
+smallest gated fix (UBO-layout / PS-constant delivery); and
+separately the ~0 sample (sampler/format/binding).
+
+**Status.** Flicker SOLVED+committed (§28at 36b32cc), unaffected,
+user-confirmed for title/intro. Dark-menu = the one open construct,
+FS-internally bisected (~20 eliminations), deterministic repro +
+bisection harness in hand; `[s28ax]`/`[s28ay]` reverted (false).
+§28g…§28aw stand; `?video=webgpu`/per-draw ring/§26 untouched.

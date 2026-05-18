@@ -3472,6 +3472,17 @@ const REVZ_COMPARE_FLIP = true;
 // menu identically dark (hash unchanged) ⇒ array-layer is NOT the
 // root. Flag kept inert (false) as a documented negative result.
 const S28AW_FORCE_TEXLAYER0 = false;
+// §28ax CONFIRMED: const-magenta FILLED the menu ⇒ draws reach the
+// framebuffer with valid full-screen geometry; the dark is purely
+// FS-internal. §28ay: dolphin_fn_1_→white showed only sparse white
+// lines + a dark-blue region (NOT the full menu) ⇒ the texture
+// sample WAS ~0 (secondary) AND the TEV/PS-constant chain collapses
+// the bulk output regardless (DOMINANT). Both flags reverted to
+// false (diagnostic shader rewrites must never ship); findings in
+// SESSION §28ax/§28ay. Next: pinpoint which TEV PS-constant/UBO
+// member is delivered ~0 for the menu draw.
+const S28AX_FS_CONST = false;
+const S28AY_SAMPLER_WHITE = false;
 // §28at: apply the compare flip uniformly (drop the per-pass `revZ`
 // gate). The single reverse-Z convention is correct for every
 // rzRelevant draw now that flag=false made all viewports uniform.
@@ -5200,6 +5211,35 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     if (wgsl !== before &&
         (self._wgS28awN = (self._wgS28awN || 0) + 1) <= 4) {
       console.log(`[s28aw] forced textureSampleBias layer→0 in fs id=${id}`);
+    }
+  }
+  // [s28ax] decisive bisection: replace the textured-FS entry body
+  // (the only `-> @location(0) vec4<f32> { … }`, no nested braces in
+  // Naga's main) with a constant magenta return.
+  if (S28AX_FS_CONST && stage === 2 &&
+      wgsl.indexOf("textureSampleBias(") >= 0) {
+    const before = wgsl;
+    wgsl = wgsl.replace(
+      /(->\s*@location\(0\)\s*vec4<f32>\s*\{)[^{}]*\}/,
+      "$1 return vec4<f32>(1.0, 0.0, 1.0, 1.0); }");
+    if (wgsl !== before &&
+        (self._wgS28axN = (self._wgS28axN || 0) + 1) <= 4) {
+      console.log(`[s28ax] forced const-magenta FS id=${id}`);
+    }
+  }
+  // [s28ay] sample-vs-TEV bisect: dolphin_fn_1_ is the texture-sampler
+  // helper (`-> vec4<i32> { …no nested braces… return _eN; }`). Force
+  // it to return white so the TEV runs with a known-good "sample".
+  if (S28AY_SAMPLER_WHITE && stage === 2 &&
+      wgsl.indexOf("fn dolphin_fn_1_(") >= 0 &&
+      wgsl.indexOf("textureSampleBias(") >= 0) {
+    const before = wgsl;
+    wgsl = wgsl.replace(
+      /(fn dolphin_fn_1_\([^{]*\{)[^{}]*\}/,
+      "$1 return vec4<i32>(255i, 255i, 255i, 255i); }");
+    if (wgsl !== before &&
+        (self._wgS28ayN = (self._wgS28ayN || 0) + 1) <= 4) {
+      console.log(`[s28ay] forced dolphin_fn_1_→white FS id=${id}`);
     }
   }
   let module;
