@@ -9,7 +9,7 @@ export const PLAYABLE_PRESET = Object.freeze({
   oglproxy: "worker",
   wasmjit: "1",
   jittier: "guarded",
-  forcejit: "1",
+  forcejit: "0",
   jitwarmup: "700",
   oc: "1",
   queue: "2",
@@ -28,7 +28,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   oglproxy: "worker",
   wasmjit: "1",
   jittier: "guarded",
-  forcejit: "1",
+  forcejit: "0",
   queue: "2",
   fastsw: "1",
   metrics: "0"
@@ -67,12 +67,7 @@ export function readSettingsFromSearch(search) {
     oglproxy: normalizeChoice("oglproxy", normalizeOglProxy(params.get("oglproxy"))),
     wasmjit: params.get("wasmjit") === "0" ? "0" : DEFAULT_SETTINGS.wasmjit,
     jittier: params.get("wasmjit") === "2" ? "mixed" : normalizeChoice("jittier", params.get("jittier") || DEFAULT_SETTINGS.jittier),
-    forcejit:
-      params.get("forcejit") === "0"
-        ? "0"
-        : params.get("forcejit") === "1"
-          ? "1"
-          : DEFAULT_SETTINGS.forcejit,
+    forcejit: params.get("forcejit") === "1" ? "1" : DEFAULT_SETTINGS.forcejit,
     queue: normalizeChoice("queue", params.get("queue") || DEFAULT_SETTINGS.queue),
     fastsw: normalizeChoice("fastsw", params.get("fastsw") || DEFAULT_SETTINGS.fastsw),
     metrics: params.get("metrics") === "1" ? "1" : DEFAULT_SETTINGS.metrics

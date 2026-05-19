@@ -868,13 +868,13 @@ function requestedPpcWasmJitTier() {
 }
 
 function requestedPpcWasmJitForce() {
-  // §28bk: forcejit defaults ON. Measured (§28bi/bj): keeping the JIT
-  // continuously engaged lifts heavy scenes ~30→46 % and kills the
-  // cold-start "JIT warmup" sawtooth (the post-activation stall fuse
-  // was periodically disabling the JIT — the dominant not-snappy).
-  // Opt out with ?forcejit=0. (OGL's JIT-off safety reads the raw
-  // `forcejit` param directly, so it is unaffected by this default.)
-  return new URLSearchParams(window.location.search).get("forcejit") !== "0";
+  // §28bl: REVERTED §28bk's forcejit-default per user request — back
+  // to the last known-stable behaviour (forcejit OFF by default, the
+  // post-activation stall fuse active) so the software hybrid is a
+  // clean known-good baseline to reassess from. forcejit=1 still
+  // available explicitly (gives ~46 % heavy battle but bypasses the
+  // smoothness fuse — measured tradeoff, §28bi/bj/bk).
+  return new URLSearchParams(window.location.search).get("forcejit") === "1";
 }
 
 function requestedPpcWasmJitWarmupFrames(videoBackend) {

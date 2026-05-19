@@ -4771,3 +4771,31 @@ correctness; mixed still NOT defaulted — no gain + corruption
 risk). Flicker §28at intact; `?video=webgpu` reference untouched.
 §28g…§28bj stand. Open: the user-reported link-1 (`?video=wgpu`)
 residual flicker — next.
+
+### 28bl. RESET to simplest stable (user-directed) — §28bk forcejit-default REVERTED for a clean reassessment baseline
+
+User feedback after the §28bk ship: "still not good" across the
+board (link-1 wgpu still flickers, link-2 software still not snappy,
+rendering wrong, "fundamentally off"). Honest reassessment given to
+the user: (1) heavy Melee battle has a **fundamental ~46 % PPC→WASM
+emulation ceiling** (§28bh) — not a fixable flag; (2) `?video=wgpu`
+is an experimental path with deep, non-trivial flicker + dark-menu
+defects (no simple fix); (3) `?video=software` is the only
+fully-correct path, limited only by that fundamental speed ceiling.
+User chose **"Revert to simplest stable, then reassess."**
+
+Action: reverted §28bk's `forcejit` default. `core-host.js:871`
+back to `get("forcejit") === "1"` (default OFF, stall-fuse active);
+`settings.js` DEFAULT/PRESET `forcejit "1"→"0"` and the param parse
+back to original. The software hybrid is now byte-for-behaviour at
+its **pre-session last-stable default** (the verified §28ao/§28as
+"renders + smooth, fuse-protected" state). Deliberately KEPT (these
+do NOT change the default software-hybrid behaviour): the §28bi
+`enabled|0` latent-bug fix (only affects the non-defaulted mixed
+tier), the §28bj mixed cap (inert at the guarded default), the
+§28at flicker decouple (api_type==Vulkan-gated → no-op for the
+Software backend), and the full §28at–§28bk honest investigation
+record. `forcejit=1` remains available explicitly for anyone who
+wants the speed/feel tradeoff. Goal: give the user a known-good
+baseline to test and judge direction from, rather than a drifted
+state. §28g…§28bk stand as documented history.
