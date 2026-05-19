@@ -4830,3 +4830,33 @@ Software hybrid in real use — already the committed default in
 further perf change needed there. Open/experimental: `?video=wgpu`
 hardware path (flicker + dark menu) — separate, deep, documented.
 §28g…§28bl stand; the §28bh ceiling claim is corrected here.
+
+### 28bn. ★★★★ DIRECTION LOCKED — "correct and fast native" = the Software hybrid; `?video=wgpu` GPU path de-scoped (not a perf lever)
+
+User decision, explicit: **"we want correct and fast native."**
+This closes the strategic question opened by §28bm. The product is
+the **Software hybrid** (`video=software` + `presenter=webgpu`,
+native 640×480, pixel-correct, Naga/Rust transpiler blits the
+frame) — **already the committed default** (`settings.js`:
+video=software, presenter=webgpu, forcejit=0) at `7197c56`, and
+**user-verified GOOD warm** (battle 84–104 %, correct render).
+
+**Nothing more to build for this goal** — the metrics are
+conclusive: emulated rendering is ~4–13 % of the frame (~1.2 ms
+constant); the only performance lever is the PPC-JIT/CPU path,
+which is already good warm. The `?video=wgpu` hardware renderer is
+**explicitly de-scoped**: it is NOT a performance lever (a perfect
+GPU offload nets ~+0.8 %, §28bh/architect) and its only honest
+justification would be higher-than-native internal resolution — a
+visual feature the user did not ask for. Its open defects (flicker
+§28aq structural per-pass depth; dark menu §28bc subtle
+shader-translation) remain documented but are **no longer pursued**
+per this decision. Kept as legit, default-affecting-nothing fixes:
+§28at (Vulkan-gated, no-op for Software), §28bi (`enabled|0` latent
+bug). `forcejit=1` stays an explicit opt-in (max speed, smoothness
+tradeoff) — not default.
+
+Recorded to durable memory (`project-direction-native-locked`) so
+no future session re-chases the GPU. **Net: the wasm-dolphin
+deliverable is the shipped, user-verified `7197c56` Software-hybrid
+default — correct and fast native. Done.** §28g…§28bm stand.
