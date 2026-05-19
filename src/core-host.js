@@ -899,19 +899,11 @@ function requestedPpcWasmJitWarmupFrames(videoBackend) {
       );
     }
   } else {
-    // §28bo: the non-forcejit default was 3600 core frames — at the
-    // slow pre-JIT CachedInterpreter rate that is *minutes* of choppy
-    // execution before the JIT engages, the real "still not smooth"
-    // (user screenshots stuck at frame ~1242-1650 / "JIT warmup" /
-    // jitc tiny). §28ao already established 300 is safe for the
-    // non-OGL software/wgpu product path (the post-activation stall
-    // fuse + cooldown guard destabilisation; the worker constant is
-    // 300). OGL keeps its GPU-driver safety floor (minimumWarmup =
-    // SAFE_JIT_WARMUP_FRAMES via the max()). This delivers forcejit's
-    // early-JIT smoothness WITHOUT bypassing the stall-fuse.
-    effective = forceJit
-      ? Math.max(minimumWarmup, 700)
-      : Math.max(minimumWarmup, videoBackend === "OGL" ? 3600 : 300);
+    // §28bq: REVERTED §28bo (3600→300). Early engage into the huge
+    // initial compile burst, combined with §28bp removing the
+    // post-engage stall guard, froze the core at boot ("core not
+    // advancing" regression). Back to the verified-good 3600.
+    effective = forceJit ? Math.max(minimumWarmup, 700) : Math.max(minimumWarmup, 3600);
   }
   return effective;
 }

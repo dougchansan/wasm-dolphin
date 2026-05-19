@@ -4907,3 +4907,47 @@ forcejit only ever "worked" by bypassing the fuse entirely (its
 tradeoff). §28bi `enabled|0` + §28at Vulkan-gate kept; mixed still
 not defaulted; `?video=webgpu` reference + §26 untouched.
 §28g…§28bn stand.
+
+### 28bq. ★ REGRESSION — §28bo/§28bp caused a boot stall ("core not advancing"); REVERTED to the user-confirmed-good `7197c56` state
+
+User hit a NEW failure on `416fc9e`: status "**Boot stall
+detected: core not advancing. Try reloading.**" — stuck at the
+Kirby-vs-Ness VS/"NOW LOADING" screen, never reached battle
+(HUD: 45 %, JIT on, `jitc 7595/7548`, "discio recorded 7800 new
+compiles"). The user-confirmed-good baseline `7197c56` *did*
+progress to battle, so §28bo/§28bp regressed it.
+
+**Cause (clear):** §28bo made the JIT engage early (frame 300 vs
+3600) straight into the **huge initial compile burst** (~7548
+blocks). §28bp had removed, for the webgpu presenter, the line-1493
+`presentationMaxIntervalMs > 5 s` for-session stall guard — which
+is the **only** disable check that runs DURING the post-engage
+grace period (everything else early-returns while
+`framesSinceActivation < 240`, and `catastrophic` only samples
+every ≥1.5 s after the grace gate). So the compile-burst core
+freeze had no fuse → boot stall. §28bp over-reached: removing a
+real-freeze guard, not just the spurious sawtooth trigger.
+
+**Action — reverted (discipline: a regression → restore known-good
+immediately, don't stack fixes):** `core-host.js:902` back to
+`3600`; `maybeDisablePpcWasmJit` line-1493 stall guard and
+`regressed` restored to their pre-§28bp form (no
+`presentMetricsReliable` gate). The code is now behaviour-identical
+to the user-verified-good `7197c56`/§28bl state (progresses to
+battle; renders; the §28bm-corrected "warm ≈84–104 %"). Kept:
+§28bi `enabled|0`, §28at Vulkan-gate (no-op at default), the full
+honest §28bo/bp record above as documented history.
+
+**Honest status of "smooth":** the real mechanism IS understood and
+correct (§28bp diagnosis: the stall-fuse spuriously kills the JIT
+on the webgpu presenter's structurally-dead present metrics → the
+sawtooth) — but the FIX must NOT remove the grace-period real-freeze
+protection. The correct redesign (NOT yet implemented; deliberately
+not stacking it onto a live regression): replace the presentation-
+based post-engage stall guard with a **core-liveness** one (core
+frame counter not advancing vs wall-clock for >Ns ⇒ disable) so it
+catches genuine compile-burst freezes AND the §28bp sawtooth without
+the presentation mis-fire. That is a careful, separately-verified
+change for a fresh pass — the user's working state is restored
+first. §28bo/§28bp superseded by this revert. §28g…§28bp stand as
+history; net live state = `7197c56`-equivalent.
