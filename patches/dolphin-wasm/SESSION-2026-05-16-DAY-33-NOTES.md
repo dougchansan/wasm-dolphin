@@ -4860,3 +4860,50 @@ Recorded to durable memory (`project-direction-native-locked`) so
 no future session re-chases the GPU. **Net: the wasm-dolphin
 deliverable is the shipped, user-verified `7197c56` Software-hybrid
 default — correct and fast native. Done.** §28g…§28bm stand.
+
+### 28bo/bp. ★★★★ GENUINE "not smooth" root — JIT held off 3600 frames, then SAWTOOTHED off by the fuse on the webgpu presenter's structurally-dead present metrics; fixed WITHOUT the forcejit tradeoff
+
+User "still not smooth enough" (screenshots: present 5–13 fps while
+core ~50, "JIT warmup" persisting at frame 1242–1650, `jitc:47`).
+Investigated the actual engage/disable code + verified — two real
+roots, neither rendering nor GPU:
+
+- **§28bo (cold-start delay).** `core-host.js:902` set the
+  non-forcejit JIT warmup to **3600 core frames** for the
+  software/wgpu product path — at pre-JIT CachedInterpreter speed
+  that's *minutes* of choppy execution before the JIT engages. §28ao
+  established 300 is safe for non-OGL (stall-fuse + cooldown guard).
+  Fixed: non-OGL non-forcejit warmup `3600→300` (videoBackend-gated;
+  OGL keeps its `SAFE_JIT_WARMUP_FRAMES` floor). Validator forces
+  `jitwarmup=700` so it can't exercise this else-branch, but the
+  user's no-param link hits it.
+
+- **§28bp (the bigger one — verified by the speed curve).** After
+  warmup the JIT engages → ~100 % → the **post-activation stall fuse
+  spuriously disables it** ("WASM JIT temporarily off") → ~30 % →
+  re-engage → off … a 106↔30 % SAWTOOTH = the actual "not smooth".
+  `maybeDisablePpcWasmJit` disables on presentation-derived triggers
+  (line-1493 5 s `presentationMaxIntervalMs` for-session kill +
+  `regressed` on `presentationFps`) which §28s itself documented are
+  **structurally ~0/unreliable for the WebGPU presenter** (the
+  product default). §28s fixed only `catastrophic`; the presentation
+  triggers were left → spurious thrash. Fix:
+  `presentMetricsReliable = preferredPresenterBackend!=="webgpu"`;
+  in the webgpu path the JIT disables **only** on the
+  renderer-agnostic `catastrophic` core-freeze signal (genuine
+  destabilisation still fuses it; a structurally-low present fps no
+  longer does). This is the forcejit smoothness benefit **without**
+  forcejit's blanket fuse-bypass — real-freeze protection retained.
+
+**Verified (cold validator, software+webgpu, battle, no forcejit):**
+"temporarily off"/"disabled after" count **0** (was a repeating
+sawtooth pre-§28bp); JIT engages and STAYS; 0 valErr; renders. The
+cold ephemeral context still caps absolute speed (~44 %, the §28bm
+artifact — empty JIT cache) but the choppiness *mechanism* (fuse
+sawtooth) is conclusively gone — final judgement is the user's warm
+browser (their confirmed 84–104 %, now without the on/off thrash).
+Reconciles the whole session: every prior change missed this;
+forcejit only ever "worked" by bypassing the fuse entirely (its
+tradeoff). §28bi `enabled|0` + §28at Vulkan-gate kept; mixed still
+not defaulted; `?video=webgpu` reference + §26 untouched.
+§28g…§28bn stand.

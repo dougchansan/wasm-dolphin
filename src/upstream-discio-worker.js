@@ -1490,7 +1490,20 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // Detect multi-second post-activation stalls even during the grace period.
   // A stall exceeding WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS (5s) means the
   // compile burst blocked presentation long enough to produce a visible freeze.
-  if (presentationMaxIntervalMs > WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS) {
+  // §28bp: the WebGPU presenter does NOT drive presentationMaxInterval
+  // /presentationFps (those count the legacy canvas-blit, structurally
+  // ~0/meaningless here — §28s). So these presentation-derived disable
+  // triggers MIS-FIRE on the product default and thrash the JIT
+  // on/off (the 106↔30 % sawtooth = the real "not smooth"). In the
+  // webgpu-presenter path the ONLY valid disable signal is the
+  // renderer-agnostic `catastrophic` (core frame counter froze vs
+  // wall-clock, computed below) — a genuine freeze still disables;
+  // a structurally-low present fps no longer does. forcejit got this
+  // effect by bypassing the whole fuse (no protection); this keeps
+  // real-freeze protection.
+  const presentMetricsReliable = preferredPresenterBackend !== "webgpu";
+  if (presentMetricsReliable &&
+      presentationMaxIntervalMs > WASM_JIT_POST_ACTIVATION_STALL_THRESHOLD_MS) {
     api.setPpcWasmJitEnabled(0);
     ppcWasmJitActive = false;
     ppcWasmJitDisabledForSession = true;
@@ -1518,8 +1531,15 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // OR it's catastrophically slow in absolute terms (sub-floor — a
   // genuine freeze, not just a heavy renderer). The 5s post-activation
   // stall check above already handles compile-burst freezes.
+  // §28bp: `regressed` keys on presentationFps, which is structurally
+  // unreliable for the webgpu presenter (§28s). Only honour it when
+  // present metrics are meaningful (OGL/webgl/2d); otherwise rely
+  // solely on the renderer-agnostic `catastrophic` core-liveness
+  // check below — stops the spurious cooldown thrash that produced
+  // the user-visible JIT sawtooth.
   const baseline = ppcWasmJitPreEngageFps;
   const regressed =
+    presentMetricsReliable &&
     baseline >= WASM_JIT_REGRESSION_MIN_BASELINE_FPS &&
     presentationFps < baseline * WASM_JIT_REGRESSION_FRACTION;
 
