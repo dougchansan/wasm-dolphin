@@ -4990,3 +4990,26 @@ web survey mapped to this codebase (full detail in memory
 No code changed this pass (research only); live state stays the
 known-good `7197c56`-equivalent (`1ddacb2`). User to choose whether
 to take the measurement pass. §28g…§28bq stand.
+
+## §28bt - Option C+ block re-dispatch (SHIPPED, correctness-clean ~11% win)
+
+Following §28bs (verdict: block-linking is the bigger prize), implemented the SMALLEST safe increment rather than the high-risk in-WASM multi-block emitter overhaul.
+
+Change: `CachedInterpreter::ExecuteOneBlock` gains an outer re-dispatch for-loop. When a block ends with `m_ppc_state.downcount > 0` and CPU `Running`, it fetches the next block via `m_block_cache.Dispatch()` and re-enters the callback loop in-place instead of unwinding to `Run()` and re-entering `ExecuteOneBlock` (~14M times/s in warm battle). Every per-block writeback (pc=npc, downcount-=N, perfmon, halt) still happens in RunWasmBlock / end-block callbacks BEFORE the downcount is observed, so chaining is state-equivalent to the `Run()` do-while (Advance() still only at slice boundary when downcount<=0).
+
+Triple-gated, byte-identical to baseline when off:
+- `ExecuteOneBlock(bool allow_redispatch=true)`; `SingleStep()` passes `false` (debugger never chains)
+- runtime kill-switch `DOLPHIN_WEB_DISABLE_BLOCK_REDISPATCH = 1u<<15` (`?disable=blockredispatch` or `=32768`); `core-host.js` name added, `all`->0xffff
+- disabled while the per-block profiler is sampling (keeps RecordPpcBlockProfile one-block-per-call)
+
+Verification (same binary, warm battle savestate, video=software&presenter=webgpu, forcejit, n=2 each, in-process env launchers):
+| run | postJitGS | coreFps | avgGS | prog | runtime-max-gap | err |
+|-----|-----------|---------|-------|------|-----------------|-----|
+| ON 1  | 54.74 | 32.94 | 50.34 | pass | 0 | none |
+| ON 2  | 57.64 | 34.61 | 53.69 | pass | 0 | none |
+| OFF 1 | 51.93 | 31.27 | 47.36 | pass | 0 | none |
+| OFF 2 | 49.17 | 29.55 | 44.82 | pass | 0 | none |
+
+ON range [54.74,57.64] vs OFF range [49.17,51.93] do NOT overlap. Means: +11.2% gameSpeed, +11.1% fps, +12.9% avgGS. All four correctness-clean (no stall = no §28bo/bp regression; OFF = baseline path on same binary via the kill-switch). Result far exceeds the architect's modest estimate => the C++ per-block unwind/re-enter was a bigger cost than expected.
+
+Honest scope: the WASM module-boundary `call_indirect` (Option B, in-WASM multi-block linking) is still the bigger UNTAPPED lever but is the HIGH-risk emitter overhaul (no cross-module WASM jumps; invalidation/mid-region interrupt correctness) - deferred, decision open. C+ shipped default-ON with the kill-switch retained as the zero-rebuild safety fallback. Tooling: tools/jit-split-analyze.mjs, tools/_run-jitsplit{,-on,-off,-on2,-off2}.mjs.

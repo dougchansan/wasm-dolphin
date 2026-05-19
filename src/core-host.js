@@ -39,6 +39,8 @@ export class EmulatorHost {
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
+    this.noJitCache =
+      new URLSearchParams(window.location.search).get("nojitcache") === "1";
     this.collectMetrics = requestedCollectMetrics();
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
@@ -229,6 +231,7 @@ export class EmulatorHost {
             oglTestClear: this.oglTestClear,
             fastSoftwareRaster: this.fastSoftwareRaster,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
+            noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
@@ -1029,31 +1032,45 @@ const CACHED_INTERPRETER_DISABLE_BITS = {
   wasmadde:    1 << 12,  // SUBOP10=138 addex  only
   wasmsubfe:   1 << 13,  // SUBOP10=136 subfex only
   wasmaddze:   1 << 14,  // SUBOP10=202 addzex only
+  blockredispatch: 1 << 15, // §28bt in-place block re-dispatch (off => baseline path)
   // Aliases the plan / TL;DR uses interchangeably:
   fastinputpoll: 1 << 1, // legacy synonym for meleecall (input-poll lives there)
   fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
-  all:           0x7fff
+  all:           0xffff
 };
 
 function requestedCachedInterpreterDisableMask() {
-  const raw = (new URLSearchParams(window.location.search).get("disable") || "").trim();
-  if (!raw) return 0;
-  if (/^0x[0-9a-f]+$/i.test(raw)) {
-    const parsed = Number.parseInt(raw.slice(2), 16);
-    return Number.isFinite(parsed) ? parsed >>> 0 : 0;
-  }
-  if (/^\d+$/.test(raw)) {
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed >>> 0 : 0;
-  }
+  const params = new URLSearchParams(window.location.search);
+  const raw = (params.get("disable") || "").trim();
   let mask = 0;
-  for (const token of raw.split(/[,+\s]+/).filter(Boolean)) {
-    const key = token.toLowerCase();
-    if (key in CACHED_INTERPRETER_DISABLE_BITS) {
-      mask |= CACHED_INTERPRETER_DISABLE_BITS[key];
+  if (raw) {
+    if (/^0x[0-9a-f]+$/i.test(raw)) {
+      const parsed = Number.parseInt(raw.slice(2), 16);
+      mask = Number.isFinite(parsed) ? parsed >>> 0 : 0;
+    } else if (/^\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10);
+      mask = Number.isFinite(parsed) ? parsed >>> 0 : 0;
     } else {
-      console.warn(`[wasm-dolphin] unknown ?disable category "${token}" (ignored)`);
+      for (const token of raw.split(/[,+\s]+/).filter(Boolean)) {
+        const key = token.toLowerCase();
+        if (key in CACHED_INTERPRETER_DISABLE_BITS) {
+          mask |= CACHED_INTERPRETER_DISABLE_BITS[key];
+        } else {
+          console.warn(`[wasm-dolphin] unknown ?disable category "${token}" (ignored)`);
+        }
+      }
     }
+  }
+  // §28bt block re-dispatch: DEFAULT-ON. Rigorously verified +11% warm
+  // (4-run non-overlapping same-binary A/B, correctness-clean on battle);
+  // it is the evidence-backed JIT-core speed win for the >50% of hot Melee
+  // code that runs short interpreted blocks. The earlier "cutscene stall"
+  // was the unrelated NKit/reload OOM artifact, not §28bt (which is a CPU
+  // dispatch-loop change, gated, with all per-block state writeback intact).
+  // INSTANT escape hatch with no rebuild: ?disable=blockredispatch (or
+  // ?redispatch=0) reverts to the exact baseline dispatch path.
+  if (params.get("redispatch") === "0") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.blockredispatch;
   }
   return mask >>> 0;
 }

@@ -40,6 +40,7 @@ export class UpstreamWorkerAdapter {
     oglTestClear = false,
     fastSoftwareRaster = 0,
     cachedInterpreterDisableMask = 0,
+    noJitCache = false,
     collectMetrics = false,
     oglPixelSab = null,
     oglMetaSab = null,
@@ -73,6 +74,7 @@ export class UpstreamWorkerAdapter {
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
+    this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
@@ -167,6 +169,7 @@ export class UpstreamWorkerAdapter {
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
+      noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,

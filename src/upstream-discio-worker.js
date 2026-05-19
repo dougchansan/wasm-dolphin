@@ -268,6 +268,7 @@ async function handleMessage(type, payload) {
         oglTestClear: payload.oglTestClear,
         fastSoftwareRaster: payload.fastSoftwareRaster,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
+        noJitCache: payload.noJitCache,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -453,6 +454,7 @@ async function loadCore({
   oglTestClear = false,
   fastSoftwareRaster = 0,
   cachedInterpreterDisableMask = 0,
+  noJitCache = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -553,7 +555,15 @@ async function loadCore({
   // Reconcile IDB cache against this build's fingerprint before we touch
   // the cache map. If the build changed since the previous session, clear
   // the stale modules so we don't carry forward dead entries forever.
-  await reconcileJitCacheWithBuild(buildFingerprint);
+  // ?nojitcache=1: skip the IndexedDB JIT-cache entirely (no reconcile, no
+  // boot-time mass re-instantiation of thousands of cached WebAssembly
+  // Modules, no persistence). Deterministic isolation/mitigation for the
+  // renderer OOM — the JIT just recompiles fresh this session.
+  if (!noJitCache) {
+    await reconcileJitCacheWithBuild(buildFingerprint);
+  } else {
+    postStatus("jit-cache: DISABLED via ?nojitcache=1 (no IDB load/persist)");
+  }
 
   // Day-15 (wasm-dolphin) WebGPU video backend: when the user selects
   // `?video=webgpu`, the existing WebGPU presenter (createWebGpuPresenter)
@@ -610,7 +620,7 @@ async function loadCore({
   // pthread, instantiate cached Modules locally, and avoid the cross-thread
   // table problem from Day 6. Phase B adds cache lookup in the EM_JS;
   // Phase C adds IndexedDB persistence.
-  installDolphinJitCacheChannel(moduleInstance);
+  if (!noJitCache) installDolphinJitCacheChannel(moduleInstance);
   api.setVideoBackend?.(videoBackend);
   api.setCpuThread?.(Boolean(cpuThread));
   api.setCpuCore?.(cpuCore);
@@ -2661,6 +2671,15 @@ const DOLPHIN_JIT_IDB_VERSION = 2;
 // small per-block WebAssembly.Modules (raw bytes live in IDB, not
 // the Map) so 6× is a modest memory delta on a 1.36 GB-game tab.
 const DOLPHIN_JIT_CACHE_MAX = 49152; // hard cap on in-memory entries
+// §28bw: bound the BOOT-TIME re-instantiation. The IDB store grows
+// unbounded (12k+ entries observed); compiling ALL of them at boot on top
+// of the fixed non-growable 1.5 GiB core memory exhausts the renderer
+// (Aborted: out of memory → demo-core fallback). The OOM was hit fully
+// compiling ~12k modules, so cap boot-load well under that. This keeps a
+// strong partial pre-warm (fast start) WITHOUT the OOM — the default;
+// ?nojitcache=1 still fully disables. Live in-session caching is
+// unaffected (DOLPHIN_JIT_CACHE_MAX gated only the boot-load break).
+const DOLPHIN_JIT_IDB_BOOT_LOAD_MAX = 4096;
 const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
@@ -2773,7 +2792,7 @@ async function loadDolphinJitCacheFromIdb(db) {
   // so each pthread still receives ready-to-instantiate Modules.
   const COMPILE_BATCH = 64;
   for (let i = 0; i < entries.length; i += COMPILE_BATCH) {
-    if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) break;
+    if (dolphinJitCacheMap.size >= DOLPHIN_JIT_IDB_BOOT_LOAD_MAX) break;
     const batch = [];
     for (const { key, value } of entries.slice(i, i + COMPILE_BATCH)) {
       if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
