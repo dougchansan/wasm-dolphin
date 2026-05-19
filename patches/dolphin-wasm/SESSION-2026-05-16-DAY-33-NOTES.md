@@ -4951,3 +4951,42 @@ the presentation mis-fire. That is a careful, separately-verified
 change for a fresh pass — the user's working state is restored
 first. §28bo/§28bp superseded by this revert. §28g…§28bp stand as
 history; net live state = `7197c56`-equivalent.
+
+### 28br. Research survey — fast GC/PPC emulation techniques; "rewrite in Rust" SETTLED as no-leverage; real levers = JIT block-linking + WASM-local regalloc
+
+User asked to research white papers on optimising GameCube-era code
+for modern PCs + "refactor using the rust rebuild." Ran a sourced
+web survey mapped to this codebase (full detail in memory
+`project-perf-roadmap-research`). Verdicts:
+
+- **Rust rewrite — no leverage, settled with evidence.** Rust & C++
+  both LLVM→WASM, same engine (MS benchmarks: parity). Throughput =
+  PPC→WASM JIT *codegen design* + engine WASM execution, not host
+  source language. Reconfirms §28bi (git: no Rust perf refactor;
+  only the Naga shader transpiler is Rust). Don't re-raise.
+- **Host-trap fastmem CANNOT exist in browser WASM** (guest can't
+  catch host page-faults; engine owns the trap); `memory64` is
+  *slower*. The `EmitReadU32MaybeDirect` masked-bounds + direct-load
+  path is already the only correct in-browser fastmem — done.
+- **Already implemented** (don't re-chase): tiered int→cached→JIT;
+  software-fastmem; selective JIT admission; idle + Melee hot-loop
+  fast-paths; IndexedDB cross-session JIT-cache (§28u);
+  warmup/stall-fuse mgmt.
+- **Two untapped levers** (mainline Dolphin's top wins missing here),
+  both core-rebuild: (1) **block linking/chaining** — direct
+  compiled-block→block jumps vs per-block return-to-JS-dispatcher
+  (`CachedInterpreter.cpp:149`); HIGH leverage (attacks the 86–96 %
+  exec path), HIGH risk (WASM has no cross-module direct jumps).
+  (2) **WASM-local register allocation** — hot PPC regs in WASM
+  locals vs per-instruction state-struct round-trips; MED–HIGH
+  leverage, MED risk.
+- **Disciplined next step (NO rebuild):** instrument the warm-battle
+  split — time inside emitted block bodies vs per-block dispatch/
+  re-entry. Quantifies block-linking upside + says which of (1)/(2)
+  is the bigger prize before any risky core rebuild. (Per the
+  session's measure-before-expensive-build rule, reinforced by the
+  §28bo/bp regression.)
+
+No code changed this pass (research only); live state stays the
+known-good `7197c56`-equivalent (`1ddacb2`). User to choose whether
+to take the measurement pass. §28g…§28bq stand.
