@@ -4799,3 +4799,34 @@ record. `forcejit=1` remains available explicitly for anyone who
 wants the speed/feel tradeoff. Goal: give the user a known-good
 baseline to test and judge direction from, rather than a drifted
 state. §28g…§28bk stand as documented history.
+
+### 28bm. ★ HONEST CORRECTION — the §28bh "fundamental ~46 % battle ceiling" was a COLD-VALIDATOR ARTIFACT; real warm browser runs heavy battle ~84–104 %
+
+User tested the §28bl clean stable baseline (commit `7197c56`,
+`video=software&presenter=webgpu`, forcejit OFF / fuse-protected /
+guarded — the pre-session last-stable default) in a real warm
+browser and confirmed **"GOOD BASELINE"** with screenshots of live
+in-game battle (Ice Climbers vs Link, full stage, HUD, correct
+render) at **84 %, 90 %, 104 % speed**.
+
+This **falsifies §28bh's "battle is PPC-emulation-bound at a
+fundamental ~46 % ceiling."** That figure came from the **ephemeral
+Playwright validator, which starts with an EMPTY JIT cache every
+run (cold, worst case)** — a caveat that was noted but then wrongly
+elevated to a "fundamental limit." In the user's actual browser the
+JIT cache accumulates across runs, so heavy battle runs at ~full
+speed. Honest lesson (again, this session's recurring one): **user
+warm-browser ground truth > the cold ephemeral harness**; the whole
+§28bi/bj/bk forcejit/mixed-tier effort was chasing a problem that
+was largely a measurement artifact. The §28bi `enabled|0` fix
+remains a legit latent-bug fix; §28bh's *profiling method* stands
+but its **ceiling conclusion is retracted** — do not cite a ~46 %
+battle ceiling.
+
+**Net state (verified by the user):** the simplest-stable default
+(`7197c56`) IS the good, snappy, correctly-rendering state for the
+Software hybrid in real use — already the committed default in
+`settings.js` (video=software, presenter=webgpu, forcejit=0). No
+further perf change needed there. Open/experimental: `?video=wgpu`
+hardware path (flicker + dark menu) — separate, deep, documented.
+§28g…§28bl stand; the §28bh ceiling claim is corrected here.
