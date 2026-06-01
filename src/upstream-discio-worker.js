@@ -3833,7 +3833,11 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // then shows Melee geometry, the EFB is correct and the XFB/present
 // chain (scale/UV) is the bug; if still uniform, the EFB itself is
 // wrong (transform/depth). Flip to false to restore normal present.
-const DIAG_EFB_TO_CANVAS = true;
+// §28cx: diagnosis complete — the raw-EFB blit was the FLICKER source.
+// The EFB is loadOp=clear'd to (0,0,0,0) at each frame start, so presents
+// landing after the clear but before/without draws showed black → flicker.
+// The XFB (tex#47) carries content every frame. Restored to normal present.
+const DIAG_EFB_TO_CANVAS = false;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT depth (still dark with depth bypassed) ⇒ blend/TEV/material/texture construct
