@@ -33,20 +33,46 @@
     // messages (start function, exit, etc.).
     globalThis.addEventListener("message", (event) => {
       const data = event.data;
-      if (!data || data.type !== "dolphin-jit-cache") return;
-      // Stash on globalThis first so that even if `Module` isn't ready
-      // yet (pre-js timing), the cache survives until Module is.
-      globalThis._dolphinPendingJitCache = data.cache || null;
-      if (typeof Module !== "undefined") {
-        Module._dolphinJitCache = globalThis._dolphinPendingJitCache;
-      }
-      // First-message diagnostic. Logged via console; will surface in the
-      // browser console + the validator's worker-console capture.
-      if (!globalThis._dolphinJitCacheLogged) {
-        globalThis._dolphinJitCacheLogged = true;
-        const size = data.cache && data.cache.size ? data.cache.size : 0;
-        // eslint-disable-next-line no-console
-        console.log("[jit-cache:pthread] received cache (size=" + size + ")");
+      if (!data) return;
+      if (data.type === "dolphin-jit-cache") {
+        // Bulk-set: discio worker pushes the entire map at boot.
+        // Stash on globalThis first so that even if `Module` isn't ready
+        // yet (pre-js timing), the cache survives until Module is.
+        globalThis._dolphinPendingJitCache = data.cache || null;
+        if (typeof Module !== "undefined") {
+          Module._dolphinJitCache = globalThis._dolphinPendingJitCache;
+        }
+        // First-message diagnostic. Logged via console; will surface in the
+        // browser console + the validator's worker-console capture.
+        if (!globalThis._dolphinJitCacheLogged) {
+          globalThis._dolphinJitCacheLogged = true;
+          const size = data.cache && data.cache.size ? data.cache.size : 0;
+          // eslint-disable-next-line no-console
+          console.log("[jit-cache:pthread] received cache (size=" + size + ")");
+        }
+      } else if (data.type === "dolphin-jit-cache-add" && data.hash && data.module) {
+        // §28ch incremental add: discio worker sends a single
+        // {hash, module} entry as it lazy-loads more of the IDB beyond
+        // the boot-load cap. Merge into the existing map (don't replace).
+        const target =
+          (typeof Module !== "undefined" && Module._dolphinJitCache) ||
+          globalThis._dolphinPendingJitCache;
+        if (target && target.set) {
+          target.set(data.hash, data.module);
+          globalThis._dolphinJitCacheAddCount =
+            (globalThis._dolphinJitCacheAddCount || 0) + 1;
+          // Log every 1000th add so we know lazy fill is making progress
+          // without spamming.
+          if (globalThis._dolphinJitCacheAddCount % 1000 === 0) {
+            // eslint-disable-next-line no-console
+            console.log(
+              "[jit-cache:pthread] lazy adds=" +
+                globalThis._dolphinJitCacheAddCount +
+                " size=" +
+                target.size
+            );
+          }
+        }
       }
     });
   } else {

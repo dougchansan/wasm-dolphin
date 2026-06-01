@@ -141,6 +141,8 @@ export class UpstreamWorkerAdapter {
     }
 
     if (!this.worker) {
+      const _t_worker = performance.now();
+      console.log(`[boot-phase] new Worker(discio) at perf.now=${_t_worker.toFixed(1)}ms`);
       this.worker = new Worker(this.workerUrl, {
         type: "module",
         name: "dolphin-upstream-discio"
@@ -148,6 +150,8 @@ export class UpstreamWorkerAdapter {
       this.worker.addEventListener("message", (event) => this.handleMessage(event.data));
       this.worker.addEventListener("error", (event) => this.rejectAll(event.message || "Upstream worker failed"));
     }
+    const _t_load = performance.now();
+    console.log(`[boot-phase] main-thread postMessage(load) at perf.now=${_t_load.toFixed(1)}ms`);
 
     const loadPayload = {
       coreUrl: new URL(this.coreUrl, window.location.href).href,
@@ -221,8 +225,14 @@ export class UpstreamWorkerAdapter {
   }
 
   async mountGame(file) {
+    const _t_mountStart = performance.now();
+    console.log(`[boot-phase] mountGame() entry at perf.now=${_t_mountStart.toFixed(1)}ms (file=${file?.size ?? "?"}B name=${file?.name ?? "?"})`);
     await this.load();
+    const _t_afterLoad = performance.now();
+    console.log(`[boot-phase] mountGame() after this.load() at perf.now=${_t_afterLoad.toFixed(1)}ms (load took ${(_t_afterLoad - _t_mountStart).toFixed(1)}ms)`);
     const response = await this.request("mountFile", { file });
+    const _t_afterMount = performance.now();
+    console.log(`[boot-phase] mountGame() mountFile responded at perf.now=${_t_afterMount.toFixed(1)}ms (mountFile took ${(_t_afterMount - _t_afterLoad).toFixed(1)}ms)`);
     this.applyMetadata(response);
     this.applyFrame(response);
 

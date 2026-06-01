@@ -106,7 +106,11 @@ const url = new URL(baseUrl);
 url.searchParams.set("core", "upstream");
 url.searchParams.set("video", videoMode);
 url.searchParams.set("cpu", process.env.CPU || "dual");
-url.searchParams.set("speed", "1");
+// §28cx: honor a SPEED override so throughput A/Bs can run unthrottled
+// (?speed=unlimited) — at speed=1 a faster JIT just idles in throttle and
+// the gameSpeed% pins at 100%, hiding headroom. Unthrottled, gameSpeed% IS
+// the raw throughput. Defaults to "1" (every existing caller unchanged).
+url.searchParams.set("speed", process.env.SPEED || "1");
 url.searchParams.set("presenter", process.env.PRESENTER || (videoMode === "software" ? "webgpu" : "webgl"));
 url.searchParams.set("pacing", process.env.PACING || "smooth");
 // Use the safer guarded JIT for both backends. The "mixed" tier compiles
@@ -136,7 +140,17 @@ if (videoMode === "ogl") {
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
+if (process.env.REDISPATCH) url.searchParams.set("redispatch", process.env.REDISPATCH);
+if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCKMERGE);
+if (process.env.REGALLOC) url.searchParams.set("regalloc", process.env.REGALLOC);
+if (process.env.SHORTPREFIX) url.searchParams.set("shortprefix", process.env.SHORTPREFIX);
+if (process.env.SMEARCOMPILE) url.searchParams.set("smearcompile", process.env.SMEARCOMPILE);
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
+// §28cx in-page main-thread profiler passthrough (?mainprof=1). Headless can
+// only validate the tooling emits — real-Chrome contention is the authoritative
+// signal — but it confirms activation and dumps the audio-pump cadence +
+// LoAF script-attribution snapshot at end of run (mainprofile.json).
+if (process.env.MAINPROF) url.searchParams.set("mainprof", process.env.MAINPROF);
 url.searchParams.set("metrics", "1");
 url.searchParams.set("probe", `menu-progress-${Date.now()}`);
 
@@ -645,6 +659,20 @@ try {
   console.log(`\n[menu-progress] done: ${JSON.stringify(summary, null, 2)}`);
   console.log(`[menu-progress] ${distinctHashes.size} distinct canvas hashes across ${samples.length} samples`);
   console.log(`[menu-progress] artifacts: ${outDir}`);
+  // §28cx: dump the in-page main-thread profiler snapshot if it was enabled.
+  if (process.env.MAINPROF) {
+    try {
+      const mp = await page.evaluate(() => window.__mainProfile?.summary?.() ?? null);
+      if (mp) {
+        await writeFile(path.join(outDir, "mainprofile.json"), JSON.stringify(mp, null, 2));
+        console.log(`\n[mainprof] snapshot:\n${JSON.stringify(mp, null, 2)}`);
+      } else {
+        console.log("[mainprof] window.__mainProfile not present (profiler did not activate)");
+      }
+    } catch (e) {
+      console.log(`[mainprof] capture threw: ${e?.message || e}`);
+    }
+  }
   await browser.close();
 }
 

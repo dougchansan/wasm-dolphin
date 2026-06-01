@@ -130,6 +130,12 @@ std::uint64_t s_xfb_decode_count = 0;
 std::atomic<std::uint32_t> s_last_video_sync_us{0};
 std::atomic<std::uint32_t> s_last_video_publish_us{0};
 std::atomic<std::uint32_t> s_last_video_total_us{0};
+// §28cs lifetime max — the avg in the HUD masks the 41-47ms spikes the
+// §28cn-cr investigation chain identified. Need max to see which
+// sub-component (sync vs publish) is the actual culprit.
+std::atomic<std::uint32_t> s_max_video_sync_us{0};
+std::atomic<std::uint32_t> s_max_video_publish_us{0};
+std::atomic<std::uint32_t> s_max_video_total_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_convert_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_copy_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_total_us{0};
@@ -338,8 +344,11 @@ std::string XfbProfileStats()
       << " avg:" << FormatMicrosAsMs(avg_decode)
       << " max:" << FormatMicrosAsMs(s_max_xfb_decode_us)
       << " vo_sync:" << FormatMicrosAsMs(s_last_video_sync_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_sync_us.load(std::memory_order_relaxed))
       << " vo_pub:" << FormatMicrosAsMs(s_last_video_publish_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_publish_us.load(std::memory_order_relaxed))
       << " vo_total:" << FormatMicrosAsMs(s_last_video_total_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_total_us.load(std::memory_order_relaxed))
       << " swxfb:" << FormatMicrosAsMs(s_last_sw_xfb_total_us.load(std::memory_order_relaxed))
       << " conv:" << FormatMicrosAsMs(s_last_sw_xfb_convert_us.load(std::memory_order_relaxed))
       << " copy:" << FormatMicrosAsMs(s_last_sw_xfb_copy_us.load(std::memory_order_relaxed))
@@ -517,6 +526,15 @@ void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t pu
   s_last_video_sync_us.store(sync_us, std::memory_order_relaxed);
   s_last_video_publish_us.store(publish_us, std::memory_order_relaxed);
   s_last_video_total_us.store(total_us, std::memory_order_relaxed);
+  // §28cs CAS-update lifetime maxes so we can see which sub-component
+  // spikes during the 41-47ms VICallback stalls.
+  auto cas_max = [](std::atomic<std::uint32_t>& a, std::uint32_t v) {
+    std::uint32_t prev = a.load(std::memory_order_relaxed);
+    while (v > prev && !a.compare_exchange_weak(prev, v, std::memory_order_relaxed)) {}
+  };
+  cas_max(s_max_video_sync_us, sync_us);
+  cas_max(s_max_video_publish_us, publish_us);
+  cas_max(s_max_video_total_us, total_us);
 }
 
 void DolphinWeb_RecordSoftwareXfbEncodeProfile(std::uint32_t convert_us, std::uint32_t copy_us,

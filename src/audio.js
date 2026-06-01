@@ -8,10 +8,46 @@ export class AudioController {
     this.pumpTimer = 0;
     this.pumpPending = false;
     this.nextPlayTime = 0;
-    this.targetLeadSeconds = 0.12;
-    this.startLeadSeconds = 0.025;
+    // §28cm/cu audio buffer tuning. 120ms holds clean once the CPU
+    // throttle uses sleep_until (§28cr3 reverted busy-spin → audio thread
+    // gets CPU during throttle waits → no starvation). 80ms is too tight
+    // (probe showed 5u/4d at 80ms). 120ms is the sweet spot for audio
+    // latency vs robustness. URL param ?audiolead=N (seconds, 0.05-1.0)
+    // overrides. ?audiopump=N (ms, 5-100) tunes pump interval.
+    const params = new URLSearchParams(window.location.search);
+    const leadParam = Number.parseFloat(params.get("audiolead") || "");
+    this.targetLeadSeconds =
+      Number.isFinite(leadParam) && leadParam >= 0.05 && leadParam <= 1
+        ? leadParam
+        : 0.12;
+    this.startLeadSeconds = 0.05;
     this.chunkFrames = 1024;
+    const pumpParam = Number.parseInt(params.get("audiopump") || "", 10);
+    this.pumpIntervalMs =
+      Number.isFinite(pumpParam) && pumpParam >= 5 && pumpParam <= 100
+        ? pumpParam
+        : 15;
     this.stats = "audio:off";
+
+    // §28cx main-thread contention diagnostics. The pump is driven by a
+    // setInterval on the main thread; when the main thread is blocked the
+    // interval is starved and the AudioContext schedule runs dry → underrun.
+    // These counters (a few numbers per pump call — negligible cost) let the
+    // main-thread profiler (?mainprof=1) distinguish "setInterval starved on
+    // main thread" (large pump gaps) from "worker slow to answer mixAudio"
+    // (large mix latency). Read via window.__audio.profile.
+    this.lastPumpAt = 0;
+    this.profile = {
+      pumpCount: 0,
+      pumpMisses: 0,
+      maxGapMs: 0,
+      sumGapMs: 0,
+      gapSamples: 0,
+      lastGapMs: 0,
+      maxMixMs: 0,
+      sumMixMs: 0,
+      mixSamples: 0
+    };
   }
 
   setSource(source) {
@@ -72,7 +108,7 @@ export class AudioController {
 
     this.pumpTimer = window.setInterval(() => {
       void this.pump();
-    }, 20);
+    }, this.pumpIntervalMs);
   }
 
   stopPump() {
@@ -85,6 +121,23 @@ export class AudioController {
   }
 
   async pump() {
+    // Record cadence BEFORE the early-return guards so we capture every
+    // setInterval firing — including the ticks that no-op because a prior
+    // pump is still pending. A gap ≫ pumpIntervalMs means the main thread
+    // starved this timer (the underrun smoking gun).
+    const pumpEnteredAt = performance.now();
+    if (this.lastPumpAt) {
+      const gap = pumpEnteredAt - this.lastPumpAt;
+      const p = this.profile;
+      p.lastGapMs = gap;
+      p.sumGapMs += gap;
+      p.gapSamples += 1;
+      if (gap > p.maxGapMs) p.maxGapMs = gap;
+      if (gap > this.pumpIntervalMs * 2) p.pumpMisses += 1;
+    }
+    this.lastPumpAt = pumpEnteredAt;
+    this.profile.pumpCount += 1;
+
     if (this.muted || !this.source || !this.context || !this.gain || this.pumpPending) {
       return;
     }
@@ -103,7 +156,16 @@ export class AudioController {
       let scheduled = 0;
       const horizon = now + this.targetLeadSeconds;
       while (!this.muted && this.nextPlayTime < horizon && scheduled < 6) {
+        // mixAudio is a postMessage round-trip to the worker; time it so the
+        // profiler can attribute slow chunks to a busy worker vs. main-thread
+        // starvation (which shows up as pump-gap, recorded above).
+        const mixT0 = performance.now();
         const chunk = await this.source(this.chunkFrames);
+        const mixMs = performance.now() - mixT0;
+        const p = this.profile;
+        p.sumMixMs += mixMs;
+        p.mixSamples += 1;
+        if (mixMs > p.maxMixMs) p.maxMixMs = mixMs;
         if (!this.scheduleChunk(chunk)) {
           break;
         }

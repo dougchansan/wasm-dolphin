@@ -1,5 +1,6 @@
 import { DEFAULT_UPSTREAM_CORE_URL, WORKERFS_MOUNT_DIR, sanitizeDiscFileName } from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
+import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -8,6 +9,7 @@ import { parseDolHeader } from "./dol.js";
 // via EM_ASM at Initialize/Draw/ShowImage to confirm it's on the
 // device-owning thread. Pthreads have their own `self` without it.
 self.__dolphinDiscioWorker = true;
+console.log(`[boot-phase] discio-worker module-eval at perf.now=${performance.now().toFixed(1)}ms`);
 
 let coreUrl = DEFAULT_UPSTREAM_CORE_URL;
 let moduleInstance = null;
@@ -538,8 +540,19 @@ async function loadCore({
     await setupSoftwarePresenter(canvas, preferredPresenterBackend);
   }
 
+  // §28cf boot-phase timing instrumentation. Attributes the ~1s page-load
+  // freeze measured in §28cd. Each step's wall time is postStatus'd so the
+  // validator's console-log capture surfaces the breakdown without a rebuild.
+  const _bootT0 = performance.now();
+  const _bootMark = (label) => {
+    const dt = performance.now() - _bootT0;
+    console.log(`[boot-phase] ${label} t=${dt.toFixed(1)}ms`);
+  };
+  _bootMark("loadCore-entry");
   coreUrl = new URL(nextCoreUrl, self.location.href).href;
+  const _t_import = performance.now();
   const imported = await import(coreUrl);
+  console.log(`[boot-phase] import(coreUrl) took ${(performance.now() - _t_import).toFixed(1)}ms`);
   const factory = imported.default ?? imported.createDolphinCore ?? self.createDolphinCore;
 
   if (typeof factory !== "function") {
@@ -550,8 +563,10 @@ async function loadCore({
   // wasmBinary (skips its internal fetch) and (b) fingerprint it for the
   // JIT-cache cross-build invalidation. Single localhost fetch instead of
   // a double-fetch + extra hash pass.
+  const _t_fetch = performance.now();
   const { wasmBinary, fingerprint: buildFingerprint } =
       await fetchWasmAndFingerprint(coreUrl);
+  console.log(`[boot-phase] fetchWasmAndFingerprint took ${(performance.now() - _t_fetch).toFixed(1)}ms (${(wasmBinary.byteLength / 1048576).toFixed(2)}MiB)`);
   // Reconcile IDB cache against this build's fingerprint before we touch
   // the cache map. If the build changed since the previous session, clear
   // the stale modules so we don't carry forward dead entries forever.
@@ -559,11 +574,24 @@ async function loadCore({
   // boot-time mass re-instantiation of thousands of cached WebAssembly
   // Modules, no persistence). Deterministic isolation/mitigation for the
   // renderer OOM — the JIT just recompiles fresh this session.
+  // §28cg prebuilt cache pre-warm. If the app ships a `/prebuilt-jit-cache.bin`
+  // matching this build's fingerprint, populate IDB from it BEFORE
+  // reconcileJitCacheWithBuild runs — that function then loads the modules out
+  // of IDB via the existing async-compile batches (same path warm boots take).
+  // First-session cold starts get the same warm-cache treatment as session 2+,
+  // killing the menu-nav interpret stall measured in §28bz/§28cf.
+  if (!noJitCache && buildFingerprint) {
+    const _t_prebuilt = performance.now();
+    const seeded = await maybeSeedIdbFromPrebuiltCache(coreUrl, buildFingerprint);
+    console.log(`[boot-phase] prebuilt-jit-cache seed took ${(performance.now() - _t_prebuilt).toFixed(1)}ms (seeded ${seeded} new IDB entries)`);
+  }
+  const _t_idb = performance.now();
   if (!noJitCache) {
     await reconcileJitCacheWithBuild(buildFingerprint);
   } else {
     postStatus("jit-cache: DISABLED via ?nojitcache=1 (no IDB load/persist)");
   }
+  console.log(`[boot-phase] reconcileJitCacheWithBuild took ${(performance.now() - _t_idb).toFixed(1)}ms (cache size now ${dolphinJitCacheMap.size})`);
 
   // Day-15 (wasm-dolphin) WebGPU video backend: when the user selects
   // `?video=webgpu`, the existing WebGPU presenter (createWebGpuPresenter)
@@ -576,6 +604,7 @@ async function loadCore({
       ? renderGpu.device
       : undefined;
 
+  const _t_factory = performance.now();
   moduleInstance = await factory({
     noInitialRun: true,
     canvas: videoBackend === "OGL" ? moduleCanvas || undefined : undefined,
@@ -596,6 +625,8 @@ async function loadCore({
     printErr: (message) => postStatus(message),
     onAbort: (reason) => postStatus(`Emscripten abort: ${reason}`)
   });
+
+  console.log(`[boot-phase] factory({wasmBinary}) Emscripten init took ${(performance.now() - _t_factory).toFixed(1)}ms`);
 
   // Day-16: `?video=webgpu` runs the Software→WebGPU-presenter hybrid.
   // The C++ Software path writes XFB into s_framebuffer; the existing
@@ -648,14 +679,18 @@ async function loadCore({
   }
   startFrameRingDrainLoop();
   configurePresentationQueue(presentationQueueSize);
-  presentationPacingMode = presentationPacing === "direct" ? "direct" : "smooth";
+  if (presentationPacing === "tick") presentationPacingMode = "tick";
+  else if (presentationPacing === "direct") presentationPacingMode = "direct";
+  else presentationPacingMode = "smooth";
+  const _t_coreinit = performance.now();
   api.coreInit?.();
+  console.log(`[boot-phase] api.coreInit() took ${(performance.now() - _t_coreinit).toFixed(1)}ms`);
   startPresentationLoop();
 
   if (!moduleInstance.FS?.filesystems?.WORKERFS) {
     throw new Error("Upstream Dolphin bundle was not built with WORKERFS");
   }
-
+  _bootMark("loadCore-return");
   return moduleInstance;
 }
 
@@ -840,10 +875,14 @@ async function mountFile(file) {
     mounted = false;
   }
 
+  const _t_workerfs = performance.now();
   fs.mount(fs.filesystems.WORKERFS, { blobs: [{ name: safeName, data: file }] }, WORKERFS_MOUNT_DIR);
   mounted = true;
+  console.log(`[boot-phase] fs.mount(WORKERFS) took ${(performance.now() - _t_workerfs).toFixed(1)}ms (${(file.size / 1048576).toFixed(1)}MiB image)`);
 
+  const _t_mount = performance.now();
   const accepted = api.mountDisc(path);
+  console.log(`[boot-phase] api.mountDisc() took ${(performance.now() - _t_mount).toFixed(1)}ms`);
   if (!accepted) {
     throw new Error("Upstream Dolphin DiscIO rejected the selected disc");
   }
@@ -863,8 +902,12 @@ async function mountFile(file) {
 
   if (api.bootDisc && file.size >= MIN_FULL_BOOT_BYTES) {
     coreBoot.attempted = true;
+    const _t_boot = performance.now();
     coreBoot.accepted = Boolean(api.bootDisc(path));
+    console.log(`[boot-phase] api.bootDisc() took ${(performance.now() - _t_boot).toFixed(1)}ms`);
+    const _t_pump = performance.now();
     api.pumpHostJobs?.();
+    console.log(`[boot-phase] api.pumpHostJobs() took ${(performance.now() - _t_pump).toFixed(1)}ms`);
   } else if (api.bootDisc) {
     coreBoot.skippedReason = `Disc image is too small for full CPU boot (${file.size} bytes)`;
   }
@@ -1201,6 +1244,46 @@ function startPresentationLoop() {
     presentationChannel.port1.onmessage = () => runPresentationLoop();
   }
   schedulePresentationLoop();
+  // §28cl tick mode: in addition to the new-frame-driven present loop,
+  // start a 60Hz timer that re-paints the last known frame whenever the
+  // previous paint is older than ~14ms (one frame at 60Hz with slack).
+  // Skips when no frame has been painted yet, when a real paint just
+  // happened, or when the buffer cache is empty.
+  if (presentationPacingMode === "tick") {
+    startTickRepaintLoop();
+  }
+}
+
+// §28cl: 60Hz re-paint loop for tick pacing. Cheap — drawFrameToWebGpu
+// already runs in <2ms typical; re-painting the same buffer at 60Hz costs
+// the same as a fresh frame would have. The new-frame presentFrame path
+// is unchanged so latency stays at direct-mode levels; this only fills
+// the visual gaps when Melee internally renders duplicates.
+let _tickRepaintTimer = null;
+function startTickRepaintLoop() {
+  if (_tickRepaintTimer) return;
+  const TICK_MS = 16; // ~60 Hz cadence
+  const SKIP_IF_RECENT_MS = 14; // don't double-paint within one frame of a real paint
+  _tickRepaintTimer = setInterval(() => {
+    if (!presentationLoopActive) return;
+    if (!_lastFrameCopyValid || _lastFrameLength <= 0) return;
+    const now = performance.now();
+    if (lastPresentedAt > 0 && (now - lastPresentedAt) < SKIP_IF_RECENT_MS) return;
+    // Re-paint the STABLE snapshot (not the live s_framebuffer pointer, which
+    // the core overwrites mid-frame → flicker). Bypasses recordPresentedFrame
+    // so the presentation-fps metric continues to reflect *unique* content
+    // rate, not the tick rate. lastPresentedAt is bumped so back-to-back ticks
+    // honor the SKIP_IF_RECENT_MS gate.
+    const tickBytes = _lastFrameCopy.subarray(0, _lastFrameLength);
+    if (renderGpu) {
+      drawFrameBytesToWebGpu(_lastFrameWidth, _lastFrameHeight, tickBytes);
+    } else if (renderGl) {
+      drawFrameBytesToWebGl(_lastFrameWidth, _lastFrameHeight, tickBytes);
+    } else if (renderContext) {
+      drawFrameBytesToCanvas(_lastFrameWidth, _lastFrameHeight, tickBytes);
+    }
+    lastPresentedAt = now;
+  }, TICK_MS);
 }
 
 function schedulePresentationLoop() {
@@ -1355,6 +1438,10 @@ function runPresentationLoop() {
       lastHostPumpTime = now;
       if (!coreBoot.accepted) {
         const runStartedAt = performance.now();
+        if (!self._firstRunFrameLogged) {
+          self._firstRunFrameLogged = true;
+          console.log(`[boot-phase] FIRST api.runFrame() at perf.now=${runStartedAt.toFixed(1)}ms`);
+        }
         api.runFrame?.();
         stages.run = performance.now() - runStartedAt;
         addProfileTime("run", stages.run);
@@ -1718,17 +1805,59 @@ function runPacedPresentation(timestamp = performance.now()) {
   }
 }
 
+let _firstPaintLogged = false;
+// §28cl last-frame cache for tick-mode re-paints. Updated on every real
+// presentFrame call (NEW content) so the tick timer can re-paint the same
+// content at a steady cadence without waiting for Melee to produce a fresh
+// xfb. Width/height/pointer/length are exactly what drawFrameToWebGpu /
+// drawFrameToCanvas / drawFrameToWebGl expect — the same call signature
+// presentFrame uses internally.
+let _lastFrameWidth = 0;
+let _lastFrameHeight = 0;
+let _lastFramePointer = 0;
+let _lastFrameLength = 0;
+// §28cx tick-flicker fix: a stable JS-owned snapshot of the last real frame.
+// The 60 Hz tick re-paint timer paints THIS, never the live s_framebuffer
+// pointer — the core overwrites s_framebuffer with the next frame between
+// signals, so re-reading the pointer mid-write produced torn/black frames
+// (the flicker seen in pacing=tick).
+let _lastFrameCopy = null;
+let _lastFrameCopyValid = false;
 function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?.() ?? 0) {
   const presentStartedAt = performance.now();
   if (coreFrame === lastPresentedCoreFrame) {
     updatePresentationFps();
     return;
   }
+  if (!_firstPaintLogged) {
+    _firstPaintLogged = true;
+    console.log(`[boot-phase] FIRST paint coreFrame=${coreFrame} at perf.now=${presentStartedAt.toFixed(1)}ms (${width}x${height})`);
+  }
+  // §28cl: stash for the tick re-paint timer.
+  _lastFramePointer = pointer;
 
   const frameView =
     moduleInstance && pointer > 0 && length > 0
       ? new Uint8Array(moduleInstance.HEAPU8.buffer, pointer, length)
       : null;
+
+  // §28cx tick-flicker fix: snapshot this complete frame into a stable buffer
+  // so the tick re-paint never reads s_framebuffer while the core writes the
+  // next frame. CRITICAL: stash the dims TOGETHER with the copy, and ONLY when
+  // the frame is valid — otherwise a null/zero/resolution-change frame would
+  // bump _lastFrameWidth/Height/Length while _lastFrameCopy kept old bytes, and
+  // the tick would upload old bytes at new dimensions → stride mismatch → the
+  // rainbow-gradient flicker. Keeping them atomic means a transition frame
+  // simply leaves the last good frame (and its dims) on screen.
+  if (frameView) {
+    if (!_lastFrameCopy || _lastFrameCopy.length < length)
+      _lastFrameCopy = new Uint8Array(length);
+    _lastFrameCopy.set(frameView);
+    _lastFrameWidth = width;
+    _lastFrameHeight = height;
+    _lastFrameLength = length;
+    _lastFrameCopyValid = true;
+  }
 
   const drawStartedAt = performance.now();
   if (renderGpu) {
@@ -1844,6 +1973,21 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
     drawFrameBytesToCanvas(width, height, bytes);
   }
   addProfileTime("draw", performance.now() - drawStartedAt);
+
+  // §28cx tick-flicker fix (REAL one): feed the tick re-paint cache from THIS
+  // clean paced frame. `bytes` is the queue entry's own stable copy, with dims
+  // that match it. Previously _lastFrameCopy was only set by presentFrame —
+  // which is NOT called in paced/tick mode — so it stayed frozen on an early
+  // boot/garbage frame, and the 60Hz tick timer re-blitted that garbage
+  // interleaved with the good paced frames → the rainbow flicker. Now the tick
+  // always re-blits the latest GOOD frame (dims always match the bytes).
+  if (bytes && bytes.byteLength > 0) {
+    _lastFrameCopy = bytes;
+    _lastFrameWidth = width;
+    _lastFrameHeight = height;
+    _lastFrameLength = bytes.byteLength;
+    _lastFrameCopyValid = true;
+  }
 
   const hashStartedAt = performance.now();
   recordVisualFrameHash(hashFrameBytes(bytes));
@@ -2671,15 +2815,14 @@ const DOLPHIN_JIT_IDB_VERSION = 2;
 // small per-block WebAssembly.Modules (raw bytes live in IDB, not
 // the Map) so 6× is a modest memory delta on a 1.36 GB-game tab.
 const DOLPHIN_JIT_CACHE_MAX = 49152; // hard cap on in-memory entries
-// §28bw: bound the BOOT-TIME re-instantiation. The IDB store grows
-// unbounded (12k+ entries observed); compiling ALL of them at boot on top
-// of the fixed non-growable 1.5 GiB core memory exhausts the renderer
-// (Aborted: out of memory → demo-core fallback). The OOM was hit fully
-// compiling ~12k modules, so cap boot-load well under that. This keeps a
-// strong partial pre-warm (fast start) WITHOUT the OOM — the default;
-// ?nojitcache=1 still fully disables. Live in-session caching is
-// unaffected (DOLPHIN_JIT_CACHE_MAX gated only the boot-load break).
-const DOLPHIN_JIT_IDB_BOOT_LOAD_MAX = 4096;
+// §28bw / §28cg / §28cv / §28cw revert: probe-validated PTHREAD_POOL_SIZE=8
+// + 16k cache config FAILED in real Chrome — audio drops 18u/16d despite
+// 0u/0d in headless probe. Reverted PTHREAD_POOL_SIZE to 16; reverted cache
+// cap to 8192 to maintain the 192k Module memory ceiling. Lesson: headless
+// probe doesn't capture real-Chrome main-thread contention from compositor,
+// extensions, GC. ALWAYS validate in real browser before shipping changes
+// to PTHREAD_POOL_SIZE.
+const DOLPHIN_JIT_IDB_BOOT_LOAD_MAX = 8192;
 const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
@@ -2894,6 +3037,92 @@ const dolphinJitIdbReady = (async () => {
 // cache only needs to absorb the initial burst, not the whole game.
 let dolphinJitCachePreWarmed = false;
 const DOLPHIN_JIT_PREWARM_THRESHOLD = 50;
+// §28cg fetch + decode the prebuilt JIT cache (if present) and bulk-insert
+// its modules into IDB BEFORE reconcileJitCacheWithBuild runs. Returns the
+// number of entries seeded (0 if no file, fingerprint mismatch, or IDB has
+// equal-or-better coverage already).
+async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
+  await dolphinJitIdbReady;
+  if (!dolphinJitIdb || !currentFingerprint) return 0;
+  // Skip when IDB already has matching-fingerprint entries — the prebuilt
+  // file is for FIRST-session cold start only. Once IDB has accumulated
+  // real entries, the user's own cache is a better fit than our shipped one.
+  const storedFp = await readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY);
+  if (storedFp === currentFingerprint) {
+    const existingCount = await new Promise((resolve) => {
+      try {
+        const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readonly");
+        const req = tx.objectStore(DOLPHIN_JIT_IDB_STORE).count();
+        req.onsuccess = () => resolve(req.result || 0);
+        req.onerror = () => resolve(0);
+      } catch { resolve(0); }
+    });
+    if (existingCount >= DOLPHIN_JIT_PREWARM_THRESHOLD) {
+      // User's IDB already pre-warmed enough — no need to seed from prebuilt.
+      return 0;
+    }
+  }
+  const prebuiltUrl = new URL("prebuilt-jit-cache.bin", coreUrlValue).href;
+  let buffer;
+  try {
+    const resp = await fetch(prebuiltUrl);
+    if (!resp.ok) {
+      // 404 is normal — the build just didn't ship a prebuilt cache.
+      return 0;
+    }
+    buffer = await resp.arrayBuffer();
+  } catch {
+    return 0;
+  }
+  let decoded;
+  try {
+    decoded = decodePrebuiltCache(buffer);
+  } catch (err) {
+    postStatus(`jit-cache: prebuilt decode failed: ${err?.message || err}`);
+    return 0;
+  }
+  if (decoded.fingerprint !== currentFingerprint) {
+    postStatus(
+      `jit-cache: prebuilt fingerprint mismatch (file=${decoded.fingerprint.slice(0, 8)} build=${currentFingerprint.slice(0, 8)}); ignored`
+    );
+    return 0;
+  }
+  // §28ch: only seed the FIRST DOLPHIN_JIT_IDB_BOOT_LOAD_MAX entries into
+  // IDB synchronously — past testing showed a 16k-entry IDB tx blocks the
+  // main thread ~3s and re-inflates the startup freeze the prebuilt cache
+  // was meant to fix. Stash the OVERFLOW in `dolphinJitPrebuiltOverflow`;
+  // the lazy-fill task drains it post-boot and writes-back to IDB after
+  // each successful compile so subsequent sessions read from the IDB path.
+  const boot = decoded.entries.slice(0, DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  const overflow = decoded.entries.slice(DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  if (overflow.length > 0) {
+    dolphinJitPrebuiltOverflow = overflow;
+  }
+  const seeded = await new Promise((resolve) => {
+    try {
+      const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
+      const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
+      let inserted = 0;
+      for (const { hash, bytes } of boot) {
+        store.put(bytes, hash);
+        inserted += 1;
+      }
+      tx.oncomplete = () => resolve(inserted);
+      tx.onerror = () => resolve(0);
+      tx.onabort = () => resolve(0);
+    } catch {
+      resolve(0);
+    }
+  });
+  // Stamp the fingerprint too so reconcileJitCacheWithBuild treats this as
+  // a same-build cache and just loads (vs clearing) the seeded modules.
+  if (seeded > 0) {
+    await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, currentFingerprint);
+    postStatus(`jit-cache: seeded ${seeded} prebuilt modules into IDB (fingerprint match)`);
+  }
+  return seeded;
+}
+
 async function reconcileJitCacheWithBuild(fingerprint) {
   await dolphinJitIdbReady;
   if (!dolphinJitIdb) return 0;
@@ -2958,6 +3187,18 @@ function handleDolphinJitNewCompile(event) {
     );
   }
 }
+// §28ch lazy-fill state. Stored at module scope so the background fill
+// task (kicked off after reconcileJitCacheWithBuild) can broadcast new
+// modules to pthread workers as they become available.
+let dolphinJitPthreadWorkers = [];
+let dolphinJitLazyFillActive = false;
+// §28ch overflow buffer: prebuilt entries beyond the boot-load cap that
+// we DON'T write to IDB upfront (the 20MiB IDB tx blocked the main thread
+// long enough to inflate the startup freeze). Lazy fill compiles from
+// here, then writes-back to IDB after each successful compile so subsequent
+// sessions can read from the existing IDB-path.
+let dolphinJitPrebuiltOverflow = null;
+
 async function installDolphinJitCacheChannel(moduleInstance) {
   const pthread = moduleInstance?.PThread;
   if (!pthread) {
@@ -2971,6 +3212,7 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     ...(pthread.runningWorkers || []),
     ...(pthread.unusedWorkers || [])
   ];
+  dolphinJitPthreadWorkers = workers;
   if (!workers.length) {
     postStatus("jit-cache: no pthread workers visible at boot (PTHREAD_POOL_SIZE may be 0)");
     return;
@@ -3013,6 +3255,110 @@ async function installDolphinJitCacheChannel(moduleInstance) {
     }
   }
   postStatus(`jit-cache: pushed cache (${dolphinJitCacheMap.size} entries) to ${sent}/${workers.length} pthread workers`);
+  // §28ch: kick off background lazy fill so any IDB entries past the
+  // boot-load cap get compiled + pushed to pthreads incrementally while
+  // the game runs. Cost: small CPU on discio worker + N postMessages,
+  // each well under the 16ms frame budget. Gain: bigger effective cache
+  // covering menu-nav transitions that the bounded boot-load missed.
+  startLazyJitCacheFill();
+}
+
+// §28ch: continue loading IDB modules past DOLPHIN_JIT_IDB_BOOT_LOAD_MAX,
+// compiling them async on the discio worker, and pushing each one to all
+// pthread workers via "dolphin-jit-cache-add" messages so they merge into
+// the per-pthread Module._dolphinJitCache. Idempotent: starts once,
+// silently no-ops on subsequent calls.
+async function startLazyJitCacheFill() {
+  if (dolphinJitLazyFillActive) return;
+  if (!dolphinJitIdb) return;
+  dolphinJitLazyFillActive = true;
+  const startedAt = performance.now();
+  const startSize = dolphinJitCacheMap.size;
+  const skipKeys = new Set(dolphinJitCacheMap.keys());
+  // §28ch source preference: drain the in-memory overflow buffer first
+  // (filled by maybeSeedIdbFromPrebuiltCache with entries the boot-load
+  // skipped). Subsequent sessions whose IDB has more than the boot-load
+  // cap fall back to the IDB-cursor path.
+  let remaining = [];
+  let fromOverflow = false;
+  if (dolphinJitPrebuiltOverflow && dolphinJitPrebuiltOverflow.length > 0) {
+    fromOverflow = true;
+    for (const { hash, bytes } of dolphinJitPrebuiltOverflow) {
+      if (!skipKeys.has(hash)) remaining.push({ key: hash, value: bytes });
+    }
+    // Release the overflow buffer once we've copied the work list — its
+    // bytes will be reachable through `remaining` until they compile.
+    dolphinJitPrebuiltOverflow = null;
+  } else {
+    remaining = await new Promise((resolve) => {
+      const out = [];
+      try {
+        const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readonly");
+        const cur = tx.objectStore(DOLPHIN_JIT_IDB_STORE).openCursor();
+        cur.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (!cursor) { resolve(out); return; }
+          if (!skipKeys.has(cursor.key)) {
+            out.push({ key: cursor.key, value: cursor.value });
+          }
+          cursor.continue();
+        };
+        cur.onerror = () => resolve(out);
+      } catch { resolve(out); }
+    });
+  }
+  if (remaining.length === 0) {
+    dolphinJitLazyFillActive = false;
+    return;
+  }
+  postStatus(`jit-cache: lazy fill starting on ${remaining.length} extra IDB entries`);
+  // Small batches with a yield between them so we don't starve the
+  // discio-worker event loop (it pumps presentation frames, audio buffers,
+  // and disc-io requests).
+  const LAZY_BATCH = 16;
+  const HARD_CAP = DOLPHIN_JIT_CACHE_MAX;
+  let added = 0;
+  for (let i = 0; i < remaining.length; i += LAZY_BATCH) {
+    if (dolphinJitCacheMap.size >= HARD_CAP) break;
+    const slice = remaining.slice(i, i + LAZY_BATCH);
+    const compiles = slice.map((entry) => {
+      if (!(entry.value instanceof Uint8Array) && !(entry.value instanceof ArrayBuffer)) {
+        return null;
+      }
+      const buf = entry.value instanceof ArrayBuffer
+        ? new Uint8Array(entry.value)
+        : entry.value;
+      // Only carry bytes through when sourced from the overflow buffer —
+      // those need IDB write-back. IDB-sourced entries are already there.
+      return { key: entry.key, p: WebAssembly.compile(buf), bytes: fromOverflow ? buf : null };
+    }).filter(Boolean);
+    const settled = await Promise.allSettled(compiles.map((c) => c.p));
+    for (let k = 0; k < settled.length; k++) {
+      if (settled[k].status !== "fulfilled") continue;
+      const key = compiles[k].key;
+      const mod = settled[k].value;
+      const bytes = compiles[k].bytes;
+      dolphinJitCacheMap.set(key, mod);
+      added += 1;
+      // Push to every pthread worker. Modules are structured-clone-safe
+      // so the receiver can install them on its local wasmTable.
+      for (const w of dolphinJitPthreadWorkers) {
+        try { w.postMessage({ type: "dolphin-jit-cache-add", hash: key, module: mod }); } catch {}
+      }
+      // §28ch persist-on-fill: when the source was the prebuilt-overflow
+      // (not already in IDB), write the bytes so subsequent sessions skip
+      // the prebuilt file entirely. Fire-and-forget; existing helper
+      // batches writes via the open dolphinJitIdb instance.
+      if (bytes) writeDolphinJitEntryToIdb(key, bytes);
+    }
+    // Yield to the event loop between batches.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const ms = Math.round(performance.now() - startedAt);
+  postStatus(
+    `jit-cache: lazy fill done — added ${added} (cache ${startSize}→${dolphinJitCacheMap.size}) in ${ms}ms`
+  );
+  dolphinJitLazyFillActive = false;
 }
 
 // Day-27: cross-thread WebGPU command ring. The video pthread can't
@@ -3248,7 +3594,15 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
           console.log(`[s28-missbg] n=${self._wgMiss.n} b${binding} ` +
             `top-missing=${top}`);
         }
-        return;  // resource not ready — skip this frame
+        // §28cx FORCE-VALID: do NOT drop the whole bind group when a texture
+        // is missing — that permanently skips every draw using it (the
+        // create record is one-shot), which is why characters & menus vanish
+        // (their CMPR maps aren't on the consumer yet / format-unsupported).
+        // Substitute the persistent dummy view so the group stays valid and
+        // the draw RENDERS (placeholder texel for the one missing map, not an
+        // invisible character). Mirrors the non-filterable substitution below.
+        entries.push({ binding, resource: getFixedLayouts().dummyTexView });
+        continue;
       }
       // §26: the fixed group-1 layout declares sampleType:"float"
       // (filterable). Binding a non-filterable / non-float texture
@@ -3267,7 +3621,11 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
       }
     } else if (kind === 2) {
       const s = webGpuObjects.samplers.get(resId);
-      if (!s) return;
+      if (!s) {
+        // §28cx FORCE-VALID: missing sampler → dummy, don't drop the group.
+        entries.push({ binding, resource: getFixedLayouts().dummySampler });
+        continue;
+      }
       entries.push({ binding, resource: s });
     } else {
       const b = webGpuObjects.buffers.get(resId);

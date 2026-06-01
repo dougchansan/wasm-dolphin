@@ -1,5 +1,6 @@
 import { AudioController } from "./audio.js";
 import { EmulatorHost } from "./core-host.js";
+import { startMainThreadProfiler } from "./main-profiler.js";
 import {
   CONTROL_LABELS,
   formatControlLabel,
@@ -68,6 +69,7 @@ const elements = {
   hudUnderDrop: document.querySelector("#hudUnderDrop"),
   hudQueue: document.querySelector("#hudQueue"),
   hudJitCache: document.querySelector("#hudJitCache"),
+  hudRunloop: document.querySelector("#hudRunloop"),
   hudWgx: document.querySelector("#hudWgx"),
   hudStatus: document.querySelector("#hudStatus"),
   inputSource: document.querySelector("#inputSource"),
@@ -128,6 +130,11 @@ const host = new EmulatorHost({
   onMode: setMode
 });
 audio.setSource((frames) => host.mixAudio(frames));
+// §28cx: expose the host so the main-thread profiler can read the existing
+// >20ms stall counters (rAF loop vs worker→main message handler). LoAF's
+// 50ms floor is blind to the 33-50ms band that actually starves the audio
+// pump; these counters cover >20ms and attribute it to JS vs non-JS.
+window.__host = host;
 
 // Validator/dev hook: fetch a Dolphin .sav by URL and State::LoadAs it
 // through the active adapter (worker → core LoadStateFile). Returns the
@@ -214,6 +221,12 @@ wireTransport();
 wireKeyboard();
 wireTouchControls();
 wireGamepadPolling();
+
+// §28cx main-thread profiler — activates only with ?mainprof=1. Diagnoses
+// what eats main-thread time (LoAF script attribution) and whether the audio
+// pump's setInterval is being starved, the suspected cause of real-Chrome
+// audio underruns the worker-only probe can't see.
+startMainThreadProfiler();
 
 host
   .init()
@@ -615,6 +628,17 @@ function updateScreenHud(info) {
   const jitc = /\bjitc:(\d+)\/(\d+)/.exec(helper);
   elements.hudJitCache.textContent = jitc ? `${jitc[1]}/${jitc[2]}` : "0/0";
 
+  // §28cn per-slice CPU pthread profiler: avg/max/runOnlyMax wall time per
+  // CoreTiming slice. max > 16000us = blew one 60Hz frame; runOnlyMax
+  // separated from max so we can see whether the spike was compile-burst
+  // or pure-emulation cost.
+  const runloop = /\brunloop:(\d+)slices\/avg(\d+)us\/max(\d+)us\/runOnlyMax(\d+)us/.exec(helper);
+  if (elements.hudRunloop) {
+    elements.hudRunloop.textContent = runloop
+      ? `${runloop[2]}/${runloop[3]}/${runloop[4]}`
+      : "-/-/-";
+  }
+
   const wgx = /\bwgx:d(\d+)\/mp(\d+)\/mb(\d+)\/sk(\d+)/.exec(helper);
   elements.hudWgx.textContent = wgx
     ? `d${wgx[1]} mp${wgx[2]} mb${wgx[3]} sk${wgx[4]}`
@@ -751,13 +775,102 @@ function wireTouchControls() {
 }
 
 function wireGamepadPolling() {
+  // §28cj diagnostic + escape-hatch modes. URL params:
+  //   ?nogamepad=1     — skip gamepad polling entirely; keyboard-only play
+  //   ?gamepaddebug=1  — per-frame console dump + sticky on-page HUD of
+  //                      every navigator.getGamepads() entry (id, mapping,
+  //                      axes, pressed buttons). Use to attribute phantom
+  //                      inputs when split-deadzone tuning isn't enough.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("nogamepad") === "1") {
+    console.log("[gamepad] disabled via ?nogamepad=1 — keyboard/touch only this session");
+    return;
+  }
+  const debugGamepad = params.get("gamepaddebug") === "1";
+  let _gpLastLog = 0;
+  let _gpHud = null;
+  if (debugGamepad) {
+    _gpHud = document.createElement("pre");
+    _gpHud.id = "gamepad-debug-hud";
+    Object.assign(_gpHud.style, {
+      position: "fixed",
+      top: "8px",
+      right: "8px",
+      maxWidth: "560px",
+      maxHeight: "60vh",
+      overflow: "auto",
+      padding: "8px 10px",
+      background: "rgba(0,0,0,0.85)",
+      color: "#0f0",
+      font: "11px/1.3 ui-monospace,Menlo,Consolas,monospace",
+      zIndex: 99999,
+      pointerEvents: "none",
+      whiteSpace: "pre",
+      border: "1px solid #0f0",
+      borderRadius: "4px"
+    });
+    _gpHud.textContent = "[gamepad-debug] waiting for first poll…";
+    document.body.appendChild(_gpHud);
+  }
+
   // Poll on a 2ms interval rather than rAF. The Gamepad API has no event
   // model so we must poll, but rAF caps the cadence at the display refresh
   // rate (~16.7ms), which adds a worst-case full-frame of latency to every
   // gamepad input. setInterval at 2ms cuts that floor to ~2ms.
   const poll = () => {
     const pads = navigator.getGamepads?.() ?? [];
-    const firstPad = Array.from(pads).find(Boolean);
+    // §28ck device selection. `pads.find(Boolean)` (the old code) picked
+    // index [0] regardless of whether it was a real controller or a
+    // phantom HID device with empty mapping and axes stuck at extremes
+    // (e.g. Xbox accessory at Product 0x03c3 with all axes pinned to -1).
+    // Prefer pads with W3C `mapping === "standard"` — those are real
+    // controllers whose button/axis indexes match our STANDARD_GAMEPAD_*
+    // assumptions. Fall back to first non-null only if no standard pad
+    // is present. Among multiple standard pads, the one with the highest
+    // button count usually wins (Xbox Wireless = 17, generic = fewer).
+    const list = Array.from(pads).filter(Boolean);
+    const standard = list.filter((p) => p?.mapping === "standard");
+    const firstPad =
+      (standard.length
+        ? standard.reduce((best, p) =>
+            (p.buttons?.length || 0) > (best.buttons?.length || 0) ? p : best,
+            standard[0])
+        : list[0]) || null;
+
+    if (debugGamepad) {
+      const now = performance.now();
+      if (now - _gpLastLog > 250) {
+        _gpLastLog = now;
+        const lines = [`[gamepad-debug] pads.length=${pads.length} t=${(now/1000).toFixed(1)}s`];
+        let anyPad = false;
+        for (let i = 0; i < pads.length; i++) {
+          const p = pads[i];
+          if (!p) { lines.push(`  [${i}] null`); continue; }
+          anyPad = true;
+          const axes = (p.axes || []).map((a, j) => `a${j}=${a.toFixed(3)}`).join(" ");
+          const pressedBtns = [];
+          for (let b = 0; b < (p.buttons || []).length; b++) {
+            const btn = p.buttons[b];
+            if (btn?.pressed || (btn?.value ?? 0) > 0.05) {
+              pressedBtns.push(`b${b}=${(btn.value ?? (btn.pressed ? 1 : 0)).toFixed(2)}`);
+            }
+          }
+          lines.push(`  [${i}] id="${p.id}"`);
+          lines.push(`      mapping=${p.mapping || "?"} connected=${p.connected} buttons=${(p.buttons||[]).length} axes=${(p.axes||[]).length}`);
+          lines.push(`      ${axes}`);
+          lines.push(`      pressed:[${pressedBtns.join(" ") || "(none)"}]`);
+        }
+        if (!anyPad) lines.push("  (no gamepad detected yet — press a button on the controller to wake the API)");
+        const text = lines.join("\n");
+        if (_gpHud) _gpHud.textContent = text;
+        // Also log once per second to console for copy-paste convenience.
+        if (now - (_gpLastLog - 250) > 1000 || _gpLastLog < 1500) {
+          // eslint-disable-next-line no-console
+          console.log(text);
+        }
+      }
+    }
+
     const gamepadInput = readGamepadInput(firstPad);
     gamepadPressed = gamepadInput.pressed;
     gamepadInputState = firstPad ? gamepadInput.state : null;

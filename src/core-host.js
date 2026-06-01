@@ -978,10 +978,33 @@ function requestedPresenterBackend() {
 
 function requestedPresentationPacing(videoBackend = "Software Renderer") {
   const requested = new URLSearchParams(window.location.search).get("pacing");
+  // §28cl pacing modes:
+  //   direct — paint immediately when a new frame arrives (lowest latency,
+  //            but canvas only updates as often as Melee produces unique
+  //            frames, which is often only 10-15 Hz despite 60fps core)
+  //   smooth — buffer N frames + paint on a steady 60Hz cadence (smoother
+  //            visual but adds latency from the buffer depth)
+  //   tick   — §28cl best-of-both: present immediately on new frames (zero
+  //            buffer, zero added latency, like direct) AND also re-paint
+  //            the LAST KNOWN frame on a steady 16.7ms tick so the canvas
+  //            keeps refreshing even when Melee renders duplicates. Visual
+  //            cadence stays at 60Hz like a real GameCube on a CRT.
+  if (requested === "tick") return "tick";
   if (videoBackend === "OGL") {
     return requested === "smooth" ? "smooth" : "direct";
   }
-  return requested === "direct" ? "direct" : "smooth";
+  // §28cx: tick is the DEFAULT for the software-raster paths (Software Renderer
+  // and the video=webgpu software hybrid) — user-verified snappier than Direct
+  // (canvas refreshes ~60Hz instead of only on unique frames ~20Hz), with the
+  // tick re-paint flicker fixed because presentFrameBytes feeds the re-paint
+  // cache the latest GOOD frame. The WebGPU-Real GPU backend (?video=wgpu)
+  // presents via its own GPU path that does NOT feed that cache, so tick would
+  // re-blit a stale frame → flicker; keep it on smooth (its prior default).
+  // Opt out anywhere with ?pacing=direct / ?pacing=smooth.
+  if (requested === "direct") return "direct";
+  if (requested === "smooth") return "smooth";
+  if (videoBackend === "WebGPU-Real") return "smooth";
+  return "tick";
 }
 
 function requestedOglProxyMode() {
@@ -1033,10 +1056,14 @@ const CACHED_INTERPRETER_DISABLE_BITS = {
   wasmsubfe:   1 << 13,  // SUBOP10=136 subfex only
   wasmaddze:   1 << 14,  // SUBOP10=202 addzex only
   blockredispatch: 1 << 15, // §28bt in-place block re-dispatch (off => baseline path)
+  blockmerge:      1 << 17, // §28bx adjacent-block merge (default-off; ?blockmerge=1 to enable)
+  regalloc:        1 << 20, // §28by GPR regalloc / dead-store-skip (default-off; ?regalloc=1 to enable)
+  shortprefix:     1 << 21, // §28ca lower JIT min-prefix 4→2 (default-off; ?shortprefix=1 to enable)
+  smearcompile:    1 << 22, // §28ce cap JIT compiles/slice (default-off; ?smearcompile=1 to enable)
   // Aliases the plan / TL;DR uses interchangeably:
   fastinputpoll: 1 << 1, // legacy synonym for meleecall (input-poll lives there)
   fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
-  all:           0xffff
+  all:           0x7fffff
 };
 
 function requestedCachedInterpreterDisableMask() {
@@ -1071,6 +1098,34 @@ function requestedCachedInterpreterDisableMask() {
   // ?redispatch=0) reverts to the exact baseline dispatch path.
   if (params.get("redispatch") === "0") {
     mask |= CACHED_INTERPRETER_DISABLE_BITS.blockredispatch;
+  }
+  // §28bx adjacent-block merge: DEFAULT-OFF (unverified first cut of a
+  // correctness-critical JIT change). Opt-in for A/B testing with
+  // ?blockmerge=1; any other state leaves it disabled. ?disable=blockmerge
+  // or a raw mask also composes.
+  if (params.get("blockmerge") !== "1") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.blockmerge;
+  }
+  // §28by GPR regalloc / dead-store-skip: DEFAULT-OFF (correctness-critical
+  // first cut — uses PPCAnalyst's gprDiscardable to skip stores for GPRs
+  // whose value is dead after this op). ?regalloc=1 to opt in.
+  if (params.get("regalloc") !== "1") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.regalloc;
+  }
+  // §28ca short-prefix: DEFAULT-OFF. Drops MIN_WASM_PREFIX_INSTRUCTIONS 4→2
+  // so blocks of 2-3 PPC ops compile to WASM instead of falling to
+  // Interpret<false>. Audit (§28bz) showed 54% of JIT attempts reject as
+  // "too short" — biggest single bottleneck surface. ?shortprefix=1 to opt in.
+  if (params.get("shortprefix") !== "1") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.shortprefix;
+  }
+  // §28ce compile-burst smearing: DEFAULT-OFF. Caps JIT compiles per Run()
+  // slice (max 8 OR 5000us wall, whichever first). Smears the cold-start
+  // 1.6s synchronous compile burst (measured in §28cd: 12,757 cache misses
+  // produce a 1134ms presentation-interval spike) across thousands of
+  // slices, eliminating the visible freeze. ?smearcompile=1 to opt in.
+  if (params.get("smearcompile") !== "1") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.smearcompile;
   }
   return mask >>> 0;
 }
