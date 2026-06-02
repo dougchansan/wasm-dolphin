@@ -5295,16 +5295,7 @@ function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
 // semantics — it just indexes.
 const WGPU_VERTEX_FORMAT = [
   "float32", "float32x2", "float32x3", "float32x4",
-  // §28cx: under __EMSCRIPTEN__ the VS always declares float4/float3/float inputs
-  // (posmtx=float4, colors=float4, etc — see UberShaderVertex.cpp line 154).
-  // WVF_UINT8X2/WVF_UINT8X4 (C++ indices 4/5) and WVF_SINT8X2/WVF_SINT8X4
-  // (indices 6/7) encode integer-format vertex attributes, but the WGSL
-  // declares those locations as Float — a type mismatch that fails pipeline
-  // validation with "Attribute base type (Uint) does not match shader's Float".
-  // Remap to the normalized float-compatible equivalents (unorm8/snorm8) which
-  // have Float base type and match the shader. The actual value range is
-  // identical (0–255 → 0.0–1.0 for unorm, -128–127 → -1.0–1.0 for snorm).
-  "unorm8x2", "unorm8x4", "snorm8x2", "snorm8x4",
+  "uint8x2", "uint8x4", "sint8x2", "sint8x4",
   "unorm8x2", "unorm8x4", "snorm8x2", "snorm8x4",
   "uint16x2", "uint16x4", "sint16x2", "sint16x4",
   "unorm16x2", "unorm16x4", "snorm16x2", "snorm16x4"
