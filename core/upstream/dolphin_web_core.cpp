@@ -534,15 +534,18 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_AUDIO_MUTED, false);
   Config::SetBase(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, s_video_backend == "OGL");
   Config::SetBase(Config::GFX_HACK_COPY_EFB_SCALED, false);
-  // §28cx: ubershaders DISCRIMINATOR (May-30). The UBO const-index fix made the
-  // uber pixel shaders translate (fail 27->0) and 7195 draws execute, but the EFB
-  // is still all-zero (nz=0/max=0) => draws write nothing. Flip WebGPU back to
-  // specialized (Synchronous) to isolate: specialized shaders translate fine and
-  // previously got "characters appear" — if the EFB goes non-black here, the
-  // black is uber-specific (alpha-test discard / bpmem-konst UBO not uploaded in
-  // uber mode); if still black, it's a deeper scene-pass write issue.
+  // §28cx pipeline-fix (Jun-1): WGPU_VERTEX_FORMAT uint8x2/uint8x4/sint8x2/sint8x4
+  // (C++ WVF codes 4-7) were emitting integer-base GPU vertex formats but the
+  // EMSCRIPTEN VS path declares float4 inputs (e.g. posmtx=float4, see
+  // UberShaderVertex.cpp line 154). WebGPU pipeline validation fails with
+  // "Attribute base type (Uint) does not match shader's Float at location(1)".
+  // Fixed by remapping codes 4-7 to unorm8x2/unorm8x4/snorm8x2/snorm8x4 in
+  // upstream-discio-worker.js WGPU_VERTEX_FORMAT table (JS-only, no rebuild).
+  // The uber core IS the deployed core — SynchronousUberShaders is live.
   Config::SetBase(Config::GFX_SHADER_COMPILATION_MODE,
-                  ShaderCompilationMode::Synchronous);
+                  s_video_backend == "WebGPU"
+                      ? ShaderCompilationMode::SynchronousUberShaders
+                      : ShaderCompilationMode::Synchronous);
   Config::SetBase(Config::GFX_SHADER_COMPILER_THREADS, 0);
   Config::SetBase(Config::GFX_SHADER_PRECOMPILER_THREADS, 0);
   VideoBackendBase::ActivateBackend(s_video_backend);
