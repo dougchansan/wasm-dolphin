@@ -1106,10 +1106,15 @@ function requestedCachedInterpreterDisableMask() {
   if (params.get("blockmerge") !== "1") {
     mask |= CACHED_INTERPRETER_DISABLE_BITS.blockmerge;
   }
-  // §28by GPR regalloc / dead-store-skip: DEFAULT-OFF (correctness-critical
-  // first cut — uses PPCAnalyst's gprDiscardable to skip stores for GPRs
-  // whose value is dead after this op). ?regalloc=1 to opt in.
-  if (params.get("regalloc") !== "1") {
+  // §28by/C1 GPR regcache: DEFAULT-ON as of Jun-02. The active flag drives
+  // the C1 GPR-in-WASM-locals register cache (eager-load used GPRs at block
+  // prologue, route reads/writes through locals, flush dirty at block end),
+  // NOT just the old dead-store-skip. Clean uncapped A/B (SPEED=unlimited,
+  // 3 trials): base ~191% gameSpeed vs regalloc ~265% = +38%, fully
+  // non-overlapping; blockmerge added nothing on top. Visually verified
+  // rendering correct (Great Bay battle). INSTANT escape hatch, no rebuild:
+  // ?regalloc=0 reverts to the no-regcache baseline.
+  if (params.get("regalloc") === "0") {
     mask |= CACHED_INTERPRETER_DISABLE_BITS.regalloc;
   }
   // §28ca short-prefix: DEFAULT-OFF. Drops MIN_WASM_PREFIX_INSTRUCTIONS 4→2
@@ -1123,8 +1128,11 @@ function requestedCachedInterpreterDisableMask() {
   // slice (max 8 OR 5000us wall, whichever first). Smears the cold-start
   // 1.6s synchronous compile burst (measured in §28cd: 12,757 cache misses
   // produce a 1134ms presentation-interval spike) across thousands of
-  // slices, eliminating the visible freeze. ?smearcompile=1 to opt in.
-  if (params.get("smearcompile") !== "1") {
+  // slices, eliminating the visible freeze. DEFAULT-ON as of Jun-02 (the
+  // user-felt mid-match stutter fix; throughput-neutral — only changes
+  // interpret-vs-compile timing, never correctness). Escape hatch, no
+  // rebuild: ?smearcompile=0 reverts to compile-eagerly.
+  if (params.get("smearcompile") === "0") {
     mask |= CACHED_INTERPRETER_DISABLE_BITS.smearcompile;
   }
   return mask >>> 0;
