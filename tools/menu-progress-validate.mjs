@@ -169,10 +169,7 @@ const persistBrowserData = persistUserDataDir
 const chromiumLaunchArgs = [
   "--autoplay-policy=no-user-gesture-required",
   "--enable-webgl",
-  // §28cx: --enable-unsafe-webgpu exposes experimental WebGPU features/limits a
-  // normal user's Chrome lacks. Set NO_UNSAFE_WEBGPU=1 to reproduce stable-only
-  // WebGPU (what the user actually runs) — used to diagnose warm-only black.
-  ...(process.env.NO_UNSAFE_WEBGPU ? [] : ["--enable-unsafe-webgpu"]),
+  "--enable-unsafe-webgpu",
   "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
 ];
 
