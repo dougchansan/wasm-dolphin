@@ -2307,7 +2307,48 @@ async function createWebGpuPresenter(canvas) {
     throw new Error("high-performance WebGPU adapter request returned null");
   }
 
-  const device = await adapter.requestDevice();
+  // §28cx: requestDevice() defaults to spec-MINIMUM limits. Ubershaders lean
+  // harder on the device (all 8 samplers, larger bpmem/konst UBOs, more bind
+  // groups) and can fail pipeline/bind-group creation on adapters whose default
+  // caps are tight -> silent black screen. Request the adapter's own max for the
+  // limits we lean on (safe: we ask for exactly what the adapter reports), and
+  // fall back to defaults if the request is rejected.
+  const _wgpuWantLimits = {};
+  const _wgpuAdapterLimits = adapter.limits || {};
+  for (const _k of [
+    "maxUniformBufferBindingSize", "maxStorageBufferBindingSize",
+    "maxSampledTexturesPerShaderStage", "maxSamplersPerShaderStage",
+    "maxBindGroups", "maxBindingsPerBindGroup",
+    "maxDynamicUniformBuffersPerPipelineLayout",
+    "maxBufferSize", "maxColorAttachmentBytesPerSample",
+  ]) {
+    const _v = _wgpuAdapterLimits[_k];
+    if (typeof _v === "number" && _v > 0) _wgpuWantLimits[_k] = _v;
+  }
+  let device;
+  try {
+    device = await adapter.requestDevice(
+      Object.keys(_wgpuWantLimits).length ? { requiredLimits: _wgpuWantLimits } : undefined);
+  } catch (e) {
+    console.error("[wgpu-device] requestDevice(max limits) rejected, retrying defaults:",
+                  e && e.message ? e.message : e);
+    device = await adapter.requestDevice();
+  }
+  // Surface WebGPU device errors instead of a silent black frame — these print
+  // the real reason (e.g. a limit/validation failure) to the page console.
+  try {
+    if (device.addEventListener) {
+      device.addEventListener("uncapturederror", (ev) => {
+        const m = ev && ev.error && ev.error.message ? ev.error.message : String(ev);
+        console.error("[wgpu-device-error]", m);
+      });
+    }
+    if (device.lost && device.lost.then) {
+      device.lost.then((info) => {
+        console.error("[wgpu-device-lost]", info && info.reason, info && info.message);
+      });
+    }
+  } catch (_) { /* non-fatal */ }
   const format = typeof gpu.getPreferredCanvasFormat === "function" ? gpu.getPreferredCanvasFormat() : "bgra8unorm";
   const shaderModule = device.createShaderModule({
     label: "dolphin-xfb-presenter",
@@ -4304,7 +4345,8 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_UPLOAD_TEXTURE: {
           const t = webGpuObjects.textures.get(u32[recWord + 1]);
           const uz = u32[recWord + 7];
-          if (t && !t.format.startsWith("depth") && uz < t.layers) {
+          const mipLvl = u32[recWord + 6];
+          if (t && !t.format.startsWith("depth") && uz < t.layers && mipLvl === 0) {  // §fix-mip: skip mip>0; texture created with mipLevelCount=1
             const src = u32[recWord + 2], bpr = u32[recWord + 3];
             const w = u32[recWord + 4], h = u32[recWord + 5];
             // DIAG one-shot per tex id: confirm uploaded pixels aren't
@@ -4325,7 +4367,7 @@ function drainWebGpuCmdRing() {
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
             q.writeTexture(
-              { texture: t.tex, mipLevel: u32[recWord + 6],
+              { texture: t.tex, mipLevel: mipLvl,
                 origin: { x: 0, y: 0, z: uz } },
               heapCopy(src, bpr * h),
               { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
@@ -5295,7 +5337,7 @@ function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
 // semantics — it just indexes.
 const WGPU_VERTEX_FORMAT = [
   "float32", "float32x2", "float32x3", "float32x4",
-  "uint8x2", "uint8x4", "sint8x2", "sint8x4",
+  "unorm8x2", "unorm8x4", "snorm8x2", "snorm8x4",  // §fix-attr: integer 8-bit → normalized; shader decls are float
   "unorm8x2", "unorm8x4", "snorm8x2", "snorm8x4",
   "uint16x2", "uint16x4", "sint16x2", "sint16x4",
   "unorm16x2", "unorm16x4", "snorm16x2", "snorm16x4"
