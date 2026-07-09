@@ -2,8 +2,8 @@
 
 Run the **Dolphin** GameCube/Wii emulator in a Chrome tab, compiled to
 WebAssembly. The current focus and best-supported title is **Super Smash Bros.
-Melee**, which boots and plays at near-100% game speed on a modern desktop
-browser.
+Melee**, which can approach 100% game speed on a modern desktop browser, with
+visual smoothness limited by the software rasterizer on the default path.
 
 Under the hood this is the upstream [Dolphin](https://github.com/dolphin-emu/dolphin)
 C++ codebase cross-compiled with Emscripten, driven by a small JavaScript host
@@ -14,6 +14,11 @@ real-time play possible inside the browser sandbox.
 > **License note:** Dolphin is GPLv2+. Any distributed combined build that
 > includes the vendored Dolphin sources or the built core `.wasm` must comply
 > with GPLv2+. See [License](#license).
+
+**Project references:** [current status](docs/current-status.md) ·
+[rendering modes](docs/rendering-modes.md) · [JIT flags](docs/jit-flags.md) ·
+[reproducible build](docs/repro-build.md) ·
+[Melee validation results](docs/perf-results/melee-software-hybrid.md)
 
 ---
 
@@ -32,6 +37,9 @@ The default configuration is deliberately the **correct, always-working**
 software-hybrid path. Experimental renderers and JIT levers are gated behind
 opt-in URL flags and default to off, so the default page load is always a
 working build.
+
+The recommended playable path is `video=software&presenter=webgpu`. The true
+hardware WebGPU renderer is `video=wgpu` and remains experimental.
 
 ---
 
@@ -104,11 +112,9 @@ the emulated register file on every access.
   compile-burst hitches at no throughput cost.
 
 The browser sandbox constrains how far this can go: there is no host memory-trap
-("fastmem") path — every emulated memory access is bounds-checked in software —
-and the toolchain emits no WASM SIMD. Those are the structural limits behind the
-remaining gap to native speed. See
-[`docs/core-roadmap.md`](docs/core-roadmap.md) and the
-`patches/dolphin-wasm/SESSION-*-NOTES.md` trail.
+("fastmem") path, and every emulated memory access is bounds-checked in
+software. See [the JIT flag reference](docs/jit-flags.md) and
+[`docs/core-roadmap.md`](docs/core-roadmap.md).
 
 ### Rendering: the software hybrid (default)
 
@@ -175,29 +181,17 @@ instead).
 > experimental WebGPU renderer — the performance work (the JIT register cache)
 > is C++ in the vendored Dolphin tree, not Rust.
 
+See [the Naga bridge reference](docs/webgpu-naga-bridge.md) for the ABI,
+ownership rules, and patched C++ call site.
+
 ---
 
 ## Performance & tuning flags
 
-All flags are URL query parameters, read live on load (served no-store — no
-rebuild needed to change them). Defaults are chosen so the plain page load is
-the correct, working build.
-
-| Flag | Default | Meaning |
-|------|:------:|---------|
-| `video` | `software` | `software` (hybrid) or `wgpu` (experimental hardware) |
-| `presenter` | `webgpu` | Canvas present path: `webgpu` / `webgl` / `canvas` |
-| `wasmjit` | `1` | Enable the PowerPC→WASM JIT |
-| `regalloc` | `1` | GPR register cache (`0` disables; +38%) |
-| `smearcompile` | `1` | Spread JIT compilation to avoid hitches |
-| `pacing` | `tick` | Canvas repaint strategy: `tick` / `smooth` / `direct` |
-| `fastsw` | `1` | Software raster quality/speed (`1` crisp … `3` smooth) |
-| `speed` | `1` | Emulation speed; `unlimited` uncaps for throughput A/B |
-| `oc` | `1` | CPU overclock knob |
-| `queue` | `4` | Presentation frame-queue depth (latency vs smoothness) |
-| `jitwarmup` | `700` | Stable frames before the JIT engages |
-| `metrics` | `0` | Show the on-screen OSD counters |
-| `disable=` | — | Per-helper JIT bisection bitmask (see `src/core-host.js`) |
+URL parameters are read at load time and need no rebuild. Use the canonical
+[rendering-mode](docs/rendering-modes.md) and [JIT flag](docs/jit-flags.md)
+references when constructing experiments. Save the complete URL with every
+result.
 
 ---
 
@@ -205,9 +199,8 @@ the correct, working build.
 
 A prebuilt core is committed; build only when changing the C++/Rust core.
 
-**Prerequisites:** [Emscripten SDK](https://emscripten.org/) (`emsdk`) and CMake +
-Ninja. For the WebGPU shader path, a Rust toolchain with the
-`wasm32-unknown-emscripten` target.
+The full prerequisites, version record, assumptions, outputs, and release
+checklist are in [the reproducible build guide](docs/repro-build.md).
 
 ```powershell
 # One-time: fetch and patch upstream Dolphin into vendor/dolphin
