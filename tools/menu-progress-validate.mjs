@@ -530,6 +530,27 @@ try {
 
   const loadConfiguredSaveState = async (elapsed) => {
     saveStateDone = true;
+    let readiness = null;
+    // A mounted worker can still report Dolphin's state as Starting on slower
+    // presenter paths. Loading during that window returns rc=0. Wait for a
+    // small amount of real core-frame progress before transferring the state.
+    if (elapsed <= 0) {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        readiness = await page.evaluate(() => {
+          const info = window.__lastFrameInfo || {};
+          return {
+            frame: Number(info.frame) || 0,
+            coreTicks: Number(info.coreTicks) || 0,
+            running: Boolean(info.running),
+          };
+        });
+        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
+        await page.waitForTimeout(250);
+      }
+      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
+        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
+      }
+    }
     console.log(
       `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
     );
@@ -538,6 +559,7 @@ try {
       saveStateLoadResult = {
         attemptedAtSeconds: Number(elapsed.toFixed(3)),
         loaded: Boolean(response?.loaded),
+        readiness,
         response,
       };
       console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
