@@ -15,15 +15,17 @@ the correct frames, and browser WebGPU presents or blits those frames to the
 canvas. It is not hardware-accelerated emulation of Dolphin's GPU pipeline.
 
 “Near-100% game speed” describes emulation/core timing. It does not promise
-native-smooth unique visual output. Full-quality software rasterization can
+native-smooth unique visual output. The best-quality recommended fast mode can
 produce low unique visual FPS during heavy motion even while the game advances
-at nearly the intended rate. `fastsw=2` and `fastsw=3` improve unique-frame
-cadence by trading away image quality; `fastsw=1` remains the full-quality
-choice.
+at nearly the intended rate. `fastsw=2` and `fastsw=3` trade more image
+quality for distinct-frame cadence, but can also reduce game speed in some
+scenes. `fastsw=1` is the balanced/crisp default; literal full-resolution
+software rasterization is `fastsw=0`.
 
 The true WebGPU hardware renderer is selected with `video=wgpu`. It is
-experimental and parked, and it may render black on some Windows GPUs. Wii and
-broader GameCube compatibility are not the current focus.
+experimental and parked, and it may render black or stop at a diagnostic
+pattern instead of a game frame. Wii and broader GameCube compatibility are
+not the current focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |

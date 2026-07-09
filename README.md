@@ -26,17 +26,16 @@ real-time play possible inside the browser sandbox.
 
 | Area | State |
 |------|-------|
-| Melee boot + gameplay (software hybrid) | ✅ Playable, ~100% game speed |
-| PPC→WASM JIT with GPR register cache | ✅ Default-on, +38% throughput |
+| Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
+| PPC→WASM JIT with GPR register cache | ✅ Default-on; historical throughput result needs a reproducible rerun |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
 | Audio | ✅ Worker-fed presentation, tuned buffering |
-| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — renders on some GPUs, black on others |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — current classifier did not reach a real game frame |
 | Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
 
-The default configuration is deliberately the **correct, always-working**
-software-hybrid path. Experimental renderers and JIT levers are gated behind
-opt-in URL flags and default to off, so the default page load is always a
-working build.
+The default configuration is the recommended, locally validated
+software-hybrid path. Experimental renderers and correctness-sensitive JIT
+levers remain behind opt-in URL flags.
 
 The recommended playable path is `video=software&presenter=webgpu`. The true
 hardware WebGPU renderer is `video=wgpu` and remains experimental.
@@ -56,9 +55,9 @@ npm start         # serves the app; prints a local URL
 
 Open the printed URL in **Chrome** (WebGPU + SharedArrayBuffer required — the
 dev server sends the necessary COOP/COEP headers). Drag a Melee ISO onto the
-page to boot. About 12 seconds in, the status pill announces *"Experimental
-WASM JIT enabled after N stable video frames"*, after which gameplay runs at
-near-100% speed.
+page to boot. After the configured warmup, the status pill may announce
+*"Experimental WASM JIT enabled after N stable video frames"*. Game speed and
+visual cadence remain scene-, cache-, browser-, and machine-dependent.
 
 ### Recommended playable URL
 
@@ -74,7 +73,7 @@ pins every knob for reproducibility:
 - `wasmjit=1` — the PowerPC→WASM JIT (with register cache) is active.
 - `pacing=tick` — repaint the canvas on a steady tick for smoother scrolling
   (default for software paths).
-- `fastsw=1` — full-quality software raster (see [Raster quality](#raster-quality-fastsw)).
+- `fastsw=1` — balanced/crisp fast software mode (see [Raster quality](#raster-quality-fastsw)).
 
 ---
 
@@ -106,14 +105,16 @@ registers are held in WASM locals for the life of a block (loaded in the
 prologue, flushed at block end and around calls) instead of round-tripping to
 the emulated register file on every access.
 
-- Clean A/B measurement: **+38% raw throughput**, and it is **on by default**.
+- Historical local A/B reported **+38% raw throughput**; rerun it on a pinned,
+  reproducible core before treating that number as a release benchmark.
 - Escape hatch: `?regalloc=0` disables it.
-- `?smearcompile=1` (default-on) spreads JIT compilation to remove mid-match
-  compile-burst hitches at no throughput cost.
+- `?smearcompile=1` (default-on) spreads JIT compilation to reduce mid-match
+  compile bursts.
 
 The browser sandbox constrains how far this can go: there is no host memory-trap
-("fastmem") path, and every emulated memory access is bounds-checked in
-software. See [the JIT flag reference](docs/jit-flags.md) and
+("fastmem") path, every emulated memory access is bounds-checked in software,
+and the dynamic PPC JIT does not yet emit SIMD. See
+[the JIT flag reference](docs/jit-flags.md) and
 [`docs/core-roadmap.md`](docs/core-roadmap.md).
 
 ### Rendering: the software hybrid (default)
@@ -126,10 +127,11 @@ The pipeline is:
 software rasterizer → EFB → XFB (YUV encode) → WebGPU presenter → <canvas>
 ```
 
-The felt smoothness bottleneck is **not** the CPU — the game logic runs at
-~60 fps — but the scalar software rasterizer + XFB encode, which cap the number
-of *unique* frames reaching the screen during heavy motion. Two knobs address
-this:
+The main measured smoothness limit on the default path is the software GPU:
+game timing can approach its target while the rasterizer produces relatively
+few distinct frames. Current XFB encode/decode samples are only low
+single-digit milliseconds, so the exact raster/TEV/backlog subphase still needs
+instrumentation. Two knobs expose the tradeoff:
 
 #### Pacing
 
@@ -140,28 +142,30 @@ this:
 
 #### Raster quality (`fastsw`)
 
-`?fastsw=` trades image quality for a higher unique-frame rate by thinning the
-software raster and XFB encode:
+`?fastsw=` thins the software raster and XFB encode. Aggressive modes can
+raise unique-frame cadence, but are not guaranteed to raise game speed:
 
-| `fastsw` | What it does | Quality | Unique fps (battle) |
-|:--:|------|------|--:|
-| `1` (default) | Full-quality encode | Crisp | ~15–22 |
-| `2` | Half-row encode with **row duplication** | Blocky vertical banding | ~35 |
-| `3` | Half-row encode with **vertical interpolation (LERP)** | Smooth, no banding | ~29 |
+| `fastsw` | What it does | Quality |
+|:--:|------|------|
+| `0` | Upstream full-resolution raster/encode | Literal full quality; slowest |
+| `1` (default) | 2×2 sampled raster with replicated cells | Crispest recommended fast mode |
+| `2` | 4×4 sampled raster with row duplication | Most aggressive; blocky bands |
+| `3` | 4×4 sampled raster with vertical interpolation | Aggressive; smoother bands |
 
 `fastsw=3` reconstructs the rows that `fastsw=2` duplicates by interpolating
-between neighbors — same throughput class as `fastsw=2`, without the
-venetian-blind banding. All fast modes share a quarter-resolution *shading* skip,
-so none of them are full-quality; `fastsw=1` remains the crisp default.
+between neighbors. Mode 1 shades one sample per 2×2 cell; modes 2 and 3 shade
+one per 4×4 cell. None is literal full quality; `fastsw=1` remains the crisp
+default. Results are scene-dependent—see the
+[measured performance audit](docs/performance-audit-2026-07-09.md).
 
 ### Rendering: WebGPU hardware backend (experimental, parked)
 
-`?video=wgpu` selects a true WebGPU hardware renderer (ubershaders) that would
-bypass the software-raster unique-frame ceiling entirely. It works on some GPUs
-but currently renders **black on some Windows GPUs**, so it is **not** the
-default and must not be shipped to the default page until verified on the target
-GPU. Prior black-3D, flicker, and dark-menu issues have been root-caused and
-fixed; the remaining blocker is GPU-specific.
+`?video=wgpu` selects the true WebGPU hardware renderer command path, intended
+to bypass the software-raster unique-frame ceiling. It has rendered on some
+builds and GPUs,
+but can render black or only a diagnostic pattern instead of game frames, so it
+is **not** the default. Shader, batch, upload-lifetime, and first-draw failures
+still need the staged classifier described in the performance audit.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.
