@@ -40,6 +40,7 @@ export async function collectRunMetadata({
   hashRom = true,
   corePath,
   saveStateUrl,
+  saveStatePath,
   saveStateAt,
   inputScript,
   sceneLabel,
@@ -49,9 +50,10 @@ export async function collectRunMetadata({
     .split(/\r?\n/)
     .filter(Boolean);
   const cpuModels = [...new Set(os.cpus().map((cpu) => cpu.model.trim()).filter(Boolean))];
-  const [rom, core] = await Promise.all([
+  const [rom, core, saveState] = await Promise.all([
     describeFile(romPath, { hash: hashRom }),
     describeFile(corePath, { hash: true }),
+    describeFile(saveStatePath, { hash: true }),
   ]);
 
   return {
@@ -98,6 +100,7 @@ export async function collectRunMetadata({
     artifacts: {
       rom,
       core,
+      saveState,
     },
   };
 }

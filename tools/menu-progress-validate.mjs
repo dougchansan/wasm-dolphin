@@ -94,6 +94,10 @@ const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScr
 // /__savestate_probe.sav); SAVE_STATE_AT = seconds into the run to do
 // it (must be after boot — Core must be running for State::LoadAs).
 const saveStateUrl = process.env.SAVE_STATE_URL || "";
+// Optional local counterpart used only for provenance. SAVE_STATE_URL is what
+// the browser loads; SAVE_STATE_PATH lets the harness record the exact bytes
+// without assuming how the development server maps URLs to disk.
+const saveStatePath = process.env.SAVE_STATE_PATH || "";
 const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
 const sceneLabel = process.env.SCENE_LABEL || "";
 let saveStateDone = false;
@@ -234,6 +238,7 @@ const runMetadata = await collectRunMetadata({
   hashRom: process.env.HASH_ROM !== "0",
   corePath: path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm"),
   saveStateUrl,
+  saveStatePath,
   saveStateAt,
   inputScript: process.env.INPUT_SCRIPT || defaultInputScript,
   sceneLabel,
@@ -713,6 +718,7 @@ try {
     url: runMetadata.benchmark.url,
     romSha256: runMetadata.artifacts.rom.sha256,
     coreSha256: runMetadata.artifacts.core.sha256,
+    saveStateSha256: runMetadata.artifacts.saveState?.sha256 || null,
   };
   await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));

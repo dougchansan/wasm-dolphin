@@ -8,6 +8,7 @@ cores/dolphin/dolphin-upstream.js
 cores/dolphin/dolphin-upstream.wasm
 cores/dolphin/*.data
 *.log
+*.sav
 
 # Day-23: Rust crate build artifacts for the Naga SPIR-V→WGSL
 # transpiler. Source (Cargo.toml, src/, .cargo/) is tracked; the
