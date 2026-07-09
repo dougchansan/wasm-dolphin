@@ -1,5 +1,6 @@
 import { AudioController } from "./audio.js";
 import { EmulatorHost } from "./core-host.js";
+import { startMainThreadProfiler } from "./main-profiler.js";
 import {
   CONTROL_LABELS,
   formatControlLabel,
@@ -9,9 +10,16 @@ import {
   resolveKeyboardButton,
   updatePressedSet
 } from "./input.js";
+import {
+  buildPlayablePresetHref,
+  buildSettingsHref,
+  describeSettings,
+  readSettingsFromSearch
+} from "./settings.js";
 
 const elements = {
   adapterStatus: document.querySelector("#adapterStatus"),
+  audioStatus: document.querySelector("#audioStatus"),
   bootApploader: document.querySelector("#bootApploader"),
   bootBlocker: document.querySelector("#bootBlocker"),
   bootDol: document.querySelector("#bootDol"),
@@ -22,6 +30,8 @@ const elements = {
   controlGrid: document.querySelector("#controlGrid"),
   coreLabel: document.querySelector("#coreLabel"),
   coreMode: document.querySelector("#coreMode"),
+  debugPanel: document.querySelector("#debugPanel"),
+  debugToggle: document.querySelector("#debugToggle"),
   dropBadge: document.querySelector("#dropBadge"),
   dropZone: document.querySelector("#dropZone"),
   frameCounter: document.querySelector("#frameCounter"),
@@ -32,6 +42,7 @@ const elements = {
   coreTicks: document.querySelector("#coreTicks"),
   coreFpsCounter: document.querySelector("#coreFpsCounter"),
   presentationGapCounter: document.querySelector("#presentationGapCounter"),
+  presentationLagCounter: document.querySelector("#presentationLagCounter"),
   ppcPc: document.querySelector("#ppcPc"),
   cpuCoreName: document.querySelector("#cpuCoreName"),
   ppcWasmJit: document.querySelector("#ppcWasmJit"),
@@ -40,18 +51,64 @@ const elements = {
   uiFpsCounter: document.querySelector("#uiFpsCounter"),
   gameSize: document.querySelector("#gameSize"),
   gameTitle: document.querySelector("#gameTitle"),
+  hudFps: document.querySelector("#hudFps"),
+  hudJit: document.querySelector("#hudJit"),
+  hudLatency: document.querySelector("#hudLatency"),
+  hudResolution: document.querySelector("#hudResolution"),
+  hudSpeed: document.querySelector("#hudSpeed"),
+  hudVisualFps: document.querySelector("#hudVisualFps"),
+  hudCoreFps: document.querySelector("#hudCoreFps"),
+  hudFrame: document.querySelector("#hudFrame"),
+  hudGlSwap: document.querySelector("#hudGlSwap"),
+  hudMode: document.querySelector("#hudMode"),
+  hudWatchdog: document.querySelector("#hudWatchdog"),
+  hudGap: document.querySelector("#hudGap"),
+  hudGlError: document.querySelector("#hudGlError"),
+  hudDraw: document.querySelector("#hudDraw"),
+  hudNz: document.querySelector("#hudNz"),
+  hudUnderDrop: document.querySelector("#hudUnderDrop"),
+  hudQueue: document.querySelector("#hudQueue"),
+  hudJitCache: document.querySelector("#hudJitCache"),
+  hudRunloop: document.querySelector("#hudRunloop"),
+  hudWgx: document.querySelector("#hudWgx"),
+  hudStatus: document.querySelector("#hudStatus"),
   inputSource: document.querySelector("#inputSource"),
   loadButton: document.querySelector("#loadButton"),
+  dlStateButton: document.querySelector("#dlStateButton"),
+  ulStateInput: document.querySelector("#ulStateInput"),
   mountNote: document.querySelector("#mountNote"),
   muteButton: document.querySelector("#muteButton"),
+  overlayToggle: document.querySelector("#overlayToggle"),
   resetButton: document.querySelector("#resetButton"),
   romInput: document.querySelector("#romInput"),
   rootEntryList: document.querySelector("#rootEntryList"),
   runButton: document.querySelector("#runButton"),
   saveButton: document.querySelector("#saveButton"),
   screen: document.querySelector("#screen"),
+  screenHud: document.querySelector("#screenHud"),
+  settingCore: document.querySelector("#settingCore"),
+  settingCpu: document.querySelector("#settingCpu"),
+  settingFastSw: document.querySelector("#settingFastSw"),
+  settingForceJit: document.querySelector("#settingForceJit"),
+  settingJitTier: document.querySelector("#settingJitTier"),
+  settingOglProxy: document.querySelector("#settingOglProxy"),
+  settingPacing: document.querySelector("#settingPacing"),
+  settingMetrics: document.querySelector("#settingMetrics"),
+  settingPresenter: document.querySelector("#settingPresenter"),
+  settingQueue: document.querySelector("#settingQueue"),
+  settingResolution: document.querySelector("#settingResolution"),
+  settingSpeed: document.querySelector("#settingSpeed"),
+  settingVideo: document.querySelector("#settingVideo"),
+  settingWasmJit: document.querySelector("#settingWasmJit"),
+  settingsApplyButton: document.querySelector("#settingsApplyButton"),
+  settingsForm: document.querySelector("#settingsForm"),
+  settingsPresetButton: document.querySelector("#settingsPresetButton"),
+  settingsSummary: document.querySelector("#settingsSummary"),
   statusPill: document.querySelector("#statusPill")
 };
+
+const DEBUG_PREF_KEY = "wasm-dolphin.debug-open";
+const OSD_PREF_KEY = "wasm-dolphin.osd-visible";
 
 const keyboardPressed = new Set();
 let touchPressed = new Set();
@@ -59,21 +116,117 @@ let gamepadPressed = new Set();
 let gamepadInputState = null;
 let combinedPressed = new Set();
 let lastFrameInfo = null;
+let currentSettings = readSettingsFromSearch(window.location.search);
 
 const audio = new AudioController();
+// Exposed for the validator: lets it unmute programmatically and tap the
+// AudioContext via an AnalyserNode to check that audio is actually being
+// produced during gameplay (Phase C of the smoothness/audio validator).
+window.__audio = audio;
 const host = new EmulatorHost({
   canvas: elements.screen,
   onFrame: handleFrame,
   onStatus: setStatus,
   onMode: setMode
 });
+audio.setSource((frames) => host.mixAudio(frames));
+// §28cx: expose the host so the main-thread profiler can read the existing
+// >20ms stall counters (rAF loop vs worker→main message handler). LoAF's
+// 50ms floor is blind to the 33-50ms band that actually starves the audio
+// pump; these counters cover >20ms and attribute it to JS vs non-JS.
+window.__host = host;
+
+// Validator/dev hook: fetch a Dolphin .sav by URL and State::LoadAs it
+// through the active adapter (worker → core LoadStateFile). Returns the
+// worker response ({loaded, rc, beforeState, afterState}) so callers
+// can tell a successful load from a build/version rejection.
+window.__loadStateFile = async (url) => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return { loaded: false, error: `fetch ${res.status}` };
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const a = host.adapter;
+    if (!a || typeof a.loadStateFile !== "function")
+      return { loaded: false, error: "adapter has no loadStateFile" };
+    return await a.loadStateFile(bytes);
+  } catch (e) {
+    return { loaded: false, error: String(e?.message || e) };
+  }
+};
+
+// Capture a version-matched save state from THIS build; returns it
+// base64-encoded so the validator can persist it (Playwright evaluate
+// can't return an ArrayBuffer). Chunked to avoid call-stack limits.
+window.__saveStateFile = async () => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.saveStateFile !== "function")
+      return { saved: false, error: "adapter has no saveStateFile" };
+    const r = await a.saveStateFile();
+    if (!r || !r.bytes) return { saved: false, error: r?.error || "no bytes" };
+    const u8 = new Uint8Array(r.bytes);
+    let bin = "";
+    const CH = 0x8000;
+    for (let i = 0; i < u8.length; i += CH)
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+    return { saved: r.saved, size: r.size, b64: btoa(bin) };
+  } catch (e) {
+    return { saved: false, error: String(e?.message || e) };
+  }
+};
+
+// One-call: capture a version-matched state and download it as a
+// .sav file from the browser. Run window.__downloadSaveState() in the
+// devtools console while in the battle scene. The downloaded file is
+// loadable by this exact build via the validator's SAVE_STATE_URL.
+window.__downloadSaveState = async (name) => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.saveStateFile !== "function")
+      return { saved: false, error: "adapter has no saveStateFile" };
+    const r = await a.saveStateFile();
+    if (!r || !r.bytes) return { saved: false, error: r?.error || "no bytes" };
+    const blob = new Blob([r.bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "battle-state.sav";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { saved: true, size: r.size, file: link.download };
+  } catch (e) {
+    return { saved: false, error: String(e?.message || e) };
+  }
+};
+
+// Reload a state already in the worker FS (round-trip proof).
+window.__loadStateFileFs = async (fsPath) => {
+  try {
+    const a = host.adapter;
+    if (!a || typeof a.loadStateFileFromFs !== "function")
+      return { loaded: false, error: "adapter has no loadStateFileFromFs" };
+    return await a.loadStateFileFromFs(fsPath || "/savestate_out.sav");
+  } catch (e) {
+    return { loaded: false, error: String(e?.message || e) };
+  }
+};
 
 renderControlGrid();
+wireSettings();
+wireDiagnostics();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
 wireTouchControls();
 wireGamepadPolling();
+
+// §28cx main-thread profiler — activates only with ?mainprof=1. Diagnoses
+// what eats main-thread time (LoAF script attribution) and whether the audio
+// pump's setInterval is being starved, the suspected cause of real-Chrome
+// audio underruns the worker-only probe can't see.
+startMainThreadProfiler();
 
 host
   .init()
@@ -84,6 +237,28 @@ host
 
 function handleFrame(info) {
   lastFrameInfo = info;
+  // Expose to the validator. Reading via window is cheaper than DOM
+  // querySelector + textContent parsing and preserves structured
+  // numeric fields (histogram array, stddev) without round-tripping
+  // through human-readable strings.
+  window.__lastFrameInfo = info;
+  updateScreenHud(info);
+  updateRuntimeControls(info);
+
+  if (!elements.debugPanel.hidden) {
+    updateDebugMetrics(info);
+  }
+}
+
+function updateRuntimeControls(info) {
+  elements.coreMode.textContent = info.mode === "dolphin" ? "Dolphin" : "Demo";
+  elements.runButton.textContent = info.running ? "Pause" : "Run";
+  elements.statusPill.classList.toggle("paused", !info.running);
+  audio.update(info.buttonMask, info.running);
+  elements.muteButton.textContent = audio.label();
+}
+
+function updateDebugMetrics(info) {
   elements.frameCounter.textContent = String(info.frame);
   elements.fpsCounter.textContent = String(info.fps);
   if (elements.visualFpsCounter) {
@@ -105,6 +280,15 @@ function handleFrame(info) {
     const formattedMax = maxGap.toFixed(maxGap >= 10 ? 0 : 1);
     elements.presentationGapCounter.textContent = `${formattedP95} p95 / ${formattedMax} max / ${longFrames}`;
   }
+  if (elements.presentationLagCounter) {
+    const frameLag = Math.max(0, Number(info.presentationFrameLag) || 0);
+    const queueAge = Math.max(0, Number(info.presentationQueueAgeMs) || 0);
+    elements.presentationLagCounter.textContent =
+      `${frameLag.toFixed(0)}f / ${queueAge.toFixed(queueAge >= 10 ? 0 : 1)} ms`;
+  }
+  if (elements.audioStatus) {
+    elements.audioStatus.textContent = audio.stats || audio.label();
+  }
   elements.coreTicks.textContent = formatLargeInteger(info.coreTicks || 0);
   elements.ppcPc.textContent = formatHex(info.ppcPc || 0) || "-";
   elements.cpuCoreName.textContent = info.cpuCoreName || "-";
@@ -113,10 +297,6 @@ function handleFrame(info) {
   if (elements.frameProfileStats) {
     elements.frameProfileStats.textContent = info.frameProfileStats || "-";
   }
-  elements.coreMode.textContent = info.mode === "dolphin" ? "Dolphin" : "Demo";
-  elements.runButton.textContent = info.running ? "Pause" : "Run";
-  elements.statusPill.classList.toggle("paused", !info.running);
-  audio.update(info.buttonMask, info.running);
 }
 
 function setStatus(message, tone = "") {
@@ -152,9 +332,61 @@ function wireTransport() {
     syncGameInfo(host.game);
   });
 
+  // Working save-state path (the slot Save/Load above are stubbed in
+  // the discio core): DL State captures a version-matched .sav via
+  // SaveStateFile and downloads it; UL State loads a .sav via
+  // LoadStateFile. Both go through the real State::SaveToFileSync /
+  // State::LoadAs path that §24 made functional.
+  elements.dlStateButton.addEventListener("click", async () => {
+    const btn = elements.dlStateButton;
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    setStatus("Capturing save state… (a few seconds)");
+    try {
+      const r = await window.__downloadSaveState("battle-state.sav");
+      setStatus(
+        r && r.saved
+          ? `Save state downloaded (${r.size} B) — battle-state.sav`
+          : `Save state failed: ${r?.error || "unknown"}`,
+        r && r.saved ? undefined : "error");
+    } catch (e) {
+      setStatus(`Save state failed: ${e?.message || e}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  });
+
+  elements.ulStateInput.addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    setStatus(`Loading save state ${file.name}…`);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const a = host.adapter;
+      if (!a || typeof a.loadStateFile !== "function") {
+        setStatus("Upload state: adapter has no loadStateFile", "error");
+        return;
+      }
+      const r = await a.loadStateFile(bytes);
+      setStatus(
+        r && r.loaded
+          ? `Save state loaded (${r.afterState || "running"})`
+          : `Save state load failed (rc=${r?.rc ?? "?"}${
+              r?.error ? " " + r.error : ""})`,
+        r && r.loaded ? undefined : "error");
+    } catch (e) {
+      setStatus(`Upload state failed: ${e?.message || e}`, "error");
+    }
+  });
+
   elements.muteButton.addEventListener("click", async () => {
-    await audio.setMuted(!audio.muted);
-    elements.muteButton.textContent = audio.muted ? "Muted" : "Audio";
+    const muted = !audio.muted;
+    host.setAudioMuted(muted);
+    await audio.setMuted(muted);
+    elements.muteButton.textContent = audio.label();
   });
 
   elements.fullscreenButton.addEventListener("click", async () => {
@@ -164,6 +396,150 @@ function wireTransport() {
       await elements.dropZone.requestFullscreen();
     }
   });
+}
+
+function wireSettings() {
+  populateSettingsForm(currentSettings);
+  updateSettingsSummary();
+
+  elements.settingsForm.addEventListener("change", () => {
+    currentSettings = collectSettingsForm();
+    updateSettingsSummary();
+  });
+
+  elements.settingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const nextHref = buildSettingsHref(window.location.href, collectSettingsForm());
+    window.location.assign(nextHref);
+  });
+
+  elements.settingsPresetButton.addEventListener("click", () => {
+    window.location.assign(buildPlayablePresetHref(window.location.href));
+  });
+}
+
+function wireDiagnostics() {
+  const debugOpen = localStorage.getItem(DEBUG_PREF_KEY) === "1";
+  const osdVisible = localStorage.getItem(OSD_PREF_KEY) !== "0";
+
+  setDebugOpen(debugOpen);
+  setOverlayVisible(osdVisible);
+
+  elements.debugToggle.addEventListener("click", () => {
+    setDebugOpen(elements.debugPanel.hidden);
+  });
+
+  elements.overlayToggle.addEventListener("click", () => {
+    setOverlayVisible(elements.screenHud.hidden);
+  });
+}
+
+function populateSettingsForm(settings) {
+  elements.settingCore.value = settings.core;
+  elements.settingVideo.value = settings.video;
+  elements.settingResolution.value = settings.present;
+  elements.settingSpeed.value = settings.speed;
+  elements.settingCpu.value = settings.cpu;
+  elements.settingPresenter.value = settings.presenter;
+  elements.settingPacing.value = settings.pacing;
+  elements.settingOglProxy.value = settings.oglproxy;
+  elements.settingQueue.value = settings.queue;
+  elements.settingFastSw.value = settings.fastsw;
+  elements.settingJitTier.value = settings.jittier;
+  elements.settingWasmJit.checked = settings.wasmjit === "1";
+  elements.settingForceJit.checked = settings.forcejit === "1";
+  elements.settingMetrics.checked = settings.metrics === "1";
+}
+
+function collectSettingsForm() {
+  return {
+    core: elements.settingCore.value,
+    video: elements.settingVideo.value,
+    present: elements.settingResolution.value,
+    speed: elements.settingSpeed.value,
+    cpu: elements.settingCpu.value,
+    presenter: elements.settingPresenter.value,
+    pacing: elements.settingPacing.value,
+    oglproxy: elements.settingOglProxy.value,
+    queue: elements.settingQueue.value,
+    fastsw: elements.settingFastSw.value,
+    wasmjit: elements.settingWasmJit.checked ? "1" : "0",
+    jittier: elements.settingJitTier.value,
+    forcejit: elements.settingForceJit.checked ? "1" : "0",
+    metrics: elements.settingMetrics.checked ? "1" : "0"
+  };
+}
+
+function updateSettingsSummary() {
+  elements.settingsSummary.textContent = describeSettings(currentSettings);
+}
+
+function setDebugOpen(open) {
+  elements.debugPanel.hidden = !open;
+  elements.debugToggle.setAttribute("aria-expanded", String(open));
+  elements.debugToggle.classList.toggle("active", open);
+  elements.debugToggle.textContent = open ? "DBG on" : "DBG";
+  localStorage.setItem(DEBUG_PREF_KEY, open ? "1" : "0");
+  if (open && lastFrameInfo) {
+    updateDebugMetrics(lastFrameInfo);
+  }
+  setAutoScreenshotEnabled(open);
+}
+
+// Auto-screenshot: when DBG is on, snapshot the visible canvas every 3s and
+// download as a PNG. State is attached to globalThis directly without a
+// const/let intermediate so the function works regardless of where
+// setDebugOpen is called from during module init (lexical declarations
+// hit TDZ if accessed before their source line during the same module
+// evaluation pass).
+function setAutoScreenshotEnabled(enabled) {
+  const state = (globalThis.__autoScreenshotState ??= { timer: null, count: 0 });
+  if (state.timer) {
+    clearInterval(state.timer);
+    state.timer = null;
+  }
+  if (!enabled) return;
+  state.count = 0;
+  state.timer = setInterval(captureCanvasSnapshot, 3000);
+}
+
+function captureCanvasSnapshot() {
+  try {
+    const canvas = document.querySelector("#screen");
+    if (!canvas) return;
+    // Render the visible canvas into an offscreen 2D canvas first so we can
+    // turn the result into a PNG even if the original is a transferred
+    // OffscreenCanvas placeholder (which has no .toDataURL of its own).
+    const cw = canvas.clientWidth || canvas.width || 320;
+    const ch = canvas.clientHeight || canvas.height || 240;
+    const snap = document.createElement("canvas");
+    snap.width = cw;
+    snap.height = ch;
+    const ctx = snap.getContext("2d", { alpha: false });
+    if (!ctx) return;
+    ctx.drawImage(canvas, 0, 0, cw, ch);
+    const dataUrl = snap.toDataURL("image/png");
+    const state = (globalThis.__autoScreenshotState ??= { timer: null, count: 0 });
+    state.count += 1;
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `wasm-dolphin-${ts}-shot${String(state.count).padStart(3, "0")}.png`;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.warn("[auto-screenshot] failed:", err);
+  }
+}
+
+function setOverlayVisible(visible) {
+  elements.screenHud.hidden = !visible;
+  elements.overlayToggle.setAttribute("aria-pressed", String(visible));
+  elements.overlayToggle.classList.toggle("active", visible);
+  elements.overlayToggle.textContent = visible ? "FPS on" : "FPS";
+  localStorage.setItem(OSD_PREF_KEY, visible ? "1" : "0");
 }
 
 function wireFileMounting() {
@@ -198,9 +574,94 @@ function wireFileMounting() {
   });
 }
 
+function updateScreenHud(info) {
+  elements.hudFps.textContent = formatMetricNumber(info.presentationFps ?? info.fps);
+  elements.hudVisualFps.textContent =
+    info.visualChangeFps == null ? "n/a" : formatMetricNumber(info.visualChangeFps);
+  elements.hudSpeed.textContent = `${Math.max(0, Number(info.gameSpeed) || 0)}%`;
+  elements.hudLatency.textContent = formatPresentationLag(info);
+  elements.hudJit.textContent = parseJitState(info);
+  elements.hudResolution.textContent = parsePresentationResolution(info);
+
+  // Diagnostic fields parsed out of the worker's helper-stats string.
+  const helper = String(info.ppcWasmHelperStats || "");
+  elements.hudCoreFps.textContent = `${Math.max(0, Number(info.coreFps) || 0)}`;
+  elements.hudFrame.textContent = `${info.frame ?? 0}`;
+
+  const oglSwap = /\bogl_swap:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudGlSwap.textContent = oglSwap;
+
+  const present = /present\s+(\w+)\s+signal:(\w+)\s+mode:(\w+)/.exec(helper);
+  if (present) {
+    elements.hudMode.textContent = `${present[1]}/${present[3]}`;
+  } else {
+    elements.hudMode.textContent = "-";
+  }
+
+  const wd = /\bwd:(\d+)\/(\d+)/.exec(helper);
+  elements.hudWatchdog.textContent = wd ? `${wd[1]}/${wd[2]}` : "0/0";
+
+  const p95 = Number(info.presentationP95IntervalMs) || 0;
+  const maxGap = Number(info.presentationMaxIntervalMs) || 0;
+  elements.hudGap.textContent = `${Math.round(p95)}/${Math.round(maxGap)}`;
+
+  const glerr = Number(info.oglGlError) || 0;
+  elements.hudGlError.textContent = `0x${glerr.toString(16)}`;
+
+  // §28v: richer diagnostic badges parsed from the worker helper
+  // string so screenshots carry render/JIT health at a glance.
+  const prim = /\bprim:(\d+)/.exec(helper)?.[1] ?? "0";
+  const draw = /\bdraw:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudDraw.textContent = `${prim}/${draw}`;
+
+  const nz = /\bnz:(\d+)/.exec(helper)?.[1];
+  elements.hudNz.textContent = nz == null ? "n/a" : nz;
+
+  const under = /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "0";
+  const drop = /\bdrop:(\d+)/.exec(helper)?.[1] ?? "0";
+  elements.hudUnderDrop.textContent = `${under}/${drop}`;
+
+  const q = /\bqueue:(\d+)\/(\d+)/.exec(helper);
+  const sig = /\bsignal:(\w+)/.exec(helper)?.[1] ?? "?";
+  elements.hudQueue.textContent = q ? `${q[1]}/${q[2]}:${sig}` : `-:${sig}`;
+
+  const jitc = /\bjitc:(\d+)\/(\d+)/.exec(helper);
+  elements.hudJitCache.textContent = jitc ? `${jitc[1]}/${jitc[2]}` : "0/0";
+
+  // §28cn per-slice CPU pthread profiler: avg/max/runOnlyMax wall time per
+  // CoreTiming slice. max > 16000us = blew one 60Hz frame; runOnlyMax
+  // separated from max so we can see whether the spike was compile-burst
+  // or pure-emulation cost.
+  const runloop = /\brunloop:(\d+)slices\/avg(\d+)us\/max(\d+)us\/runOnlyMax(\d+)us/.exec(helper);
+  if (elements.hudRunloop) {
+    elements.hudRunloop.textContent = runloop
+      ? `${runloop[2]}/${runloop[3]}/${runloop[4]}`
+      : "-/-/-";
+  }
+
+  const wgx = /\bwgx:d(\d+)\/mp(\d+)\/mb(\d+)\/sk(\d+)/.exec(helper);
+  elements.hudWgx.textContent = wgx
+    ? `d${wgx[1]} mp${wgx[2]} mb${wgx[3]} sk${wgx[4]}`
+    : "-";
+
+  if (elements.statusPill && elements.hudStatus) {
+    const txt = elements.statusPill.textContent || "";
+    elements.hudStatus.textContent = txt.length > 80 ? txt.slice(0, 77) + "..." : txt;
+  }
+}
+
 async function mountFile(file) {
   try {
     const game = await host.mountFile(file);
+    // Auto-unmute on disc boot. AudioController defaults to muted because
+    // the AudioContext can only be created after a user gesture; the disc
+    // mount click is the user gesture, so unmute here so audio actually
+    // plays. Users can still mute via the button.
+    if (audio.muted) {
+      await audio.setMuted(false);
+      elements.muteButton.textContent = audio.label();
+    }
+    host.setAudioMuted(audio.muted);
     syncGameInfo(game);
     host.start();
   } catch (error) {
@@ -314,9 +775,102 @@ function wireTouchControls() {
 }
 
 function wireGamepadPolling() {
+  // §28cj diagnostic + escape-hatch modes. URL params:
+  //   ?nogamepad=1     — skip gamepad polling entirely; keyboard-only play
+  //   ?gamepaddebug=1  — per-frame console dump + sticky on-page HUD of
+  //                      every navigator.getGamepads() entry (id, mapping,
+  //                      axes, pressed buttons). Use to attribute phantom
+  //                      inputs when split-deadzone tuning isn't enough.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("nogamepad") === "1") {
+    console.log("[gamepad] disabled via ?nogamepad=1 — keyboard/touch only this session");
+    return;
+  }
+  const debugGamepad = params.get("gamepaddebug") === "1";
+  let _gpLastLog = 0;
+  let _gpHud = null;
+  if (debugGamepad) {
+    _gpHud = document.createElement("pre");
+    _gpHud.id = "gamepad-debug-hud";
+    Object.assign(_gpHud.style, {
+      position: "fixed",
+      top: "8px",
+      right: "8px",
+      maxWidth: "560px",
+      maxHeight: "60vh",
+      overflow: "auto",
+      padding: "8px 10px",
+      background: "rgba(0,0,0,0.85)",
+      color: "#0f0",
+      font: "11px/1.3 ui-monospace,Menlo,Consolas,monospace",
+      zIndex: 99999,
+      pointerEvents: "none",
+      whiteSpace: "pre",
+      border: "1px solid #0f0",
+      borderRadius: "4px"
+    });
+    _gpHud.textContent = "[gamepad-debug] waiting for first poll…";
+    document.body.appendChild(_gpHud);
+  }
+
+  // Poll on a 2ms interval rather than rAF. The Gamepad API has no event
+  // model so we must poll, but rAF caps the cadence at the display refresh
+  // rate (~16.7ms), which adds a worst-case full-frame of latency to every
+  // gamepad input. setInterval at 2ms cuts that floor to ~2ms.
   const poll = () => {
     const pads = navigator.getGamepads?.() ?? [];
-    const firstPad = Array.from(pads).find(Boolean);
+    // §28ck device selection. `pads.find(Boolean)` (the old code) picked
+    // index [0] regardless of whether it was a real controller or a
+    // phantom HID device with empty mapping and axes stuck at extremes
+    // (e.g. Xbox accessory at Product 0x03c3 with all axes pinned to -1).
+    // Prefer pads with W3C `mapping === "standard"` — those are real
+    // controllers whose button/axis indexes match our STANDARD_GAMEPAD_*
+    // assumptions. Fall back to first non-null only if no standard pad
+    // is present. Among multiple standard pads, the one with the highest
+    // button count usually wins (Xbox Wireless = 17, generic = fewer).
+    const list = Array.from(pads).filter(Boolean);
+    const standard = list.filter((p) => p?.mapping === "standard");
+    const firstPad =
+      (standard.length
+        ? standard.reduce((best, p) =>
+            (p.buttons?.length || 0) > (best.buttons?.length || 0) ? p : best,
+            standard[0])
+        : list[0]) || null;
+
+    if (debugGamepad) {
+      const now = performance.now();
+      if (now - _gpLastLog > 250) {
+        _gpLastLog = now;
+        const lines = [`[gamepad-debug] pads.length=${pads.length} t=${(now/1000).toFixed(1)}s`];
+        let anyPad = false;
+        for (let i = 0; i < pads.length; i++) {
+          const p = pads[i];
+          if (!p) { lines.push(`  [${i}] null`); continue; }
+          anyPad = true;
+          const axes = (p.axes || []).map((a, j) => `a${j}=${a.toFixed(3)}`).join(" ");
+          const pressedBtns = [];
+          for (let b = 0; b < (p.buttons || []).length; b++) {
+            const btn = p.buttons[b];
+            if (btn?.pressed || (btn?.value ?? 0) > 0.05) {
+              pressedBtns.push(`b${b}=${(btn.value ?? (btn.pressed ? 1 : 0)).toFixed(2)}`);
+            }
+          }
+          lines.push(`  [${i}] id="${p.id}"`);
+          lines.push(`      mapping=${p.mapping || "?"} connected=${p.connected} buttons=${(p.buttons||[]).length} axes=${(p.axes||[]).length}`);
+          lines.push(`      ${axes}`);
+          lines.push(`      pressed:[${pressedBtns.join(" ") || "(none)"}]`);
+        }
+        if (!anyPad) lines.push("  (no gamepad detected yet — press a button on the controller to wake the API)");
+        const text = lines.join("\n");
+        if (_gpHud) _gpHud.textContent = text;
+        // Also log once per second to console for copy-paste convenience.
+        if (now - (_gpLastLog - 250) > 1000 || _gpLastLog < 1500) {
+          // eslint-disable-next-line no-console
+          console.log(text);
+        }
+      }
+    }
+
     const gamepadInput = readGamepadInput(firstPad);
     gamepadPressed = gamepadInput.pressed;
     gamepadInputState = firstPad ? gamepadInput.state : null;
@@ -326,11 +880,9 @@ function wireGamepadPolling() {
     } else {
       syncInput(elements.inputSource.textContent === "Gamepad" ? "Keyboard" : elements.inputSource.textContent);
     }
-
-    requestAnimationFrame(poll);
   };
 
-  requestAnimationFrame(poll);
+  setInterval(poll, 2);
 }
 
 function syncInput(source) {
@@ -374,6 +926,44 @@ function formatHex(value) {
 
 function formatLargeInteger(value) {
   return Number.isFinite(value) ? Math.trunc(value).toLocaleString("en-US") : "0";
+}
+
+function formatMetricNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "0";
+  }
+
+  return numeric >= 10 ? String(Math.round(numeric)) : numeric.toFixed(1);
+}
+
+function formatPresentationLag(info) {
+  const frameLag = Math.max(0, Number(info.presentationFrameLag) || 0);
+  return `${frameLag.toFixed(0)}f`;
+}
+
+function parseJitState(info) {
+  const helperStats = info.ppcWasmHelperStats || "";
+  const match = /(?:^|\s)jit:([a-z0-9_-]+)/i.exec(helperStats);
+  if (match) {
+    return match[1] === "on" ? "JIT on" : `JIT ${match[1]}`;
+  }
+
+  if ((info.ppcWasmBlockCompileCount || 0) > 0 || (info.ppcWasmBlockRunCount || 0) > 0) {
+    return "JIT active";
+  }
+
+  return currentSettings.wasmjit === "1" ? "JIT armed" : "JIT off";
+}
+
+function parsePresentationResolution(info) {
+  const helperStats = info.ppcWasmHelperStats || "";
+  const match = /present:(\d+x\d+)/i.exec(helperStats);
+  if (match) {
+    return match[1];
+  }
+
+  return `${elements.screen.width}x${elements.screen.height}`;
 }
 
 function formatOffsetSize(offset, size) {

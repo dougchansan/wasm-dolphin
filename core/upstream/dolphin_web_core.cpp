@@ -4,14 +4,18 @@
 #include "dolphin_web_discio.cpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "AudioCommon/AudioCommon.h"
+#include "AudioCommon/SoundStream.h"
 #include "Common/CommonPaths.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -29,24 +33,37 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/GBAPad.h"
+#include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/GCKeyboard.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Host.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/State.h"
 #include "Core/System.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
 
 extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
+extern "C" std::uint32_t DolphinWeb_SetCachedInterpreterDisableMask(std::uint32_t mask);
+extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#include <pthread.h>
+#include <atomic>
+
+// §27d: defined in VideoCommon/Fifo.cpp — the after-load callback (CPU
+// pthread) stores a sentinel; the GPU-thread gate reads it back.
+namespace Fifo { extern std::atomic<std::uint32_t> g_s27_sentinel; }
+
+extern "C" const char* DolphinWeb_GetAudioCommonStats();
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -175,8 +192,14 @@ std::vector<std::uint8_t> BuildStateAddImmediateModule(std::uint32_t dest_offset
   imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
   imports.push_back(0x02);
   imports.push_back(0x03);
-  EmitU32Leb(imports, 16384);
-  EmitU32Leb(imports, 16384);
+  // Imported shared memory's declared min/max MUST equal the actual SAB's
+  // min/max — and we bumped INITIAL_MEMORY from 1 GiB → 1.5 GiB in
+  // CMakeLists.txt (no growth). 1.5 GiB / 64 KiB = 24576 pages. Out-of-sync
+  // values trigger LinkError("memory max 24576 > WASM binary max 16384") in
+  // the JIT block compiler around frame 700. Keep both numbers in step
+  // with INITIAL_MEMORY.
+  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, 24576);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -329,8 +352,9 @@ std::vector<std::uint8_t> BuildPpcIntegerBlockModule(std::span<const UGeckoInstr
   imports.insert(imports.end(), {'m', 'e', 'm', 'o', 'r', 'y'});
   imports.push_back(0x02);
   imports.push_back(0x03);
-  EmitU32Leb(imports, 16384);
-  EmitU32Leb(imports, 16384);
+  // See INITIAL_MEMORY sync note above.
+  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, 24576);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -416,6 +440,10 @@ PowerPC::CPUCore s_cpu_core = PowerPC::CPUCore::CachedInterpreter;
 bool s_cpu_thread = false;
 float s_cpu_overclock = 1.0f;
 float s_emulation_speed = 1.0f;
+constexpr int AUDIO_PULL_MAX_FRAMES = 4096;
+std::array<s16, AUDIO_PULL_MAX_FRAMES * 2> s_audio_pull_buffer{};
+std::string s_audio_stats = "audio:unavailable";
+std::string s_audio_stats_snapshot = "audio:unavailable";
 
 bool BrowserMsgHandler(const char* caption, const char* text, bool yes_no, Common::MsgType style)
 {
@@ -494,7 +522,7 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_OVERCLOCK_ENABLE, true);
   Config::SetBase(Config::MAIN_OVERCLOCK, s_cpu_overclock);
   Config::SetBase(Config::MAIN_PRECISION_FRAME_TIMING, false);
-  Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, false);
+  Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, true);
   Config::SetBase(Config::MAIN_SMOOTH_EARLY_PRESENTATION, true);
   Config::SetBase(Config::MAIN_SYNC_ON_SKIP_IDLE, false);
   Config::SetBase(Config::MAIN_ACCURATE_FMADDS, false);
@@ -502,11 +530,19 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_OSD_MESSAGES, false);
   Config::SetBase(Config::MAIN_SLOT_A, ExpansionInterface::EXIDeviceType::MemoryCardFolder);
   Config::SetBase(Config::MAIN_SLOT_B, ExpansionInterface::EXIDeviceType::None);
-  Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
-  Config::SetBase(Config::MAIN_AUDIO_MUTED, true);
+  Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("Web Audio"));
+  Config::SetBase(Config::MAIN_AUDIO_MUTED, false);
   Config::SetBase(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, s_video_backend == "OGL");
   Config::SetBase(Config::GFX_HACK_COPY_EFB_SCALED, false);
-  Config::SetBase(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::Synchronous);
+  // §28cx: ubershaders DISCRIMINATOR (May-30). The UBO const-index fix made the
+  // uber pixel shaders translate (fail 27->0) and 7195 draws execute, but the EFB
+  // is still all-zero (nz=0/max=0) => draws write nothing. Flip WebGPU back to
+  // specialized (Synchronous) to isolate: specialized shaders translate fine and
+  // previously got "characters appear" — if the EFB goes non-black here, the
+  // black is uber-specific (alpha-test discard / bpmem-konst UBO not uploaded in
+  // uber mode); if still black, it's a deeper scene-pass write issue.
+  Config::SetBase(Config::GFX_SHADER_COMPILATION_MODE,
+                  ShaderCompilationMode::Synchronous);
   Config::SetBase(Config::GFX_SHADER_COMPILER_THREADS, 0);
   Config::SetBase(Config::GFX_SHADER_PRECOMPILER_THREADS, 0);
   VideoBackendBase::ActivateBackend(s_video_backend);
@@ -521,6 +557,59 @@ void EnsureRuntime()
   Pad::Initialize();
   Pad::InitializeGBA();
   Keyboard::Initialize();
+
+  // §27 savestate-load backend resync. Probe evidence: after
+  // State::Load the WebGPU command-ring producer (the dual-core GPU
+  // FIFO mainloop, which is what records opcodes) freezes — the ring
+  // `write` index stops advancing the instant the load lands and never
+  // resumes (CPU/core keeps running the battle at ~44fps, frame
+  // counter advances, but zero GPU commands flow → black & static).
+  // Root cause: in dual-core, VideoBackendBase::DoState() ends with
+  // FifoManager::GpuMaySleep() (m_gpu_mainloop.AllowSleep()) on the
+  // explicit assumption that "the next GP burst will wake it up
+  // again". In this wasm remote-backend model that burst-wake does
+  // not re-park-wake the asleep BlockingLoop, so the GPU thread stays
+  // asleep forever. The after-load callback fires on the CPU thread at
+  // the very end of LoadAsFromCore (after DoState's GpuMaySleep), so
+  // re-issuing RunGpu() here force-wakes the GPU mainloop; it then
+  // drains the FIFO the now-running game is filling and the producer
+  // resumes. Consumer caches (texture/bind-group ids, _wgEfbColorId)
+  // self-rederive once commands flow again, so no consumer reset is
+  // needed for this construct.
+  State::SetOnAfterLoadCallback([]() {
+    // §27b disambiguator: which pthread runs the after-load callback
+    // (= the LoadAsFromCore context)? Compare to the long-lived CPU
+    // pthread tid ([s27-GPB]) and GPU pthread tid ([s27-gate]). A
+    // *third* tid confirms the load runs off the emulation CPU thread
+    // → the CPU↔GPU CP-FIFO incoherence is the RunOnCPUThread-job
+    // context hop (§27b hypothesis 2).
+    EM_ASM({ console.log("[after-load] cb fired tid=" + ($0 >>> 0)); },
+           static_cast<unsigned>(pthread_self()));
+    // §27c fix attempt 1 (smallest, non-blocking rendezvous). The
+    // GPU-FIFO pthread is stranded on a pre-load CP snapshot: post-load
+    // it reads CPReadWriteDistance==0 forever while this CPU thread
+    // sees it grow (§27b). FlushGpu() does m_gpu_mainloop.Wait() — the
+    // canonical CPU↔GPU rendezvous — which forces a happens-before
+    // edge so the GPU thread re-acquires the restored CP state; then
+    // RunGpu() re-kicks it. (The GPU loop is idle/spinning with no
+    // pending work, so Wait() returns promptly — no hang.)
+    // §27d definitive shared-memory test: store a sentinel from THIS
+    // (CPU) pthread; the GPU-thread gate logs it (`sent=`). If the GPU
+    // thread never reads 0xABCD1234, the two dual-core pthreads do not
+    // share memory post-load (architecture defect, no Dolphin-level
+    // resync can fix it); if it does, the CP desync is logical state.
+    Fifo::g_s27_sentinel.store(0xABCD1234u, std::memory_order_seq_cst);
+    // §27d candidate (a): the blocking FlushGpu()/m_gpu_mainloop.Wait()
+    // version drained the load-time FIFO backlog for ~3 s then TOTALLY
+    // halted both Dolphin pthreads (CPU+GPU silent) — Wait() on the CPU
+    // thread is a regression. Use the non-blocking EmulatorState(true)
+    // (m_emu_running_state.Set + m_gpu_mainloop.Wakeup() + clears
+    // AllowSleep) so the GPU consumer re-engages for the steady state,
+    // then RunGpu() re-kicks it. No CPU-thread blocking.
+    auto& fifo = Core::System::GetInstance().GetFifo();
+    fifo.EmulatorState(true);
+    fifo.RunGpu();
+  });
 
   s_runtime_initialized = true;
   s_core_status = "Runtime initialized";
@@ -653,6 +742,27 @@ int SetVideoBackend(const char* backend)
     s_video_backend = "Null";
     return 1;
   }
+  // Day-16: `?video=webgpu` (the user-facing string "WebGPU") routes
+  // to the Software→WebGPU-presenter hybrid. The C++ Software path
+  // runs the CPU rasteriser into s_framebuffer; JS uploads those
+  // bytes through a real wgpuRenderPass blit on the canvas context.
+  // This is the path that plays Melee today.
+  if (requested == "WebGPU")
+  {
+    s_video_backend = "Software Renderer";
+    return 1;
+  }
+  // Day-17 (wasm-dolphin): `?video=wgpu` activates the *real* WebGPU
+  // video backend (the WebGPU::VideoBackend class registered in
+  // VideoBackendBase). Construction underway — early days render
+  // clear-colour or partial content while WebGPUGfx / WebGPUTexture
+  // gain real wgpu API calls. End goal: GPU rasterisation, 60fps,
+  // no CPU bottleneck.
+  if (requested == "WebGPU-Real")
+  {
+    s_video_backend = "WebGPU";
+    return 1;
+  }
 
   return 0;
 }
@@ -707,8 +817,47 @@ int SetEmulationSpeed(float factor)
 
 int SetFastSoftwareRaster(int mode)
 {
-  DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 2 ? 2 : mode);
+  DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 3 ? 3 : mode);
   return 1;
+}
+
+// Day-1 bisection knob: per-helper disable bitmask for the cached-interpreter
+// fast paths. See the DOLPHIN_WEB_DISABLE_* constants in
+// vendor/dolphin/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+// for the bit layout. Returns the previous mask. Safe to call at any time —
+// changes take effect on the next block compile attempt.
+std::uint32_t SetCachedInterpreterDisableMask(std::uint32_t mask)
+{
+  return DolphinWeb_SetCachedInterpreterDisableMask(mask);
+}
+
+std::uint32_t GetCachedInterpreterDisableMask()
+{
+  return DolphinWeb_GetCachedInterpreterDisableMask();
+}
+
+// Day-1 instrumentation accessors: the per-swap ring buffer lives in
+// dolphin_web_discio.cpp's anonymous namespace and is visible here through
+// the single-TU include at the top of this file. JS reads via Module.HEAPU32
+// using the pointer, then walks slots `[lastDrainHead .. head) mod capacity`.
+DolphinWebFrameRingEntry* GetFrameRingEntryPtr()
+{
+  return s_frame_ring.data();
+}
+
+int GetFrameRingCapacity()
+{
+  return static_cast<int>(DOLPHIN_WEB_FRAME_RING_CAPACITY);
+}
+
+int GetFrameRingEntrySize()
+{
+  return static_cast<int>(sizeof(DolphinWebFrameRingEntry));
+}
+
+std::uint32_t GetFrameRingHead()
+{
+  return s_frame_ring_head.load(std::memory_order_relaxed);
 }
 
 int BootDisc(const char* path)
@@ -745,6 +894,91 @@ void StopCore()
   if (s_runtime_initialized)
     Core::Stop(Core::System::GetInstance());
   s_core_status = "Stopped";
+}
+
+int SetCorePaused(int paused)
+{
+  if (!s_runtime_initialized || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  Core::SetState(Core::System::GetInstance(), paused ? Core::State::Paused : Core::State::Running);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = paused ? "Paused" : "Running";
+  return 1;
+}
+
+int ResetCore()
+{
+  if (!s_runtime_initialized || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  Core::QueueHostJob(
+      [](Core::System& system) { system.GetProcessorInterface().ResetButton_Tap(); });
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Reset requested";
+  return 1;
+}
+
+int SaveCoreState(int slot)
+{
+  if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::Save(Core::System::GetInstance(), slot);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Save state requested";
+  return 1;
+}
+
+int LoadCoreState(int slot)
+{
+  if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::Load(Core::System::GetInstance(), slot);
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Load state requested";
+  return 1;
+}
+
+// Load a Dolphin save state from an arbitrary file path in the
+// Emscripten FS (the JS side FS.writeFile's the .sav there first).
+// Mirrors LoadCoreState but uses State::LoadAs(filename). NOTE: Dolphin
+// save states are serialization-version + build locked — a state from
+// a different Dolphin build is rejected by CheckIfStateLoadIsAllowed /
+// version check inside LoadAs; that's expected, not a crash here.
+int LoadStateFile(const char* path)
+{
+  if (!s_runtime_initialized || path == nullptr || *path == '\0' ||
+      !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  State::LoadAs(Core::System::GetInstance(), std::string(path));
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Load state from file requested";
+  return 1;
+}
+
+// Save a Dolphin save state to a file path in the Emscripten FS so the
+// JS side can read the bytes back and persist them. State::SaveAs is
+// async (queues onto the CPU thread + a compress/dump worker), so the
+// caller must pump frames before reading the file. A state produced
+// here is version-matched to THIS build, so LoadStateFile can restore
+// it deterministically (unlike a foreign-build .sav — see §22).
+int SaveStateFile(const char* path)
+{
+  if (!s_runtime_initialized || path == nullptr || *path == '\0' ||
+      !Core::IsRunning(Core::System::GetInstance()))
+    return 0;
+
+  // SaveToFileSync (not SaveAs): compress+write happens inline on the
+  // CPU thread, not the async WorkQueueThread that never got
+  // wall-time under the worker poll (§23 size=0). Caller pumps frames
+  // until the CPU thread runs the queued job; then the file is whole.
+  State::SaveToFileSync(Core::System::GetInstance(), std::string(path));
+  Core::HostDispatchJobs(Core::System::GetInstance());
+  s_core_status = "Save state to file requested";
+  return 1;
 }
 
 void PumpHostJobs()
@@ -810,6 +1044,97 @@ const char* GetCPUCoreName()
   if (!s_runtime_initialized)
     return "Not booted";
   return s_cpu_core == PowerPC::CPUCore::Interpreter ? "Interpreter" : "Cached Interpreter";
+}
+
+int AudioSampleRate()
+{
+  if (!s_runtime_initialized)
+    return 48000;
+
+  const SoundStream* sound_stream = Core::System::GetInstance().GetSoundStream();
+  const Mixer* mixer = sound_stream ? sound_stream->GetMixer() : nullptr;
+  const u32 sample_rate = mixer ? mixer->GetSampleRate() : 0;
+  return sample_rate > 0 ? static_cast<int>(sample_rate) : 48000;
+}
+
+int AudioChannels()
+{
+  return 2;
+}
+
+int AudioBufferFrames()
+{
+  return AUDIO_PULL_MAX_FRAMES;
+}
+
+s16* AudioBuffer()
+{
+  return s_audio_pull_buffer.data();
+}
+
+int MixAudio(int requested_frames)
+{
+  const int frames = std::clamp(requested_frames, 0, AUDIO_PULL_MAX_FRAMES);
+  if (frames <= 0)
+    return 0;
+
+  std::memset(s_audio_pull_buffer.data(), 0, static_cast<std::size_t>(frames) * 2 * sizeof(s16));
+
+  if (!s_runtime_initialized)
+  {
+    s_audio_stats = "audio:unavailable";
+    return 0;
+  }
+
+  if (Config::Get(Config::MAIN_AUDIO_MUTED))
+  {
+    s_audio_stats = "audio:muted";
+    return frames;
+  }
+
+  const SoundStream* sound_stream = Core::System::GetInstance().GetSoundStream();
+  Mixer* mixer = sound_stream ? sound_stream->GetMixer() : nullptr;
+  if (!mixer || !mixer->IsOutputSampleRateValid())
+  {
+    s_audio_stats = "audio:unavailable";
+    return 0;
+  }
+
+  const std::size_t mixed = mixer->Mix(s_audio_pull_buffer.data(), static_cast<std::size_t>(frames));
+  std::size_t nonzero_samples = 0;
+  for (std::size_t index = 0; index < mixed * 2; ++index)
+  {
+    if (s_audio_pull_buffer[index] != 0)
+      ++nonzero_samples;
+  }
+
+  s_audio_stats = "audio:frames:" + std::to_string(mixed) + " nz:" +
+                  std::to_string(nonzero_samples) + " rate:" +
+                  std::to_string(mixer->GetSampleRate());
+  return static_cast<int>(mixed);
+}
+
+int SetAudioMuted(int muted)
+{
+  if (!s_runtime_initialized)
+    return 0;
+
+  Config::SetBaseOrCurrent(Config::MAIN_AUDIO_MUTED, muted != 0);
+  AudioCommon::UpdateSoundStream(Core::System::GetInstance());
+  return 1;
+}
+
+const char* GetAudioStats()
+{
+#ifdef __EMSCRIPTEN__
+  const char* ai_stats = DolphinWeb_GetAudioCommonStats();
+  if (ai_stats && ai_stats[0] != '\0')
+  {
+    s_audio_stats_snapshot = s_audio_stats + " | " + ai_stats;
+    return s_audio_stats_snapshot.c_str();
+  }
+#endif
+  return s_audio_stats.c_str();
 }
 
 int RunWasmJitSmoke(int value)

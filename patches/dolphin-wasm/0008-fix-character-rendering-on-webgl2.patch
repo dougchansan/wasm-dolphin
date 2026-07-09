@@ -1,0 +1,65 @@
+diff --git a/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp b/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
+--- a/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
+@@ -36,12 +36,29 @@ static void SetPointer(ShaderAttrib attrib, u32 stride, const AttributeFormat& f
+   if (!format.enable)
+     return;
+
+   glEnableVertexAttribArray(static_cast<GLuint>(attrib));
++#ifdef __EMSCRIPTEN__
++  // WebGL2 / ANGLE in some configurations silently fails glVertexAttribIPointer
++  // on the per-vertex matrix-index attribute, leaving uint4 posmtx in the
++  // shader reading zero. That collapses every character vertex through
++  // matrix slot 0 and they all clip out of the view frustum, making fighter
++  // models invisible while stage geometry (which doesn't use posmtx) renders
++  // normally. Lane BB tracer pinpointed this as the cause of "characters
++  // missing in match" on the browser path.
++  // Always use glVertexAttribPointer with normalize=false; the unsigned-byte
++  // values 0..255 reach the shader as float 0.0..255.0, and the matched
++  // shader change emits `in vec4 posmtx` so int(posmtx.r) works the same.
++  glVertexAttribPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
++                        format.integer ? GL_FALSE : GL_TRUE, stride, (u8*)nullptr + format.offset);
++#else
+   if (format.integer)
+     glVertexAttribIPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
+                            stride, (u8*)nullptr + format.offset);
+   else
+     glVertexAttribPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
+                           true, stride, (u8*)nullptr + format.offset);
++#endif
+ }
+
+diff --git a/Source/Core/VideoCommon/VertexShaderGen.cpp b/Source/Core/VideoCommon/VertexShaderGen.cpp
+--- a/Source/Core/VideoCommon/VertexShaderGen.cpp
++++ b/Source/Core/VideoCommon/VertexShaderGen.cpp
+@@ -399,7 +399,15 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float4 rawpos;\n", ShaderAttrib::Position);
+     if ((uid_data->components & VB_HAS_POSMTXIDX) != 0)
++#ifdef __EMSCRIPTEN__
++      // Coordinated with OGLNativeVertexFormat: on WebGL2 we feed the
++      // per-vertex matrix index as a float attribute (0..255) rather than
++      // an integer attribute, because glVertexAttribIPointer silently
++      // fails on some ANGLE configs leaving the integer attribute zero.
++      out.Write("ATTRIBUTE_LOCATION({:s}) in float4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#else
+       out.Write("ATTRIBUTE_LOCATION({:s}) in uint4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#endif
+     if ((uid_data->components & VB_HAS_NORMAL) != 0)
+       out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawnormal;\n", ShaderAttrib::Normal);
+
+diff --git a/Source/Core/VideoCommon/UberShaderVertex.cpp b/Source/Core/VideoCommon/UberShaderVertex.cpp
+--- a/Source/Core/VideoCommon/UberShaderVertex.cpp
++++ b/Source/Core/VideoCommon/UberShaderVertex.cpp
+@@ -149,7 +149,12 @@ void GenVertexShader(ShaderCode& out, APIType api_type, const ShaderHostConfig&
+   else
+   {
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float4 rawpos;\n", ShaderAttrib::Position);
++#ifdef __EMSCRIPTEN__
++    // See VertexShaderGen.cpp: WebGL2 path feeds posmtx as float, not uint.
++    out.Write("ATTRIBUTE_LOCATION({:s}) in float4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#else
+     out.Write("ATTRIBUTE_LOCATION({:s}) in uint4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#endif
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawnormal;\n", ShaderAttrib::Normal);
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawtangent;\n", ShaderAttrib::Tangent);
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawbinormal;\n", ShaderAttrib::Binormal);

@@ -1,0 +1,78 @@
+diff --git a/Source/Core/Common/GL/GLInterface/Emscripten.cpp b/Source/Core/Common/GL/GLInterface/Emscripten.cpp
+--- a/Source/Core/Common/GL/GLInterface/Emscripten.cpp
++++ b/Source/Core/Common/GL/GLInterface/Emscripten.cpp
+@@ -148,18 +148,80 @@ bool GLContextEmscripten::Initialize(const WindowSystemInfo& wsi, bool stereo, b
+   const bool diagnostic_clear = DolphinWebUseDiagnosticClear();
+   const bool readback_present = DolphinWebUseOglReadbackPresent();
+   attributes.explicitSwapControl = !(worker_owned_webgl && (diagnostic_clear || readback_present));
+-  attributes.proxyContextToMainThread = worker_owned_webgl ?
+-                                            EMSCRIPTEN_WEBGL_CONTEXT_PROXY_DISALLOW :
+-                                            EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
++  attributes.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
+   attributes.renderViaOffscreenBackBuffer =
+       worker_owned_webgl && !(diagnostic_clear || readback_present);
+
+-  m_context = emscripten_webgl_create_context("#canvas", &attributes);
+-  if (static_cast<std::intptr_t>(m_context) <= 0)
++  if (worker_owned_webgl)
++  {
++    // Worker mode: bypass emscripten_webgl_create_context. The standard call
++    // fails because Emscripten's pthread canvas-transfer mechanism cannot
++    // re-transfer an already-transferred OffscreenCanvas (Lane Y trace).
++    // Create the WebGL2 context directly via JS on the discio-worker thread
++    // (which already owns the OffscreenCanvas), then register it with
++    // Emscripten's GL table. Falls back to the standard proxy path if the
++    // direct creation fails for any reason.
++    m_context = EM_ASM_INT({
++      var canvas = Module['canvas'];
++      if (!canvas) { console.error('[ogl] worker-mode: Module.canvas missing'); return 0; }
++      try {
++        var ctx = canvas.getContext('webgl2', {
++          alpha: false, depth: true, stencil: true, antialias: false,
++          premultipliedAlpha: false, preserveDrawingBuffer: false,
++          powerPreference: 'high-performance'
++        });
++        if (!ctx) { console.error('[ogl] worker-mode: getContext webgl2 returned null'); return 0; }
++        if (typeof GL === 'undefined' || typeof GL.registerContext !== 'function') {
++          console.error('[ogl] worker-mode: GL.registerContext unavailable');
++          return 0;
++        }
++        var handle = GL.registerContext(ctx, { majorVersion: 2, minorVersion: 0 });
++        console.log('[ogl] worker-mode: WebGL2 context created directly, handle=' + handle);
++        return handle;
++      } catch (e) {
++        console.error('[ogl] worker-mode: direct context creation threw', e);
++        return 0;
++      }
++    });
++    if (static_cast<std::intptr_t>(m_context) <= 0)
++    {
++      emscripten_console_errorf("[ogl] worker-mode direct context FAILED (%lld); "
++                                "falling back to PROXY_ALWAYS",
++                                static_cast<long long>(static_cast<std::intptr_t>(m_context)));
++      m_context = emscripten_webgl_create_context("#canvas", &attributes);
++      if (static_cast<std::intptr_t>(m_context) <= 0)
++      {
++        emscripten_console_errorf("[ogl] WebGL2 fallback context also failed: %lld",
++                                  static_cast<long long>(static_cast<std::intptr_t>(m_context)));
++        m_context = 0;
++        return false;
++      }
++      emscripten_console_log("[ogl] worker-mode FALLBACK to proxy succeeded");
++    }
++  }
++  else
+   {
+-    emscripten_console_errorf("[ogl] WebGL2 context creation failed: %lld",
+-                              static_cast<long long>(static_cast<std::intptr_t>(m_context)));
+-    m_context = 0;
+-    return false;
++    m_context = emscripten_webgl_create_context("#canvas", &attributes);
++    if (static_cast<std::intptr_t>(m_context) <= 0)
++    {
++      emscripten_console_errorf("[ogl] WebGL2 context creation failed: %lld",
++                                static_cast<long long>(static_cast<std::intptr_t>(m_context)));
++      m_context = 0;
++      return false;
++    }
+   }

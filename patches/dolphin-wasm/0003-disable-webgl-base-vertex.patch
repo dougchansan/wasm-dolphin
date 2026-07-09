@@ -1,0 +1,18 @@
+diff --git a/Source/Core/VideoBackends/OGL/OGLConfig.cpp b/Source/Core/VideoBackends/OGL/OGLConfig.cpp
+--- a/Source/Core/VideoBackends/OGL/OGLConfig.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLConfig.cpp
+@@ -537,6 +537,15 @@ bool PopulateConfig(GLContext* m_main_gl_context)
+     glEnable(GL_PROGRAM_POINT_SIZE);
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  // WebGL does not provide the desktop/GLES base-vertex draw entrypoints Dolphin's OGL
++  // backend normally uses. Some browser stacks still expose related extension strings, which
++  // sends the wasm build down glDrawElementsBaseVertex and produces GL_INVALID_OPERATION frames.
++  // Force Dolphin's existing zero-based index upload fallback in browsers.
++  g_ogl_config.bSupportsGLBaseVertex = false;
++#endif
++
+   // Supported by all GS-supporting ES and 4.3+
+   g_backend_info.bSupportsGLLayerInFS =
+       g_backend_info.bSupportsGeometryShaders && g_ogl_config.eSupportedGLSLVersion >= Glsl430;

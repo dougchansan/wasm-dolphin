@@ -28,6 +28,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/atomic.h>
+#include <emscripten/em_asm.h>
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -129,6 +130,12 @@ std::uint64_t s_xfb_decode_count = 0;
 std::atomic<std::uint32_t> s_last_video_sync_us{0};
 std::atomic<std::uint32_t> s_last_video_publish_us{0};
 std::atomic<std::uint32_t> s_last_video_total_us{0};
+// §28cs lifetime max — the avg in the HUD masks the 41-47ms spikes the
+// §28cn-cr investigation chain identified. Need max to see which
+// sub-component (sync vs publish) is the actual culprit.
+std::atomic<std::uint32_t> s_max_video_sync_us{0};
+std::atomic<std::uint32_t> s_max_video_publish_us{0};
+std::atomic<std::uint32_t> s_max_video_total_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_convert_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_copy_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_total_us{0};
@@ -143,6 +150,46 @@ std::atomic<std::uint32_t> s_last_ogl_height{0};
 std::atomic<std::uint32_t> s_last_ogl_debug_bits{0};
 std::atomic<std::uint32_t> s_last_ogl_readback_rgba{0};
 std::atomic<int> s_last_ogl_gl_error{0};
+
+// Day-1 per-frame ring buffer. The OGL swap callback pushes one entry per
+// swap; the JS worker drains it on a 1Hz timer and logs to console. Lets us
+// see exactly which frame stops drawing without needing to set a breakpoint
+// in C++. Capacity is one ring slot per (Melee 60fps × ~4 seconds) — enough
+// to capture a JIT-engagement transition with margin around it.
+struct DolphinWebFrameRingEntry
+{
+  std::uint32_t frame;
+  std::uint32_t prim;
+  std::uint32_t draw;
+  std::uint32_t verts;
+  std::uint32_t xfb_hash;
+  std::uint32_t glerr;
+  std::int32_t  commit_result;
+  std::uint32_t debug_bits;
+};
+static_assert(sizeof(DolphinWebFrameRingEntry) == 32,
+              "frame ring entry must stay 32 bytes for JS HEAPU32 stride math");
+
+constexpr std::uint32_t DOLPHIN_WEB_FRAME_RING_CAPACITY = 256;
+std::atomic<std::uint32_t> s_frame_ring_head{0};  // monotonic write counter (mod CAPACITY = slot)
+std::array<DolphinWebFrameRingEntry, DOLPHIN_WEB_FRAME_RING_CAPACITY> s_frame_ring{};
+
+void PushFrameRingEntry(std::uint32_t frame, std::uint32_t prim, std::uint32_t draw,
+                        std::uint32_t verts, std::uint32_t xfb_hash, std::uint32_t glerr,
+                        std::int32_t commit_result, std::uint32_t debug_bits)
+{
+  const std::uint32_t head = s_frame_ring_head.fetch_add(1, std::memory_order_relaxed);
+  const std::uint32_t slot = head % DOLPHIN_WEB_FRAME_RING_CAPACITY;
+  DolphinWebFrameRingEntry& entry = s_frame_ring[slot];
+  entry.frame = frame;
+  entry.prim = prim;
+  entry.draw = draw;
+  entry.verts = verts;
+  entry.xfb_hash = xfb_hash;
+  entry.glerr = glerr;
+  entry.commit_result = commit_result;
+  entry.debug_bits = debug_bits;
+}
 
 int ScaledPresentationDimension(std::uint32_t source)
 {
@@ -297,8 +344,11 @@ std::string XfbProfileStats()
       << " avg:" << FormatMicrosAsMs(avg_decode)
       << " max:" << FormatMicrosAsMs(s_max_xfb_decode_us)
       << " vo_sync:" << FormatMicrosAsMs(s_last_video_sync_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_sync_us.load(std::memory_order_relaxed))
       << " vo_pub:" << FormatMicrosAsMs(s_last_video_publish_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_publish_us.load(std::memory_order_relaxed))
       << " vo_total:" << FormatMicrosAsMs(s_last_video_total_us.load(std::memory_order_relaxed))
+      << "/max" << FormatMicrosAsMs(s_max_video_total_us.load(std::memory_order_relaxed))
       << " swxfb:" << FormatMicrosAsMs(s_last_sw_xfb_total_us.load(std::memory_order_relaxed))
       << " conv:" << FormatMicrosAsMs(s_last_sw_xfb_convert_us.load(std::memory_order_relaxed))
       << " copy:" << FormatMicrosAsMs(s_last_sw_xfb_copy_us.load(std::memory_order_relaxed))
@@ -476,6 +526,15 @@ void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t pu
   s_last_video_sync_us.store(sync_us, std::memory_order_relaxed);
   s_last_video_publish_us.store(publish_us, std::memory_order_relaxed);
   s_last_video_total_us.store(total_us, std::memory_order_relaxed);
+  // §28cs CAS-update lifetime maxes so we can see which sub-component
+  // spikes during the 41-47ms VICallback stalls.
+  auto cas_max = [](std::atomic<std::uint32_t>& a, std::uint32_t v) {
+    std::uint32_t prev = a.load(std::memory_order_relaxed);
+    while (v > prev && !a.compare_exchange_weak(prev, v, std::memory_order_relaxed)) {}
+  };
+  cas_max(s_max_video_sync_us, sync_us);
+  cas_max(s_max_video_publish_us, publish_us);
+  cas_max(s_max_video_total_us, total_us);
 }
 
 void DolphinWeb_RecordSoftwareXfbEncodeProfile(std::uint32_t convert_us, std::uint32_t copy_us,
@@ -744,7 +803,33 @@ void DolphinWeb_OnOglSwap(int worker_owned, int commit_result, std::uint32_t wid
   s_last_ogl_debug_bits.store(debug_bits, std::memory_order_relaxed);
   s_last_ogl_readback_rgba.store(readback_rgba, std::memory_order_relaxed);
   s_last_ogl_gl_error.store(gl_error, std::memory_order_relaxed);
+  ++s_frame;
+  PublishFrameSignal();
+
+  // Day-1 instrumentation: push a frame-ring entry. xfb_hash uses the most
+  // recently published readback hash; for direct OGL contexts where readback
+  // isn't computed each frame, we substitute the per-swap readback_rgba so
+  // any value change is still visible. g_stats.this_frame may be stale on
+  // backends that don't run the VideoCommon present path each swap — that's
+  // a known limitation of taking the recording at swap rather than present.
+  PushFrameRingEntry(s_frame, g_stats.this_frame.num_prims, g_stats.this_frame.num_draw_calls,
+                     g_stats.this_frame.num_vertices_loaded, readback_rgba,
+                     static_cast<std::uint32_t>(gl_error), commit_result, debug_bits);
+
 }
+
+// Day-3 investigation note: attempted to capture rendered frames on the GPU
+// pthread via canvas.transferToImageBitmap() inside this function, then post
+// them to discio-worker via self.postMessage. The capture *succeeds*
+// (transferToImageBitmap returns a valid bitmap from GL.currentContext.GLctx.canvas
+// on the pthread, where Emscripten transferred Module.canvas at GL init time),
+// but Emscripten's pthread runtime intercepts user-level self.postMessage
+// calls — the discio-worker never receives the bitmap messages despite
+// 3000+ captures per minute. Confirmed empirically by adding a catch-all
+// message counter in discio-worker: only "load"/"mixAudio" messages arrive,
+// no "detachedOglFrame" ever lands. See SESSION-2026-05-12-DAY-3-NOTES.md
+// for the full trail. Worker-mode painting requires a SAB-backed pixel
+// transport instead; that's deferred to Day 4.
 
 const char* GetVideoStats()
 {

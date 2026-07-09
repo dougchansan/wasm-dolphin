@@ -124,11 +124,32 @@ export function buttonMaskFromPressed(pressed) {
   return mask >>> 0;
 }
 
-export function pressedFromGamepad(gamepad, threshold = 0.36) {
-  return readGamepadInput(gamepad, threshold).pressed;
+// §28ci gamepad deadzones, split into two scales:
+//   ANALOG: small, so real-use axis motion reads smoothly through to the
+//     emulated stick byte. Too-large here and slow stick movements feel
+//     "snapped" / digital.
+//   DIGITAL: large, so drift on worn Xbox sticks (commonly idles at
+//     0.3-0.45 magnitude) doesn't fire phantom STICK_UP / C_STICK_*
+//     pressed events. Those are the events that drive menu navigation
+//     and the C-stick camera, so they must be drift-tolerant.
+// User-reported symptoms in Chrome (2026-05-25): c-stick moving the
+// screen and up-button stuck pressed at rest — both fixed by raising the
+// digital threshold past typical Xbox drift.
+const DEFAULT_GAMEPAD_ANALOG_DEADZONE = 0.18;
+const DEFAULT_GAMEPAD_DIGITAL_DEADZONE = 0.55;
+
+export function pressedFromGamepad(
+  gamepad,
+  digitalThreshold = DEFAULT_GAMEPAD_DIGITAL_DEADZONE
+) {
+  return readGamepadInput(gamepad, digitalThreshold).pressed;
 }
 
-export function readGamepadInput(gamepad, threshold = 0.36) {
+export function readGamepadInput(
+  gamepad,
+  digitalThreshold = DEFAULT_GAMEPAD_DIGITAL_DEADZONE,
+  analogDeadzone = DEFAULT_GAMEPAD_ANALOG_DEADZONE
+) {
   const pressed = new Set();
   const state = { ...DEFAULT_PAD_STATE };
 
@@ -161,19 +182,19 @@ export function readGamepadInput(gamepad, threshold = 0.36) {
   if (gamepad.buttons[1]?.pressed) state.analogB = 0xff;
 
   const [leftX = 0, leftY = 0, rightX = 0, rightY = 0] = gamepad.axes;
-  state.stickX = axisToPadByte(leftX, false, threshold);
-  state.stickY = axisToPadByte(leftY, true, threshold);
-  state.cStickX = axisToPadByte(rightX, false, threshold);
-  state.cStickY = axisToPadByte(rightY, true, threshold);
+  state.stickX = axisToPadByte(leftX, false, analogDeadzone);
+  state.stickY = axisToPadByte(leftY, true, analogDeadzone);
+  state.cStickX = axisToPadByte(rightX, false, analogDeadzone);
+  state.cStickY = axisToPadByte(rightY, true, analogDeadzone);
 
-  if (leftX <= -threshold) pressed.add("STICK_LEFT");
-  if (leftX >= threshold) pressed.add("STICK_RIGHT");
-  if (leftY <= -threshold) pressed.add("STICK_UP");
-  if (leftY >= threshold) pressed.add("STICK_DOWN");
-  if (rightX <= -threshold) pressed.add("C_STICK_LEFT");
-  if (rightX >= threshold) pressed.add("C_STICK_RIGHT");
-  if (rightY <= -threshold) pressed.add("C_STICK_UP");
-  if (rightY >= threshold) pressed.add("C_STICK_DOWN");
+  if (leftX <= -digitalThreshold) pressed.add("STICK_LEFT");
+  if (leftX >= digitalThreshold) pressed.add("STICK_RIGHT");
+  if (leftY <= -digitalThreshold) pressed.add("STICK_UP");
+  if (leftY >= digitalThreshold) pressed.add("STICK_DOWN");
+  if (rightX <= -digitalThreshold) pressed.add("C_STICK_LEFT");
+  if (rightX >= digitalThreshold) pressed.add("C_STICK_RIGHT");
+  if (rightY <= -digitalThreshold) pressed.add("C_STICK_UP");
+  if (rightY >= digitalThreshold) pressed.add("C_STICK_DOWN");
 
   return { pressed, state };
 }
@@ -222,8 +243,17 @@ function applyDigitalAxis(state, pressed, negativeButton, positiveButton, field)
 }
 
 function axisToPadByte(axis, invert, deadzone) {
-  const normalized = Number.isFinite(axis) && Math.abs(axis) >= deadzone ? axis : 0;
-  const oriented = invert ? -normalized : normalized;
+  // §28ci post-deadzone scaling. Without it, axis values just past the
+  // deadzone jump to ~deadzone%-of-full immediately, so stick-drift at
+  // 0.3-0.4 magnitude that barely clears a 0.2 deadzone still produces
+  // a 20%-off-center byte → visible camera drift. Subtract the deadzone
+  // and re-scale the surviving 0..1-deadzone range to 0..1 so the byte
+  // starts at center and only moves smoothly with real input.
+  if (!Number.isFinite(axis)) return clampByte(0x80);
+  const mag = Math.abs(axis);
+  if (mag < deadzone) return clampByte(0x80);
+  const scaled = ((mag - deadzone) / (1 - deadzone)) * Math.sign(axis);
+  const oriented = invert ? -scaled : scaled;
   return clampByte(Math.round(0x80 + oriented * 0x60));
 }
 

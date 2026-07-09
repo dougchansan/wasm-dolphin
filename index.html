@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>wasm-dolphin</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./src/styles.css">
   </head>
   <body>
@@ -18,26 +19,69 @@
         </div>
         <div class="topbar-actions">
           <span class="status-pill" id="statusPill">Booting</span>
+          <button class="icon-button" id="overlayToggle" type="button" title="Toggle FPS overlay" aria-pressed="true">FPS</button>
+          <button class="icon-button" id="debugToggle" type="button" title="Toggle diagnostics" aria-expanded="false" aria-controls="debugPanel">DBG</button>
           <button class="icon-button" id="fullscreenButton" type="button" title="Fullscreen" aria-label="Fullscreen">[]</button>
         </div>
       </header>
 
       <main class="workspace">
         <section class="play-area" aria-label="Emulator">
-          <div class="screen-frame" id="dropZone">
-            <canvas id="screen" width="640" height="480" aria-label="Emulator screen"></canvas>
-            <div class="drop-badge" id="dropBadge">Drop disc</div>
+          <div class="crt-set" id="dropZone">
+            <div class="crt-bezel">
+              <div class="screen-viewport">
+                <canvas id="screen" width="640" height="480" aria-label="Emulator screen"></canvas>
+                <div class="screen-osd" id="screenHud">
+                  <span><strong id="hudFps">0</strong> present</span>
+                  <span><strong id="hudVisualFps">0</strong> visual</span>
+                  <span><strong id="hudSpeed">0%</strong> speed</span>
+                  <span><strong id="hudLatency">0f</strong> lag</span>
+                  <span><strong id="hudJit">JIT off</strong></span>
+                  <span id="hudResolution">640x480</span>
+                  <span><strong id="hudCoreFps">0</strong> core</span>
+                  <span><strong id="hudFrame">0</strong> frame</span>
+                  <span><strong id="hudGlSwap">0</strong> gl</span>
+                  <span><strong id="hudMode">-</strong></span>
+                  <span><strong id="hudWatchdog">0/0</strong> wd</span>
+                  <span><strong id="hudGap">0/0</strong>ms gap</span>
+                  <span><strong id="hudGlError">0x0</strong> glerr</span>
+                  <span><strong id="hudDraw">0/0</strong> draw</span>
+                  <span><strong id="hudNz">0</strong> nz</span>
+                  <span><strong id="hudUnderDrop">0/0</strong> u/d</span>
+                  <span><strong id="hudQueue">0/0</strong> q</span>
+                  <span><strong id="hudJitCache">0/0</strong> jitc</span>
+                  <span><strong id="hudRunloop">-/-</strong>us runloop</span>
+                  <span><strong id="hudWgx">-</strong> wgx</span>
+                  <span id="hudStatus" style="opacity:.7"></span>
+                </div>
+                <div class="drop-badge" id="dropBadge">Drop disc</div>
+                <div class="scanlines" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div class="crt-footer" aria-hidden="true">
+              <span class="power-light"></span>
+              <span class="speaker-grille"></span>
+              <span class="control-knobs">
+                <i></i>
+                <i></i>
+              </span>
+            </div>
           </div>
 
           <div class="transport" aria-label="Playback controls">
+            <label class="file-button">
+              Open disc
+              <input id="romInput" type="file" accept=".iso,.gcm,.rvz,.wbfs,.wad,.dol,.elf">
+            </label>
             <button id="runButton" type="button">Pause</button>
             <button id="resetButton" type="button">Reset</button>
             <button id="muteButton" type="button">Muted</button>
             <button id="saveButton" type="button">Save</button>
             <button id="loadButton" type="button">Load</button>
+            <button id="dlStateButton" type="button">DL State</button>
             <label class="file-button">
-              Open
-              <input id="romInput" type="file" accept=".iso,.gcm,.rvz,.wbfs,.wad,.dol,.elf">
+              UL State
+              <input id="ulStateInput" type="file" accept=".sav">
             </label>
           </div>
 
@@ -53,10 +97,11 @@
               <button data-touch-button="A" aria-label="A">A</button>
             </div>
           </div>
+          <p class="keyboard-hint">Keyboard controls: X = GameCube A, Z = B, Enter = Start, WASD = stick.</p>
         </section>
 
-        <aside class="side-panel" aria-label="Emulator status">
-          <section class="panel-block">
+        <aside class="control-panel" aria-label="Emulator controls">
+          <section class="panel-block game-block">
             <div class="section-heading">
               <h2>Game</h2>
               <span id="gameSize">No file</span>
@@ -65,112 +110,252 @@
             <p class="muted" id="mountNote">Demo WASM core active</p>
           </section>
 
-          <section class="panel-block">
+          <form class="settings-panel" id="settingsForm">
             <div class="section-heading">
-              <h2>Boot</h2>
-              <span id="bootStatus">No disc</span>
+              <h2>Settings</h2>
+              <span id="settingsSummary">Startup</span>
             </div>
-            <div class="metric-row">
-              <span>Apploader</span>
-              <strong id="bootApploader">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>Boot DOL</span>
-              <strong id="bootDol">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>FST</span>
-              <strong id="bootFst">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>Image</span>
-              <strong id="bootImage">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>Entry</span>
-              <strong id="bootEntry">-</strong>
-            </div>
-            <p class="muted compact" id="bootBlocker">No boot attempt</p>
-            <div class="root-entry-list" id="rootEntryList" aria-label="Disc root entries"></div>
-          </section>
 
-          <section class="panel-block">
-            <div class="section-heading">
-              <h2>Core</h2>
-              <span id="coreMode">Demo</span>
-            </div>
-            <div class="metric-row">
-              <span>Frame</span>
-              <strong id="frameCounter">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>Present FPS</span>
-              <strong id="fpsCounter">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>Visual FPS</span>
-              <strong id="visualFpsCounter">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>UI FPS</span>
-              <strong id="uiFpsCounter">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>Core FPS</span>
-              <strong id="coreFpsCounter">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>Game Speed</span>
-              <strong id="gameSpeedCounter">0%</strong>
-            </div>
-            <div class="metric-row">
-              <span>Frame Gap</span>
-              <strong id="presentationGapCounter">0 ms</strong>
-            </div>
-            <div class="metric-row">
-              <span>Ticks</span>
-              <strong id="coreTicks">0</strong>
-            </div>
-            <div class="metric-row">
-              <span>PPC PC</span>
-              <strong id="ppcPc">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>CPU</span>
-              <strong id="cpuCoreName">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>WASM JIT exp</span>
-              <strong id="ppcWasmJit">0 / 0</strong>
-            </div>
-            <div class="metric-row">
-              <span>WASM Helper</span>
-              <strong id="ppcWasmHelperStats">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>Frame Profile</span>
-              <strong id="frameProfileStats">-</strong>
-            </div>
-            <div class="metric-row">
-              <span>Adapter</span>
-              <strong id="adapterStatus">Fallback</strong>
-            </div>
-          </section>
+            <div class="setting-grid">
+              <label>
+                <span>Core</span>
+                <select id="settingCore">
+                  <option value="native">Native</option>
+                  <option value="upstream">Upstream</option>
+                </select>
+              </label>
 
-          <section class="panel-block">
-            <div class="section-heading">
-              <h2>Input</h2>
-              <span id="inputSource">Keyboard</span>
-            </div>
-            <div class="control-grid" id="controlGrid"></div>
-          </section>
+              <label>
+                <span>Renderer</span>
+                <select id="settingVideo">
+                  <option value="software">Software</option>
+                  <option value="ogl">OpenGL GPU</option>
+                  <option value="null">Null video</option>
+                </select>
+              </label>
 
-          <section class="panel-block">
-            <div class="section-heading">
-              <h2>Core Slot</h2>
-              <span>cores/dolphin</span>
+              <label>
+                <span>GPU path</span>
+                <select id="settingOglProxy">
+                  <option value="proxy">Compatible GL</option>
+                  <option value="worker">Direct worker GL</option>
+                  <option value="main">Main thread GL</option>
+                  <option value="readback">Readback debug</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Resolution</span>
+                <select id="settingResolution">
+                  <option value="full">Full 640x480</option>
+                  <option value="0.75">75% present</option>
+                  <option value="half">Half 320x240</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Speed</span>
+                <select id="settingSpeed">
+                  <option value="0.5">0.5x</option>
+                  <option value="0.75">0.75x</option>
+                  <option value="1">1x</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="unlimited">Unlimited</option>
+                </select>
+              </label>
+
+              <label>
+                <span>CPU</span>
+                <select id="settingCpu">
+                  <option value="auto">Auto</option>
+                  <option value="single">Single thread</option>
+                  <option value="dual">Dual core</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Presenter</span>
+                <select id="settingPresenter">
+                  <option value="webgpu">WebGPU</option>
+                  <option value="webgl">WebGL</option>
+                  <option value="2d">Canvas 2D</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Frame queue</span>
+                <select id="settingQueue">
+                  <option value="2">2 frames</option>
+                  <option value="4">4 frames</option>
+                  <option value="8">8 frames</option>
+                  <option value="12">12 frames</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Pacing</span>
+                <select id="settingPacing">
+                  <option value="smooth">Smooth</option>
+                  <option value="direct">Direct</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Raster quality</span>
+                <select id="settingFastSw">
+                  <option value="0">Full quality</option>
+                  <option value="1">Balanced</option>
+                  <option value="2">Emergency speed</option>
+                </select>
+              </label>
+
+              <label>
+                <span>JIT tier</span>
+                <select id="settingJitTier">
+                  <option value="guarded">Guarded</option>
+                  <option value="mixed">Mixed experimental</option>
+                </select>
+              </label>
             </div>
-            <p class="muted compact">Emscripten Dolphin bundles load from <code>cores/dolphin</code>.</p>
+
+            <div class="toggle-row">
+              <label class="switch-line">
+                <input id="settingWasmJit" type="checkbox">
+                <span>WASM JIT</span>
+              </label>
+              <label class="switch-line">
+                <input id="settingForceJit" type="checkbox">
+                <span>Force JIT</span>
+              </label>
+              <label class="switch-line">
+                <input id="settingMetrics" type="checkbox">
+                <span>Collect Metrics</span>
+              </label>
+            </div>
+
+            <div class="settings-actions">
+              <button id="settingsApplyButton" type="submit">Apply restart</button>
+              <button id="settingsPresetButton" type="button">Melee preset</button>
+            </div>
+          </form>
+
+          <section class="debug-panel" id="debugPanel" aria-label="Diagnostics" hidden>
+            <section class="panel-block">
+              <div class="section-heading">
+                <h2>Boot</h2>
+                <span id="bootStatus">No disc</span>
+              </div>
+              <div class="metric-row">
+                <span>Apploader</span>
+                <strong id="bootApploader">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>Boot DOL</span>
+                <strong id="bootDol">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>FST</span>
+                <strong id="bootFst">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>Image</span>
+                <strong id="bootImage">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>Entry</span>
+                <strong id="bootEntry">-</strong>
+              </div>
+              <p class="muted compact" id="bootBlocker">No boot attempt</p>
+              <div class="root-entry-list" id="rootEntryList" aria-label="Disc root entries"></div>
+            </section>
+
+            <section class="panel-block">
+              <div class="section-heading">
+                <h2>Runtime</h2>
+                <span id="coreMode">Demo</span>
+              </div>
+              <div class="metric-row">
+                <span>Frame</span>
+                <strong id="frameCounter">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>Present FPS</span>
+                <strong id="fpsCounter">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>Visual FPS</span>
+                <strong id="visualFpsCounter">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>UI FPS</span>
+                <strong id="uiFpsCounter">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>Core FPS</span>
+                <strong id="coreFpsCounter">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>Game Speed</span>
+                <strong id="gameSpeedCounter">0%</strong>
+              </div>
+              <div class="metric-row">
+                <span>Frame Gap</span>
+                <strong id="presentationGapCounter">0 ms</strong>
+              </div>
+              <div class="metric-row">
+                <span>Latency</span>
+                <strong id="presentationLagCounter">0f / 0 ms</strong>
+              </div>
+              <div class="metric-row">
+                <span>Audio</span>
+                <strong id="audioStatus">Audio off</strong>
+              </div>
+              <div class="metric-row">
+                <span>Ticks</span>
+                <strong id="coreTicks">0</strong>
+              </div>
+              <div class="metric-row">
+                <span>PPC PC</span>
+                <strong id="ppcPc">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>CPU</span>
+                <strong id="cpuCoreName">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>WASM JIT exp</span>
+                <strong id="ppcWasmJit">0 / 0</strong>
+              </div>
+              <div class="metric-row">
+                <span>WASM Helper</span>
+                <strong id="ppcWasmHelperStats">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>Frame Profile</span>
+                <strong id="frameProfileStats">-</strong>
+              </div>
+              <div class="metric-row">
+                <span>Adapter</span>
+                <strong id="adapterStatus">Fallback</strong>
+              </div>
+            </section>
+
+            <section class="panel-block">
+              <div class="section-heading">
+                <h2>Input</h2>
+                <span id="inputSource">Keyboard</span>
+              </div>
+              <div class="control-grid" id="controlGrid"></div>
+            </section>
+
+            <section class="panel-block">
+              <div class="section-heading">
+                <h2>Core Slot</h2>
+                <span>cores/dolphin</span>
+              </div>
+              <p class="muted compact">Emscripten Dolphin bundles load from <code>cores/dolphin</code>.</p>
+            </section>
           </section>
         </aside>
       </main>

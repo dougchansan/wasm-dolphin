@@ -2,68 +2,210 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index f07566c..1250fdd 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -575,7 +575,7 @@ if(ENABLE_EVDEV)
-   endif()
- endif()
- 
+@@ -578 +578 @@ endif()
 -if(UNIX)
 +if(UNIX AND NOT EMSCRIPTEN)
-   message(STATUS "Using named pipes as controller inputs")
-   add_definitions(-DUSE_PIPES=1)
-   message(STATUS "Watching game memory for changes")
-@@ -703,7 +703,7 @@ if(ENABLE_CUBEB)
-   add_definitions(-DHAVE_CUBEB)
- endif()
- 
+@@ -706 +706 @@ endif()
 -if(NOT ANDROID)
 +if(NOT ANDROID AND NOT EMSCRIPTEN)
-   dolphin_find_optional_system_library(LibUSB Externals/libusb)
-   add_definitions(-D__LIBUSB__)
- endif()
-@@ -723,7 +723,7 @@ dolphin_find_optional_system_library(MBEDTLS Externals/mbedtls 2.28)
- 
- dolphin_find_optional_system_library(CURL Externals/curl)
- 
+@@ -726 +726 @@ dolphin_find_optional_system_library(CURL Externals/curl)
 -if(NOT ANDROID)
 +if(NOT ANDROID AND NOT EMSCRIPTEN)
-   dolphin_find_optional_system_library(HIDAPI Externals/hidapi)
- endif()
- 
-diff --git a/Externals/SFML/SFML b/Externals/SFML/SFML
---- a/Externals/SFML/SFML
-+++ b/Externals/SFML/SFML
-@@ -1 +1 @@
--Subproject commit 0fa201c969e48ecc253581c5841ce73f44d42f49
-+Subproject commit 0fa201c969e48ecc253581c5841ce73f44d42f49-dirty
-diff --git a/Externals/xxhash/xxHash b/Externals/xxhash/xxHash
---- a/Externals/xxhash/xxHash
-+++ b/Externals/xxhash/xxHash
-@@ -1 +1 @@
--Subproject commit e626a72bc2321cd320e953a0ccf1584cad60f363
-+Subproject commit e626a72bc2321cd320e953a0ccf1584cad60f363-dirty
+diff --git a/Source/Core/AudioCommon/AudioCommon.cpp b/Source/Core/AudioCommon/AudioCommon.cpp
+index 73e1094..009037e 100644
+--- a/Source/Core/AudioCommon/AudioCommon.cpp
++++ b/Source/Core/AudioCommon/AudioCommon.cpp
+@@ -4,0 +5,6 @@
++#ifdef __EMSCRIPTEN__
++#include <atomic>
++#include <cstdint>
++#include <string>
++#endif
++
+@@ -14,0 +15,3 @@
++#ifdef __EMSCRIPTEN__
++#include "AudioCommon/WebAudioStream.h"
++#endif
+@@ -27,0 +31,9 @@ constexpr int AUDIO_VOLUME_MAX = 100;
++#ifdef __EMSCRIPTEN__
++constexpr std::string_view BACKEND_WEB_AUDIO = "Web Audio";
++static std::atomic<std::uint64_t> s_web_ai_buffer_count{0};
++static std::atomic<std::uint64_t> s_web_ai_frame_count{0};
++static std::atomic<std::uint64_t> s_web_ai_nonzero_sample_count{0};
++static std::atomic<std::uint32_t> s_web_ai_last_frames{0};
++static std::atomic<std::uint32_t> s_web_ai_last_nonzero_samples{0};
++static std::string s_web_audio_common_stats = "ai:buf:0 frames:0 nz:0 last:0/0";
++#endif
+@@ -30,0 +37,4 @@ static std::unique_ptr<SoundStream> CreateSoundStreamForBackend(std::string_view
++#ifdef __EMSCRIPTEN__
++  if (backend == BACKEND_WEB_AUDIO && WebAudioStream::IsValid())
++    return std::make_unique<WebAudioStream>();
++#endif
+@@ -96,0 +107,3 @@ std::string GetDefaultSoundBackend()
++#if defined(__EMSCRIPTEN__)
++  return std::string(BACKEND_WEB_AUDIO);
++#endif
+@@ -121,0 +135,4 @@ std::vector<std::string> GetSoundBackends()
++#ifdef __EMSCRIPTEN__
++  if (WebAudioStream::IsValid())
++    backends.emplace_back(BACKEND_WEB_AUDIO);
++#endif
+@@ -198,0 +216,18 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
++#ifdef __EMSCRIPTEN__
++  std::uint32_t nonzero_samples = 0;
++  if (samples)
++  {
++    const std::size_t sample_count = static_cast<std::size_t>(num_samples) * 2;
++    for (std::size_t index = 0; index < sample_count; ++index)
++    {
++      if (samples[index] != 0)
++        ++nonzero_samples;
++    }
++  }
++  s_web_ai_buffer_count.fetch_add(1, std::memory_order_relaxed);
++  s_web_ai_frame_count.fetch_add(num_samples, std::memory_order_relaxed);
++  s_web_ai_nonzero_sample_count.fetch_add(nonzero_samples, std::memory_order_relaxed);
++  s_web_ai_last_frames.store(num_samples, std::memory_order_relaxed);
++  s_web_ai_last_nonzero_samples.store(nonzero_samples, std::memory_order_relaxed);
++#endif
++
+@@ -214,0 +250,13 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
++#ifdef __EMSCRIPTEN__
++extern "C" const char* DolphinWeb_GetAudioCommonStats()
++{
++  s_web_audio_common_stats =
++      "ai:buf:" + std::to_string(s_web_ai_buffer_count.load(std::memory_order_relaxed)) +
++      " frames:" + std::to_string(s_web_ai_frame_count.load(std::memory_order_relaxed)) +
++      " nz:" + std::to_string(s_web_ai_nonzero_sample_count.load(std::memory_order_relaxed)) +
++      " last:" + std::to_string(s_web_ai_last_frames.load(std::memory_order_relaxed)) + "/" +
++      std::to_string(s_web_ai_last_nonzero_samples.load(std::memory_order_relaxed));
++  return s_web_audio_common_stats.c_str();
++}
++#endif
++
+diff --git a/Source/Core/AudioCommon/CMakeLists.txt b/Source/Core/AudioCommon/CMakeLists.txt
+index 04ad967..b7f9248 100644
+--- a/Source/Core/AudioCommon/CMakeLists.txt
++++ b/Source/Core/AudioCommon/CMakeLists.txt
+@@ -16,0 +17,7 @@ add_library(audiocommon
++
++if(EMSCRIPTEN)
++  target_sources(audiocommon PRIVATE
++    WebAudioStream.cpp
++    WebAudioStream.h
++  )
++endif()
+diff --git a/Source/Core/AudioCommon/WebAudioStream.cpp b/Source/Core/AudioCommon/WebAudioStream.cpp
+new file mode 100644
+index 0000000..c11b5b6
+--- /dev/null
++++ b/Source/Core/AudioCommon/WebAudioStream.cpp
+@@ -0,0 +1,59 @@
++// Copyright 2026
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include "AudioCommon/WebAudioStream.h"
++
++#include <algorithm>
++#include <cstring>
++
++WebAudioStream::WebAudioStream() = default;
++
++WebAudioStream::~WebAudioStream()
++{
++  m_running.store(false, std::memory_order_release);
++}
++
++bool WebAudioStream::Init()
++{
++  GetMixer()->SetSampleRate(48000);
++  return true;
++}
++
++bool WebAudioStream::SetRunning(bool running)
++{
++  m_running.store(running, std::memory_order_release);
++  return true;
++}
++
++void WebAudioStream::SetVolume(int volume)
++{
++  m_volume.store(std::clamp(volume, 0, 100), std::memory_order_release);
++}
++
++std::size_t WebAudioStream::Mix(s16* samples, std::size_t frames)
++{
++  if (!samples || frames == 0)
++    return 0;
++
++  if (!m_running.load(std::memory_order_acquire))
++  {
++    std::memset(samples, 0, frames * 2 * sizeof(s16));
++    return frames;
++  }
++
++  const std::size_t mixed = GetMixer()->Mix(samples, frames);
++  const int volume = m_volume.load(std::memory_order_acquire);
++  if (volume <= 0)
++  {
++    std::memset(samples, 0, mixed * 2 * sizeof(s16));
++    return mixed;
++  }
++
++  if (volume < 100)
++  {
++    for (std::size_t index = 0; index < mixed * 2; ++index)
++      samples[index] = static_cast<s16>((static_cast<int>(samples[index]) * volume) / 100);
++  }
++
++  return mixed;
++}
+diff --git a/Source/Core/AudioCommon/WebAudioStream.h b/Source/Core/AudioCommon/WebAudioStream.h
+new file mode 100644
+index 0000000..d978413
+--- /dev/null
++++ b/Source/Core/AudioCommon/WebAudioStream.h
+@@ -0,0 +1,28 @@
++// Copyright 2026
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <atomic>
++
++#include "AudioCommon/SoundStream.h"
++#include "Common/CommonTypes.h"
++
++class WebAudioStream final : public SoundStream
++{
++public:
++  WebAudioStream();
++  ~WebAudioStream() override;
++
++  static bool IsValid() { return true; }
++
++  bool Init() override;
++  bool SetRunning(bool running) override;
++  void SetVolume(int volume) override;
++
++  std::size_t Mix(s16* samples, std::size_t frames);
++
++private:
++  std::atomic<bool> m_running{false};
++  std::atomic<int> m_volume{100};
++};
 diff --git a/Source/Core/Common/CMakeLists.txt b/Source/Core/Common/CMakeLists.txt
 index 894fd38..1fbe546 100644
 --- a/Source/Core/Common/CMakeLists.txt
 +++ b/Source/Core/Common/CMakeLists.txt
-@@ -190,10 +190,13 @@ PRIVATE
-   CURL::libcurl
-   FatFs
-   spng::spng
+@@ -193 +192,0 @@ PRIVATE
 -  watcher
-   ${VTUNE_LIBRARIES}
- )
- 
+@@ -196,0 +196,4 @@ PRIVATE
 +if(NOT EMSCRIPTEN)
 +  target_link_libraries(common PRIVATE watcher)
 +endif()
 +
- if ((DEFINED CMAKE_ANDROID_ARCH_ABI AND CMAKE_ANDROID_ARCH_ABI MATCHES "x86|x86_64") OR
-     (NOT DEFINED CMAKE_ANDROID_ARCH_ABI AND _M_X86_64))
-   target_link_libraries(common PRIVATE bdisasm)
-@@ -288,6 +291,13 @@ target_sources(common PRIVATE
-   GL/GLExtensions/GLExtensions.h
- )
- 
+@@ -290,0 +294,7 @@ target_sources(common PRIVATE
 +if(EMSCRIPTEN)
 +  target_sources(common PRIVATE
 +    GL/GLInterface/Emscripten.cpp
@@ -71,17 +213,11 @@ index 894fd38..1fbe546 100644
 +  )
 +endif()
 +
- if(ENABLE_EGL AND EGL_FOUND)
-   target_sources(common PRIVATE
-     GL/GLInterface/EGL.cpp
 diff --git a/Source/Core/Common/FilesystemWatcher.cpp b/Source/Core/Common/FilesystemWatcher.cpp
 index 9497023..83b7808 100644
 --- a/Source/Core/Common/FilesystemWatcher.cpp
 +++ b/Source/Core/Common/FilesystemWatcher.cpp
-@@ -3,6 +3,34 @@
- 
- #include "Common/FilesystemWatcher.h"
- 
+@@ -5,0 +6,28 @@
 +#ifdef __EMSCRIPTEN__
 +
 +namespace wtr
@@ -110,39 +246,21 @@ index 9497023..83b7808 100644
 +
 +#else
 +
- #include <wtr/watcher.hpp>
- 
- #include "Common/Logging/Log.h"
-@@ -65,3 +93,5 @@ void FilesystemWatcher::Unwatch(const std::string& path)
-   m_watched_paths.erase(path);
- }
- }  // namespace Common
+@@ -67,0 +96,2 @@ void FilesystemWatcher::Unwatch(const std::string& path)
 +
 +#endif
 diff --git a/Source/Core/Common/GL/GLContext.cpp b/Source/Core/Common/GL/GLContext.cpp
 index eef6896..bb8da27 100644
 --- a/Source/Core/Common/GL/GLContext.cpp
 +++ b/Source/Core/Common/GL/GLContext.cpp
-@@ -5,6 +5,9 @@
- 
- #include "Common/GL/GLContext.h"
- 
+@@ -7,0 +8,3 @@
 +#if defined(__EMSCRIPTEN__)
 +#include "Common/GL/GLInterface/Emscripten.h"
 +#endif
- #if defined(__APPLE__)
- #include "Common/GL/GLInterface/AGL.h"
- #endif
-@@ -79,6 +82,9 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowSystemInfo& wsi, bool s
-                                              bool prefer_gles)
- {
-   std::unique_ptr<GLContext> context;
+@@ -81,0 +85,3 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowSystemInfo& wsi, bool s
 +#if defined(__EMSCRIPTEN__)
 +  context = std::make_unique<GLContextEmscripten>();
 +#endif
- #if defined(__APPLE__)
-   if (wsi.type == WindowSystemType::MacOS || wsi.type == WindowSystemType::Headless)
-     context = std::make_unique<GLContextAGL>();
 diff --git a/Source/Core/Common/GL/GLInterface/Emscripten.cpp b/Source/Core/Common/GL/GLInterface/Emscripten.cpp
 new file mode 100644
 index 0000000..64877b1
@@ -487,116 +605,57 @@ diff --git a/Source/Core/Common/MemoryUtil.cpp b/Source/Core/Common/MemoryUtil.c
 index 0d66890..659f9a8 100644
 --- a/Source/Core/Common/MemoryUtil.cpp
 +++ b/Source/Core/Common/MemoryUtil.cpp
-@@ -21,6 +21,7 @@
- #endif
- #if defined __APPLE__ || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__
- #include <sys/sysctl.h>
+@@ -23,0 +24 @@
 +#elif defined __EMSCRIPTEN__
- #elif defined __HAIKU__
- #include <OS.h>
- #else
-@@ -271,6 +272,8 @@ size_t MemPhysical()
-   size_t length = sizeof(size_t);
-   sysctl(mib, 2, &physical_memory, &length, nullptr, 0);
-   return physical_memory;
+@@ -273,0 +275,2 @@ size_t MemPhysical()
 +#elif defined __EMSCRIPTEN__
 +  return 512ull * 1024ull * 1024ull;
- #elif defined __HAIKU__
-   system_info sysinfo;
-   get_system_info(&sysinfo);
 diff --git a/Source/Core/Common/Thread.cpp b/Source/Core/Common/Thread.cpp
 index 258559b..2efd1a4 100644
 --- a/Source/Core/Common/Thread.cpp
 +++ b/Source/Core/Common/Thread.cpp
-@@ -170,6 +170,8 @@ void SetCurrentThreadName(const char* name)
- {
- #ifdef __APPLE__
-   pthread_setname_np(name);
+@@ -172,0 +173,2 @@ void SetCurrentThreadName(const char* name)
 +#elif defined __EMSCRIPTEN__
 +  (void)name;
- #elif defined __FreeBSD__ || defined __OpenBSD__
-   pthread_set_name_np(pthread_self(), name);
- #elif defined(__NetBSD__)
 diff --git a/Source/Core/Common/Timer.cpp b/Source/Core/Common/Timer.cpp
 index 9570734..9719118 100644
 --- a/Source/Core/Common/Timer.cpp
 +++ b/Source/Core/Common/Timer.cpp
-@@ -210,7 +210,7 @@ auto SteadyAwakeClock::now() -> time_point
-   // Note that Linux's CLOCK_MONOTONIC "does not count time that the system is suspended".
-   // This is in contrast to the behavior on macOS and FreeBSD.
-   static constexpr auto clock_id =
+@@ -213 +213 @@ auto SteadyAwakeClock::now() -> time_point
 -#if defined(__linux__)
 +#if defined(__linux__) || defined(__EMSCRIPTEN__)
-       CLOCK_MONOTONIC;
- #elif defined(__APPLE__)
-       CLOCK_UPTIME_RAW;
 diff --git a/Source/Core/Core/Boot/Boot.cpp b/Source/Core/Core/Boot/Boot.cpp
 index 2ddadfe..f865292 100644
 --- a/Source/Core/Core/Boot/Boot.cpp
 +++ b/Source/Core/Core/Boot/Boot.cpp
-@@ -61,6 +61,10 @@
- #include "DiscIO/VolumeDisc.h"
- #include "DiscIO/VolumeWad.h"
- 
+@@ -63,0 +64,4 @@
 +static void DolphinWebTraceBootStatus(const char*)
 +{
 +}
 +
- static std::vector<std::string> ReadM3UFile(const std::string& m3u_path,
-                                             const std::string& folder_path)
- {
-@@ -499,6 +503,7 @@ static void CopyDefaultExceptionHandlers(Core::System& system)
- bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
-                    std::unique_ptr<BootParameters> boot)
- {
+@@ -501,0 +506 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +  DolphinWebTraceBootStatus("BootUp entered");
-   SConfig& config = SConfig::GetInstance();
- 
-   // Triforce systems are region free and always must use the NTSC video mode
-@@ -521,18 +526,24 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
-     }
-     bool operator()(BootParameters::Disc& disc) const
-     {
+@@ -523,0 +529 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("Booting disc");
-       NOTICE_LOG_FMT(BOOT, "Booting from disc: {}", disc.path);
-       const DiscIO::VolumeDisc* volume =
-           SetDisc(system.GetDVDInterface(), std::move(disc.volume), disc.auto_disc_change_paths);
+@@ -526,0 +533 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("Disc inserted");
-       AchievementManager::GetInstance().LoadGame(volume);
+@@ -527,0 +535 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("Achievements loaded");
- 
-       if (!volume)
-         return false;
- 
+@@ -531,0 +540 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("EmulatedBS2 entering");
-       if (!EmulatedBS2(system, guard, system.IsWii(), *volume, riivolution_patches))
-         return false;
+@@ -533,0 +543 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("EmulatedBS2 completed");
- 
-       SConfig::OnTitleDirectlyBooted(guard);
+@@ -535,0 +546 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +      DolphinWebTraceBootStatus("Title direct boot notified");
-       return true;
-     }
- 
-@@ -675,8 +686,10 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
-   if (!std::visit(BootTitle(system, guard, boot->riivolution_patches), boot->parameters))
-     return false;
- 
+@@ -677,0 +689 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +  DolphinWebTraceBootStatus("Applying general memory patches");
-   DiscIO::Riivolution::ApplyGeneralMemoryPatches(guard, boot->riivolution_patches);
- 
+@@ -679,0 +692 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 +  DolphinWebTraceBootStatus("BootUp returning true");
-   return true;
- }
- 
 diff --git a/Source/Core/Core/Boot/Boot_BS2Emu.cpp b/Source/Core/Core/Boot/Boot_BS2Emu.cpp
 index a44796d..6f18ed5 100644
 --- a/Source/Core/Core/Boot/Boot_BS2Emu.cpp
 +++ b/Source/Core/Core/Boot/Boot_BS2Emu.cpp
-@@ -44,6 +44,14 @@
- #include "VideoCommon/XFMemory.h"
- #include "VideoCommon/XFStateManager.h"
- 
+@@ -46,0 +47,8 @@
 +static void DolphinWebTraceBS2Status(const char*)
 +{
 +}
@@ -605,158 +664,63 @@ index a44796d..6f18ed5 100644
 +{
 +}
 +
- namespace
- {
- void PresetTimeBaseTicks(Core::System& system, const Core::CPUThreadGuard& guard)
-@@ -65,8 +73,13 @@ void CBoot::RunFunction(Core::System& system, u32 address)
-   ppc_state.pc = address;
-   LR(ppc_state) = 0x00;
- 
+@@ -67,0 +76 @@ void CBoot::RunFunction(Core::System& system, u32 address)
 +  int step_count = 0;
-   while (ppc_state.pc != 0x00)
+@@ -68,0 +78,2 @@ void CBoot::RunFunction(Core::System& system, u32 address)
 +  {
 +    DolphinWebTracePPCStep("RunFunction", ppc_state.pc, step_count);
-     power_pc.SingleStep();
+@@ -69,0 +81,2 @@ void CBoot::RunFunction(Core::System& system, u32 address)
 +    ++step_count;
 +  }
- }
- 
- void CBoot::SetupMSR(Core::System& system)
-@@ -142,6 +155,7 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
-                          const DiscIO::VolumeDisc& volume,
-                          const std::vector<DiscIO::Riivolution::Patch>& riivolution_patches)
- {
+@@ -144,0 +158 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("RunApploader entered");
-   const DiscIO::Partition partition = volume.GetGamePartition();
- 
-   // Load Apploader to Memory - The apploader is hardcoded to begin at 0x2440 on the disc,
-@@ -155,7 +169,9 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
-     INFO_LOG_FMT(BOOT, "Invalid apploader. Your disc image is probably corrupted.");
-     return false;
-   }
+@@ -157,0 +172 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Apploader header read");
-   DVDRead(system, volume, offset + 0x20, 0x01200000, *size + *trailer, partition);
+@@ -158,0 +174 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Apploader copied to memory");
- 
-   // TODO - Make Apploader(or just RunFunction()) debuggable!!!
- 
-@@ -169,32 +185,38 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
- 
-   // Call iAppLoaderEntry.
-   DEBUG_LOG_FMT(BOOT, "Call iAppLoaderEntry");
+@@ -171,0 +188 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Calling iAppLoaderEntry");
-   const u32 iAppLoaderFuncAddr = is_wii ? 0x80004000 : 0x80003100;
-   ppc_state.gpr[3] = iAppLoaderFuncAddr + 0;
-   ppc_state.gpr[4] = iAppLoaderFuncAddr + 4;
-   ppc_state.gpr[5] = iAppLoaderFuncAddr + 8;
-   RunFunction(system, *entry);
+@@ -176,0 +194 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("iAppLoaderEntry returned");
-   const u32 iAppLoaderInit = mmu.Read<u32>(iAppLoaderFuncAddr + 0);
-   const u32 iAppLoaderMain = mmu.Read<u32>(iAppLoaderFuncAddr + 4);
-   const u32 iAppLoaderClose = mmu.Read<u32>(iAppLoaderFuncAddr + 8);
- 
-   // iAppLoaderInit
-   DEBUG_LOG_FMT(BOOT, "Call iAppLoaderInit");
+@@ -182,0 +201 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Calling iAppLoaderInit");
-   PowerPC::MMU::HostWrite<u32>(guard, 0x4E800020, 0x81300000);  // Write BLR
-   HLE::Patch(system, 0x81300000, "AppLoaderReport");            // HLE OSReport for Apploader
-   ppc_state.gpr[3] = 0x81300000;
-   RunFunction(system, iAppLoaderInit);
+@@ -186,0 +206 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("iAppLoaderInit returned");
- 
-   // iAppLoaderMain - Here we load the apploader, the DOL (the exe) and the FST (filesystem).
-   // To give you an idea about where the stuff is located on the disc take a look at yagcd
-   // ch 13.
-   DEBUG_LOG_FMT(BOOT, "Call iAppLoaderMain");
+@@ -191,0 +212 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Calling iAppLoaderMain");
- 
-   ppc_state.gpr[3] = 0x81300004;
-   ppc_state.gpr[4] = 0x81300008;
-   ppc_state.gpr[5] = 0x8130000c;
- 
-   RunFunction(system, iAppLoaderMain);
+@@ -197,0 +219 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("iAppLoaderMain returned");
- 
-   // iAppLoaderMain returns 1 if the pointers in R3/R4/R5 were filled with values for DVD copy
-   // Typical behaviour is doing it once for each section defined in the DOL header. Some unlicensed
-@@ -202,6 +224,7 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
-   // iAppLoaderMain returns 0 when there are no more sections to copy.
-   while (ppc_state.gpr[3] != 0x00)
-   {
+@@ -204,0 +227 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +    DolphinWebTraceBS2Status("Apploader DVD copy iteration");
-     const u32 ram_address = mmu.Read<u32>(0x81300004);
-     const u32 length = mmu.Read<u32>(0x81300008);
-     const u32 dvd_offset = mmu.Read<u32>(0x8130000c) << (is_wii ? 2 : 0);
-@@ -218,11 +241,14 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
-     ppc_state.gpr[5] = 0x8130000c;
- 
-     RunFunction(system, iAppLoaderMain);
+@@ -220,0 +244 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +    DolphinWebTraceBS2Status("iAppLoaderMain iteration returned");
-   }
- 
-   // iAppLoaderClose
-   DEBUG_LOG_FMT(BOOT, "call iAppLoaderClose");
+@@ -224,0 +249 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("Calling iAppLoaderClose");
-   RunFunction(system, iAppLoaderClose);
+@@ -225,0 +251 @@ bool CBoot::RunApploader(Core::System& system, const Core::CPUThreadGuard& guard
 +  DolphinWebTraceBS2Status("iAppLoaderClose returned");
-   HLE::UnPatch(system, "AppLoaderReport");
- 
-   // return
-@@ -289,15 +315,20 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
-                            const DiscIO::VolumeDisc& volume,
-                            const std::vector<DiscIO::Riivolution::Patch>& riivolution_patches)
- {
+@@ -291,0 +318 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("EmulatedBS2_GC entered");
-   INFO_LOG_FMT(BOOT, "Faking GC BS2...");
- 
-   auto& ppc_state = system.GetPPCState();
- 
-   SetupMSR(system);
+@@ -296,0 +324 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("MSR set up");
-   SetupHID(ppc_state, /*is_wii*/ false);
+@@ -297,0 +326 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("HID set up");
-   SetupBAT(system, /*is_wii*/ false);
+@@ -298,0 +328 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("BAT set up");
- 
-   SetupGCMemory(system, guard);
+@@ -300,0 +331 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("GC memory set up");
- 
-   // Datel titles don't initialize the postMatrices, but they have dual-texture coordinate
-   // transformation enabled. We initialize all of xfmem to 0, which results in everything using
-@@ -312,6 +343,7 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
-   xf_state_manager.InvalidateXFRange(XFMEM_POSTMATRICES + 0x3d * 4, XFMEM_POSTMATRICES_END);
- 
-   DVDReadDiscID(system, volume, 0x00000000);
+@@ -314,0 +346 @@ bool CBoot::EmulatedBS2_GC(Core::System& system, const Core::CPUThreadGuard& gua
 +  DolphinWebTraceBS2Status("Disc ID copied");
- 
-   auto& memory = system.GetMemory();
-   bool streaming = memory.Read_U8(0x80000008);
 diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
-index e411239..83cad32 100644
+index e411239..1dfe915 100644
 --- a/Source/Core/Core/CMakeLists.txt
 +++ b/Source/Core/Core/CMakeLists.txt
-@@ -772,7 +772,7 @@ elseif(APPLE)
-     HW/EXI/BBA/TAP_Apple.cpp
-   )
-   target_link_libraries(core PUBLIC ${IOB_LIBRARY})
+@@ -775 +775 @@ elseif(APPLE)
 -elseif(UNIX)
 +elseif(UNIX AND NOT EMSCRIPTEN)
-   target_sources(core PRIVATE
-     HW/EXI/BBA/TAP_Unix.cpp
-   )
-@@ -820,7 +820,7 @@ if(TARGET Hidapi::Hidapi)
-   target_compile_definitions(core PRIVATE -DHAVE_HIDAPI=1)
- endif()
- 
+@@ -823 +823 @@ endif()
 -if(UNIX)
 +if(UNIX AND NOT EMSCRIPTEN)
-   target_sources(core PRIVATE
-     MemoryWatcher.cpp
-     MemoryWatcher.h
-@@ -845,3 +845,46 @@ if(USE_RETRO_ACHIEVEMENTS)
-     target_compile_definitions(core PUBLIC -DRC_CLIENT_SUPPORTS_RAINTEGRATION)
-   endif()
- endif()
+@@ -847,0 +848,43 @@ endif()
 +
 +if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
 +  add_executable(dolphin_web_core ${DOLPHIN_WASM_CORE_SOURCE})
@@ -796,7 +760,7 @@ index e411239..83cad32 100644
 +    "-sSTACK_SIZE=5242880"
 +    "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
 +    "-sPTHREAD_POOL_SIZE=16"
-+    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_GetPpcProfileStats','_BootDisc','_StopCore','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetCPUCoreName','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
 +    "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8']"
 +  )
 +endif()
@@ -804,31 +768,19 @@ diff --git a/Source/Core/Core/Core.cpp b/Source/Core/Core/Core.cpp
 index cebcc74..e8b31e3 100644
 --- a/Source/Core/Core/Core.cpp
 +++ b/Source/Core/Core/Core.cpp
-@@ -16,6 +16,12 @@
- #include <fmt/chrono.h>
- #include <fmt/format.h>
- 
+@@ -18,0 +19,6 @@
 +#ifdef __EMSCRIPTEN__
 +#include <emscripten/emscripten.h>
 +#include <emscripten/threading.h>
 +#include <pthread.h>
 +#endif
 +
- #ifdef _WIN32
- #include <windows.h>
- #endif
-@@ -91,12 +97,277 @@
- #include "VideoCommon/VideoBackendBase.h"
- #include "VideoCommon/VideoEvents.h"
- 
+@@ -93,0 +100,4 @@
 +static void DolphinWebTraceCoreStatus(const char*)
 +{
 +}
 +
- namespace Core
- {
- static bool s_wants_determinism;
- 
+@@ -97,0 +108,261 @@ static bool s_wants_determinism;
 +#ifdef __EMSCRIPTEN__
 +class DolphinWebThread
 +{
@@ -1090,16 +1042,10 @@ index cebcc74..e8b31e3 100644
 +#endif
 +}
 +
- // Declarations and definitions
+@@ -99 +370 @@ static bool s_wants_determinism;
 -static std::thread s_emu_thread;
 +static DolphinThread s_emu_thread;
- static Common::HookableEvent<Core::State> s_state_changed_event;
- 
- static bool s_is_throttler_temp_disabled = false;
-@@ -218,6 +489,14 @@ bool WantsDeterminism()
- bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const WindowSystemInfo& wsi)
- {
-   std::lock_guard lock(s_core_mutex);
+@@ -220,0 +492,8 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 +  const bool worker_owned_webgl = ReadWorkerOwnedWebGLRequest();
 +  const bool diagnostic_ogl_clear = ReadDiagnosticOglClearRequest();
 +  const bool ogl_readback_present = ReadOglReadbackPresentRequest();
@@ -1108,13 +1054,7 @@ index cebcc74..e8b31e3 100644
 +  SetDiagnosticOglClear(diagnostic_ogl_clear);
 +  SetOglReadbackPresent(ogl_readback_present);
 +  SetFastSoftwareRaster(fast_software_raster);
- 
-   if (s_emu_thread.joinable())
-   {
-@@ -246,7 +525,12 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
- 
-   // Start the emu thread
-   s_state.store(State::Starting);
+@@ -249 +528,6 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 -  s_emu_thread = std::thread(EmuThread, std::ref(system), std::move(boot), prepared_wsi);
 +  if (worker_owned_webgl)
 +    RegisterModuleCanvasForPthreadTransfer();
@@ -1122,129 +1062,46 @@ index cebcc74..e8b31e3 100644
 +      CreateDolphinThread(worker_owned_webgl, [&system, boot = std::move(boot), prepared_wsi]() mutable {
 +        EmuThread(system, std::move(boot), prepared_wsi);
 +      });
-   return true;
- }
- 
-@@ -323,6 +607,8 @@ static void CPUSetInitialExecutionState(Core::System& system, bool force_paused
- static void CpuThread(Core::System& system, const std::optional<std::string>& savestate_path,
-                       bool delete_savestate)
- {
+@@ -325,0 +610,2 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
 +  DolphinWebTraceCoreStatus("CpuThread entered");
 +
-   if (system.IsDualCoreMode())
-     Common::SetCurrentThreadName("CPU thread");
-   else
-@@ -384,7 +670,9 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
-   }
- 
-   // Enter CPU run loop. When we leave it - we are done.
+@@ -386,0 +673 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
 +  DolphinWebTraceCoreStatus("CPU run loop entering");
-   system.GetCPU().Run();
+@@ -387,0 +675 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
 +  DolphinWebTraceCoreStatus("CPU run loop exited");
- 
- #ifdef USE_MEMORYWATCHER
-   s_memory_watcher.reset();
-@@ -469,7 +757,7 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
-     std::promise<bool> init_from_thread;
- 
-     // Spawn the GPU thread.
+@@ -472 +760 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
 -    std::thread gpu_thread{[&] {
 +    DolphinThread gpu_thread = CreateDolphinThread(UseWorkerOwnedWebGL(), [&] {
-       Common::SetCurrentThreadName("Video thread");
- 
-       const bool is_init = init_video();
-@@ -482,7 +770,7 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
-       INFO_LOG_FMT(CONSOLE, "{}", StopMessage(false, "Video Loop Ended"));
- 
-       deinit_video();
+@@ -485 +773 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
 -    }};
 +    });
- 
-     if (init_from_thread.get_future().get())
-     {
-@@ -512,6 +800,7 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
- static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot,
-                       WindowSystemInfo wsi)
- {
+@@ -514,0 +803 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("EmuThread entered");
-   NotifyStateChanged(State::Starting);
-   Common::ScopeGuard flag_guard{[] {
-     {
-@@ -536,9 +825,11 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
- 
-   // Switch the window used for inputs to the render window. This way, the cursor position
-   // is relative to the render window, instead of the main window.
+@@ -538,0 +828 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Checking controller interface");
-   ASSERT(g_controller_interface.IsInit());
-   g_controller_interface.ChangeWindow(wsi.render_window);
- 
+@@ -541,0 +832 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Loading input config");
-   Pad::LoadConfig();
-   Pad::LoadGBAConfig();
-   Keyboard::LoadConfig();
-@@ -577,9 +868,11 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-   system.GetMovie().Init(*boot);
-   Common::ScopeGuard movie_guard([&system] { system.GetMovie().Shutdown(); });
- 
+@@ -579,0 +871 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Initializing audio");
-   AudioCommon::InitSoundStream(system);
-   Common::ScopeGuard audio_guard([&system] { AudioCommon::ShutdownSoundStream(system); });
- 
+@@ -582,0 +875 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Initializing hardware");
-   HW::Init(system,
-            NetPlay::IsNetPlayRunning() ? &(boot_session_data.GetNetplaySettings()->sram) : nullptr);
- 
-@@ -607,6 +900,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-     PanicAlertFmt("Failed to initialize video backend!");
-     return;
-   }
+@@ -609,0 +903 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Video backend initialized");
- 
-   if (cpu_info.HTT)
-     Config::SetBaseOrCurrent(Config::MAIN_DSP_THREAD, cpu_info.num_cores > 4);
-@@ -619,6 +913,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-     PanicAlertFmt("Failed to initialize DSP emulation!");
-     return;
-   }
+@@ -621,0 +916 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("DSP initialized");
- 
-   AudioCommon::PostInitSoundStream(system);
- 
-@@ -639,8 +934,10 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-   {
-     ASSERT(IsCPUThread());
-     CPUThreadGuard guard(system);
+@@ -641,0 +937 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +    DolphinWebTraceCoreStatus("BootUp entering");
-     if (!CBoot::BootUp(system, guard, std::move(boot)))
-       return;
+@@ -643,0 +940 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +    DolphinWebTraceCoreStatus("BootUp completed");
-   }
- 
-   // Initialise Wii filesystem contents.
-@@ -656,6 +953,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-     wiifs_guard.Dismiss();
- 
-   // This adds the SyncGPU handler to CoreTiming, so now CoreTiming::Advance might block.
+@@ -658,0 +956 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Preparing FIFO");
-   system.GetFifo().Prepare();
- 
-   const Common::EventHook frame_presented =
-@@ -674,6 +972,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
-   UpdateTitle(system);
- 
-   // Become the CPU thread.
+@@ -676,0 +975 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 +  DolphinWebTraceCoreStatus("Entering CPU thread function");
-   cpu_thread_func(system, savestate_path, delete_savestate);
- }
- 
 diff --git a/Source/Core/Core/HW/DVD/AMMediaboard.cpp b/Source/Core/Core/HW/DVD/AMMediaboard.cpp
 index e20698e..a6718bc 100644
 --- a/Source/Core/Core/HW/DVD/AMMediaboard.cpp
 +++ b/Source/Core/Core/HW/DVD/AMMediaboard.cpp
-@@ -3,6 +3,94 @@
- 
- #include "Core/HW/DVD/AMMediaboard.h"
- 
+@@ -5,0 +6,88 @@
 +#ifdef __EMSCRIPTEN__
 +
 +namespace AMMediaboard
@@ -1333,23 +1190,14 @@ index e20698e..a6718bc 100644
 +
 +#else
 +
- #include <algorithm>
- #include <bit>
- #include <random>
-@@ -2422,3 +2510,5 @@ s32 DebuggerGetSocket(u32 triforce_fd)
-   return -1;
- }
- }  // namespace AMMediaboard
+@@ -2424,0 +2513,2 @@ s32 DebuggerGetSocket(u32 triforce_fd)
 +
 +#endif
 diff --git a/Source/Core/Core/HW/EXI/BBA/TAPServerConnection.cpp b/Source/Core/Core/HW/EXI/BBA/TAPServerConnection.cpp
 index d70e3ea..9f7fddb 100644
 --- a/Source/Core/Core/HW/EXI/BBA/TAPServerConnection.cpp
 +++ b/Source/Core/Core/HW/EXI/BBA/TAPServerConnection.cpp
-@@ -1,6 +1,72 @@
- // Copyright 2020 Dolphin Emulator Project
- // SPDX-License-Identifier: GPL-2.0-or-later
- 
+@@ -3,0 +4,66 @@
 +#ifdef __EMSCRIPTEN__
 +
 +#include <utility>
@@ -1416,23 +1264,14 @@ index d70e3ea..9f7fddb 100644
 +
 +#else
 +
- #include <cstdlib>
- #include <cstring>
- #include <optional>
-@@ -357,3 +423,5 @@ void TAPServerConnection::ReadThreadHandler()
- }
- 
- }  // namespace ExpansionInterface
+@@ -359,0 +426,2 @@ void TAPServerConnection::ReadThreadHandler()
 +
 +#endif
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.cpp
 index c49c6e3..3dbf3e2 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.cpp
-@@ -22,6 +22,40 @@
- 
- namespace ExpansionInterface
- {
+@@ -24,0 +25,34 @@ namespace ExpansionInterface
 +#ifdef __EMSCRIPTEN__
 +bool CEXIETHERNET::TAPNetworkInterface::Activate()
 +{
@@ -1467,291 +1306,143 @@ index c49c6e3..3dbf3e2 100644
 +}
 +#endif
 +
- // XXX: The BBA stores multi-byte elements as little endian.
- // Multiple parts of this implementation depend on Dolphin
- // being compiled for a little endian host.
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.h b/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.h
 index 00d0fcb..d0576f2 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.h
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceEthernet.h
-@@ -347,8 +347,8 @@ private:
-     void RecvStop() override;
- 
-   protected:
+@@ -350,2 +350,2 @@ private:
 -#if defined(WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||          \
 -    defined(__OpenBSD__)
 +#if defined(WIN32) || defined(__EMSCRIPTEN__) || defined(__linux__) || defined(__APPLE__) ||       \
 +    defined(__FreeBSD__) || defined(__OpenBSD__)
-     std::thread readThread;
-     Common::Flag readEnabled;
-     Common::Flag readThreadShutdown;
-@@ -360,7 +360,8 @@ private:
-     OVERLAPPED mWriteOverlapped = {};
-     std::vector<u8> mWriteBuffer;
-     bool mWritePending = false;
+@@ -363 +363,2 @@ private:
 -#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
 +#elif defined(__EMSCRIPTEN__) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
 +    defined(__OpenBSD__)
-     int fd = -1;
- #endif
-   };
-@@ -411,8 +412,8 @@ private:
-     bool m_chat_osd_enabled;
-     bool m_bba_link_up = false;
-     bool m_bba_failure_notified = false;
+@@ -414,2 +415,2 @@ private:
 -#if defined(WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||          \
 -    defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
 +#if defined(WIN32) || defined(__EMSCRIPTEN__) || defined(__linux__) || defined(__APPLE__) ||       \
 +    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
-     sf::UdpSocket m_sf_socket;
-     sf::IpAddress m_sf_recipient_ip = sf::IpAddress::Any;
-     char m_in_frame[9004]{};
-@@ -455,8 +456,8 @@ private:
-     Common::MACAddress m_router_mac{};
-     std::map<u32, Common::MACAddress> m_arp_table;
-     sf::TcpListener m_upnp_httpd;
+@@ -458,2 +459,2 @@ private:
 -#if defined(WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||          \
 -    defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
 +#if defined(WIN32) || defined(__EMSCRIPTEN__) || defined(__linux__) || defined(__APPLE__) ||       \
 +    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
-     NetworkRef m_network_ref;
-     std::thread m_read_thread;
-     Common::Flag m_read_enabled;
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceMemoryCard.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceMemoryCard.cpp
 index 73ff1d6..7cddbee 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceMemoryCard.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceMemoryCard.cpp
-@@ -45,8 +45,10 @@ namespace ExpansionInterface
- #define MC_STATUS_READY 0x01
- #define SIZE_TO_Mb (1024 * 8 * 16)
- 
+@@ -47,0 +48 @@ namespace ExpansionInterface
 +#ifndef __EMSCRIPTEN__
- static const u32 MC_TRANSFER_RATE_READ = 512 * 1024;
- static const auto MC_TRANSFER_RATE_WRITE = static_cast<u32>(96.125f * 1024.0f);
+@@ -49,0 +51 @@ static const auto MC_TRANSFER_RATE_WRITE = static_cast<u32>(96.125f * 1024.0f);
 +#endif
- 
- static Common::EnumMap<CoreTiming::EventType*, MAX_MEMCARD_SLOT> s_et_cmd_done;
- static Common::EnumMap<CoreTiming::EventType*, MAX_MEMCARD_SLOT> s_et_transfer_complete;
-@@ -242,7 +244,11 @@ CEXIMemoryCard::~CEXIMemoryCard()
- 
- bool CEXIMemoryCard::UseDelayedTransferCompletion() const
- {
+@@ -244,0 +247,3 @@ bool CEXIMemoryCard::UseDelayedTransferCompletion() const
 +#ifdef __EMSCRIPTEN__
 +  return false;
 +#else
-   return true;
+@@ -245,0 +251 @@ bool CEXIMemoryCard::UseDelayedTransferCompletion() const
 +#endif
- }
- 
- bool CEXIMemoryCard::IsPresent() const
-@@ -269,9 +275,13 @@ void CEXIMemoryCard::TransferComplete()
- 
- void CEXIMemoryCard::CmdDoneLater(u64 cycles)
- {
+@@ -271,0 +278,3 @@ void CEXIMemoryCard::CmdDoneLater(u64 cycles)
 +#ifdef __EMSCRIPTEN__
 +  CmdDone();
 +#else
-   auto& core_timing = m_system.GetCoreTiming();
-   core_timing.RemoveEvent(s_et_cmd_done[m_card_slot]);
-   core_timing.ScheduleEvent(cycles, s_et_cmd_done[m_card_slot], static_cast<u64>(m_card_slot));
+@@ -274,0 +284 @@ void CEXIMemoryCard::CmdDoneLater(u64 cycles)
 +#endif
- }
- 
- void CEXIMemoryCard::SetCS(int cs)
-@@ -531,9 +541,11 @@ void CEXIMemoryCard::DMARead(u32 addr, u32 size)
-   }
- 
-   // Schedule transfer complete later based on read speed
+@@ -533,0 +544 @@ void CEXIMemoryCard::DMARead(u32 addr, u32 size)
 +#ifndef __EMSCRIPTEN__
-   m_system.GetCoreTiming().ScheduleEvent(
-       size * (m_system.GetSystemTimers().GetTicksPerSecond() / MC_TRANSFER_RATE_READ),
-       s_et_transfer_complete[m_card_slot], static_cast<u64>(m_card_slot));
+@@ -536,0 +548 @@ void CEXIMemoryCard::DMARead(u32 addr, u32 size)
 +#endif
- }
- 
- // DMA write are preceded by all of the necessary setup via IMMWrite
-@@ -549,8 +561,10 @@ void CEXIMemoryCard::DMAWrite(u32 addr, u32 size)
-   }
- 
-   // Schedule transfer complete later based on write speed
+@@ -551,0 +564 @@ void CEXIMemoryCard::DMAWrite(u32 addr, u32 size)
 +#ifndef __EMSCRIPTEN__
-   m_system.GetCoreTiming().ScheduleEvent(
-       size * (m_system.GetSystemTimers().GetTicksPerSecond() / MC_TRANSFER_RATE_WRITE),
-       s_et_transfer_complete[m_card_slot], static_cast<u64>(m_card_slot));
+@@ -554,0 +568 @@ void CEXIMemoryCard::DMAWrite(u32 addr, u32 size)
 +#endif
- }
- }  // namespace ExpansionInterface
 diff --git a/Source/Core/Core/HW/GCPad.cpp b/Source/Core/Core/HW/GCPad.cpp
 index 188882c..0673f91 100644
 --- a/Source/Core/Core/HW/GCPad.cpp
 +++ b/Source/Core/Core/HW/GCPad.cpp
-@@ -12,6 +12,11 @@
- namespace Pad
- {
- static InputConfig s_config("GCPadNew", _trans("Pad"), "GCPad", "Pad");
+@@ -14,0 +15,5 @@ static InputConfig s_config("GCPadNew", _trans("Pad"), "GCPad", "Pad");
 +
 +#ifdef __EMSCRIPTEN__
 +extern "C" int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status);
 +#endif
 +
- InputConfig* GetConfig()
- {
-   return &s_config;
-@@ -55,6 +60,12 @@ bool IsInitialized()
- 
- GCPadStatus GetStatus(int pad_num)
- {
+@@ -57,0 +63,6 @@ GCPadStatus GetStatus(int pad_num)
 +#ifdef __EMSCRIPTEN__
 +  GCPadStatus web_status = {};
 +  if (DolphinWeb_GetPadStatus(pad_num, &web_status))
 +    return web_status;
 +#endif
 +
-   return static_cast<GCPad*>(s_config.GetController(pad_num))->GetInput();
- }
- 
 diff --git a/Source/Core/Core/HW/Triforce/ICCardReader.cpp b/Source/Core/Core/HW/Triforce/ICCardReader.cpp
 index b438992..736a72d 100644
 --- a/Source/Core/Core/HW/Triforce/ICCardReader.cpp
 +++ b/Source/Core/Core/HW/Triforce/ICCardReader.cpp
-@@ -468,7 +468,7 @@ void ICCardReader::Update()
-     if (!ic_card)
-       break;
- 
+@@ -471 +471 @@ void ICCardReader::Update()
 -    if (!ic_card->WriteData(page, input_payload.subspan(6, PAGE_SIZE)))
 +    if (!ic_card->WriteData(page, input_payload.subspan(6, IC_CARD_PAGE_SIZE)))
-     {
-       status_code = HardwareUntestedErrorCode;
-     }
-@@ -564,7 +564,7 @@ void ICCardReader::Update()
-     if (!ic_card)
-       break;
- 
+@@ -567 +567 @@ void ICCardReader::Update()
 -    const u32 byte_count = page_count * PAGE_SIZE;
 +    const u32 byte_count = page_count * IC_CARD_PAGE_SIZE;
- 
-     if (!validate_input_payload_size(8 + byte_count))
-       break;
-@@ -611,8 +611,8 @@ void ICCardReader::SendReply(u8 command, u16 status_code, std::span<const u8> pa
- 
- std::span<const u8> ICCardReader::ICCard::ReadData(u16 page, u16 page_count)
- {
+@@ -614,2 +614,2 @@ std::span<const u8> ICCardReader::ICCard::ReadData(u16 page, u16 page_count)
 -  const u32 byte_offset = page * PAGE_SIZE;
 -  const u32 byte_count = page_count * PAGE_SIZE;
 +  const u32 byte_offset = page * IC_CARD_PAGE_SIZE;
 +  const u32 byte_count = page_count * IC_CARD_PAGE_SIZE;
- 
-   if (byte_count + byte_offset > m_data.size())
-   {
-@@ -629,10 +629,10 @@ std::span<const u8> ICCardReader::ICCard::ReadData(u16 page, u16 page_count)
- 
- bool ICCardReader::ICCard::WriteData(u16 page, std::span<const u8> write_span)
- {
+@@ -632,2 +632,2 @@ bool ICCardReader::ICCard::WriteData(u16 page, std::span<const u8> write_span)
 -  constexpr u32 read_only_area_begin = READ_ONLY_PAGE_INDEX * PAGE_SIZE;
 -  constexpr u32 read_only_area_end = read_only_area_begin + PAGE_SIZE;
 +  constexpr u32 read_only_area_begin = READ_ONLY_PAGE_INDEX * IC_CARD_PAGE_SIZE;
 +  constexpr u32 read_only_area_end = read_only_area_begin + IC_CARD_PAGE_SIZE;
- 
+@@ -635 +635 @@ bool ICCardReader::ICCard::WriteData(u16 page, std::span<const u8> write_span)
 -  const u32 byte_offset = page * PAGE_SIZE;
 +  const u32 byte_offset = page * IC_CARD_PAGE_SIZE;
- 
-   if ((byte_offset < read_only_area_end) &&
-       (byte_offset + write_span.size() > read_only_area_begin))
-@@ -659,7 +659,7 @@ bool ICCardReader::ICCard::WriteData(u16 page, std::span<const u8> write_span)
- 
- u16 ICCardReader::ICCard::DecreaseUseCount(u16 page, u16 amount)
- {
+@@ -662 +662 @@ u16 ICCardReader::ICCard::DecreaseUseCount(u16 page, u16 amount)
 -  const u32 byte_offset = page * PAGE_SIZE;
 +  const u32 byte_offset = page * IC_CARD_PAGE_SIZE;
-   auto* const addr = m_data.data() + byte_offset;
- 
-   const u16 previous_use_count = Common::swap16(addr);
-@@ -728,7 +728,7 @@ void ICCardReader::ICCard::Initialize()
-   {
-     NOTICE_LOG_FMT(SERIALINTERFACE_CARD, "Creating new IC Card data.");
-     InitializeCardData(m_data);
+@@ -731 +731 @@ void ICCardReader::ICCard::Initialize()
 -    FlushData(READ_ONLY_PAGE_INDEX * PAGE_SIZE, PAGE_SIZE * 2);
 +    FlushData(READ_ONLY_PAGE_INDEX * IC_CARD_PAGE_SIZE, IC_CARD_PAGE_SIZE * 2);
-   }
- }
- 
 diff --git a/Source/Core/Core/HW/Triforce/ICCardReader.h b/Source/Core/Core/HW/Triforce/ICCardReader.h
 index 7f4911c..ad8c43d 100644
 --- a/Source/Core/Core/HW/Triforce/ICCardReader.h
 +++ b/Source/Core/Core/HW/Triforce/ICCardReader.h
-@@ -41,7 +41,7 @@ private:
- 
-   void SendReply(u8 command, u16 status_code, std::span<const u8> payload);
- 
+@@ -44 +44 @@ private:
 -  static constexpr std::size_t PAGE_SIZE = 8;
 +  static constexpr std::size_t IC_CARD_PAGE_SIZE = 8;
-   static constexpr u32 PAGE_COUNT = 256;
- 
-   // TODO: Maybe we're supposed to error for out-of-bound pages instead?
-@@ -50,7 +50,7 @@ private:
-   class ICCard
-   {
-   public:
+@@ -53 +53 @@ private:
 -    using UID = std::array<u8, PAGE_SIZE>;
 +    using UID = std::array<u8, IC_CARD_PAGE_SIZE>;
- 
-     ICCard(std::string filename, const UID& uid);
- 
-@@ -76,7 +76,7 @@ private:
-   private:
-     void FlushData(u32 byte_offset, u32 byte_count);
- 
+@@ -79 +79 @@ private:
 -    std::array<u8, PAGE_SIZE * PAGE_COUNT> m_data{};
 +    std::array<u8, IC_CARD_PAGE_SIZE * PAGE_COUNT> m_data{};
- 
-     const std::string m_filename;
- 
 diff --git a/Source/Core/Core/IOS/Network/Socket.h b/Source/Core/Core/IOS/Network/Socket.h
 index 4f07612..8d68c74 100644
 --- a/Source/Core/Core/IOS/Network/Socket.h
 +++ b/Source/Core/Core/IOS/Network/Socket.h
-@@ -14,14 +14,14 @@ typedef pollfd pollfd_t;
- #define MALLOC(x) HeapAlloc(GetProcessHeap(), 0, (x))
- #define FREE(x) HeapFree(GetProcessHeap(), 0, (x))
- 
+@@ -17,2 +17,2 @@ typedef pollfd pollfd_t;
 -#elif defined(__linux__) or defined(__APPLE__) or defined(__FreeBSD__) or defined(__NetBSD__) or   \
 -    defined(__OpenBSD__) or defined(__HAIKU__)
 +#elif defined(__EMSCRIPTEN__) or defined(__linux__) or defined(__APPLE__) or defined(__FreeBSD__) or \
 +    defined(__NetBSD__) or defined(__OpenBSD__) or defined(__HAIKU__)
- #include <arpa/inet.h>
- #include <netdb.h>
- #include <sys/ioctl.h>
- #include <sys/socket.h>
- #include <sys/types.h>
+@@ -24 +24 @@ typedef pollfd pollfd_t;
 -#if defined(ANDROID) || defined(__HAIKU__)
 +#if defined(ANDROID) || defined(__HAIKU__) || defined(__EMSCRIPTEN__)
- #include <fcntl.h>
- #else
- #include <sys/fcntl.h>
 diff --git a/Source/Core/Core/IOS/USB/Emulated/Microphone.cpp b/Source/Core/Core/IOS/USB/Emulated/Microphone.cpp
 index 4a21c76..d6530b1 100644
 --- a/Source/Core/Core/IOS/USB/Emulated/Microphone.cpp
 +++ b/Source/Core/Core/IOS/USB/Emulated/Microphone.cpp
-@@ -36,9 +36,9 @@ Microphone::Microphone(const MicrophoneState& sampler, std::string worker_name)
- {
- }
- #else
+@@ -39,2 +39 @@ Microphone::Microphone(const MicrophoneState& sampler, std::string worker_name)
 -Microphone::Microphone(MicrophoneState sampler, std::string worker_name)
 -    : m_sampler(std::move(sampler))
 +Microphone::Microphone(const MicrophoneState& sampler, std::string worker_name) : m_sampler(sampler)
- {
+@@ -41,0 +41 @@ Microphone::Microphone(MicrophoneState sampler, std::string worker_name)
 +  (void)worker_name;
- }
- #endif
- 
 diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
-index 3ec24a3..bde8a92 100644
+index 3ec24a3..fce73d7 100644
 --- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
 +++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
-@@ -3,222 +3,8165 @@
- 
- #include "Core/PowerPC/CachedInterpreter/CachedInterpreter.h"
- 
+@@ -5,0 +6,9 @@
 +#include <algorithm>
 +#include <array>
 +#include <bit>
@@ -1761,40 +1452,26 @@ index 3ec24a3..bde8a92 100644
 +#include <initializer_list>
 +#include <limits>
 +#include <optional>
- #include <span>
- #include <sstream>
+@@ -7,0 +17,3 @@
 +#include <string>
 +#include <string_view>
 +#include <type_traits>
- #include <utility>
+@@ -8,0 +21 @@
 +#include <vector>
- 
- #include <fmt/ostream.h>
- 
- #include "Common/CommonTypes.h"
- #include "Common/GekkoDisassembler.h"
- #include "Common/Logging/Log.h"
+@@ -14,0 +28 @@
 +#include "Core/Config/MainSettings.h"
- #include "Core/ConfigManager.h"
- #include "Core/Core.h"
- #include "Core/CoreTiming.h"
- #include "Core/HLE/HLE.h"
- #include "Core/HW/CPU.h"
+@@ -19,0 +34,3 @@
 +#include "Core/HW/GPFifo.h"
 +#include "Core/HW/Memmap.h"
 +#include "Core/HW/SystemTimers.h"
- #include "Core/Host.h"
- #include "Core/PowerPC/Gekko.h"
+@@ -21,0 +39,2 @@
 +#include "Core/PowerPC/Interpreter/ExceptionUtils.h"
 +#include "Core/PowerPC/Interpreter/Interpreter_FPUtils.h"
- #include "Core/PowerPC/Interpreter/Interpreter.h"
- #include "Core/PowerPC/Jit64Common/Jit64Constants.h"
+@@ -23,0 +43 @@
 +#include "Core/PowerPC/MMU.h"
- #include "Core/PowerPC/PPCAnalyst.h"
+@@ -24,0 +45 @@
 +#include "Core/PowerPC/PPCTables.h"
- #include "Core/PowerPC/PowerPC.h"
- #include "Core/System.h"
- 
+@@ -27,0 +49,5079 @@
 +#ifdef __EMSCRIPTEN__
 +#include <emscripten/emscripten.h>
 +
@@ -2894,6 +2571,8 @@ index 3ec24a3..bde8a92 100644
 +};
 +
 +constexpr u32 WASM_IMPORT_FASTCHECK_GPFIFO_INDEX = 14;
++constexpr u32 WASM_GATHER_PIPE_FLUSH_THRESHOLD =
++    GPFifo::GATHER_PIPE_EXTRA_SIZE - GPFifo::GATHER_PIPE_SIZE;
 +
 +void EmitLocalGet(std::vector<u8>& body, u32 index)
 +{
@@ -3931,7 +3610,7 @@ index 3ec24a3..bde8a92 100644
 +  EmitStateLoadU32(body, layout.gather_pipe_ptr_offset);
 +  EmitStateLoadU32(body, layout.gather_pipe_base_ptr_offset);
 +  body.push_back(0x6b);
-+  EmitI32Const(body, GPFifo::GATHER_PIPE_SIZE);
++  EmitI32Const(body, WASM_GATHER_PIPE_FLUSH_THRESHOLD);
 +  body.push_back(0x4f);
 +  body.push_back(0x04);
 +  body.push_back(0x40);
@@ -4784,14 +4463,21 @@ index 3ec24a3..bde8a92 100644
 +
 +bool IsSinglePrecisionArithmeticSubop(u32 subop5)
 +{
-+  return subop5 == 20 || subop5 == 21 || subop5 == 25 || subop5 == 28 || subop5 == 29 ||
-+         subop5 == 30 || subop5 == 31;
++  return subop5 == 18 || subop5 == 20 || subop5 == 21 || subop5 == 25 || subop5 == 28 ||
++         subop5 == 29 || subop5 == 30 || subop5 == 31;
++}
++
++bool IsDoublePrecisionArithmeticSubop(u32 subop5)
++{
++  return subop5 == 18 || subop5 == 20 || subop5 == 21 || subop5 == 25 || subop5 == 28 ||
++         subop5 == 29 || subop5 == 30 || subop5 == 31;
 +}
 +
 +void EmitSinglePrecisionArithmetic(std::vector<u8>& body, const WasmStateLayout& layout,
 +                                   const PPCAnalyst::CodeOp& op, u32 downcount)
 +{
 +  const UGeckoInstruction inst = op.inst;
++  const bool divide = inst.SUBOP5 == 18;
 +  const bool multiply_only = inst.SUBOP5 == 25;
 +  const bool add_or_madd = inst.SUBOP5 == 21 || inst.SUBOP5 == 29 || inst.SUBOP5 == 31;
 +  const bool negative = inst.SUBOP5 == 30 || inst.SUBOP5 == 31;
@@ -4799,15 +4485,23 @@ index 3ec24a3..bde8a92 100644
 +  EmitFpuAvailableOrFallback(body, op, layout, downcount);
 +
 +  EmitStateLoadF64(body, PsOffset(layout, inst.FA, 0));
-+  if (multiply_only || inst.SUBOP5 >= 28)
-+  {
-+    EmitStateLoadF64(body, PsOffset(layout, inst.FC, 0));
-+    body.push_back(0xa2);
-+  }
-+  if (!multiply_only)
++  if (divide)
 +  {
 +    EmitStateLoadF64(body, PsOffset(layout, inst.FB, 0));
-+    body.push_back(add_or_madd ? 0xa0 : 0xa1);
++    body.push_back(0xa3);
++  }
++  else
++  {
++    if (multiply_only || inst.SUBOP5 >= 28)
++    {
++      EmitStateLoadF64(body, PsOffset(layout, inst.FC, 0));
++      body.push_back(0xa2);
++    }
++    if (!multiply_only)
++    {
++      EmitStateLoadF64(body, PsOffset(layout, inst.FB, 0));
++      body.push_back(add_or_madd ? 0xa0 : 0xa1);
++    }
 +  }
 +  body.push_back(0xb6);
 +  body.push_back(0xbb);
@@ -4828,6 +4522,51 @@ index 3ec24a3..bde8a92 100644
 +  body.push_back(0x0b);
 +}
 +
++void EmitDoublePrecisionArithmetic(std::vector<u8>& body, const WasmStateLayout& layout,
++                                   const PPCAnalyst::CodeOp& op, u32 downcount)
++{
++  const UGeckoInstruction inst = op.inst;
++  const bool divide = inst.SUBOP5 == 18;
++  const bool multiply_only = inst.SUBOP5 == 25;
++  const bool add_or_madd = inst.SUBOP5 == 21 || inst.SUBOP5 == 29 || inst.SUBOP5 == 31;
++  const bool negative = inst.SUBOP5 == 30 || inst.SUBOP5 == 31;
++
++  EmitFpuAvailableOrFallback(body, op, layout, downcount);
++
++  EmitStateLoadF64(body, PsOffset(layout, inst.FA, 0));
++  if (divide)
++  {
++    EmitStateLoadF64(body, PsOffset(layout, inst.FB, 0));
++    body.push_back(0xa3);
++  }
++  else if (multiply_only || inst.SUBOP5 >= 28)
++  {
++    EmitStateLoadF64(body, PsOffset(layout, inst.FC, 0));
++    body.push_back(0xa2);
++    if (!multiply_only)
++    {
++      EmitStateLoadF64(body, PsOffset(layout, inst.FB, 0));
++      body.push_back(add_or_madd ? 0xa0 : 0xa1);
++    }
++  }
++  else
++  {
++    EmitStateLoadF64(body, PsOffset(layout, inst.FB, 0));
++    body.push_back(add_or_madd ? 0xa0 : 0xa1);
++  }
++  if (negative)
++    body.push_back(0x9a);
++  EmitLocalSet(body, 6);
++
++  EmitStateStoreU32Prefix(body);
++  EmitLocalGet(body, 6);
++  EmitStateStoreF64Suffix(body, PsOffset(layout, inst.FD, 0));
++
++  body.push_back(0x05);
++  EmitFpCall(body, op, downcount);
++  body.push_back(0x0b);
++}
++
 +bool IsPairedQuantizedFloatMemoryCandidate(UGeckoInstruction inst)
 +{
 +  switch (inst.OPCD)
@@ -4838,6 +4577,29 @@ index 3ec24a3..bde8a92 100644
 +  case 57:  // psq_lu
 +  case 61:  // psq_stu
 +    return inst.RA != 0;
++  default:
++    return false;
++  }
++}
++
++bool IsPpcWasmDirectHelperFpuInstruction(UGeckoInstruction inst)
++{
++  if (inst.Rc || inst.OPCD != 63)
++    return false;
++
++  switch (inst.SUBOP5)
++  {
++  case 18:  // fdivx
++  case 20:  // fsubx
++  case 21:  // faddx
++  case 23:  // fselx
++  case 25:  // fmulx
++  case 26:  // frsqrtex
++  case 28:  // fmsubx
++  case 29:  // fmaddx
++  case 30:  // fnmsubx
++  case 31:  // fnmaddx
++    return true;
 +  default:
 +    return false;
 +  }
@@ -4866,6 +4628,9 @@ index 3ec24a3..bde8a92 100644
 +
 +  if (inst.OPCD == 63)
 +  {
++    if (IsDoublePrecisionArithmeticSubop(inst.SUBOP5) && !inst.Rc)
++      return true;
++
 +    if (inst.SUBOP10 == 15)  // fctiwzx
 +      return true;
 +
@@ -5257,6 +5022,8 @@ index 3ec24a3..bde8a92 100644
 +
 +  EM_ASM(
 +      {
++        if (!Module.dolphinWebVerbosePpcJit)
++          return;
 +        const reason = UTF8ToString($0);
 +        const opname = $1 ? UTF8ToString($1) : "-";
 +        const inst = ($2 >>> 0).toString(16).padStart(8, "0");
@@ -6423,6 +6190,11 @@ index 3ec24a3..bde8a92 100644
 +    return true;
 +
 +  case 63:
++    if (IsDoublePrecisionArithmeticSubop(inst.SUBOP5) && !inst.Rc)
++    {
++      EmitDoublePrecisionArithmetic(body, layout, op, downcount);
++      return true;
++    }
 +    if ((inst.SUBOP10 == 0 || inst.SUBOP10 == 32) && !inst.Rc)
 +    {
 +      EmitFloatCompare(body, layout, op, downcount);
@@ -6468,11 +6240,10 @@ index 3ec24a3..bde8a92 100644
 +
 +  const UGeckoInstruction inst = op.inst;
 +
-+  // Direct-tier JIT admits FPU only when this file has a specialized emitter for the opcode.
-+  // Unsupported FPU instructions would compile as imported helper calls, which is slower than the
-+  // cached interpreter on Melee's hot title-screen blocks.
++  // Direct-tier JIT admits FPU only when this file has a specialized emitter or a known hot helper
++  // fallback. Letting every FPU helper through regresses Melee's title-screen blocks.
 +  if ((op.opinfo->flags & FL_USE_FPU) != 0)
-+    return IsPpcWasmSpecializedFpuInstruction(inst);
++    return IsPpcWasmSpecializedFpuInstruction(inst) || IsPpcWasmDirectHelperFpuInstruction(inst);
 +
 +  switch (inst.OPCD)
 +  {
@@ -6780,10 +6551,7 @@ index 3ec24a3..bde8a92 100644
 +}  // namespace
 +#endif
 +
- CachedInterpreter::CachedInterpreter(Core::System& system) : JitBase(system), m_block_cache(*this)
- {
- }
- 
+@@ -32 +5132,2537 @@ CachedInterpreter::CachedInterpreter(Core::System& system) : JitBase(system), m_
 -CachedInterpreter::~CachedInterpreter() = default;
 +CachedInterpreter::~CachedInterpreter() = default;
 +
@@ -9232,44 +9000,34 @@ index 3ec24a3..bde8a92 100644
 +{
 +  s_wasm_jit_enabled = enabled != 0;
 +}
- 
--void CachedInterpreter::Init()
++
 +extern "C" void SetPpcProfileEnabled(int enabled)
- {
--  RefreshConfig();
++{
 +  const bool next_enabled = enabled != 0;
 +  if (next_enabled && !s_ppc_block_profile_enabled)
 +    ResetPpcBlockProfile();
 +  s_ppc_block_profile_enabled = next_enabled;
 +}
- 
--  AllocCodeSpace(CODE_SIZE);
--  ResetFreeMemoryRanges();
++
 +extern "C" const char* GetPpcProfileStats()
 +{
 +  static std::string stats;
 +  static u32 last_refresh_total_blocks = 0;
 +  constexpr u32 STATS_REFRESH_BLOCKS = 1000000;
- 
--  jo.enableBlocklink = false;
++
 +  if (!s_ppc_block_profile_enabled)
 +  {
 +    stats.clear();
 +    return stats.c_str();
 +  }
- 
--  m_block_cache.Init();
++
 +  if (!stats.empty() &&
 +      s_ppc_profile_total_blocks - last_refresh_total_blocks < STATS_REFRESH_BLOCKS)
 +  {
 +    return stats.c_str();
 +  }
 +  last_refresh_total_blocks = s_ppc_profile_total_blocks;
- 
--  code_block.m_stats = &js.st;
--  code_block.m_gpa = &js.gpa;
--  code_block.m_fpa = &js.fpa;
--}
++
 +  std::vector<PpcBlockProfileEntry> hot_blocks;
 +  hot_blocks.reserve(16);
 +  for (const PpcBlockProfileEntry& entry : s_ppc_profile_entries)
@@ -9277,10 +9035,7 @@ index 3ec24a3..bde8a92 100644
 +    if (entry.count != 0)
 +      hot_blocks.push_back(entry);
 +  }
- 
--void CachedInterpreter::Shutdown()
--{
--  m_block_cache.Shutdown();
++
 +  const std::size_t top_count = std::min<std::size_t>(hot_blocks.size(), 8);
 +  std::partial_sort(hot_blocks.begin(), hot_blocks.begin() + top_count, hot_blocks.end(),
 +                    [](const auto& lhs, const auto& rhs) {
@@ -9312,13 +9067,10 @@ index 3ec24a3..bde8a92 100644
 +  stats = out.str();
 +  ResetPpcBlockProfileWindow();
 +  return stats.c_str();
- }
- 
--void CachedInterpreter::ExecuteOneBlock()
++}
++
 +extern "C" const char* GetPpcWasmHelperStats()
- {
--  const u8* normal_entry = m_block_cache.Dispatch();
--  if (!normal_entry)
++{
 +  static std::string stats;
 +  static u32 last_refresh_block_run_count = 0;
 +  static u32 last_refresh_direct_tier_reject_count = 0;
@@ -9329,57 +9081,33 @@ index 3ec24a3..bde8a92 100644
 +      s_wasm_block_run_count - last_refresh_block_run_count < STATS_REFRESH_BLOCK_RUNS &&
 +      s_wasm_direct_tier_reject_count == last_refresh_direct_tier_reject_count &&
 +      s_fast_dcbx_loop_blocks == last_refresh_dcbx_loop_blocks)
-   {
--    Jit(m_ppc_state.pc);
--    return;
++  {
 +    return stats.c_str();
-   }
++  }
 +  last_refresh_block_run_count = s_wasm_block_run_count;
 +  last_refresh_direct_tier_reject_count = s_wasm_direct_tier_reject_count;
 +  last_refresh_dcbx_loop_blocks = s_fast_dcbx_loop_blocks;
- 
--  auto& ppc_state = m_ppc_state;
--  while (true)
++
 +  std::vector<std::pair<u32, u32>> hot_keys;
 +  hot_keys.reserve(16);
-+
+@@ -34,3 +7670,6 @@ CachedInterpreter::~CachedInterpreter() = default;
+-void CachedInterpreter::Init()
+-{
+-  RefreshConfig();
 +  for (std::size_t key = 0; key < s_wasm_helper_key_counts.size(); ++key)
-   {
--    const auto callback = *reinterpret_cast<const AnyCallback*>(normal_entry);
--    const u8* payload = normal_entry + sizeof(callback);
--    // Direct dispatch to the most commonly used callbacks for better performance
--    if (callback == AnyCallbackCast(Interpret<false>)) [[likely]]
--    {
--      Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
--      normal_entry = payload + sizeof(InterpretOperands);
--    }
--    else if (callback == AnyCallbackCast(Interpret<true>))
--    {
--      Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
--      normal_entry = payload + sizeof(InterpretOperands);
--    }
--    else
--    {
--      if (const auto distance = callback(ppc_state, payload))
--        normal_entry += distance;
--      else
--        break;
--    }
++  {
 +    const u32 count = s_wasm_helper_key_counts[key];
 +    if (count != 0)
 +      hot_keys.emplace_back(count, static_cast<u32>(key));
-   }
--}
- 
--void CachedInterpreter::Run()
--{
--  auto& core_timing = m_system.GetCoreTiming();
++  }
+@@ -38,2 +7677,3 @@ void CachedInterpreter::Init()
+-  AllocCodeSpace(CODE_SIZE);
+-  ResetFreeMemoryRanges();
 +  const std::size_t top_count = std::min<std::size_t>(hot_keys.size(), 8);
 +  std::partial_sort(hot_keys.begin(), hot_keys.begin() + top_count, hot_keys.end(),
 +                    [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
- 
--  const CPU::State* state_ptr = m_system.GetCPU().GetStatePtr();
--  while (*state_ptr == CPU::State::Running)
+@@ -41 +7681,90 @@ void CachedInterpreter::Init()
+-  jo.enableBlocklink = false;
 +  std::ostringstream out;
 +  out << (s_wasm_jit_direct_only ? "tier:guarded " : "tier:mixed ");
 +  out << "reject:" << s_wasm_direct_tier_reject_count << " ";
@@ -9390,10 +9118,7 @@ index 3ec24a3..bde8a92 100644
 +      << " fctiwz:" << s_wasm_fctiwz_call_count << " psqfast:" << s_wasm_psq_fast_c_count
 +      << " gpfifo:" << s_wasm_gpfifo_fastcheck_count;
 +  if (s_fast_dcbx_loop_blocks != 0)
-   {
--    // Start new timing slice
--    // NOTE: Exceptions may change PC
--    core_timing.Advance();
++  {
 +    out << " | dcbloop blocks:" << s_fast_dcbx_loop_blocks
 +        << " lines:" << s_fast_dcbx_loop_lines
 +        << " extra:" << s_fast_dcbx_loop_extra_iterations;
@@ -9473,8 +9198,8 @@ index 3ec24a3..bde8a92 100644
 +        << " bx:" << s_fast_branch_bx_ops << " bclr:" << s_fast_branch_bclrx_ops
 +        << " bcctr:" << s_fast_branch_bcctrx_ops;
 +  }
- 
--    do
+@@ -43 +7772,8 @@ void CachedInterpreter::Init()
+-  m_block_cache.Init();
 +  std::vector<std::pair<u32, u32>> hot_direct_rejects;
 +  hot_direct_rejects.reserve(16);
 +  for (std::size_t key = 0; key < s_wasm_direct_reject_key_counts.size(); ++key)
@@ -9483,7 +9208,11 @@ index 3ec24a3..bde8a92 100644
 +    if (count != 0)
 +      hot_direct_rejects.emplace_back(count, static_cast<u32>(key));
 +  }
-+
+@@ -45,4 +7781,12 @@ void CachedInterpreter::Init()
+-  code_block.m_stats = &js.st;
+-  code_block.m_gpa = &js.gpa;
+-  code_block.m_fpa = &js.fpa;
+-}
 +  const std::size_t direct_reject_top_count =
 +      std::min<std::size_t>(hot_direct_rejects.size(), 6);
 +  std::partial_sort(hot_direct_rejects.begin(),
@@ -9496,7 +9225,11 @@ index 3ec24a3..bde8a92 100644
 +    const u32 key = hot_direct_rejects[i].second;
 +    out << " | rej" << (key >> 10) << "/" << (key & 0x3ff) << ":" << count;
 +  }
-+
+@@ -50,4 +7794,8 @@ void CachedInterpreter::Init()
+-void CachedInterpreter::Shutdown()
+-{
+-  m_block_cache.Shutdown();
+-}
 +  for (std::size_t i = 0; i < top_count; ++i)
 +  {
 +    const u32 count = hot_keys[i].first;
@@ -9505,11 +9238,17 @@ index 3ec24a3..bde8a92 100644
 +    const u32 subop = key & 0x3ff;
 +    out << " | " << opcd << "/" << subop << ":" << count;
 +  }
-+
+@@ -55,4 +7803,3 @@ void CachedInterpreter::Shutdown()
+-void CachedInterpreter::ExecuteOneBlock()
+-{
+-  const u8* normal_entry = m_block_cache.Dispatch();
+-  if (!normal_entry)
 +  std::vector<std::pair<u32, u32>> hot_system_keys;
 +  hot_system_keys.reserve(16);
 +  for (std::size_t key = 0; key < s_wasm_system_key_counts.size(); ++key)
-+  {
+@@ -60,2 +7807,13 @@ void CachedInterpreter::ExecuteOneBlock()
+-    Jit(m_ppc_state.pc);
+-    return;
 +    const u32 count = s_wasm_system_key_counts[key];
 +    if (count != 0)
 +      hot_system_keys.emplace_back(count, static_cast<u32>(key));
@@ -9523,12 +9262,33 @@ index 3ec24a3..bde8a92 100644
 +    const u32 count = hot_system_keys[i].first;
 +    const u32 key = hot_system_keys[i].second;
 +    out << " | sys" << (key >> 10) << "/" << (key & 0x3ff) << ":" << count;
-+  }
-+
+@@ -64,2 +7822,3 @@ void CachedInterpreter::ExecuteOneBlock()
+-  auto& ppc_state = m_ppc_state;
+-  while (true)
 +  std::vector<std::pair<u32, u32>> hot_fp_keys;
 +  hot_fp_keys.reserve(16);
 +  for (std::size_t key = 0; key < s_wasm_fp_key_counts.size(); ++key)
-+  {
+@@ -67,20 +7826,12 @@ void CachedInterpreter::ExecuteOneBlock()
+-    const auto callback = *reinterpret_cast<const AnyCallback*>(normal_entry);
+-    const u8* payload = normal_entry + sizeof(callback);
+-    // Direct dispatch to the most commonly used callbacks for better performance
+-    if (callback == AnyCallbackCast(Interpret<false>)) [[likely]]
+-    {
+-      Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+-      normal_entry = payload + sizeof(InterpretOperands);
+-    }
+-    else if (callback == AnyCallbackCast(Interpret<true>))
+-    {
+-      Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+-      normal_entry = payload + sizeof(InterpretOperands);
+-    }
+-    else
+-    {
+-      if (const auto distance = callback(ppc_state, payload))
+-        normal_entry += distance;
+-      else
+-        break;
+-    }
 +    const u32 count = s_wasm_fp_key_counts[key];
 +    if (count != 0)
 +      hot_fp_keys.emplace_back(count, static_cast<u32>(key));
@@ -9541,8 +9301,12 @@ index 3ec24a3..bde8a92 100644
 +    const u32 count = hot_fp_keys[i].first;
 +    const u32 key = hot_fp_keys[i].second;
 +    out << " | fp" << (key >> 10) << "/" << (key & 0x3ff) << ":" << count;
-+  }
-+
+@@ -88 +7838,0 @@ void CachedInterpreter::ExecuteOneBlock()
+-}
+@@ -90,3 +7840,8 @@ void CachedInterpreter::ExecuteOneBlock()
+-void CachedInterpreter::Run()
+-{
+-  auto& core_timing = m_system.GetCoreTiming();
 +  static constexpr std::array<std::string_view, static_cast<u32>(PsqFallbackReason::Count)>
 +      psq_fallback_labels = {"nofp", "le", "lsqe", "nonfloat", "mem", "ra0", "miss"};
 +  for (std::size_t i = 0; i < psq_fallback_labels.size(); ++i)
@@ -9551,11 +9315,16 @@ index 3ec24a3..bde8a92 100644
 +    if (count != 0)
 +      out << " | psq-" << psq_fallback_labels[i] << ":" << count;
 +  }
-+
+@@ -94,2 +7849,3 @@ void CachedInterpreter::Run()
+-  const CPU::State* state_ptr = m_system.GetCPU().GetStatePtr();
+-  while (*state_ptr == CPU::State::Running)
 +  std::vector<std::pair<u32, u32>> hot_psq_types;
 +  hot_psq_types.reserve(8);
 +  for (std::size_t key = 0; key < s_wasm_psq_type_scale_counts.size(); ++key)
-+  {
+@@ -97,3 +7853,17 @@ void CachedInterpreter::Run()
+-    // Start new timing slice
+-    // NOTE: Exceptions may change PC
+-    core_timing.Advance();
 +    const u32 count = s_wasm_psq_type_scale_counts[key];
 +    if (count != 0)
 +      hot_psq_types.emplace_back(count, static_cast<u32>(key));
@@ -9573,12 +9342,13 @@ index 3ec24a3..bde8a92 100644
 +        << (subkey & 0x3f) << ":" << hot_psq_types[i].first << "@"
 +        << std::hex << s_wasm_psq_type_scale_sample_addresses[key] << std::dec;
 +  }
-+
+@@ -101 +7871,4 @@ void CachedInterpreter::Run()
+-    do
 +  auto append_hot_sprs = [&out](std::string_view label, const std::array<u32, 1024>& counts) {
 +    std::vector<std::pair<u32, u32>> hot_sprs;
 +    hot_sprs.reserve(8);
 +    for (std::size_t index = 0; index < counts.size(); ++index)
-     {
+@@ -103,2 +7876,34 @@ void CachedInterpreter::Run()
 -      ExecuteOneBlock();
 -    } while (m_ppc_state.downcount > 0 && *state_ptr == CPU::State::Running);
 +      const u32 count = counts[index];
@@ -9615,14 +9385,13 @@ index 3ec24a3..bde8a92 100644
 +    out << " | br" << (key >> 5) << "/" << (key & 31) << ":" << count << "@"
 +        << std::hex << s_wasm_helper_branch_sample_pcs[key] << "/"
 +        << s_wasm_helper_branch_sample_insts[key] << std::dec;
-   }
+@@ -105,0 +7911,2 @@ void CachedInterpreter::Run()
 +  stats = out.str();
 +  return stats.c_str();
- }
- 
+@@ -108 +7915 @@ void CachedInterpreter::Run()
 -void CachedInterpreter::SingleStep()
 +extern "C" int TestPpcWasmDirectCandidate(u32 inst_hex)
- {
+@@ -110,3 +7917,5 @@ void CachedInterpreter::SingleStep()
 -  // Enter new timing slice
 -  m_system.GetCoreTiming().Advance();
 -  ExecuteOneBlock();
@@ -9631,12 +9400,11 @@ index 3ec24a3..bde8a92 100644
 +  op.address = 0x80003100;
 +  op.opinfo = PPCTables::GetOpInfo(op.inst, op.address);
 +  return IsPpcWasmDirectInstructionCandidate(op) ? 1 : 0;
- }
- 
+@@ -115,2 +7924 @@ void CachedInterpreter::SingleStep()
 -s32 CachedInterpreter::StartProfiledBlock(PowerPC::PowerPCState& ppc_state,
 -                                          const StartProfiledBlockOperands& operands)
 +extern "C" int TestDcbxLoopPattern(u32 dcbx_hex, u32 addi_hex, u32 third_hex, u32 fourth_hex)
- {
+@@ -118,2 +7926,23 @@ s32 CachedInterpreter::StartProfiledBlock(PowerPC::PowerPCState& ppc_state,
 -  JitBlock::ProfileData::BeginProfiling(operands.profile_data);
 -  return sizeof(AnyCallback) + sizeof(operands);
 +  constexpr u32 dcbx_address = 0x80003000;
@@ -9662,13 +9430,12 @@ index 3ec24a3..bde8a92 100644
 +  }
 +
 +  return 0;
- }
- 
+@@ -122,3 +7951 @@ s32 CachedInterpreter::StartProfiledBlock(PowerPC::PowerPCState& ppc_state,
 -template <bool profiled>
 -s32 CachedInterpreter::EndBlock(PowerPC::PowerPCState& ppc_state,
 -                                const EndBlockOperands<profiled>& operands)
 +extern "C" int TestPpcWasmDirectCandidateCompiles(u32 inst_hex)
- {
+@@ -126,7 +7953,36 @@ s32 CachedInterpreter::EndBlock(PowerPC::PowerPCState& ppc_state,
 -  ppc_state.pc = ppc_state.npc;
 -  ppc_state.downcount -= operands.downcount;
 -  PowerPC::UpdatePerformanceMonitor(operands.downcount, operands.num_load_stores,
@@ -9712,13 +9479,12 @@ index 3ec24a3..bde8a92 100644
 +
 +  const int handle = CompileWasmCachedInterpreterBlockForTest(bytes);
 +  return handle > 0 ? 1 : -2;
- }
- 
+@@ -135,3 +7991 @@ s32 CachedInterpreter::EndBlock(PowerPC::PowerPCState& ppc_state,
 -template <bool write_pc>
 -s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
 -                                 const InterpretOperands& operands)
 +extern "C" int RunPpcWasmMultipleWordMemorySmoke()
- {
+@@ -139 +7993,20 @@ s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
 -  if constexpr (write_pc)
 +  auto& state = Core::System::GetInstance().GetPPCState();
 +  std::array<u8, 256> ram{};
@@ -9740,31 +9506,31 @@ index 3ec24a3..bde8a92 100644
 +    return 10;
 +  if (DolphinWeb_CachedInterpreterRunWasmBlockForTest(
 +          store_handle, static_cast<int>(reinterpret_cast<std::uintptr_t>(&state))) != 0)
-   {
+@@ -141,2 +8014 @@ s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
 -    ppc_state.pc = operands.current_pc;
 -    ppc_state.npc = operands.current_pc + 4;
 +    return 11;
-   }
+@@ -144,3 +8015,0 @@ s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
 -  operands.func(operands.interpreter, operands.inst);
 -  return sizeof(AnyCallback) + sizeof(operands);
 -}
- 
+@@ -148,5 +8017 @@ s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
 -template <bool write_pc>
 -s32 CachedInterpreter::InterpretAndCheckExceptions(
 -    PowerPC::PowerPCState& ppc_state, const InterpretAndCheckExceptionsOperands& operands)
 -{
 -  if constexpr (write_pc)
 +  for (u32 reg = 18; reg <= 31; ++reg)
-   {
+@@ -154,2 +8019,4 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -    ppc_state.pc = operands.current_pc;
 -    ppc_state.npc = operands.current_pc + 4;
 +    const u32 expected = 0x90000000u | (reg * 0x010101u);
 +    if (!ReadRamU32BEForWasmBlockTest(ram, 0x20 + (reg - 18) * sizeof(u32), expected))
 +      return 20 + static_cast<int>(reg - 18);
 +    state.gpr[reg] = 0;
-   }
+@@ -157 +8023,0 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -  operands.func(operands.interpreter, operands.inst);
- 
+@@ -159 +8025,9 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -  if ((ppc_state.Exceptions & (EXCEPTION_DSI | EXCEPTION_PROGRAM)) != 0)
 +  const std::array<PPCAnalyst::CodeOp, 1> load_ops = {
 +      MakeWasmBlockTestOp(EncodeDFormForWasmBlockTest(46, 18, 1, 0), 0x80003104)};
@@ -9775,16 +9541,16 @@ index 3ec24a3..bde8a92 100644
 +    return 40;
 +  if (DolphinWeb_CachedInterpreterRunWasmBlockForTest(
 +          load_handle, static_cast<int>(reinterpret_cast<std::uintptr_t>(&state))) != 0)
-   {
+@@ -161,4 +8035 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -    ppc_state.pc = operands.current_pc;
 -    ppc_state.downcount -= operands.downcount;
 -    operands.power_pc.CheckExceptions();
 -    return 0;
 +    return 41;
-   }
+@@ -166,2 +8036,0 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -  return sizeof(AnyCallback) + sizeof(operands);
 -}
- 
+@@ -169,7 +8038,9 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 -s32 CachedInterpreter::HLEFunction(PowerPC::PowerPCState& ppc_state,
 -                                   const HLEFunctionOperands& operands)
 -{
@@ -9801,16 +9567,14 @@ index 3ec24a3..bde8a92 100644
 +      return 50 + static_cast<int>(reg - 18);
 +  }
 +  return state.npc == 0x80003108 ? 1 : 70;
- }
- 
+@@ -178,2 +8049 @@ s32 CachedInterpreter::HLEFunction(PowerPC::PowerPCState& ppc_state,
 -s32 CachedInterpreter::WriteBrokenBlockNPC(PowerPC::PowerPCState& ppc_state,
 -                                           const WriteBrokenBlockNPCOperands& operands)
 +extern "C" int RunPpcWasmSinglePrecisionArithmeticSmoke()
- {
+@@ -181,3 +8051,69 @@ s32 CachedInterpreter::WriteBrokenBlockNPC(PowerPC::PowerPCState& ppc_state,
 -  const auto& [current_pc] = operands;
 -  ppc_state.npc = current_pc;
 -  return sizeof(AnyCallback) + sizeof(operands);
--}
 +  auto& state = Core::System::GetInstance().GetPPCState();
 +  std::array<u8, 64> ram{};
 +  state.npc = 0;
@@ -9823,11 +9587,8 @@ index 3ec24a3..bde8a92 100644
 +  state.ps[4].Fill(0.0);
 +  state.ps[5].Fill(0.0);
 +  state.ps[6].Fill(0.0);
- 
--s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHaltOperands& operands)
--{
--  const auto& [power_pc, current_pc, downcount] = operands;
--  if (!ppc_state.msr.FP)
++  state.ps[7].Fill(0.0);
++
 +  const WasmStateLayout layout =
 +      MakeWasmBlockTestLayout(state, ram.data(), static_cast<u32>(ram.size()));
 +  auto run_op = [&](UGeckoInstruction inst, u32 address, u32 next_pc) {
@@ -9846,15 +9607,9 @@ index 3ec24a3..bde8a92 100644
 +    return 10;
 +  if (!NearlyEqualForWasmBlockTest(state.ps[1].PS0AsDouble(), 3.75) ||
 +      !NearlyEqualForWasmBlockTest(state.ps[1].PS1AsDouble(), 3.75))
-   {
--    ppc_state.pc = current_pc;
--    ppc_state.downcount -= downcount;
--    ppc_state.Exceptions |= EXCEPTION_FPU_UNAVAILABLE;
--    power_pc.CheckExceptions();
--    return 0;
++  {
 +    return 11;
-   }
--  return sizeof(AnyCallback) + sizeof(operands);
++  }
 +
 +  if (run_op(EncodeAFormForWasmBlockTest(59, 4, 3, 2, 0, 20), 0x80003204, 0x80003208) != 0)
 +    return 20;
@@ -9864,29 +9619,127 @@ index 3ec24a3..bde8a92 100644
 +    return 21;
 +  }
 +
-+  if (run_op(EncodeAFormForWasmBlockTest(59, 5, 2, 0, 3, 25), 0x80003208, 0x8000320c) != 0)
++  if (run_op(EncodeAFormForWasmBlockTest(59, 7, 2, 3, 0, 18), 0x80003208, 0x8000320c) != 0)
 +    return 30;
-+  if (!NearlyEqualForWasmBlockTest(state.ps[5].PS0AsDouble(), 3.375) ||
-+      !NearlyEqualForWasmBlockTest(state.ps[5].PS1AsDouble(), 3.375))
++  if (!NearlyEqualForWasmBlockTest(state.ps[7].PS0AsDouble(), 0.6666666865) ||
++      !NearlyEqualForWasmBlockTest(state.ps[7].PS1AsDouble(), 0.6666666865))
 +  {
 +    return 31;
 +  }
 +
-+  if (run_op(EncodeAFormForWasmBlockTest(59, 6, 2, 3, 2, 29), 0x8000320c, 0x80003210) != 0)
++  if (run_op(EncodeAFormForWasmBlockTest(59, 5, 2, 0, 3, 25), 0x8000320c, 0x80003210) != 0)
 +    return 40;
-+  if (!NearlyEqualForWasmBlockTest(state.ps[6].PS0AsDouble(), 4.5) ||
-+      !NearlyEqualForWasmBlockTest(state.ps[6].PS1AsDouble(), 4.5))
++  if (!NearlyEqualForWasmBlockTest(state.ps[5].PS0AsDouble(), 3.375) ||
++      !NearlyEqualForWasmBlockTest(state.ps[5].PS1AsDouble(), 3.375))
 +  {
 +    return 41;
 +  }
 +
-+  return state.npc == 0x80003210 ? 1 : 50;
- }
- 
++  if (run_op(EncodeAFormForWasmBlockTest(59, 6, 2, 3, 2, 29), 0x80003210, 0x80003214) != 0)
++    return 50;
++  if (!NearlyEqualForWasmBlockTest(state.ps[6].PS0AsDouble(), 4.5) ||
++      !NearlyEqualForWasmBlockTest(state.ps[6].PS1AsDouble(), 4.5))
++  {
++    return 51;
++  }
++
++  return state.npc == 0x80003214 ? 1 : 60;
+@@ -186 +8122 @@ s32 CachedInterpreter::WriteBrokenBlockNPC(PowerPC::PowerPCState& ppc_state,
+-s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHaltOperands& operands)
++extern "C" int RunPpcWasmDoublePrecisionArithmeticSmoke()
+@@ -188,2 +8124,34 @@ s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHal
+-  const auto& [power_pc, current_pc, downcount] = operands;
+-  if (!ppc_state.msr.FP)
++  auto& state = Core::System::GetInstance().GetPPCState();
++  std::array<u8, 64> ram{};
++  state.npc = 0;
++  state.msr.Hex = 1u << 13;
++  state.Exceptions = 0;
++  state.fpscr.Hex = 0;
++  state.ps[1].SetBoth(-1.0, 101.0);
++  state.ps[2].SetPS0(9.0);
++  state.ps[3].SetPS0(4.5);
++  state.ps[4].SetPS0(3.0);
++  state.ps[5].SetBoth(-1.0, 105.0);
++  state.ps[6].SetBoth(-1.0, 106.0);
++  state.ps[7].SetBoth(-1.0, 107.0);
++  state.ps[8].SetBoth(-1.0, 108.0);
++  state.ps[9].SetBoth(-1.0, 109.0);
++
++  const WasmStateLayout layout =
++      MakeWasmBlockTestLayout(state, ram.data(), static_cast<u32>(ram.size()));
++  auto run_op = [&](UGeckoInstruction inst, u32 address, u32 next_pc) {
++    const std::array<PPCAnalyst::CodeOp, 1> ops = {MakeWasmBlockTestOp(inst, address)};
++    const std::vector<u8> bytes = BuildWasmCachedInterpreterBlock(ops, layout, next_pc, true);
++    if (bytes.empty())
++      return -1;
++    const int handle = CompileWasmCachedInterpreterBlockForTest(bytes);
++    if (handle <= 0)
++      return -2;
++    return DolphinWeb_CachedInterpreterRunWasmBlockForTest(
++        handle, static_cast<int>(reinterpret_cast<std::uintptr_t>(&state)));
++  };
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 1, 2, 3, 0, 21), 0x80003600, 0x80003604) != 0)
++    return 10;
++  if (!NearlyEqualForWasmBlockTest(state.ps[1].PS0AsDouble(), 13.5) ||
++      !NearlyEqualForWasmBlockTest(state.ps[1].PS1AsDouble(), 101.0))
+@@ -191,5 +8159 @@ s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHal
+-    ppc_state.pc = current_pc;
+-    ppc_state.downcount -= downcount;
+-    ppc_state.Exceptions |= EXCEPTION_FPU_UNAVAILABLE;
+-    power_pc.CheckExceptions();
+-    return 0;
++    return 11;
+@@ -197 +8161,42 @@ s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHal
+-  return sizeof(AnyCallback) + sizeof(operands);
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 5, 2, 4, 0, 18), 0x80003604, 0x80003608) != 0)
++    return 20;
++  if (!NearlyEqualForWasmBlockTest(state.ps[5].PS0AsDouble(), 3.0) ||
++      !NearlyEqualForWasmBlockTest(state.ps[5].PS1AsDouble(), 105.0))
++  {
++    return 21;
++  }
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 6, 2, 0, 4, 25), 0x80003608, 0x8000360c) != 0)
++    return 30;
++  if (!NearlyEqualForWasmBlockTest(state.ps[6].PS0AsDouble(), 27.0) ||
++      !NearlyEqualForWasmBlockTest(state.ps[6].PS1AsDouble(), 106.0))
++  {
++    return 31;
++  }
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 7, 2, 3, 0, 20), 0x8000360c, 0x80003610) != 0)
++    return 40;
++  if (!NearlyEqualForWasmBlockTest(state.ps[7].PS0AsDouble(), 4.5) ||
++      !NearlyEqualForWasmBlockTest(state.ps[7].PS1AsDouble(), 107.0))
++  {
++    return 41;
++  }
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 8, 2, 3, 4, 29), 0x80003610, 0x80003614) != 0)
++    return 50;
++  if (!NearlyEqualForWasmBlockTest(state.ps[8].PS0AsDouble(), 31.5) ||
++      !NearlyEqualForWasmBlockTest(state.ps[8].PS1AsDouble(), 108.0))
++  {
++    return 51;
++  }
++
++  if (run_op(EncodeAFormForWasmBlockTest(63, 9, 2, 3, 4, 30), 0x80003614, 0x80003618) != 0)
++    return 60;
++  if (!NearlyEqualForWasmBlockTest(state.ps[9].PS0AsDouble(), -22.5) ||
++      !NearlyEqualForWasmBlockTest(state.ps[9].PS1AsDouble(), 109.0))
++  {
++    return 61;
++  }
++
++  return state.npc == 0x80003618 ? 1 : 70;
+@@ -200,2 +8205 @@ s32 CachedInterpreter::CheckFPU(PowerPC::PowerPCState& ppc_state, const CheckHal
 -s32 CachedInterpreter::CheckBreakpoint(PowerPC::PowerPCState& ppc_state,
 -                                       const CheckHaltOperands& operands)
 +extern "C" int RunPpcWasmPairedQuantizedMemorySmoke()
- {
+@@ -203,3 +8207,36 @@ s32 CachedInterpreter::CheckBreakpoint(PowerPC::PowerPCState& ppc_state,
 -  const auto& [power_pc, current_pc, downcount] = operands;
 -  ppc_state.pc = current_pc;
 -  if (power_pc.CheckAndHandleBreakPoints())
@@ -9926,12 +9779,12 @@ index 3ec24a3..bde8a92 100644
 +    return 10;
 +  if (!NearlyEqualForWasmBlockTest(state.ps[1].PS0AsDouble(), 1.5) ||
 +      !NearlyEqualForWasmBlockTest(state.ps[1].PS1AsDouble(), -2.25))
-   {
+@@ -207,3 +8244 @@ s32 CachedInterpreter::CheckBreakpoint(PowerPC::PowerPCState& ppc_state,
 -    // Accessing PowerPCState through power_pc instead of ppc_state produces better assembly.
 -    power_pc.GetPPCState().downcount -= downcount;
 -    return 0;
 +    return 11;
-   }
+@@ -211 +8246,51 @@ s32 CachedInterpreter::CheckBreakpoint(PowerPC::PowerPCState& ppc_state,
 -  return sizeof(AnyCallback) + sizeof(operands);
 +
 +  if (run_op(EncodeDFormForWasmBlockTest(60, 3, 2, 8), 0x80003404, 0x80003408) != 0)
@@ -9984,12 +9837,11 @@ index 3ec24a3..bde8a92 100644
 +    return 51;
 +
 +  return state.npc == 0x80003414 ? 1 : 60;
- }
- 
+@@ -214,2 +8299 @@ s32 CachedInterpreter::CheckBreakpoint(PowerPC::PowerPCState& ppc_state,
 -s32 CachedInterpreter::CheckIdle(PowerPC::PowerPCState& ppc_state,
 -                                 const CheckIdleOperands& operands)
 +extern "C" int RunPpcWasmFloatCompareSmoke()
- {
+@@ -217,4 +8301,48 @@ s32 CachedInterpreter::CheckIdle(PowerPC::PowerPCState& ppc_state,
 -  const auto& [core_timing, idle_pc] = operands;
 -  if (ppc_state.npc == idle_pc)
 -    core_timing.Idle();
@@ -10042,27 +9894,15 @@ index 3ec24a3..bde8a92 100644
 +    return result;
 +
 +  return state.npc == 0x8000330c ? 1 : 40;
- }
+@@ -221,0 +8350 @@ s32 CachedInterpreter::CheckIdle(PowerPC::PowerPCState& ppc_state,
 +#endif
- 
- bool CachedInterpreter::HandleFunctionHooking(u32 address)
- {
-@@ -354,6 +8297,11 @@ bool CachedInterpreter::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
-   auto& cpu = m_system.GetCPU();
-   auto& breakpoints = power_pc.GetBreakPoints();
- 
+@@ -356,0 +8486,5 @@ bool CachedInterpreter::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 +#ifdef __EMSCRIPTEN__
 +  if (TryWriteWasmBlock(nextPC))
 +    return true;
 +#endif
 +
-   if (IsProfilingEnabled())
-     Write(StartProfiledBlock, {js.curBlock->profile_data.get()});
- 
-@@ -400,10 +8348,15 @@ bool CachedInterpreter::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
-       }
-       else
-       {
+@@ -403,4 +8537,9 @@ bool CachedInterpreter::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 -        const InterpretOperands operands = {interpreter, Interpreter::GetInterpreterOp(op.inst),
 -                                            js.compilerPC, op.inst};
 -        Write(op.canEndBlock ? CallbackCast(Interpret<true>) : CallbackCast(Interpret<false>),
@@ -10076,17 +9916,11 @@ index 3ec24a3..bde8a92 100644
 +          Write(op.canEndBlock ? CallbackCast(Interpret<true>) : CallbackCast(Interpret<false>),
 +                operands);
 +        }
-       }
- 
-       if (op.branchIsIdleLoop)
 diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
 index dd940e8..f76a5df 100644
 --- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
 +++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
-@@ -71,16 +71,32 @@ private:
-   void ResetFreeMemoryRanges();
- 
-   void LogGeneratedCode() const;
+@@ -73,0 +74,9 @@ private:
 +  bool TryWriteFastInstruction(const PPCAnalyst::CodeOp& op,
 +                               PowerPC::PowerPCManager& power_pc);
 +  bool TryWriteMeleeTitleLoop(u32 index, PowerPC::PowerPCManager& power_pc);
@@ -10096,30 +9930,16 @@ index dd940e8..f76a5df 100644
 +#ifdef __EMSCRIPTEN__
 +  bool TryWriteWasmBlock(u32 nextPC);
 +#endif
- 
-   struct StartProfiledBlockOperands;
-   template <bool profiled>
-   struct EndBlockOperands;
-   struct InterpretOperands;
-   struct InterpretAndCheckExceptionsOperands;
+@@ -79,0 +89,4 @@ private:
 +  struct FastInstructionOperands;
 +  struct MeleeTitleLoopOperands;
 +  struct OsInterruptFunctionOperands;
 +  struct DcbxLoopOperands;
-   struct HLEFunctionOperands;
-   struct WriteBrokenBlockNPCOperands;
-   struct CheckHaltOperands;
-   struct CheckIdleOperands;
+@@ -83,0 +97,3 @@ private:
 +#ifdef __EMSCRIPTEN__
 +  struct WasmBlockOperands;
 +#endif
- 
-   static s32 StartProfiledBlock(PowerPC::PowerPCState& ppc_state,
-                                 const StartProfiledBlockOperands& operands);
-@@ -99,6 +115,43 @@ private:
-   template <bool write_pc>
-   static s32 InterpretAndCheckExceptions(std::ostream& stream,
-                                          const InterpretAndCheckExceptionsOperands& operands);
+@@ -101,0 +118,37 @@ private:
 +  static s32 FastMfmsr(PowerPC::PowerPCState& ppc_state,
 +                       const FastInstructionOperands& operands);
 +  static s32 FastMfmsr(std::ostream& stream, const FastInstructionOperands& operands);
@@ -10157,24 +9977,12 @@ index dd940e8..f76a5df 100644
 +  static s32 FastDcbxLoop(PowerPC::PowerPCState& ppc_state,
 +                          const DcbxLoopOperands& operands);
 +  static s32 FastDcbxLoop(std::ostream& stream, const DcbxLoopOperands& operands);
-   static s32 HLEFunction(PowerPC::PowerPCState& ppc_state, const HLEFunctionOperands& operands);
-   static s32 HLEFunction(std::ostream& stream, const HLEFunctionOperands& operands);
-   static s32 WriteBrokenBlockNPC(PowerPC::PowerPCState& ppc_state,
-@@ -110,6 +163,10 @@ private:
-   static s32 CheckBreakpoint(std::ostream& stream, const CheckHaltOperands& operands);
-   static s32 CheckIdle(PowerPC::PowerPCState& ppc_state, const CheckIdleOperands& operands);
-   static s32 CheckIdle(std::ostream& stream, const CheckIdleOperands& operands);
+@@ -112,0 +166,4 @@ private:
 +#ifdef __EMSCRIPTEN__
 +  static s32 RunWasmBlock(PowerPC::PowerPCState& ppc_state, const WasmBlockOperands& operands);
 +  static s32 RunWasmBlock(std::ostream& stream, const WasmBlockOperands& operands);
 +#endif
- 
-   Common::RangeSizeSet<u8*> m_free_ranges;
-   CachedInterpreterBlockCache m_block_cache;
-@@ -149,6 +206,42 @@ struct CachedInterpreter::InterpretAndCheckExceptionsOperands : InterpretOperand
-   u32 downcount;
- };
- 
+@@ -151,0 +209,36 @@ struct CachedInterpreter::InterpretAndCheckExceptionsOperands : InterpretOperand
 +struct CachedInterpreter::FastInstructionOperands
 +{
 +  PowerPC::PowerPCManager& power_pc;
@@ -10211,13 +10019,7 @@ index dd940e8..f76a5df 100644
 +  u32 loop_mode;
 +};
 +
- struct CachedInterpreter::HLEFunctionOperands
- {
-   Core::System& system;
-@@ -174,3 +267,15 @@ struct CachedInterpreter::CheckIdleOperands
-   CoreTiming::CoreTimingManager& core_timing;
-   u32 idle_pc;
- };
+@@ -176,0 +270,12 @@ struct CachedInterpreter::CheckIdleOperands
 +
 +#ifdef __EMSCRIPTEN__
 +struct CachedInterpreter::WasmBlockOperands
@@ -10234,10 +10036,7 @@ diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disass
 index 6653297..66dd045 100644
 --- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
 +++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
-@@ -89,6 +89,113 @@ s32 CachedInterpreter::CheckIdle(std::ostream& stream, const CheckIdleOperands&
-   return sizeof(AnyCallback) + sizeof(operands);
- }
- 
+@@ -91,0 +92,107 @@ s32 CachedInterpreter::CheckIdle(std::ostream& stream, const CheckIdleOperands&
 +s32 CachedInterpreter::FastMfmsr(std::ostream& stream, const FastInstructionOperands& operands)
 +{
 +  const auto& [power_pc, current_pc, inst] = operands;
@@ -10345,13 +10144,7 @@ index 6653297..66dd045 100644
 +}
 +#endif
 +
- static std::once_flag s_sorted_lookup_flag;
- 
- std::size_t CachedInterpreter::Disassemble(const JitBlock& block, std::ostream& stream)
-@@ -114,6 +221,21 @@ std::size_t CachedInterpreter::Disassemble(const JitBlock& block, std::ostream&
-       LOOKUP_KV(CachedInterpreter::CheckFPU),
-       LOOKUP_KV(CachedInterpreter::CheckBreakpoint),
-       LOOKUP_KV(CachedInterpreter::CheckIdle),
+@@ -116,0 +224,15 @@ std::size_t CachedInterpreter::Disassemble(const JitBlock& block, std::ostream&
 +      LOOKUP_KV(CachedInterpreter::FastMfmsr),
 +      LOOKUP_KV(CachedInterpreter::FastMtmsr),
 +      LOOKUP_KV(CachedInterpreter::FastMfspr),
@@ -10367,17 +10160,11 @@ index 6653297..66dd045 100644
 +#ifdef __EMSCRIPTEN__
 +      LOOKUP_KV(CachedInterpreter::RunWasmBlock),
 +#endif
-   });
- 
- #undef LOOKUP_KV
 diff --git a/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp b/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
 index 4eecedc..726b18c 100644
 --- a/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
 +++ b/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
-@@ -318,13 +318,16 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
-   }
-   else if (length > 32)
-   {
+@@ -321,7 +321,10 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
 -    // Even if we can't check the set for optimization, we still want to remove all fully covered
 -    // cache lines from the valid_block set so that later calls don't try to invalidate already
 -    // cleared regions.
@@ -10395,17 +10182,11 @@ index 4eecedc..726b18c 100644
 +        valid_block.ClearRangeAndTestAny(static_cast<u32>(first_block), static_cast<u32>(end_block));
 +    if (!forced && !had_valid_blocks)
 +      destroy_block = false;
-   }
- 
-   if (destroy_block)
 diff --git a/Source/Core/Core/PowerPC/JitCommon/JitCache.h b/Source/Core/Core/PowerPC/JitCommon/JitCache.h
 index 4b5ac6f..9e924b9 100644
 --- a/Source/Core/Core/PowerPC/JitCommon/JitCache.h
 +++ b/Source/Core/Core/PowerPC/JitCommon/JitCache.h
-@@ -140,6 +140,40 @@ public:
-   void Clear(u32 bit) { m_valid_block[bit / 32] &= ~(1u << (bit % 32)); }
-   void ClearAll() { memset(m_valid_block.get(), 0, sizeof(u32) * VALID_BLOCK_ALLOC_ELEMENTS); }
-   bool Test(u32 bit) const { return (m_valid_block[bit / 32] & (1u << (bit % 32))) != 0; }
+@@ -142,0 +143,34 @@ public:
 +
 +  bool ClearRangeAndTestAny(u32 first_bit, u32 end_bit)
 +  {
@@ -10440,35 +10221,20 @@ index 4b5ac6f..9e924b9 100644
 +    m_valid_block[last_word] &= ~last_mask;
 +    return any;
 +  }
- };
- 
- class JitBaseBlockCache
 diff --git a/Source/Core/DiscIO/CMakeLists.txt b/Source/Core/DiscIO/CMakeLists.txt
 index bfec96d..cb13e49 100644
 --- a/Source/Core/DiscIO/CMakeLists.txt
 +++ b/Source/Core/DiscIO/CMakeLists.txt
-@@ -70,7 +70,6 @@ add_library(discio
- 
- target_link_libraries(discio
- PUBLIC
+@@ -73 +72,0 @@ PUBLIC
 -  core
-   BZip2::BZip2
-   LibLZMA::LibLZMA
-   zstd::zstd
-@@ -82,7 +81,42 @@ PRIVATE
-   ZLIB::ZLIB
- )
- 
+@@ -84,0 +84,6 @@ PRIVATE
 +if(EMSCRIPTEN)
 +  target_link_libraries(discio PUBLIC common)
 +else()
 +  target_link_libraries(discio PUBLIC core)
 +endif()
 +
- if(MSVC)
-   # Add precompiled header
-   target_link_libraries(discio PRIVATE use_pch)
- endif()
+@@ -88,0 +94,29 @@ endif()
 +
 +if(EMSCRIPTEN AND DOLPHIN_WASM_BRIDGE_SOURCE)
 +  add_executable(dolphin_web_discio ${DOLPHIN_WASM_BRIDGE_SOURCE})
@@ -10502,69 +10268,40 @@ diff --git a/Source/Core/InputCommon/CMakeLists.txt b/Source/Core/InputCommon/CM
 index 0e5612f..64febf2 100644
 --- a/Source/Core/InputCommon/CMakeLists.txt
 +++ b/Source/Core/InputCommon/CMakeLists.txt
-@@ -144,7 +144,7 @@ elseif(ANDROID)
-   )
- endif()
- 
+@@ -147 +147 @@ endif()
 -if(NOT ANDROID)
 +if(TARGET LibUSB::LibUSB)
-   target_link_libraries(inputcommon PUBLIC LibUSB::LibUSB)
- endif()
- 
 diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
 index e11d95d..e68a029 100644
 --- a/Source/Core/InputCommon/GCAdapter.cpp
 +++ b/Source/Core/InputCommon/GCAdapter.cpp
-@@ -3,12 +3,15 @@
- 
- #include "InputCommon/GCAdapter.h"
- 
+@@ -6 +6 @@
 -#ifndef ANDROID
 +#if !defined(ANDROID) && !defined(__EMSCRIPTEN__)
- #define GCADAPTER_USE_LIBUSB_IMPLEMENTATION true
- #define GCADAPTER_USE_ANDROID_IMPLEMENTATION false
+@@ -9 +9 @@
 -#else
 +#elif defined(ANDROID)
- #define GCADAPTER_USE_LIBUSB_IMPLEMENTATION false
- #define GCADAPTER_USE_ANDROID_IMPLEMENTATION true
+@@ -11,0 +12,3 @@
 +#else
 +#define GCADAPTER_USE_LIBUSB_IMPLEMENTATION false
 +#define GCADAPTER_USE_ANDROID_IMPLEMENTATION false
- #endif
- 
- #include <array>
-@@ -1070,6 +1073,10 @@ bool IsDetected(const char** error_message)
-   return false;
- #elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
-   return s_detected;
+@@ -1072,0 +1076,4 @@ bool IsDetected(const char** error_message)
 +#else
 +  if (error_message)
 +    *error_message = "GC adapter USB backend is unavailable in this build.";
 +  return false;
- #endif
- }
- 
 diff --git a/Source/Core/VideoBackends/OGL/OGLMain.cpp b/Source/Core/VideoBackends/OGL/OGLMain.cpp
 index df0c28a..6a7a929 100644
 --- a/Source/Core/VideoBackends/OGL/OGLMain.cpp
 +++ b/Source/Core/VideoBackends/OGL/OGLMain.cpp
-@@ -39,6 +39,12 @@ Make AA apply instantly during gameplay if possible
- #include <string>
- #include <vector>
- 
+@@ -41,0 +42,6 @@ Make AA apply instantly during gameplay if possible
 +#ifdef __EMSCRIPTEN__
 +#include <emscripten/emscripten.h>
 +
 +extern "C" int DolphinWeb_UseWorkerOwnedWebGL();
 +#endif
 +
- #include "Common/Common.h"
- #include "Common/GL/GLContext.h"
- #include "Common/GL/GLUtil.h"
-@@ -60,6 +66,39 @@ Make AA apply instantly during gameplay if possible
- 
- namespace OGL
- {
+@@ -62,0 +69,33 @@ namespace OGL
 +#ifdef __EMSCRIPTEN__
 +namespace
 +{
@@ -10598,13 +10335,7 @@ index df0c28a..6a7a929 100644
 +}  // namespace
 +#endif
 +
- std::string VideoBackend::GetConfigName() const
- {
-   return CONFIG_NAME;
-@@ -75,6 +114,16 @@ std::string VideoBackend::GetDisplayName() const
- 
- void VideoBackend::InitBackendInfo(const WindowSystemInfo& wsi)
- {
+@@ -77,0 +117,10 @@ void VideoBackend::InitBackendInfo(const WindowSystemInfo& wsi)
 +#ifdef __EMSCRIPTEN__
 +  if (UseWorkerOwnedWebGL())
 +  {
@@ -10615,17 +10346,11 @@ index df0c28a..6a7a929 100644
 +  }
 +#endif
 +
-   std::unique_ptr<GLContext> temp_gl_context =
-       GLContext::Create(wsi, g_Config.stereo_mode == StereoMode::QuadBuffer, true,
-                         Config::Get(Config::GFX_PREFER_GLES));
 diff --git a/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp b/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
 index 2eec584..0958e21 100644
 --- a/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
 +++ b/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
-@@ -148,9 +148,12 @@ public:
-       glBufferData(m_buffertype, m_size, nullptr, GL_STREAM_DRAW);
-       m_iterator = 0;
-     }
+@@ -151,3 +151,6 @@ public:
 -    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size,
 -                                        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT |
 -                                            GL_MAP_UNSYNCHRONIZED_BIT);
@@ -10635,13 +10360,7 @@ index 2eec584..0958e21 100644
 +    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
 +#endif
 +    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size, flags);
-     return std::make_pair(pointer, m_iterator);
-   }
- 
-@@ -183,9 +186,12 @@ public:
-   std::pair<u8*, u32> Map(u32 size) override
-   {
-     AllocMemory(size);
+@@ -186,3 +189,6 @@ public:
 -    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size,
 -                                        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT |
 -                                            GL_MAP_UNSYNCHRONIZED_BIT);
@@ -10651,28 +10370,16 @@ index 2eec584..0958e21 100644
 +    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
 +#endif
 +    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size, flags);
-     return std::make_pair(pointer, m_iterator);
-   }
- 
-@@ -346,6 +352,10 @@ public:
- // Chooses the best streaming method based on the supported extensions and known issues
- std::unique_ptr<StreamBuffer> StreamBuffer::Create(u32 type, u32 size)
- {
+@@ -348,0 +355,4 @@ std::unique_ptr<StreamBuffer> StreamBuffer::Create(u32 type, u32 size)
 +#ifdef __EMSCRIPTEN__
 +  return std::make_unique<BufferSubData>(type, size);
 +#endif
 +
-   // without basevertex support, only streaming methods whith uploads everything to zero works fine:
-   if (!g_ogl_config.bSupportsGLBaseVertex)
-   {
 diff --git a/Source/Core/VideoBackends/Software/Rasterizer.cpp b/Source/Core/VideoBackends/Software/Rasterizer.cpp
 index 2839e05..7414cb6 100644
 --- a/Source/Core/VideoBackends/Software/Rasterizer.cpp
 +++ b/Source/Core/VideoBackends/Software/Rasterizer.cpp
-@@ -22,6 +22,15 @@
- 
- namespace Rasterizer
- {
+@@ -24,0 +25,9 @@ namespace Rasterizer
 +#ifdef __EMSCRIPTEN__
 +extern "C" int DolphinWeb_FastSoftwareRaster();
 +#else
@@ -10682,36 +10389,18 @@ index 2839e05..7414cb6 100644
 +}
 +#endif
 +
- static constexpr int BLOCK_SIZE = 2;
- 
- struct SlopeContext
-@@ -148,6 +157,10 @@ void SetTevKonstColors()
- 
- static void Draw(s32 x, s32 y, s32 xi, s32 yi)
- {
+@@ -150,0 +160,4 @@ static void Draw(s32 x, s32 y, s32 xi, s32 yi)
 +  static const int fast_software_raster = DolphinWeb_FastSoftwareRaster();
 +  if (fast_software_raster > 0 && ((x | y) & 1) != 0)
 +    return;
 +
-   INCSTAT(g_stats.this_frame.rasterized_pixels);
- 
-   s32 z = (s32)std::clamp<float>(ZSlope.GetValue(x, y), 0.0f, 16777215.0f);
 diff --git a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
 index 7797b1d..94f5da0 100644
 --- a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
 +++ b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
-@@ -5,6 +5,7 @@
- 
- #include <algorithm>
- #include <array>
+@@ -7,0 +8 @@
 +#include <chrono>
- #include <cstring>
- #include <vector>
- 
-@@ -19,6 +20,22 @@
- #include "VideoCommon/PerfQueryBase.h"
- #include "VideoCommon/VideoCommon.h"
- 
+@@ -21,0 +23,16 @@
 +#ifdef __EMSCRIPTEN__
 +extern "C" int DolphinWeb_FastSoftwareRaster();
 +extern "C" void DolphinWeb_RecordSoftwareXfbEncodeProfile(u32 convert_us, u32 copy_us,
@@ -10728,13 +10417,7 @@ index 7797b1d..94f5da0 100644
 +}
 +#endif
 +
- namespace EfbInterface
- {
- static std::array<u8, EFB_WIDTH * EFB_HEIGHT * 6> efb;
-@@ -561,6 +578,81 @@ static yuv444 ConvertColorToYUV(u32 color)
-   return {y_round, u_round, v_round};
- }
- 
+@@ -563,0 +581,75 @@ static yuv444 ConvertColorToYUV(u32 color)
 +static u32 ElapsedProfileMicros(std::chrono::steady_clock::time_point start,
 +                                std::chrono::steady_clock::time_point end)
 +{
@@ -10810,16 +10493,9 @@ index 7797b1d..94f5da0 100644
 +                                            static_cast<u32>(dst_height));
 +}
 +
- static u32 GetDepth(u16 x, u16 y)
- {
-   u32 offset = GetDepthOffset(x, y);
-@@ -583,8 +675,20 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
-     return;
-   }
- 
+@@ -585,0 +678 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 +  const auto profile_start = std::chrono::steady_clock::now();
-   const int left = source_rect.left;
-   const int right = source_rect.right;
+@@ -587,0 +681,11 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 +  const int src_width = source_rect.GetWidth();
 +  const int src_height = source_rect.GetHeight();
 +  const int dst_height = std::max(1, static_cast<int>(src_height * y_scale));
@@ -10831,156 +10507,81 @@ index 7797b1d..94f5da0 100644
 +    return;
 +  }
 +
-   const bool clamp_top = bpmem.triggerEFBCopy.clamp_top;
-   const bool clamp_bottom = bpmem.triggerEFBCopy.clamp_bottom;
-   const float gamma_rcp = 1.0f / gamma;
-@@ -653,14 +757,17 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
-     }
-     src_ptr += memory_stride;
-   }
+@@ -655,0 +760 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 +  const auto convert_done = std::chrono::steady_clock::now();
- 
+@@ -657,2 +761,0 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 -  const int src_width = source_rect.GetWidth();
 -  const int src_height = source_rect.GetHeight();
-   const int dst_width = src_width;
+@@ -660 +762,0 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 -  const int dst_height = src_height * y_scale;
- 
-   SW::CopyRegion(source.data(), src_width, src_height, reinterpret_cast<yuv422_packed*>(xfb_in_ram),
-                  dst_width, dst_height);
+@@ -663,0 +766,5 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
 +  const auto copy_done = std::chrono::steady_clock::now();
 +  DolphinWeb_RecordSoftwareXfbEncodeProfile(
 +      ElapsedProfileMicros(profile_start, convert_done), ElapsedProfileMicros(convert_done, copy_done),
 +      ElapsedProfileMicros(profile_start, copy_done), static_cast<u32>(src_width),
 +      static_cast<u32>(src_height), static_cast<u32>(dst_height));
- }
- 
- bool ZCompare(u16 x, u16 y, u32 z)
 diff --git a/Source/Core/VideoBackends/Software/SWGfx.cpp b/Source/Core/VideoBackends/Software/SWGfx.cpp
 index 7004c50..386bd66 100644
 --- a/Source/Core/VideoBackends/Software/SWGfx.cpp
 +++ b/Source/Core/VideoBackends/Software/SWGfx.cpp
-@@ -57,6 +57,9 @@ SWGfx::CreateFramebuffer(AbstractTexture* color_attachment, AbstractTexture* dep
- 
- bool SWGfx::BindBackbuffer(const ClearColor& clear_color)
- {
+@@ -59,0 +60,3 @@ bool SWGfx::BindBackbuffer(const ClearColor& clear_color)
 +  if (!m_window->GetContext())
 +    return true;
 +
-   // Look for framebuffer resizes
-   if (!g_presenter->SurfaceResizedTestAndClear())
-     return true;
-@@ -138,6 +141,9 @@ void SWGfx::SetScissorRect(const MathUtil::Rectangle<int>& rc)
- SurfaceInfo SWGfx::GetSurfaceInfo() const
- {
-   GLContext* context = m_window->GetContext();
+@@ -140,0 +144,3 @@ SurfaceInfo SWGfx::GetSurfaceInfo() const
 +  if (!context)
 +    return {640, 480, 1.0f, AbstractTextureFormat::RGBA8};
 +
-   return {std::max(context->GetBackBufferWidth(), 1u), std::max(context->GetBackBufferHeight(), 1u),
-           1.0f, AbstractTextureFormat::RGBA8};
- }
 diff --git a/Source/Core/VideoBackends/Software/SWOGLWindow.cpp b/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
 index a002e3e..7f2b5f0 100644
 --- a/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
 +++ b/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
-@@ -29,11 +29,14 @@ std::unique_ptr<SWOGLWindow> SWOGLWindow::Create(const WindowSystemInfo& wsi)
- 
- bool SWOGLWindow::IsHeadless() const
- {
+@@ -32 +32 @@ bool SWOGLWindow::IsHeadless() const
 -  return m_gl_context->IsHeadless();
 +  return !m_gl_context || m_gl_context->IsHeadless();
- }
- 
- bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
- {
+@@ -36,0 +37,3 @@ bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
 +#ifdef __EMSCRIPTEN__
 +  return true;
 +#else
-   m_gl_context = GLContext::Create(wsi);
-   if (!m_gl_context)
-     return false;
-@@ -82,11 +85,15 @@ bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
- 
-   glGenVertexArrays(1, &m_image_vao);
-   return true;
+@@ -84,0 +88 @@ bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
 +#endif
- }
- 
- void SWOGLWindow::ShowImage(const AbstractTexture* image,
-                             const MathUtil::Rectangle<int>& xfb_region)
- {
+@@ -89,0 +94,3 @@ void SWOGLWindow::ShowImage(const AbstractTexture* image,
 +  if (!m_gl_context)
 +    return;
 +
-   const SW::SWTexture* sw_image = static_cast<const SW::SWTexture*>(image);
-   m_gl_context->Update();  // just updates the render window position and the backbuffer size
- 
 diff --git a/Source/Core/VideoCommon/AsyncShaderCompiler.cpp b/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
 index 83eaa2e..60b861b 100644
 --- a/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
 +++ b/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
-@@ -129,6 +129,11 @@ bool AsyncShaderCompiler::StartWorkerThreads(u32 num_worker_threads)
-   if (num_worker_threads == 0)
-     return true;
- 
+@@ -131,0 +132,5 @@ bool AsyncShaderCompiler::StartWorkerThreads(u32 num_worker_threads)
 +#ifdef __EMSCRIPTEN__
 +  // WebGL does not expose shared GL contexts, so shader work must compile synchronously.
 +  return true;
 +#endif
 +
-   for (u32 i = 0; i < num_worker_threads; i++)
-   {
-     void* thread_param = nullptr;
 diff --git a/Source/Core/VideoCommon/DriverDetails.cpp b/Source/Core/VideoCommon/DriverDetails.cpp
 index b657d77..2fb809c 100644
 --- a/Source/Core/VideoCommon/DriverDetails.cpp
 +++ b/Source/Core/VideoCommon/DriverDetails.cpp
-@@ -33,6 +33,8 @@ constexpr u32 m_os = OS_ALL | OS_WINDOWS;
- constexpr u32 m_os = OS_ALL | OS_ANDROID;
- #elif __APPLE__
- constexpr u32 m_os = OS_ALL | OS_OSX;
+@@ -35,0 +36,2 @@ constexpr u32 m_os = OS_ALL | OS_OSX;
 +#elif defined(__EMSCRIPTEN__)
 +constexpr u32 m_os = OS_ALL;
- #elif __linux__
- constexpr u32 m_os = OS_ALL | OS_LINUX;
- #elif __FreeBSD__
 diff --git a/Source/Core/VideoCommon/VideoBackendBase.cpp b/Source/Core/VideoCommon/VideoBackendBase.cpp
 index 7eeefb7..ed26f24 100644
 --- a/Source/Core/VideoCommon/VideoBackendBase.cpp
 +++ b/Source/Core/VideoCommon/VideoBackendBase.cpp
-@@ -4,6 +4,7 @@
- #include "VideoCommon/VideoBackendBase.h"
- 
- #include <algorithm>
+@@ -6,0 +7 @@
 +#include <chrono>
- #include <cstring>
- #include <memory>
- #include <string>
-@@ -22,6 +23,7 @@
- #include "Core/CoreTiming.h"
- #include "Core/DolphinAnalytics.h"
- #include "Core/HW/SystemTimers.h"
+@@ -24,0 +26 @@
 +#include "Core/HW/Memmap.h"
- #include "Core/HW/VideoInterface.h"
- #include "Core/System.h"
- 
-@@ -71,6 +73,12 @@
- 
- VideoBackendBase* g_video_backend = nullptr;
- 
+@@ -73,0 +76,6 @@ VideoBackendBase* g_video_backend = nullptr;
 +#ifdef __EMSCRIPTEN__
 +extern "C" void DolphinWeb_OnXfb(const u8* xfb, u32 width, u32 stride, u32 height);
 +extern "C" void DolphinWeb_RecordVideoOutputProfile(u32 sync_us, u32 publish_us, u32 total_us);
 +extern "C" int DolphinWeb_UseWorkerOwnedWebGL();
 +#endif
 +
- #ifdef _WIN32
- #include <windows.h>
- 
-@@ -99,17 +107,64 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
-     return;
- 
-   auto& system = Core::System::GetInstance();
+@@ -101,0 +110,22 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
 +#ifdef __EMSCRIPTEN__
 +  const auto output_profile_start = std::chrono::steady_clock::now();
 +  u32 output_sync_us = 0;
@@ -11003,12 +10604,9 @@ index 7eeefb7..ed26f24 100644
 +    }
 +  };
 +#endif
-   auto& core_timing = system.GetCoreTiming();
- 
-   if (!g_ActiveConfig.bImmediateXFB)
-   {
+@@ -105,0 +136 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
 +    const auto sync_start = std::chrono::steady_clock::now();
-     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Swap);
+@@ -106,0 +138,9 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
 +    const auto sync_done = std::chrono::steady_clock::now();
 +    output_sync_us = elapsed_us(sync_start, sync_done);
 +
@@ -11018,12 +10616,7 @@ index 7eeefb7..ed26f24 100644
 +    const auto publish_done = std::chrono::steady_clock::now();
 +    output_publish_us = elapsed_us(publish_start, publish_done);
 +#endif
- 
-     const TimePoint presentation_time = core_timing.GetTargetHostTime(ticks);
-     AsyncRequests::GetInstance()->PushEvent([=] {
-       g_presenter->ViSwap(xfb_addr, fb_width, fb_stride, fb_height, ticks, presentation_time);
-     });
-   }
+@@ -112,0 +153,15 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
 +#ifdef __EMSCRIPTEN__
 +  else
 +  {
@@ -11039,6 +10632,3 @@ index 7eeefb7..ed26f24 100644
 +      output_sync_us, output_publish_us,
 +      elapsed_us(output_profile_start, std::chrono::steady_clock::now()));
 +#endif
- 
-   // Inform the Presenter of the next estimated swap time.
- 

@@ -1,0 +1,24 @@
+[package]
+name = "naga-spirv-wgsl"
+version = "0.1.0"
+edition = "2021"
+description = "SPIR-V → WGSL transpiler (Naga) with a C ABI, built as a wasm32-unknown-emscripten staticlib and linked into dolphin_web_core for the WebGPU hardware renderer."
+
+[lib]
+# staticlib so emcc can link the resulting .a directly into the
+# existing dolphin_web_core wasm module — gives a synchronous C ABI
+# call from WebGPUShaderTranslator::SpirvToWgsl, no async worker
+# round-trip / Dolphin pipeline restructuring.
+crate-type = ["staticlib"]
+
+[dependencies]
+# spv-in: SPIR-V frontend. wgsl-out: WGSL backend. We only need the
+# one direction Dolphin uses (glslang already did GLSL→SPIR-V in C++).
+naga = { version = "26", default-features = false, features = ["spv-in", "wgsl-out"] }
+
+[profile.release]
+opt-level = "s"   # size — this rides inside the game wasm
+lto = true
+codegen-units = 1
+panic = "abort"   # no unwinding into the C/emscripten boundary
+strip = true
