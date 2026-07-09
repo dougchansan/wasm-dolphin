@@ -1263,37 +1263,55 @@ async function readSample(page, elapsedSeconds) {
       // Bucket the hash to ignore tiny variations.
       visibleHash = (hash >>> 0) & 0xfffffff0;
     } catch (e) { visibleError = e.message || String(e); }
-    // ppcWasmJit element is rendered as "runCount / compileCount" with locale
-    // group separators. Parse the second integer as the JIT block compile total.
-    const jitText = read("#ppcWasmJit");
-    const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
-    const jitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
-    const jitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
     // Structured worker stats (set by app.js's handleFrame). Reading via
     // window is cheaper than DOM scraping and preserves numeric fields
     // (histogram array, lifetime counters, stddev) without round-tripping
     // through textContent.
     const info = window.__lastFrameInfo || {};
+    const metricText = (value, fallback = "") =>
+      value == null || value === "" ? fallback : String(value);
+    const percentText = (value, fallback = "") =>
+      value == null || value === "" ? fallback : `${Math.max(0, Number(value) || 0)}%`;
+    const formatGap = () => {
+      if (info.presentationP95IntervalMs == null && info.presentationMaxIntervalMs == null) {
+        return read("#presentationGapCounter");
+      }
+      const p95 = Number(info.presentationP95IntervalMs) || 0;
+      const max = Number(info.presentationMaxIntervalMs) || 0;
+      const longFrames = Number(info.presentationLongFrameCount) || 0;
+      return `${p95.toFixed(p95 >= 10 ? 0 : 1)} p95 / ` +
+        `${max.toFixed(max >= 10 ? 0 : 1)} max / ${longFrames}`;
+    };
+    // Fall back to the rendered counter for older builds that do not expose
+    // structured JIT counters. The debug panel is intentionally kept closed
+    // during benchmarks so it cannot trigger its screenshot/download loop.
+    const jitText = read("#ppcWasmJit");
+    const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
+    const parsedJitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
+    const parsedJitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
+    const jitBlockRunCount = Number(info.ppcWasmBlockRunCount ?? parsedJitBlockRunCount) || 0;
+    const jitBlockCompileCount =
+      Number(info.ppcWasmBlockCompileCount ?? parsedJitBlockCompileCount) || 0;
     // Parse drop/underrun out of the helper string. These are emitted as
     // "drop:N underrun:N" inside the worker's ppcWasmHelperStats. The
     // structured fields aren't yet surfaced separately to the DOM but the
     // helper string is always available.
-    const helperStr = read("#ppcWasmHelperStats");
+    const helperStr = String(info.ppcWasmHelperStats || read("#ppcWasmHelperStats"));
     const helperDropMatch = /\bdrop:(\d+)/.exec(helperStr);
     const helperUnderrunMatch = /\bunderrun:(\d+)/.exec(helperStr);
     const helperLongMatch = /\blong:(\d+)/.exec(helperStr);
     const helperRawFpsMatch = /\braw:(\d+)/.exec(helperStr);
     return {
       elapsedSeconds,
-      frame: read("#frameCounter"),
-      presentFps: read("#fpsCounter"),
-      visualFps: read("#visualFpsCounter"),
-      coreFps: read("#coreFpsCounter"),
-      gameSpeed: read("#gameSpeedCounter"),
-      gap: read("#presentationGapCounter"),
+      frame: metricText(info.frame, read("#frameCounter")),
+      presentFps: metricText(info.presentationFps ?? info.fps, read("#fpsCounter")),
+      visualFps: metricText(info.visualChangeFps, read("#visualFpsCounter")),
+      coreFps: metricText(info.coreFps, read("#coreFpsCounter")),
+      gameSpeed: percentText(info.gameSpeed, read("#gameSpeedCounter")),
+      gap: formatGap(),
       helper: helperStr,
-      frameProfile: read("#frameProfileStats"),
-      coreMode: read("#coreMode"),
+      frameProfile: String(info.frameProfileStats || read("#frameProfileStats")),
+      coreMode: info.mode === "dolphin" ? "Dolphin" : read("#coreMode"),
       mountNote: read("#mountNote"),
       gameTitle: read("#gameTitle"),
       statusPill: read("#statusPill"),
