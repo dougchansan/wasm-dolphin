@@ -88,7 +88,18 @@ function makeAggressiveInputScript() {
 }
 const defaultInputScript = makeAggressiveInputScript();
 
-const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScript);
+// INPUT_SCRIPT=none (or an explicitly empty value in shells that preserve it)
+// means "send no gameplay input". This is important for fixed-state benchmarks,
+// where the scene must not drift because menu navigation kept pressing buttons
+// after the state loaded.
+const rawInputScript = process.env.INPUT_SCRIPT;
+const configuredInputScript =
+  rawInputScript == null
+    ? defaultInputScript
+    : /^(?:none|off)$/i.test(rawInputScript.trim())
+      ? ""
+      : rawInputScript;
+const inputScript = parseInputScript(configuredInputScript);
 // Optional: load a Dolphin .sav (served by the dev server) once the
 // core is running. SAVE_STATE_URL = path under the dev server (e.g.
 // /__savestate_probe.sav); SAVE_STATE_AT = seconds into the run to do
@@ -101,6 +112,7 @@ const saveStatePath = process.env.SAVE_STATE_PATH || "";
 const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
 const sceneLabel = process.env.SCENE_LABEL || "";
 let saveStateDone = false;
+let saveStateLoadResult = null;
 // Capture a version-matched state at SAVE_STATE_CAPTURE_AT (write the
 // .sav into outDir for reuse), then reload it from the worker FS at
 // SAVE_STATE_RELOAD_AT to prove a deterministic round-trip.
@@ -240,7 +252,7 @@ const runMetadata = await collectRunMetadata({
   saveStateUrl,
   saveStatePath,
   saveStateAt,
-  inputScript: process.env.INPUT_SCRIPT || defaultInputScript,
+  inputScript: configuredInputScript,
   sceneLabel,
 });
 await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
@@ -341,6 +353,7 @@ await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
   inputEvents.push(entry);
 });
 
+let probeError = null;
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.evaluate((showDebugPanel) => {
@@ -515,6 +528,47 @@ try {
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
 
+  const loadConfiguredSaveState = async (elapsed) => {
+    saveStateDone = true;
+    console.log(
+      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
+    );
+    try {
+      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: Boolean(response?.loaded),
+        response,
+      };
+      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
+      if (!response?.loaded) {
+        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
+      }
+      milestoneLog.push({
+        t: elapsed.toFixed(1),
+        event: "save-state-loaded",
+        response,
+      });
+    } catch (error) {
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: false,
+        error: error?.message || String(error),
+      };
+      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
+      throw error;
+    }
+    await page.waitForTimeout(1500);
+    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+  };
+
+  // SAVE_STATE_AT=0 is the deterministic battle-benchmark path: mount the
+  // core, load the state immediately, let it settle, then start the timed
+  // sampling window. Menu navigation and character selection are bypassed.
+  if (saveStateUrl && saveStateAt <= 0) {
+    await loadConfiguredSaveState(0);
+  }
+
   const startedAt = Date.now();
   const totalSamples = Math.ceil((durationSeconds * 1000) / sampleMs);
   let lastShotSecond = -screenshotEverySeconds;
@@ -530,16 +584,7 @@ try {
     }
 
     if (saveStateUrl && !saveStateDone && elapsed >= saveStateAt) {
-      saveStateDone = true;
-      console.log(`[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}…`);
-      try {
-        const r = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
-        console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(r)}`);
-      } catch (e) {
-        console.log(`[menu-progress] loadStateFile threw: ${e?.message || e}`);
-      }
-      await page.waitForTimeout(1500);
-      await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+      await loadConfiguredSaveState(elapsed);
     }
 
     if (ssCaptureAt > 0 && !ssCaptureDone && elapsed >= ssCaptureAt) {
@@ -610,6 +655,7 @@ try {
 
   await capture(page, "zz-final.png");
 } catch (error) {
+  probeError = error;
   consoleLines.push(`[probe-error] ${error.stack || error.message}`);
   await capture(page, "zz-error.png");
 } finally {
@@ -709,6 +755,7 @@ try {
     summaryFile: "summary.json",
     samplesJsonFile: "samples.json",
     samplesCsvFile: "samples.csv",
+    saveStateLoad: saveStateLoadResult,
   };
   summary.provenance = {
     metadataFile: "run-metadata.json",
@@ -719,6 +766,7 @@ try {
     romSha256: runMetadata.artifacts.rom.sha256,
     coreSha256: runMetadata.artifacts.core.sha256,
     saveStateSha256: runMetadata.artifacts.saveState?.sha256 || null,
+    saveStateLoaded: Boolean(saveStateLoadResult?.loaded),
   };
   await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
@@ -741,6 +789,8 @@ try {
   }
   await browser.close();
 }
+
+if (probeError) throw probeError;
 
 function summarize(samples, hashes, extras = {}) {
   const { audioSamples = [], longAnimationFrames = [], inputEvents = [], bootMarks = null } =
