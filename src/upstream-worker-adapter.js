@@ -72,7 +72,7 @@ export class UpstreamWorkerAdapter {
     this.presentationPacing = presentationPacing;
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
-    this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);

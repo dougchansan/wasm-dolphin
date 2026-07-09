@@ -145,6 +145,7 @@ if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCK
 if (process.env.REGALLOC) url.searchParams.set("regalloc", process.env.REGALLOC);
 if (process.env.SHORTPREFIX) url.searchParams.set("shortprefix", process.env.SHORTPREFIX);
 if (process.env.SMEARCOMPILE) url.searchParams.set("smearcompile", process.env.SMEARCOMPILE);
+if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.FASTMEMHOIST);
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 // §28cx in-page main-thread profiler passthrough (?mainprof=1). Headless can
 // only validate the tooling emits — real-Chrome contention is the authoritative

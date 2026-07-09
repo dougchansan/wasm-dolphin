@@ -37,7 +37,7 @@ export class UpstreamMainThreadAdapter {
     this.emulationSpeed = emulationSpeed;
     this.presentationScale = presentationScale;
     this.oglTestClear = Boolean(oglTestClear);
-    this.fastSoftwareRaster = Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
     this.module = null;
     this.api = null;
     this.loaded = false;

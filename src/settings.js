@@ -47,7 +47,7 @@ const CHOICE_SETS = Object.freeze({
   jittier: new Set(["guarded", "mixed"]),
   forcejit: new Set(["0", "1"]),
   queue: new Set(["2", "4", "8", "12"]),
-  fastsw: new Set(["0", "1", "2"]),
+  fastsw: new Set(["0", "1", "2", "3"]),
   metrics: new Set(["0", "1"])
 });
 

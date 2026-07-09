@@ -618,7 +618,7 @@ async function loadCore({
     dolphinOglWorkerWebGl: videoBackend === "OGL",
     dolphinOglReadbackPresent: readbackOgl,
     dolphinOglTestClear: Boolean(oglTestClear),
-    dolphinFastSoftwareRaster: Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0)),
+    dolphinFastSoftwareRaster: Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)),
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
@@ -671,7 +671,7 @@ async function loadCore({
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
-  api.setFastSoftwareRaster?.(Math.min(2, Math.max(0, Number(fastSoftwareRaster) || 0)));
+  api.setFastSoftwareRaster?.(Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)));
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);

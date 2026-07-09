@@ -1031,7 +1031,7 @@ function requestedOglSab() {
 
 function requestedFastSoftwareRaster() {
   const requested = Number.parseInt(new URLSearchParams(window.location.search).get("fastsw") || "1", 10);
-  return Number.isFinite(requested) ? Math.min(2, Math.max(0, requested)) : 1;
+  return Number.isFinite(requested) ? Math.min(3, Math.max(0, requested)) : 1;
 }
 
 // Day-1 bisection knob: ?disable=cat1,cat2 → bitmask handed to the C++ JIT.
@@ -1060,6 +1060,7 @@ const CACHED_INTERPRETER_DISABLE_BITS = {
   regalloc:        1 << 20, // §28by GPR regalloc / dead-store-skip (default-off; ?regalloc=1 to enable)
   shortprefix:     1 << 21, // §28ca lower JIT min-prefix 4→2 (default-off; ?shortprefix=1 to enable)
   smearcompile:    1 << 22, // §28ce cap JIT compiles/slice (default-off; ?smearcompile=1 to enable)
+  fastmemhoist:    1 << 23, // §28cz per-block fastmem bounds-check hoist (ENABLE polarity; default-off; ?fastmemhoist=1)
   // Aliases the plan / TL;DR uses interchangeably:
   fastinputpoll: 1 << 1, // legacy synonym for meleecall (input-poll lives there)
   fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
@@ -1134,6 +1135,14 @@ function requestedCachedInterpreterDisableMask() {
   // rebuild: ?smearcompile=0 reverts to compile-eagerly.
   if (params.get("smearcompile") === "0") {
     mask |= CACHED_INTERPRETER_DISABLE_BITS.smearcompile;
+  }
+  // §28cz fastmem bounds-check hoist: DEFAULT-OFF, ENABLE polarity (the bit is
+  // an enable bit in the core: feature is ON only when the bit is SET). Opt in
+  // with ?fastmemhoist=1; any other state leaves the bit clear so codegen is
+  // byte-identical to today. Correctness-critical (a wrong hoisted check = an
+  // unchecked OOB WASM load) — kept off until A/B + correctness verified.
+  if (params.get("fastmemhoist") === "1") {
+    mask |= CACHED_INTERPRETER_DISABLE_BITS.fastmemhoist;
   }
   return mask >>> 0;
 }

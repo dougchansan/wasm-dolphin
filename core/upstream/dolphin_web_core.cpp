@@ -817,7 +817,7 @@ int SetEmulationSpeed(float factor)
 
 int SetFastSoftwareRaster(int mode)
 {
-  DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 2 ? 2 : mode);
+  DolphinWeb_SetFastSoftwareRaster(mode < 0 ? 0 : mode > 3 ? 3 : mode);
   return 1;
 }
 
