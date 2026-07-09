@@ -285,7 +285,7 @@ export class MainThreadProfiler {
         buckets: Array.from(this.rafGapBuckets)
       },
       audio,
-      worker: { underrun: under, drop },
+      presentationQueue: { underrun: under, drop },
       hostStalls: this._hostStalls(),
       topScripts: this.topScripts(6)
     };
@@ -321,7 +321,10 @@ export class MainThreadProfiler {
     } else {
       lines.push("  audio-pump: no samples yet (unmute + be in-game for data)");
     }
-    lines.push(`  worker audio: ${s.worker.underrun}u/${s.worker.drop}d`);
+    lines.push(
+      `  presentation queue: ${s.presentationQueue.underrun} underruns / ` +
+        `${s.presentationQueue.drop} drops`
+    );
     if (s.hostStalls) {
       const h = s.hostStalls;
       lines.push(
@@ -387,7 +390,9 @@ export class MainThreadProfiler {
     } else {
       rows.push("pump: unmute + play for data");
     }
-    rows.push(`worker ${s.worker.underrun}u/${s.worker.drop}d`);
+    rows.push(
+      `queue ${s.presentationQueue.underrun} underruns / ${s.presentationQueue.drop} drops`
+    );
     if (s.hostStalls) {
       const h = s.hostStalls;
       rows.push(`>20ms JS: loop ${h.loop} msg ${h.msg} sab ${h.sab}  (rAF>33 ${h.rafOver33})`);

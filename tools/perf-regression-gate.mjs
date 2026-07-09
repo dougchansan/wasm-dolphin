@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { parseProfileMetrics } from "./perf-artifacts.mjs";
+
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
 const outDir = path.join(root, ".omx", cli.outDir || process.env.OUT_DIR || `perf-regression-gate-${Date.now()}`);
@@ -168,7 +170,10 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines) {
     minCoreFps: minMetric(tail, "coreFps"),
     minGameSpeed: minMetric(tail, "gameSpeed"),
     maxGapMs: maxRegex(tail.map((sample) => sample.gap || "").join(" "), /(\d+(?:\.\d+)?)\s+max/g),
-    maxXfbDtMs: maxRegex(helperTail, /xfb_dt:[^|]*max:(\d+(?:\.\d+)?)/g),
+    maxXfbDtMs: Math.max(
+      0,
+      ...tail.map((sample) => parseProfileMetrics(sample.helper).coreXfbMaxIntervalMs || 0)
+    ),
     maxGlError: lastMatch(helperTail, /glerr:(0x[0-9a-f]+)/gi) || "unknown",
     emitfail: maxRegex(helperTail, /emitfail:(\d+)/g),
     compilefail: maxRegex(helperTail, /compilefail:(\d+)/g),

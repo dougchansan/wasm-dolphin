@@ -15,6 +15,12 @@ import { createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
+import {
+  collectRunMetadata,
+  parseProfileMetrics,
+  recordsToCsv,
+} from "./perf-artifacts.mjs";
+
 const root = process.cwd();
 const args = parseArgs(process.argv.slice(2));
 const baseUrl = args.baseUrl || process.env.BASE_URL || "http://127.0.0.1:8082/";
@@ -23,6 +29,8 @@ const romPath = args.rom || process.env.ROM ||
 const durationSeconds = args.duration ?? Number(process.env.DURATION || 360);
 const sampleMs = args.sampleMs ?? Number(process.env.SAMPLE_MS || 1000);
 const screenshotEverySeconds = args.shotEvery ?? Number(process.env.SHOT_EVERY || 4);
+const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
+const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
 const oglProxy = process.env.OGL_PROXY_MODE || "proxy";
 const videoMode = process.env.VIDEO || "ogl"; // "ogl" or "software"
 const headed = process.env.HEADED === "1" || args.headed;
@@ -87,6 +95,7 @@ const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScr
 // it (must be after boot — Core must be running for State::LoadAs).
 const saveStateUrl = process.env.SAVE_STATE_URL || "";
 const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
+const sceneLabel = process.env.SCENE_LABEL || "";
 let saveStateDone = false;
 // Capture a version-matched state at SAVE_STATE_CAPTURE_AT (write the
 // .sav into outDir for reuse), then reload it from the worker FS at
@@ -204,6 +213,33 @@ const browser = persistBrowserData
       return chromium.launch({ headless: !headed });
     });
 
+const browserVersion =
+  (typeof browser.version === "function" ? browser.version() : browser.browser?.()?.version?.()) || null;
+const browserExecutable =
+  typeof browserEngine.executablePath === "function" ? browserEngine.executablePath() : null;
+const runMetadata = await collectRunMetadata({
+  root,
+  url: url.href,
+  browserName,
+  browserChannel: process.env.BROWSER_CHANNEL || (browserName === "chromium" ? "chrome" : null),
+  browserVersion,
+  browserExecutable,
+  headed,
+  durationSeconds,
+  sampleMs,
+  screenshotEverySeconds,
+  captureScreenshots,
+  showDebugPanel,
+  romPath,
+  hashRom: process.env.HASH_ROM !== "0",
+  corePath: path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm"),
+  saveStateUrl,
+  saveStateAt,
+  inputScript: process.env.INPUT_SCRIPT || defaultInputScript,
+  sceneLabel,
+});
+await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
+
 // launchPersistentContext returns a BrowserContext (not Browser). Both
 // expose .newPage()/.on() with the same signatures we need below, so we
 // can treat them uniformly. Same applies to teardown via .close().
@@ -302,10 +338,10 @@ await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
 
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.evaluate(() => {
+  await page.evaluate((showDebugPanel) => {
     const panel = document.querySelector("#debugPanel");
     const toggle = document.querySelector("#debugToggle");
-    if (panel?.hidden) toggle?.click();
+    if (showDebugPanel && panel?.hidden) toggle?.click();
     // Install LoAF observer. Browsers that don't support
     // "long-animation-frame" (older Chrome, Firefox, Safari) throw —
     // swallow the error so the rest of the probe still runs.
@@ -346,7 +382,7 @@ try {
     } catch (err) {
       // PerformanceEventTiming not supported — input latency stays empty.
     }
-  });
+  }, showDebugPanel);
   // Boot timeline (Day 13). All times are wall-clock ms from "ROM upload
   // dispatched", so we know exactly where each second of startup goes.
   const bootT0 = Date.now();
@@ -534,7 +570,11 @@ try {
       await capture(page, `savestate-reloaded-t${Math.round(elapsed)}.png`);
     }
 
-    const sample = await readSample(page, elapsed);
+    const rawSample = await readSample(page, elapsed);
+    const sample = {
+      ...rawSample,
+      ...parseProfileMetrics(rawSample.helper, rawSample.frameProfile),
+    };
     samples.push(sample);
 
     if (sample.visibleHash && !distinctHashes.has(sample.visibleHash)) {
@@ -621,6 +661,7 @@ try {
   }
   await writeFile(path.join(outDir, "console.log"), consoleLines.join("\n")).catch(() => {});
   await writeFile(path.join(outDir, "samples.json"), JSON.stringify(samples, null, 2));
+  await writeFile(path.join(outDir, "samples.csv"), recordsToCsv(samples));
   await writeFile(path.join(outDir, "milestones.json"), JSON.stringify(milestoneLog, null, 2));
   if (longAnimationFrames.length) {
     await writeFile(
@@ -656,6 +697,24 @@ try {
     inputEvents,
     bootMarks,
   });
+  runMetadata.finishedAt = new Date().toISOString();
+  runMetadata.result = {
+    sampleCount: samples.length,
+    distinctCanvasHashes: distinctHashes.size,
+    summaryFile: "summary.json",
+    samplesJsonFile: "samples.json",
+    samplesCsvFile: "samples.csv",
+  };
+  summary.provenance = {
+    metadataFile: "run-metadata.json",
+    commit: runMetadata.git.commit,
+    dirty: runMetadata.git.dirty,
+    browserVersion: runMetadata.browser.version,
+    url: runMetadata.benchmark.url,
+    romSha256: runMetadata.artifacts.rom.sha256,
+    coreSha256: runMetadata.artifacts.core.sha256,
+  };
+  await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
   console.log(`\n[menu-progress] done: ${JSON.stringify(summary, null, 2)}`);
   console.log(`[menu-progress] ${distinctHashes.size} distinct canvas hashes across ${samples.length} samples`);
@@ -1233,6 +1292,7 @@ async function readSample(page, elapsedSeconds) {
       gameSpeed: read("#gameSpeedCounter"),
       gap: read("#presentationGapCounter"),
       helper: helperStr,
+      frameProfile: read("#frameProfileStats"),
       coreMode: read("#coreMode"),
       mountNote: read("#mountNote"),
       gameTitle: read("#gameTitle"),
@@ -1264,6 +1324,8 @@ async function readSample(page, elapsedSeconds) {
       )
         ? info.presentationIntervalHistogramBuckets.slice()
         : null,
+      presentationFrameLag: Number(info.presentationFrameLag) || 0,
+      presentationQueueAgeMs: Number(info.presentationQueueAgeMs) || 0,
       // Parsed from helper string (worker doesn't surface these to DOM yet).
       helperDropCount: helperDropMatch ? Number(helperDropMatch[1]) : 0,
       helperUnderrunCount: helperUnderrunMatch ? Number(helperUnderrunMatch[1]) : 0,
@@ -1274,6 +1336,7 @@ async function readSample(page, elapsedSeconds) {
 }
 
 async function capture(page, name) {
+  if (!captureScreenshots) return;
   try { await page.screenshot({ path: path.join(outDir, name), timeout: 5000 }); } catch {}
 }
 

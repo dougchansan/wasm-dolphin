@@ -1,4 +1,5 @@
-// §28by regalloc A/B — OFF (baseline). Same config, REGALLOC unset.
+// §28by regalloc A/B — OFF (baseline). The product default is ON, so the
+// escape hatch must be explicit; deleting REGALLOC would test ON vs ON.
 const tag = process.env.OUT_TAG || "regalloc-off";
 process.env.ROM = process.env.ROM ||
   "F:/Emulation/super-smash-bros.-melee-usa-en-ja-rev-2.nkit_202203/Super Smash Bros. Melee (USA) (En,Ja) (Rev 2).nkit.iso";
@@ -11,7 +12,7 @@ process.env.JITWARMUP = process.env.JITWARMUP || "700";
 process.env.DURATION = process.env.DURATION || "170";
 process.env.BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8081/";
 delete process.env.DISABLE;
-delete process.env.REGALLOC;
+process.env.REGALLOC = "0";
 
 process.argv = [
   process.argv[0],

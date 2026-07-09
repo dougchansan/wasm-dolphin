@@ -1,4 +1,5 @@
-// §28ce compile-burst smearing A/B — OFF (baseline, no throttle).
+// §28ce compile-burst smearing A/B — OFF (baseline, no throttle). Smearing is
+// default-on, so deleting SMEARCOMPILE would test ON vs ON.
 const tag = process.env.OUT_TAG || "smearcompile-off";
 process.env.ROM = process.env.ROM ||
   "F:/Emulation/super-smash-bros.-melee-usa-en-ja-rev-2.nkit_202203/Super Smash Bros. Melee (USA) (En,Ja) (Rev 2).nkit.iso";
@@ -11,7 +12,7 @@ process.env.JITWARMUP = process.env.JITWARMUP || "700";
 process.env.DURATION = process.env.DURATION || "120";
 process.env.BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8081/";
 delete process.env.DISABLE;
-delete process.env.SMEARCOMPILE;
+process.env.SMEARCOMPILE = "0";
 
 process.argv = [
   process.argv[0],

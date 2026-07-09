@@ -2,7 +2,7 @@
 # Drives menu-progress-validate.mjs directly (full env), SPEED=unlimited so
 # gameSpeed% reflects raw CPU throughput headroom (not pacing-capped).
 $ErrorActionPreference = "Continue"
-$root = "C:\Users\douglaswhittingham\wasm-dolphin"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $node = "node"
 $dur  = 45
 $trials = 3
@@ -10,8 +10,9 @@ $base = "http://127.0.0.1:8082/"
 $rom  = "F:/Emulation/super-smash-bros.-melee-usa-en-ja-rev-2.nkit_202203/Super Smash Bros. Melee (USA) (En,Ja) (Rev 2).nkit.iso"
 
 $conds = @(
-  @{ name="base"; bm=$null; ra=$null },
-  @{ name="bm";   bm="1";   ra=$null },
+  # regalloc is default-on; the no-regalloc baseline must explicitly use 0.
+  @{ name="base"; bm=$null; ra="0" },
+  @{ name="bm";   bm="1";   ra="0" },
   @{ name="ra";   bm=$null; ra="1"   },
   @{ name="both"; bm="1";   ra="1"   }
 )

@@ -151,6 +151,8 @@ let presentationUnderrunsSinceFps = 0;
 let presentationDropsSinceFps = 0;
 let presentationWindowUnderrunCount = 0;
 let presentationWindowDropCount = 0;
+let presentationFrameLag = 0;
+let presentationQueueAgeMs = 0;
 let lastCapturedCoreFrame = -1;
 let coreBoot = {
   attempted: false,
@@ -957,6 +959,8 @@ function resetPresentationBuffer() {
   presentationDropsSinceFps = 0;
   presentationWindowUnderrunCount = 0;
   presentationWindowDropCount = 0;
+  presentationFrameLag = 0;
+  presentationQueueAgeMs = 0;
 }
 
 function metadataPayload() {
@@ -1222,6 +1226,8 @@ function framePayload() {
         : 0,
     presentationIntervalHistogram: Array.from(presentationIntervalHistogram),
     presentationIntervalHistogramBuckets: PRESENTATION_HISTOGRAM_BUCKETS_MS,
+    presentationFrameLag,
+    presentationQueueAgeMs,
     visualChangeFps,
     visualFrameHash,
     visualSampleSource,
@@ -1742,6 +1748,7 @@ function captureFrameForPacedPresentation(width, height, pointer, length, coreFr
 
   frameQueue.push({
     bytes,
+    capturedAt: performance.now(),
     coreFrame,
     height,
     width
@@ -1788,6 +1795,8 @@ function runPacedPresentation(timestamp = performance.now()) {
 
     const queued = frameQueue.shift();
     if (queued) {
+      presentationFrameLag = Math.max(0, lastCapturedCoreFrame - queued.coreFrame);
+      presentationQueueAgeMs = Math.max(0, now - queued.capturedAt);
       presentFrameBytes(queued.width, queued.height, queued.bytes, queued.coreFrame);
     } else {
       presentationUnderrunCount += 1;
