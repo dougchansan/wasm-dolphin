@@ -1,107 +1,312 @@
 # wasm-dolphin
 
-A Chrome-ready WebAssembly emulator host inspired by mGBA's browser workflow.
+Run the **Dolphin** GameCube/Wii emulator in a Chrome tab, compiled to
+WebAssembly. The current focus and best-supported title is **Super Smash Bros.
+Melee**, which boots and plays at near-100% game speed on a modern desktop
+browser.
 
-This repository ships a working WebAssembly demo core so the canvas, input, save-state, fullscreen, audio, and file-mount paths can be used immediately. It also includes a from-scratch native C++ WebAssembly core scaffold under `core/native`.
+Under the hood this is the upstream [Dolphin](https://github.com/dolphin-emu/dolphin)
+C++ codebase cross-compiled with Emscripten, driven by a small JavaScript host
+that owns the canvas, audio, input, save-states, and file mounting. A custom
+PowerPC→WASM JIT and a software-rendering + WebGPU-presentation pipeline make
+real-time play possible inside the browser sandbox.
 
-The native core is the browser ABI and first boot slice, not a complete GameCube/Wii emulator yet. Full Dolphin compatibility requires porting or integrating the upstream Dolphin CPU, memory, DI, DSP, IOS, video, scheduler, and save subsystems. The fetch/build scripts are included for that next lane.
+> **License note:** Dolphin is GPLv2+. Any distributed combined build that
+> includes the vendored Dolphin sources or the built core `.wasm` must comply
+> with GPLv2+. See [License](#license).
 
-## Run
+---
+
+## Status at a glance
+
+| Area | State |
+|------|-------|
+| Melee boot + gameplay (software hybrid) | ✅ Playable, ~100% game speed |
+| PPC→WASM JIT with GPR register cache | ✅ Default-on, +38% throughput |
+| Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
+| Audio | ✅ Worker-fed presentation, tuned buffering |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — renders on some GPUs, black on others |
+| Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
+
+The default configuration is deliberately the **correct, always-working**
+software-hybrid path. Experimental renderers and JIT levers are gated behind
+opt-in URL flags and default to off, so the default page load is always a
+working build.
+
+---
+
+## Quick start
+
+Requires Node.js (for the dev server and tooling). A prebuilt core `.wasm` is
+committed, so you do **not** need to build anything to play.
 
 ```powershell
-npm test
-npm start
+npm install
+npm test          # optional: unit tests
+npm start         # serves the app; prints a local URL
 ```
 
-Open the printed local URL in Chrome. The app falls back to the demo WebAssembly core when no Dolphin bundle is present.
+Open the printed URL in **Chrome** (WebGPU + SharedArrayBuffer required — the
+dev server sends the necessary COOP/COEP headers). Drag a Melee ISO onto the
+page to boot. About 12 seconds in, the status pill announces *"Experimental
+WASM JIT enabled after N stable video frames"*, after which gameplay runs at
+near-100% speed.
 
-For the current Melee browser path, use the **recommended playable URL**
-(software backend + WASM JIT, post-Day-2 carry-op fix):
+### Recommended playable URL
+
+The default settings already select the software-hybrid path. This explicit URL
+pins every knob for reproducibility:
 
 ```text
-http://127.0.0.1:8082/?core=upstream&video=software&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=smooth&jittier=guarded&jitwarmup=700&wasmjit=1&oc=1&queue=2&fastsw=1&metrics=1
+/?core=upstream&video=software&presenter=webgpu&cpu=dual&speed=1&wasmjit=1&jitwarmup=700&oc=1&pacing=tick&fastsw=1&metrics=1
 ```
 
-Drop a Melee ISO onto the page; the status pill announces "Experimental
-WASM JIT enabled after 700 stable video frames" ~12 seconds in, after
-which gameplay runs at near-100 % game speed.
+- `video=software` + `presenter=webgpu` — software rasterizer, presented to the
+  canvas through a WebGPU blit (the "software hybrid").
+- `wasmjit=1` — the PowerPC→WASM JIT (with register cache) is active.
+- `pacing=tick` — repaint the canvas on a steady tick for smoother scrolling
+  (default for software paths).
+- `fastsw=1` — full-quality software raster (see [Raster quality](#raster-quality-fastsw)).
 
-### Measured status (post-Day-2 fix, validator 180 s)
+---
 
-| Config                                            | game speed | visual fps | playable |
-|---------------------------------------------------|-----------:|-----------:|----------|
-| `video=software` + `wasmjit=1` (recommended)      |   100.15 % |      22.4  | **Yes — best** |
-| `video=software` + `wasmjit=0`                    |    99.4 %  |      25.7  | Yes (slightly choppier startup) |
-| `video=ogl` + `oglproxy=readback` + `forcejit=1`  |    98.8 %  |       1.3  | Boots/renders. Distinct hash progression 0.34/s. |
-| `video=ogl` + `oglproxy=readback` + `forcejit=1` + `oglsab=1` |    97.2 %  |       1.6  | **2× faster visible progression** via SAB pixel transport (0.67/s distinct); main thread `putImageData`s a SharedArrayBuffer the worker fills per-readback, bypassing the WebGPU presenter + OffscreenCanvas auto-mirror. |
-| `video=ogl` + `oglproxy=worker`                   |    n/a     |       0    | Not yet — Emscripten pthread message routing |
-| `video=ogl` + `oglproxy=proxy`                    |    n/a     |       0    | Not yet — OffscreenCanvas auto-mirror inactive |
+## Architecture
 
-The OGL hardware path is bottlenecked on Emscripten's WebGL pthread proxy
-round-trip latency, not on glReadPixels bandwidth. Per-helper bisection
-knobs (`?disable=meleeloop,meleecall,...,wasmaddc,wasmsubfc,wasmadde,wasmsubfe,wasmaddze`)
-are wired so any future regression in the JIT fast-paths can be isolated
-without a rebuild — see `src/core-host.js` for the full bit list and
-`patches/dolphin-wasm/SESSION-2026-05-11-DAY-2-NOTES.md` for the rationale.
+```
+ ┌─────────────────────── Chrome tab ───────────────────────┐
+ │  Main thread (src/)                                       │
+ │   app.js · core-host.js · input.js · audio · settings     │
+ │        │  canvas (WebGPU present)   ▲ audio   ▲ input      │
+ │        ▼                            │         │            │
+ │  Web Worker: upstream-discio-worker.js                    │
+ │        │ mounts ISO via Emscripten WORKERFS                │
+ │        ▼                                                   │
+ │  dolphin-core-upstream.wasm  (Emscripten build of Dolphin)│
+ │    • PowerPC CPU: CachedInterpreter → WASM JIT + regcache  │
+ │    • Software VideoBackend: rasterizer → EFB → XFB encode  │
+ │    • DSP audio, DiscIO, scheduler, save-states             │
+ │    • (opt) WebGPU hardware backend + Naga SPIR-V→WGSL      │
+ └───────────────────────────────────────────────────────────┘
+```
 
-Full multi-day investigation trail in `docs/ogl-performance-plan.md` and
-the `patches/dolphin-wasm/SESSION-*-NOTES.md` files.
+### CPU: the PowerPC → WASM JIT
 
-## Native Core
+Dolphin's `CachedInterpreter` is extended to emit a **WebAssembly module per
+basic block** instead of interpreting PowerPC ops one at a time. The key
+optimization is a **GPR register cache**: the 32 PowerPC general-purpose
+registers are held in WASM locals for the life of a block (loaded in the
+prologue, flushed at block end and around calls) instead of round-tripping to
+the emulated register file on every access.
 
-Install Emscripten, then build the local core:
+- Clean A/B measurement: **+38% raw throughput**, and it is **on by default**.
+- Escape hatch: `?regalloc=0` disables it.
+- `?smearcompile=1` (default-on) spreads JIT compilation to remove mid-match
+  compile-burst hitches at no throughput cost.
+
+The browser sandbox constrains how far this can go: there is no host memory-trap
+("fastmem") path — every emulated memory access is bounds-checked in software —
+and the toolchain emits no WASM SIMD. Those are the structural limits behind the
+remaining gap to native speed. See
+[`docs/core-roadmap.md`](docs/core-roadmap.md) and the
+`patches/dolphin-wasm/SESSION-*-NOTES.md` trail.
+
+### Rendering: the software hybrid (default)
+
+The default path uses Dolphin's **software rasterizer** for correctness, then
+**presents** the framebuffer to the page via WebGPU (or WebGL/Canvas fallback).
+The pipeline is:
+
+```
+software rasterizer → EFB → XFB (YUV encode) → WebGPU presenter → <canvas>
+```
+
+The felt smoothness bottleneck is **not** the CPU — the game logic runs at
+~60 fps — but the scalar software rasterizer + XFB encode, which cap the number
+of *unique* frames reaching the screen during heavy motion. Two knobs address
+this:
+
+#### Pacing
+
+`?pacing=` controls how the canvas is refreshed:
+`tick` (default; steady re-paint, smoothest scroll), `smooth` (paced queue), or
+`direct` (paint only on new unique frames). The WebGPU hardware backend uses
+`smooth`.
+
+#### Raster quality (`fastsw`)
+
+`?fastsw=` trades image quality for a higher unique-frame rate by thinning the
+software raster and XFB encode:
+
+| `fastsw` | What it does | Quality | Unique fps (battle) |
+|:--:|------|------|--:|
+| `1` (default) | Full-quality encode | Crisp | ~15–22 |
+| `2` | Half-row encode with **row duplication** | Blocky vertical banding | ~35 |
+| `3` | Half-row encode with **vertical interpolation (LERP)** | Smooth, no banding | ~29 |
+
+`fastsw=3` reconstructs the rows that `fastsw=2` duplicates by interpolating
+between neighbors — same throughput class as `fastsw=2`, without the
+venetian-blind banding. All fast modes share a quarter-resolution *shading* skip,
+so none of them are full-quality; `fastsw=1` remains the crisp default.
+
+### Rendering: WebGPU hardware backend (experimental, parked)
+
+`?video=wgpu` selects a true WebGPU hardware renderer (ubershaders) that would
+bypass the software-raster unique-frame ceiling entirely. It works on some GPUs
+but currently renders **black on some Windows GPUs**, so it is **not** the
+default and must not be shipped to the default page until verified on the target
+GPU. Prior black-3D, flicker, and dark-menu issues have been root-caused and
+fixed; the remaining blocker is GPU-specific.
+
+This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
+compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.
+
+### Rust: `tools/naga-spirv-wgsl`
+
+A small Rust staticlib that transpiles **SPIR-V → WGSL** using wgpu's
+[`naga`](https://github.com/gfx-rs/wgpu). It is compiled for
+`wasm32-unknown-emscripten` and linked directly into the core `.wasm`, giving
+`WebGPUShaderTranslator::SpirvToWgsl` a synchronous C-ABI call with no async
+worker round-trip. Built with `cargo build --release --target
+wasm32-unknown-emscripten`; `panic = "abort"` so a translation failure can never
+unwind across the FFI boundary (it returns null + a `naga_last_error()` string
+instead).
+
+> This is the **only** Rust in the project, and it exists solely to support the
+> experimental WebGPU renderer — the performance work (the JIT register cache)
+> is C++ in the vendored Dolphin tree, not Rust.
+
+---
+
+## Performance & tuning flags
+
+All flags are URL query parameters, read live on load (served no-store — no
+rebuild needed to change them). Defaults are chosen so the plain page load is
+the correct, working build.
+
+| Flag | Default | Meaning |
+|------|:------:|---------|
+| `video` | `software` | `software` (hybrid) or `wgpu` (experimental hardware) |
+| `presenter` | `webgpu` | Canvas present path: `webgpu` / `webgl` / `canvas` |
+| `wasmjit` | `1` | Enable the PowerPC→WASM JIT |
+| `regalloc` | `1` | GPR register cache (`0` disables; +38%) |
+| `smearcompile` | `1` | Spread JIT compilation to avoid hitches |
+| `pacing` | `tick` | Canvas repaint strategy: `tick` / `smooth` / `direct` |
+| `fastsw` | `1` | Software raster quality/speed (`1` crisp … `3` smooth) |
+| `speed` | `1` | Emulation speed; `unlimited` uncaps for throughput A/B |
+| `oc` | `1` | CPU overclock knob |
+| `queue` | `4` | Presentation frame-queue depth (latency vs smoothness) |
+| `jitwarmup` | `700` | Stable frames before the JIT engages |
+| `metrics` | `0` | Show the on-screen OSD counters |
+| `disable=` | — | Per-helper JIT bisection bitmask (see `src/core-host.js`) |
+
+---
+
+## Building the core
+
+A prebuilt core is committed; build only when changing the C++/Rust core.
+
+**Prerequisites:** [Emscripten SDK](https://emscripten.org/) (`emsdk`) and CMake +
+Ninja. For the WebGPU shader path, a Rust toolchain with the
+`wasm32-unknown-emscripten` target.
 
 ```powershell
-npm run check:deps
-npm run build:core
-```
-
-That produces:
-
-```text
-cores/dolphin/dolphin.js
-cores/dolphin/dolphin.wasm
-```
-
-The C++ source lives at `core/native/dolphin_web_core.cpp`. It exposes a stable C ABI for the browser host: mount disc, reset, run frame, set input, save/load state, read framebuffer, and read parsed GameCube disc metadata.
-
-## Upstream Dolphin Lane
-
-To pull the upstream emulator source for the full port:
-
-```powershell
+# One-time: fetch and patch upstream Dolphin into vendor/dolphin
 npm run fetch:dolphin
 npm run patch:upstream
 npm run configure:upstream
-npm run build:upstream:discio
-npm run build:upstream:bridge
+
+# Build the gameplay core (→ cores/dolphin/dolphin-core-upstream.{js,wasm})
+npm run build:upstream:full-core
+# or, faster, with explicit parallelism:
+#   BUILD_PARALLELISM=8 node tools/build-upstream-target.mjs dolphin_web_core
 ```
 
-This clones `https://github.com/dolphin-emu/dolphin.git` into `vendor/dolphin`. Upstream Dolphin is GPLv2+, so any distributed combined browser build must comply with that license.
-The current Emscripten probe state is tracked in `docs/upstream-wasm-probe.md`.
+Other targets: `build:upstream:discio` / `build:upstream:bridge` (DiscIO
+metadata bridge), `build:core` (the standalone native scaffold under
+`core/native`). The vendored Dolphin tree (`vendor/`) is gitignored; source
+changes to the rasterizer, JIT, or shaders are baked into the committed core
+`.wasm`.
 
-The upstream bridge emits `cores/dolphin/dolphin-upstream.js` and `cores/dolphin/dolphin-upstream.wasm`. It is a DiscIO metadata bridge, not the gameplay core.
-Open the browser host with `?core=upstream` to run this bridge in a Web Worker. The worker mounts selected browser files through Emscripten `WORKERFS`, so real GameCube disc images do not need to be copied into MEMFS before DiscIO reads them.
-This bridge also exports boot-layout probes for apploader, boot DOL, FST, and raw/file reads. It still does not execute game code.
+---
 
-The host loads the web build here:
+## Testing & validation
 
-```text
-cores/dolphin/
-  dolphin.js
-  dolphin.wasm
-  ...
+```powershell
+npm test          # Node unit tests (tests/*.test.mjs)
+npm run check     # syntax-check all JS entry points
+npm run perf:gate # perf regression gate
 ```
 
-The adapter in `src/dolphin-adapter.js` looks for a factory named `createDolphinCore`, a default ESM export, or an Emscripten-style global `Module`.
-The upstream worker adapter in `src/upstream-worker-adapter.js` looks for `cores/dolphin/dolphin-upstream.js`.
+Real-browser gameplay validation uses a headed-Chrome harness that boots the
+ISO, optionally loads a save-state, and samples the OSD counters (game speed,
+core fps, unique/visual fps) to `samples.json` plus screenshots:
+
+```powershell
+$env:HEADED="1"; $env:VIDEO="software"; $env:FASTSW="1"
+node tools/menu-progress-validate.mjs --out-dir .omx/menu-progress/run1
+```
+
+Throughput A/B drivers live in `tools/ab-*.ps1`. Headless Chrome has no WebGPU,
+so rendering paths must be validated headed.
+
+---
+
+## Project layout
+
+```
+src/                     Browser host (main thread + worker)
+  app.js                 UI, settings wiring
+  core-host.js           Flag parsing, core lifecycle, presentation pacing
+  upstream-discio-worker.js  Worker that owns the core + ISO mount + present
+  settings.js input.js audio.js …
+core/
+  upstream/              C-ABI shim compiled with Dolphin (dolphin_web_core.cpp)
+  native/                Standalone from-scratch native core scaffold
+cores/dolphin/           Committed prebuilt core (.js/.wasm) the host loads
+vendor/dolphin/          Upstream Dolphin sources (gitignored; fetched+patched)
+patches/dolphin-wasm/    Build gates + browser-platform patches + session notes
+tools/
+  serve.mjs              Dev server (COOP/COEP)
+  build-upstream-target.mjs   Emscripten build driver
+  menu-progress-validate.mjs  Headed-Chrome validation harness
+  naga-spirv-wgsl/       Rust SPIR-V→WGSL transpiler (WebGPU path)
+  ab-*.ps1               Throughput A/B drivers
+docs/                    Roadmaps and investigation trail
+tests/                   Node unit tests
+```
+
+---
 
 ## Controls
 
-- GameCube A/B/X/Y: `X`, `Z`, `S`, `A`
+- GameCube A / B / X / Y: `X`, `Z`, `S`, `A`
 - Start: `Enter`
-- L/R/Z: `Q`, `E`, `C`
+- L / R / Z: `Q`, `E`, `C`
 - D-pad: arrow keys
 - Main stick: `W`, `A`, `S`, `D`
 
 Standard browser gamepads are also polled.
+
+---
+
+## Known limitations
+
+- **Crisp *and* smooth is not achievable on the software path.** Full-quality
+  raster (`fastsw=1`) is capped at the rasterizer's unique-frame rate during
+  heavy motion; the fast modes buy smoothness by reducing image quality. The
+  only way to get both is the WebGPU hardware renderer (parked) or a
+  SIMD-vectorized software rasterizer.
+- **WebGPU hardware renderer is GPU-dependent** — verify on the target GPU
+  before relying on it; it can render black on some Windows GPUs.
+- In-browser structural limits (no fastmem trap, no WASM SIMD, baseline-tier
+  codegen) bound how close the JIT can get to native speed.
+
+---
+
+## License
+
+This project builds on [Dolphin](https://github.com/dolphin-emu/dolphin), which
+is licensed **GPLv2+**. The vendored sources and any distributed combined build
+(including the core `.wasm`) are subject to GPLv2+. The Rust `naga-spirv-wgsl`
+crate depends on `naga` (MIT/Apache-2.0). Provide your own game ISOs — none are
+included.
