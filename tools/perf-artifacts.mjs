@@ -853,6 +853,39 @@ export function evaluateRunValidity({ invalidReasons = [], failures = [], consol
   return { valid: uniqueReasons.length === 0, invalidReasons: uniqueReasons };
 }
 
+export function evaluateMetricsModeEvidence({ requested, diagnostics = {}, samples = [] } = {}) {
+  const enabled = String(requested) === "1";
+  const failures = [];
+  const counters = ["helperStatsCalls", "profileStatsCalls", "profileTimeSamples"];
+  if (diagnostics.enabled !== enabled) {
+    failures.push(`requested metrics=${enabled ? 1 : 0}, renderer reported enabled=${diagnostics.enabled}`);
+  }
+  for (const name of counters) {
+    const value = Number(diagnostics[name]);
+    if (enabled ? !(value > 0) : value !== 0) {
+      failures.push(`metrics=${enabled ? 1 : 0} activation mismatch: ${name}=${diagnostics[name]}`);
+    }
+  }
+  const marker = `metrics:${enabled ? "on" : "off"}`;
+  if (!samples.some((sample) => String(sample.helper || "").includes(marker))) {
+    failures.push(`metrics=${enabled ? 1 : 0} activation marker ${marker} was not sampled`);
+  }
+  if (enabled) {
+    if (samples.some((sample) => sample.causalTelemetrySchemaVersion !== CAUSAL_TELEMETRY_SCHEMA_VERSION)) {
+      failures.push(
+        `missing or unsupported causal telemetry schema (expected ${CAUSAL_TELEMETRY_SCHEMA_VERSION})`
+      );
+    }
+  } else if (
+    samples.some(
+      (sample) => sample.causalTelemetrySchemaVersion != null || sample.causalTelemetry != null
+    )
+  ) {
+    failures.push("metrics=0 activation mismatch: causal telemetry was present");
+  }
+  return { enabled, failures };
+}
+
 export async function collectRunMetadata({
   root,
   url,

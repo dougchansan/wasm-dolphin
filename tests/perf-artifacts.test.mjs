@@ -13,6 +13,7 @@ import {
   buildComparisonTasklist,
   buildReplacementBlock,
   classifyGateOutcome,
+  evaluateMetricsModeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   extractLocalModuleSpecifiers,
@@ -435,6 +436,61 @@ test("comparison run validity includes assertions and page/worker console errors
     "run failure: compilefail=1",
     "console error: [worker:core:error] device lost",
   ]);
+});
+
+test("metrics experiment evidence accepts intentional causal suppression only when activated", () => {
+  const metricsOn = evaluateMetricsModeEvidence({
+    requested: "1",
+    diagnostics: {
+      enabled: true,
+      helperStatsCalls: 10,
+      profileStatsCalls: 10,
+      profileTimeSamples: 100,
+    },
+    samples: [
+      {
+        helper: "video xfb:10 | metrics:on | jit:off",
+        causalTelemetrySchemaVersion: 1,
+        causalTelemetry: { schemaVersion: 1 },
+      },
+    ],
+  });
+  assert.deepEqual(metricsOn.failures, []);
+
+  const metricsOff = evaluateMetricsModeEvidence({
+    requested: "0",
+    diagnostics: {
+      enabled: false,
+      helperStatsCalls: 0,
+      profileStatsCalls: 0,
+      profileTimeSamples: 0,
+    },
+    samples: [
+      {
+        helper: "video xfb:10 | metrics:off | jit:off",
+        causalTelemetrySchemaVersion: null,
+        causalTelemetry: null,
+      },
+    ],
+  });
+  assert.deepEqual(metricsOff.failures, []);
+
+  assert.match(
+    evaluateMetricsModeEvidence({
+      requested: "0",
+      diagnostics: { enabled: true, helperStatsCalls: 1, profileStatsCalls: 1, profileTimeSamples: 1 },
+      samples: [{ helper: "metrics:on", causalTelemetrySchemaVersion: 1, causalTelemetry: {} }],
+    }).failures.join(" | "),
+    /requested metrics=0.*enabled=true.*helperStatsCalls=1.*causal telemetry was present/
+  );
+  assert.match(
+    evaluateMetricsModeEvidence({
+      requested: "1",
+      diagnostics: { enabled: false, helperStatsCalls: 0, profileStatsCalls: 0, profileTimeSamples: 0 },
+      samples: [{ helper: "metrics:off", causalTelemetrySchemaVersion: null, causalTelemetry: null }],
+    }).failures.join(" | "),
+    /requested metrics=1.*enabled=false.*helperStatsCalls=0.*missing or unsupported causal telemetry schema/
+  );
 });
 
 test("comparison tasklist alternates complete four-run blocks and is bounded", () => {

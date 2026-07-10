@@ -20,6 +20,7 @@ import {
   collectRunMetadata,
   classifyGateOutcome,
   describeFile,
+  evaluateMetricsModeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   extractLocalModuleSpecifiers,
@@ -472,11 +473,13 @@ async function runScenario(scenario, context) {
   }
 
   if (!samples.length) invalidReasons.push("no timed samples were collected");
-  if (samples.some((sample) => sample.causalTelemetrySchemaVersion !== CAUSAL_TELEMETRY_SCHEMA_VERSION)) {
-    invalidReasons.push(
-      `missing or unsupported causal telemetry schema (expected ${CAUSAL_TELEMETRY_SCHEMA_VERSION})`
-    );
-  }
+  invalidReasons.push(
+    ...evaluateMetricsModeEvidence({
+      requested: scenario.params.metrics,
+      diagnostics: renderer?.metrics,
+      samples,
+    }).failures
+  );
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
   const fatalEvidence = findFatalRuntimeEvidence({
