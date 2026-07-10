@@ -282,6 +282,10 @@ test("worker diagnostics structurally retain fatal catches and RPCs are bounded"
   assert.match(gateSource, /Worker RPC \$\{type\} timed out after \$\{timeoutMs\} ms/);
   assert.match(gateSource, /requestWorkerRpc\(page, "rendererDiagnostics"\)/);
   assert.match(gateSource, /loadStateFileWithTimeout\(page/);
+  assert.match(
+    gateSource,
+    /renderer = withExpectedRendererIdentity\(await readRendererDiagnostics\(page\), scenario\.params\);\s+manifest\.renderer = renderer;\s+const battleCheckpoint = assertBattleCheckpoint/
+  );
 });
 
 test("locked build provenance rejects valid-looking source, toolchain, and JS mutations", () => {

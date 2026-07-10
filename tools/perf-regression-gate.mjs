@@ -393,6 +393,8 @@ async function runScenario(scenario, context) {
     if (!saveStateLoad.loaded) {
       throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
     }
+    renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
+    manifest.renderer = renderer;
     const battleCheckpoint = assertBattleCheckpoint(parseBattleCheckpoint(response));
     manifest.fixture.battleCheckpoint = battleCheckpoint;
     await resumeAfterBattleCheckpoint(page);
