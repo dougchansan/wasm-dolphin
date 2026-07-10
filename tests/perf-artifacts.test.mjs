@@ -15,6 +15,8 @@ import {
   classifyGateOutcome,
   evaluateQualificationProvenance,
   evaluateRunValidity,
+  extractLocalModuleSpecifiers,
+  findFatalRuntimeEvidence,
   parseProfileMetrics,
   parseBattleCheckpoint,
   recordsToCsv,
@@ -169,21 +171,92 @@ test("served identity and observed battle checkpoint reject mismatches", () => {
   assert.throws(() => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks + 1 }), /coreTicks/);
 });
 
+test("served closure extraction includes core-host and detects a changed dependency", () => {
+  assert.deepEqual(
+    extractLocalModuleSpecifiers(
+      'import { EmulatorHost } from "./core-host.js";\nnew Worker(new URL("./worker.js", import.meta.url));\nnew URL("core.wasm", import.meta.url);',
+      "src/app.js"
+    ),
+    ["./core-host.js", "./worker.js", "core.wasm"]
+  );
+  const expected = {
+    "src/app.js": { sha256: "a".repeat(64), bytes: 100 },
+    "src/core-host.js": { sha256: "b".repeat(64), bytes: 200 },
+  };
+  assert.throws(
+    () => assertServedArtifactIdentity(expected, {
+      ...expected,
+      "src/core-host.js": { sha256: "c".repeat(64), bytes: 200 },
+    }),
+    /core-host\.js/
+  );
+});
+
+test("known WebGPU validation, device, WASM, and fallback evidence is fatal", () => {
+  const evidence = findFatalRuntimeEvidence({
+    consoleLines: ["[webgpu-exec] VALIDATION: bind group layout mismatch"],
+    statuses: ["status failed: WebAssembly RuntimeError"],
+    renderer: {
+      requestedBackend: "webgpu",
+      activeBackend: "webgl",
+      errors: [{ kind: "device-lost", message: "destroyed" }],
+      emscriptenPrintErr: ["Aborted(out of bounds memory access)"],
+    },
+  });
+  assert.ok(evidence.some((line) => line.includes("VALIDATION")));
+  assert.ok(evidence.some((line) => line.includes("device-lost")));
+  assert.ok(evidence.some((line) => line.includes("renderer fallback")));
+  assert.ok(evidence.some((line) => line.includes("emscripten-printErr")));
+});
+
 test("qualification requires headed build, profile, adapter, and toolchain provenance", () => {
   const manifest = validManifest();
   manifest.browser.headed = false;
   manifest.browser.profileId = "ephemeral-run-1";
-  manifest.browser.webgpuAdapter = { selected: true, vendor: "test-vendor" };
+  manifest.browser.executablePath = "C:/Chrome/chrome.exe";
+  manifest.browser.actualChannel = "chrome";
+  manifest.renderer = {
+    requestedBackend: "webgpu",
+    activeBackend: "webgpu",
+    adapter: { selected: true, vendor: "test-vendor" },
+    device: { created: true },
+  };
   manifest.benchmark.cacheState = "cold";
   manifest.hostCore = { abiVersion: "1" };
   manifest.eventSchema = { version: "1" };
+  manifest.buildProvenance = {
+    source: "build-info.json",
+    manifestSha256: "c".repeat(64),
+    artifactVerified: true,
+    abiVerified: true,
+    eventSchemaVerified: true,
+  };
   manifest.upstream = { dolphinSha: "a".repeat(40) };
   manifest.patches = { hashes: ["b".repeat(64)] };
-  manifest.toolchain = { emscripten: "x", cmake: "x", ninja: "x", rust: "x", naga: "x" };
+  manifest.toolchain = Object.fromEntries(
+    ["emscripten", "cmake", "ninja", "rust", "naga"].map((tool) => [
+      tool,
+      { version: "1.0.0", digest: "d".repeat(64) },
+    ])
+  );
   assert.equal(evaluateQualificationProvenance(manifest).eligible, false);
   assert.ok(evaluateQualificationProvenance(manifest).missing.includes("browser.headed=true"));
   manifest.browser.headed = true;
   assert.equal(evaluateQualificationProvenance(manifest).eligible, true);
+
+  manifest.hostCore.abiVersion = "garbage";
+  manifest.eventSchema.version = "garbage";
+  manifest.browser.executablePath = "";
+  manifest.browser.actualChannel = "";
+  manifest.buildProvenance.artifactVerified = false;
+  manifest.toolchain.emscripten = "garbage";
+  const garbage = evaluateQualificationProvenance(manifest);
+  assert.equal(garbage.eligible, false);
+  assert.ok(garbage.missing.includes("hostCore.abiVersion=1"));
+  assert.ok(garbage.missing.includes("eventSchema.version=1"));
+  assert.ok(garbage.missing.includes("browser.executablePath"));
+  assert.ok(garbage.missing.includes("buildProvenance.artifactVerified=true"));
+  assert.ok(garbage.missing.includes("toolchain.emscripten.version(structured)"));
 });
 
 test("headless, screening, and unresolved statistics cannot report qualification success", () => {
@@ -378,7 +451,7 @@ function validManifest() {
       saveStateLoaded: true,
       battleCheckpoint: { verified: true },
     },
-    servedApplication: { verified: true },
+    servedApplication: { verified: true, manifestSha256: "e".repeat(64) },
   };
 }
 

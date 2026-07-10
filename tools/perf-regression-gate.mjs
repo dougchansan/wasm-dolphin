@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
+  HOST_CORE_ABI_VERSION,
+  PERF_EVENT_SCHEMA_VERSION,
   assertBattleCheckpoint,
   assertRunProvenance,
   assertServedArtifactIdentity,
@@ -16,6 +18,8 @@ import {
   describeFile,
   evaluateQualificationProvenance,
   evaluateRunValidity,
+  extractLocalModuleSpecifiers,
+  findFatalRuntimeEvidence,
   parseBattleCheckpoint,
   parseProfileMetrics,
   recordsToCsv,
@@ -79,7 +83,7 @@ async function main() {
   try {
     await verifyServedFixture(new URL(saveStateUrl, baseUrl), saveFixture.sha256);
     const servedApplication = await verifyServedApplication(baseUrl, coreArtifact);
-    const buildProvenance = await collectBuildProvenance();
+    const buildProvenance = await collectBuildProvenance(coreArtifact);
     const context = {
       baseUrl,
       buildProvenance,
@@ -273,15 +277,18 @@ async function runScenario(scenario, context) {
   const samples = [];
   const invalidReasons = [];
   let browser = null;
+  let browserLaunch = null;
   let manifest = null;
   let saveStateLoad = null;
+  let renderer = null;
   let finalScreenshotCaptured = false;
   const url = new URL(context.baseUrl);
   for (const [key, value] of Object.entries(scenario.params)) url.searchParams.set(key, value);
   url.searchParams.set("probe", `${scenario.name}-${Date.now()}`);
 
   try {
-    browser = await launchBrowser(context.chromium, context.headed);
+    browserLaunch = await launchBrowser(context.chromium, context.headed);
+    browser = browserLaunch.browser;
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const recordConsole = (scope, message) => {
       const line = `[${scope}${message.type()}] ${message.text()}`;
@@ -308,9 +315,9 @@ async function runScenario(scenario, context) {
       root,
       url: url.href,
       browserName: "chromium",
-      browserChannel: process.env.BROWSER_CHANNEL || "chrome",
+      browserChannel: browserLaunch.actualChannel,
       browserVersion,
-      browserExecutable: context.chromium.executablePath(),
+      browserExecutable: browserLaunch.executablePath,
       headed: context.headed,
       durationSeconds: context.durationSeconds,
       sampleMs: context.sampleMs,
@@ -331,13 +338,18 @@ async function runScenario(scenario, context) {
       },
     });
     manifest.schemaVersion = 2;
+    manifest.browser.requestedChannel = browserLaunch.requestedChannel;
+    manifest.browser.actualChannel = browserLaunch.actualChannel;
+    manifest.browser.executablePath = browserLaunch.executablePath;
+    manifest.browser.launchSource = browserLaunch.source;
     manifest.benchmark.inputScriptMode = "none";
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
     manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
+    manifest.buildProvenance = context.buildProvenance.buildProvenance;
     manifest.hostCore = context.buildProvenance.hostCore;
-    manifest.eventSchema = { version: "1" };
+    manifest.eventSchema = { version: PERF_EVENT_SCHEMA_VERSION };
     manifest.upstream = context.buildProvenance.upstream;
     manifest.patches = context.buildProvenance.patches;
     manifest.toolchain = context.buildProvenance.toolchain;
@@ -373,6 +385,8 @@ async function runScenario(scenario, context) {
     manifest.fixture.battleCheckpoint = battleCheckpoint;
     await resumeAfterBattleCheckpoint(page);
     saveStateLoad.postLoadProgress = await waitForPostLoadProgress(page);
+    renderer = await readRendererDiagnostics(page);
+    manifest.renderer = renderer;
     await page.waitForTimeout(context.settleSeconds * 1000);
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
@@ -400,6 +414,9 @@ async function runScenario(scenario, context) {
       if (index < totalSamples) await page.waitForTimeout(context.sampleMs);
     }
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
+    await page.waitForTimeout(100);
+    renderer = await readRendererDiagnostics(page);
+    manifest.renderer = renderer;
   } catch (error) {
     invalidReasons.push(error.message || String(error));
     consoleLines.push(`[probe-error] ${error.stack || error.message}`);
@@ -414,6 +431,12 @@ async function runScenario(scenario, context) {
   if (!samples.length) invalidReasons.push("no timed samples were collected");
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
+  const fatalEvidence = findFatalRuntimeEvidence({
+    consoleLines,
+    statuses: samples.flatMap((sample) => [sample.status, sample.statusPill]).filter(Boolean),
+    renderer: renderer || {},
+  });
+  invalidReasons.push(...fatalEvidence.map((entry) => `fatal runtime evidence: ${entry}`));
 
   const summary = summarizeScenario(
     scenario,
@@ -683,6 +706,15 @@ async function resumeAfterBattleCheckpoint(page) {
   }
 }
 
+async function readRendererDiagnostics(page) {
+  const diagnostics = await page.evaluate(async () => {
+    const adapter = window.__host?.adapter;
+    if (!adapter?.request) throw new Error("Active adapter does not expose renderer diagnostics");
+    return adapter.request("rendererDiagnostics");
+  });
+  return diagnostics || { requestedBackend: null, activeBackend: "unknown", errors: [] };
+}
+
 async function waitForPostLoadProgress(page) {
   let first = null;
   let latest = null;
@@ -817,13 +849,56 @@ async function launchBrowser(chromium, headed) {
   if (process.env.PERF_PROBE_AGGRESSIVE_GPU === "1") {
     args.push("--ignore-gpu-blocklist", "--use-angle=d3d11");
   }
-  const channel = process.env.BROWSER_CHANNEL || "chrome";
-  try {
-    return await chromium.launch({ channel, headless: !headed, args });
-  } catch (error) {
-    console.warn(`Unable to launch ${channel}; falling back to bundled Chromium: ${error.message}`);
-    return chromium.launch({ headless: !headed, args });
+  const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
+  const configuredExecutable = process.env.BROWSER_EXECUTABLE
+    ? path.resolve(process.env.BROWSER_EXECUTABLE)
+    : findInstalledBrowserExecutable(requestedChannel);
+  if (configuredExecutable) {
+    try {
+      const browser = await chromium.launch({
+        executablePath: configuredExecutable,
+        headless: !headed,
+        args,
+      });
+      return {
+        browser,
+        requestedChannel,
+        actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
+        executablePath: configuredExecutable,
+        source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
+      };
+    } catch (error) {
+      console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
+    }
   }
+  const executablePath = path.resolve(chromium.executablePath());
+  const browser = await chromium.launch({ executablePath, headless: !headed, args });
+  return {
+    browser,
+    requestedChannel,
+    actualChannel: "bundled-chromium",
+    executablePath,
+    source: "playwright-bundled",
+  };
+}
+
+function findInstalledBrowserExecutable(channel) {
+  const candidates = [];
+  if (process.platform === "win32") {
+    const roots = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA].filter(Boolean);
+    const suffix = /edge/i.test(channel)
+      ? path.join("Microsoft", "Edge", "Application", "msedge.exe")
+      : path.join("Google", "Chrome", "Application", "chrome.exe");
+    candidates.push(...roots.map((base) => path.join(base, suffix)));
+  } else if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+    );
+  } else {
+    candidates.push("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser");
+  }
+  return candidates.find((candidate) => existsSync(candidate)) || null;
 }
 
 async function importPlaywright() {
@@ -877,35 +952,50 @@ async function verifyServedFixture(url, expectedSha256) {
 }
 
 async function verifyServedApplication(baseUrl, coreArtifact) {
-  const paths = {
-    index: "index.html",
-    app: "src/app.js",
-    worker: "src/upstream-discio-worker.js",
-    coreJs: "cores/dolphin/dolphin-core-upstream.js",
-    coreWasm: "cores/dolphin/dolphin-core-upstream.wasm",
-  };
+  const roots = [
+    "index.html",
+    "src/app.js",
+    "src/upstream-discio-worker.js",
+    "cores/dolphin/dolphin-core-upstream.js",
+  ];
+  const optionalRuntimeAssets = ["cores/dolphin/prebuilt-jit-cache.bin"];
+  for (const asset of optionalRuntimeAssets) {
+    if (existsSync(path.join(root, ...asset.split("/")))) roots.push(asset);
+  }
+  const paths = await collectLocalServedClosure(roots);
   const expectedArtifacts = {};
   const servedArtifacts = {};
-  for (const [name, relativePath] of Object.entries(paths)) {
+  for (const relativePath of paths) {
     const localPath = path.join(root, ...relativePath.split("/"));
-    expectedArtifacts[name] = name === "coreWasm"
+    expectedArtifacts[relativePath] = relativePath === "cores/dolphin/dolphin-core-upstream.wasm"
       ? coreArtifact
       : await describeFile(localPath, { hash: true });
     const url = new URL(relativePath, baseUrl);
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(`Served application artifact missing: ${url.href} returned ${response.status}`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    servedArtifacts[name] = {
+    servedArtifacts[relativePath] = {
       url: url.href,
       bytes: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     };
   }
   const identity = assertServedArtifactIdentity(expectedArtifacts, servedArtifacts);
+  const manifestText = JSON.stringify(
+    Object.fromEntries(paths.map((relativePath) => [relativePath, {
+      bytes: expectedArtifacts[relativePath].bytes,
+      sha256: expectedArtifacts[relativePath].sha256,
+    }])),
+    null,
+    2
+  );
   const rootResponse = await fetch(baseUrl, { cache: "no-store" });
   return {
     ...identity,
     baseUrl,
+    roots,
+    dependencyCount: paths.length,
+    manifestSha256: createHash("sha256").update(manifestText).digest("hex"),
     isolationHeaders: {
       coop: rootResponse.headers.get("cross-origin-opener-policy"),
       coep: rootResponse.headers.get("cross-origin-embedder-policy"),
@@ -913,7 +1003,46 @@ async function verifyServedApplication(baseUrl, coreArtifact) {
   };
 }
 
-async function collectBuildProvenance() {
+async function collectLocalServedClosure(rootPaths) {
+  const queued = [...new Set(rootPaths.map(normalizeServedPath))];
+  const discovered = new Set();
+  while (queued.length) {
+    const relativePath = queued.shift();
+    if (discovered.has(relativePath)) continue;
+    const localPath = path.resolve(root, ...relativePath.split("/"));
+    if (!localPath.startsWith(`${path.resolve(root)}${path.sep}`) && localPath !== path.resolve(root)) {
+      throw new Error(`Served dependency escapes repository root: ${relativePath}`);
+    }
+    if (!existsSync(localPath)) throw new Error(`Served dependency is missing locally: ${relativePath}`);
+    discovered.add(relativePath);
+    const extension = path.extname(relativePath).toLowerCase();
+    if (![".html", ".js", ".mjs"].includes(extension)) continue;
+    const source = await readFile(localPath, "utf8");
+    for (const specifier of extractLocalModuleSpecifiers(source, relativePath)) {
+      const dependency = resolveServedSpecifier(relativePath, specifier);
+      if (!discovered.has(dependency)) queued.push(dependency);
+    }
+  }
+  return [...discovered].sort();
+}
+
+function resolveServedSpecifier(importer, specifier) {
+  const clean = specifier.split(/[?#]/, 1)[0];
+  const joined = clean.startsWith("/")
+    ? clean.slice(1)
+    : path.posix.join(path.posix.dirname(importer), clean);
+  return normalizeServedPath(joined);
+}
+
+function normalizeServedPath(value) {
+  const normalized = path.posix.normalize(String(value).replaceAll("\\", "/")).replace(/^\.\//, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    throw new Error(`Invalid served dependency path: ${value}`);
+  }
+  return normalized;
+}
+
+async function collectBuildProvenance(coreArtifact) {
   const buildInfoPath = path.join(root, "cores", "dolphin", "build-info.json");
   let buildInfo = {};
   if (existsSync(buildInfoPath)) {
@@ -923,9 +1052,34 @@ async function collectBuildProvenance() {
       throw new Error(`Invalid core build provenance ${buildInfoPath}: ${error.message}`);
     }
   }
+  const buildInfoArtifact = existsSync(buildInfoPath)
+    ? await describeFile(buildInfoPath, { hash: true })
+    : null;
   const patchHashes = parseListEnv("PATCH_HASHES", readPath(buildInfo, "patches.hashes") || []);
+  const declaredCoreSha =
+    readPath(buildInfo, "artifacts.core.sha256") ||
+    readPath(buildInfo, "artifacts.wasm.sha256") ||
+    null;
+  const declaredAbi = readPath(buildInfo, "hostCore.abiVersion") || null;
+  const declaredEventSchema = readPath(buildInfo, "eventSchema.version") || null;
+  const toolchainEntry = (tool, versionEnv, digestEnv) => {
+    const entry = readPath(buildInfo, `toolchain.${tool}`);
+    return {
+      version: process.env[versionEnv] || (typeof entry === "object" ? entry?.version : null) || null,
+      digest: process.env[digestEnv] || (typeof entry === "object" ? entry?.digest : null) || null,
+    };
+  };
   return {
-    buildInfoPath: existsSync(buildInfoPath) ? buildInfoPath : null,
+    buildProvenance: {
+      source: buildInfoArtifact ? "build-info.json" : null,
+      path: buildInfoArtifact ? buildInfoPath : null,
+      manifestSha256: buildInfoArtifact?.sha256 || null,
+      manifestBytes: buildInfoArtifact?.bytes || null,
+      declaredCoreSha256: declaredCoreSha,
+      artifactVerified: Boolean(declaredCoreSha && declaredCoreSha === coreArtifact.sha256),
+      abiVerified: declaredAbi === HOST_CORE_ABI_VERSION,
+      eventSchemaVerified: declaredEventSchema === PERF_EVENT_SCHEMA_VERSION,
+    },
     hostCore: {
       abiVersion: process.env.HOST_CORE_ABI_VERSION || readPath(buildInfo, "hostCore.abiVersion") || null,
     },
@@ -934,12 +1088,12 @@ async function collectBuildProvenance() {
     },
     patches: { hashes: patchHashes },
     toolchain: {
-      node: process.version,
-      emscripten: process.env.EMSCRIPTEN_VERSION || readPath(buildInfo, "toolchain.emscripten") || null,
-      cmake: process.env.CMAKE_VERSION || readPath(buildInfo, "toolchain.cmake") || null,
-      ninja: process.env.NINJA_VERSION || readPath(buildInfo, "toolchain.ninja") || null,
-      rust: process.env.RUST_VERSION || readPath(buildInfo, "toolchain.rust") || null,
-      naga: process.env.NAGA_VERSION || readPath(buildInfo, "toolchain.naga") || null,
+      node: { version: process.version, executablePath: process.execPath },
+      emscripten: toolchainEntry("emscripten", "EMSCRIPTEN_VERSION", "EMSCRIPTEN_DIGEST"),
+      cmake: toolchainEntry("cmake", "CMAKE_VERSION", "CMAKE_DIGEST"),
+      ninja: toolchainEntry("ninja", "NINJA_VERSION", "NINJA_DIGEST"),
+      rust: toolchainEntry("rust", "RUST_VERSION", "RUST_DIGEST"),
+      naga: toolchainEntry("naga", "NAGA_VERSION", "NAGA_DIGEST"),
     },
   };
 }

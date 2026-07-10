@@ -23,6 +23,9 @@ export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
   height: 480,
 });
 
+export const HOST_CORE_ABI_VERSION = "1";
+export const PERF_EVENT_SCHEMA_VERSION = "1";
+
 export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "git.commit",
   "browser.version",
@@ -43,18 +46,19 @@ export const REQUIRED_RUN_PROVENANCE = Object.freeze([
 export const REQUIRED_QUALIFICATION_PROVENANCE = Object.freeze([
   "browser.headed",
   "browser.version",
+  "browser.executablePath",
+  "browser.actualChannel",
   "browser.profileId",
-  "browser.webgpuAdapter.selected",
   "benchmark.cacheState",
-  "hostCore.abiVersion",
-  "eventSchema.version",
-  "upstream.dolphinSha",
-  "toolchain.emscripten",
-  "toolchain.cmake",
-  "toolchain.ninja",
-  "toolchain.rust",
-  "toolchain.naga",
+  "renderer.requestedBackend",
+  "renderer.activeBackend",
+  "renderer.adapter.selected",
+  "renderer.device.created",
+  "buildProvenance.artifactVerified",
+  "buildProvenance.abiVerified",
+  "buildProvenance.eventSchemaVerified",
   "servedApplication.verified",
+  "servedApplication.manifestSha256",
 ]);
 
 function git(root, args) {
@@ -141,16 +145,53 @@ export function evaluateQualificationProvenance(manifest) {
   } else if (manifest.patches.hashes.some((hash) => !/^[0-9a-f]{64}$/i.test(String(hash)))) {
     missing.push("patches.hashes(valid SHA-256)");
   }
-  if (!manifest?.browser?.webgpuAdapter?.selected) {
-    missing.push("browser.webgpuAdapter.selected=true");
+  if (!manifest?.renderer?.adapter?.selected) {
+    missing.push("renderer.adapter.selected=true");
   } else if (![
-    manifest.browser.webgpuAdapter.vendor,
-    manifest.browser.webgpuAdapter.device,
-    manifest.browser.webgpuAdapter.description,
+    manifest.renderer.adapter.vendor,
+    manifest.renderer.adapter.device,
+    manifest.renderer.adapter.description,
   ].some(Boolean)) {
-    missing.push("browser.webgpuAdapter.identity");
+    missing.push("renderer.adapter.identity");
+  }
+  if (!manifest?.renderer?.device?.created) missing.push("renderer.device.created=true");
+  if (manifest?.renderer?.requestedBackend === "webgpu" && manifest?.renderer?.activeBackend !== "webgpu") {
+    missing.push("renderer.activeBackend=webgpu");
   }
   if (!manifest?.browser?.profileId) missing.push("browser.profileId");
+  if (!/^[0-9a-f]{64}$/i.test(String(manifest?.servedApplication?.manifestSha256 || ""))) {
+    missing.push("servedApplication.manifestSha256(valid SHA-256)");
+  }
+  if (manifest?.hostCore?.abiVersion !== HOST_CORE_ABI_VERSION) {
+    missing.push(`hostCore.abiVersion=${HOST_CORE_ABI_VERSION}`);
+  }
+  if (manifest?.eventSchema?.version !== PERF_EVENT_SCHEMA_VERSION) {
+    missing.push(`eventSchema.version=${PERF_EVENT_SCHEMA_VERSION}`);
+  }
+  if (!/^[0-9a-f]{64}$/i.test(String(manifest?.buildProvenance?.manifestSha256 || ""))) {
+    missing.push("buildProvenance.manifestSha256(valid SHA-256)");
+  }
+  if (manifest?.buildProvenance?.source !== "build-info.json") {
+    missing.push("buildProvenance.source=build-info.json");
+  }
+  if (manifest?.buildProvenance?.artifactVerified !== true) {
+    missing.push("buildProvenance.artifactVerified=true");
+  }
+  if (manifest?.buildProvenance?.abiVerified !== true) {
+    missing.push("buildProvenance.abiVerified=true");
+  }
+  if (manifest?.buildProvenance?.eventSchemaVerified !== true) {
+    missing.push("buildProvenance.eventSchemaVerified=true");
+  }
+  for (const tool of ["emscripten", "cmake", "ninja", "rust", "naga"]) {
+    const entry = manifest?.toolchain?.[tool];
+    if (!entry || typeof entry !== "object" || !validToolVersion(entry.version)) {
+      missing.push(`toolchain.${tool}.version(structured)`);
+    }
+    if (!/^[0-9a-f]{64}$/i.test(String(entry?.digest || ""))) {
+      missing.push(`toolchain.${tool}.digest(valid SHA-256)`);
+    }
+  }
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(String(manifest?.upstream?.dolphinSha || ""))) {
     missing.push("upstream.dolphinSha(valid commit)");
   }
@@ -159,6 +200,12 @@ export function evaluateQualificationProvenance(manifest) {
     eligible: uniqueMissing.length === 0,
     missing: uniqueMissing,
   };
+}
+
+function validToolVersion(value) {
+  return /^(?:\d+\.\d+(?:\.\d+)?(?:[-+][0-9a-z.-]+)?|[0-9a-f]{40}|[0-9a-f]{64})$/i.test(
+    String(value || "").trim()
+  );
 }
 
 export function assertServedArtifactIdentity(expectedArtifacts, servedArtifacts) {
@@ -180,6 +227,47 @@ export function assertServedArtifactIdentity(expectedArtifacts, servedArtifacts)
   }
   if (mismatches.length) throw new Error(`Served application identity mismatch: ${mismatches.join("; ")}`);
   return { verified: true, artifacts: servedArtifacts };
+}
+
+export function extractLocalModuleSpecifiers(source, relativePath) {
+  const text = String(source || "");
+  const specifiers = new Set();
+  const extension = path.extname(relativePath).toLowerCase();
+  const add = (specifier, allowBareRelative = false) => {
+    if (!specifier || /^(?:[a-z]+:|#)/i.test(specifier)) return;
+    if (!allowBareRelative && !specifier.startsWith(".") && !specifier.startsWith("/")) return;
+    specifiers.add(specifier);
+  };
+  if (extension === ".html") {
+    for (const match of text.matchAll(/<(?:script|link)\b[^>]*(?:src|href)=["']([^"']+)["'][^>]*>/gi)) {
+      add(match[1], true);
+    }
+  } else {
+    for (const match of text.matchAll(/\b(?:import|export)\s+(?:[^;"']*?\s+from\s*)?["']([^"']+)["']/g)) add(match[1]);
+    for (const match of text.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) add(match[1]);
+    for (const match of text.matchAll(/\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g)) add(match[1], true);
+  }
+  return [...specifiers].sort();
+}
+
+export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], renderer = {} }) {
+  const evidence = [];
+  const fatalPattern = /(?:\[webgpu[^\]]*\][^\n]*(?:validation|device lost|uncaptured|\bfail(?:ed)?\b|\bmissing\b|threw|\berror\b)|emscripten abort|\baborted\(|(?:webassembly\.)?runtimeerror|wasm[^\n]*(?:out of bounds|unreachable|abort|failed|error)|worker[^\n]*(?:uncaught|pageerror)|status[^\n]*(?:failed|fatal))/i;
+  for (const line of [...consoleLines, ...statuses]) {
+    if (fatalPattern.test(String(line))) evidence.push(String(line));
+  }
+  for (const entry of renderer.errors || []) {
+    if (["validation", "uncaptured-error", "device-lost", "submit-error", "error-scope-failure", "emscripten-abort"].includes(entry.kind)) {
+      evidence.push(`[renderer:${entry.kind}] ${entry.message}`);
+    }
+  }
+  for (const line of renderer.emscriptenPrintErr || []) {
+    if (fatalPattern.test(String(line))) evidence.push(`[emscripten-printErr] ${line}`);
+  }
+  if (renderer.requestedBackend === "webgpu" && renderer.activeBackend !== "webgpu") {
+    evidence.push(`renderer fallback: requested webgpu, active ${renderer.activeBackend || "unknown"}`);
+  }
+  return [...new Set(evidence)];
 }
 
 export function parseBattleCheckpoint(framePayload) {

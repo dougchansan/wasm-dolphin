@@ -107,11 +107,21 @@ marked `NON_QUALIFYING` and exit nonzero; performance claims require headed
 Chrome plus complete build, patch, toolchain, browser-profile, adapter, cache,
 ABI, event-schema, and served-artifact provenance. Summary metrics name the
 complete timed window and post-warmup steady-state window separately.
-Build provenance is read from `cores/dolphin/build-info.json` when present;
-until the hermetic build provides it, qualification also accepts explicit
-`HOST_CORE_ABI_VERSION`, `UPSTREAM_DOLPHIN_SHA`, `PATCH_HASHES`, and pinned
+Qualification requires a hashed `cores/dolphin/build-info.json` from the
+hermetic build. Explicit `HOST_CORE_ABI_VERSION`, `UPSTREAM_DOLPHIN_SHA`,
+`PATCH_HASHES`, and pinned
 `EMSCRIPTEN_VERSION`, `CMAKE_VERSION`, `NINJA_VERSION`, `RUST_VERSION`, and
-`NAGA_VERSION` environment variables.
+`NAGA_VERSION` environment variables. Each tool also needs its matching
+`*_DIGEST` SHA-256 can supply structured fields during transition, but do not
+replace the build manifest. Loose strings and unsupported ABI/event versions
+are non-qualifying.
+
+Before Chrome launches, the gate discovers and hashes the complete local
+ES-module dependency closure rooted at the page, app, worker, and generated
+core module, then verifies every dependency from the served origin. The run
+manifest records the actual launched browser executable/channel and asks the
+worker-owned presenter for its real backend, adapter, device, fallback, device
+loss, uncaptured-error, error-scope, and Emscripten `printErr` evidence.
 
 For a bounded A/B screen, pass
 [`melee-screening.example.json`](melee-screening.example.json) with

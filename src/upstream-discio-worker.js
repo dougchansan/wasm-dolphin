@@ -82,6 +82,7 @@ let lastPresentationFpsTime = 0;
 let lastPresentedAt = 0;
 let lastHostPumpTime = 0;
 let renderBackend = "none";
+let rendererDiagnostics = createRendererDiagnostics();
 let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
 // Stall-logger state.
@@ -205,6 +206,38 @@ const WASM_JIT_POST_ACTIVATION_GRACE_FRAMES = 300;
 // After a temporary degraded-presentation disable, wait this many video frames
 // before allowing the JIT to re-engage. ~5 seconds at 60fps.
 const WASM_JIT_DEGRADED_COOLDOWN_FRAMES = 300;
+
+function createRendererDiagnostics() {
+  return {
+    requestedBackend: null,
+    activeBackend: "none",
+    fallback: null,
+    adapter: null,
+    device: null,
+    errors: [],
+    emscriptenPrintErr: [],
+  };
+}
+
+function recordRendererError(kind, message) {
+  const entry = {
+    atMs: Number(performance.now().toFixed(3)),
+    kind,
+    message: String(message || "unknown").slice(0, 1000),
+  };
+  rendererDiagnostics.errors.push(entry);
+  if (rendererDiagnostics.errors.length > 64) rendererDiagnostics.errors.shift();
+  return entry;
+}
+
+function rendererDiagnosticsPayload() {
+  return {
+    ...rendererDiagnostics,
+    activeBackend: renderBackend,
+    errors: rendererDiagnostics.errors.map((entry) => ({ ...entry })),
+    emscriptenPrintErr: [...rendererDiagnostics.emscriptenPrintErr],
+  };
+}
 
 self.addEventListener("message", async (event) => {
   const data = event.data ?? {};
@@ -337,6 +370,8 @@ async function handleMessage(type, payload) {
         ...framePayload(),
       };
     }
+    case "rendererDiagnostics":
+      return rendererDiagnosticsPayload();
     case "loadStateFile": {
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
@@ -488,6 +523,8 @@ async function loadCore({
   if (moduleInstance) {
     return moduleInstance;
   }
+  rendererDiagnostics = createRendererDiagnostics();
+  rendererDiagnostics.requestedBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
 
   const normalizedOglProxyMode = normalizeOglProxyMode(oglProxyMode);
@@ -534,10 +571,12 @@ async function loadCore({
   if (canvas && videoBackend === "OGL" && !readbackOgl) {
     renderCanvas = canvas;
     renderBackend = "ogl";
+    rendererDiagnostics.activeBackend = renderBackend;
     postStatus("Worker OGL path: canvas attached, awaiting WebGL2 context creation");
   } else if (detachedOgl) {
     renderCanvas = moduleCanvas;
     renderBackend = "ogl";
+    rendererDiagnostics.activeBackend = renderBackend;
     // Detached mode still "owns" a canvas (the standalone OffscreenCanvas);
     // it's just not the user's visible one. Without this, the presentation
     // loop never starts (it gates on workerOwnsCanvas) and presentFrame is
@@ -557,6 +596,7 @@ async function loadCore({
     // 1000s of swaps but the visible canvas only updates once.
     renderCanvas = moduleCanvas;
     renderBackend = "ogl";
+    rendererDiagnostics.activeBackend = renderBackend;
     workerOwnsCanvas = true;
     postStatus("Worker SAB OGL: standalone OffscreenCanvas, pixels via SharedArrayBuffer");
   }
@@ -647,8 +687,18 @@ async function loadCore({
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
-    printErr: (message) => postStatus(message),
-    onAbort: (reason) => postStatus(`Emscripten abort: ${reason}`)
+    printErr: (message) => {
+      const text = String(message || "");
+      rendererDiagnostics.emscriptenPrintErr.push(text.slice(0, 1000));
+      if (rendererDiagnostics.emscriptenPrintErr.length > 64) {
+        rendererDiagnostics.emscriptenPrintErr.shift();
+      }
+      postStatus(text);
+    },
+    onAbort: (reason) => {
+      recordRendererError("emscripten-abort", reason);
+      postStatus(`Emscripten abort: ${reason}`);
+    }
   });
 
   console.log(`[boot-phase] factory({wasmBinary}) Emscripten init took ${(performance.now() - _t_factory).toFixed(1)}ms`);
@@ -2271,6 +2321,8 @@ function formatProfileWindow(elapsedMs) {
 }
 
 async function setupSoftwarePresenter(canvas, presenterBackend) {
+  rendererDiagnostics = createRendererDiagnostics();
+  rendererDiagnostics.requestedBackend = presenterBackend;
   renderCanvas = canvas;
   renderContext = null;
   renderGpu = null;
@@ -2284,10 +2336,13 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
     try {
       renderGpu = await createWebGpuPresenter(renderCanvas);
       renderBackend = "webgpu";
+      rendererDiagnostics.activeBackend = renderBackend;
       postStatus("WebGPU presenter active");
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      rendererDiagnostics.fallback = { from: "webgpu", reason: message };
+      recordRendererError("backend-fallback", message);
       postStatus(`WebGPU presenter unavailable: ${message}; falling back to WebGL`);
     }
   }
@@ -2298,6 +2353,7 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
       renderCanvas.getContext("webgl", softwareBlitContextAttributes());
     if (renderGl) {
       renderBackend = "webgl";
+      rendererDiagnostics.activeBackend = renderBackend;
       renderGlState = createSoftwareBlitter(renderGl);
       return;
     }
@@ -2305,6 +2361,7 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
 
   renderContext = renderCanvas.getContext("2d", { alpha: false });
   renderBackend = renderContext ? "2d" : "none";
+  rendererDiagnostics.activeBackend = renderBackend;
   if (!renderContext) {
     throw new Error("Upstream software renderer could not create a worker canvas context");
   }
@@ -2342,7 +2399,37 @@ async function createWebGpuPresenter(canvas) {
     throw new Error("high-performance WebGPU adapter request returned null");
   }
 
+  let adapterInfo = adapter.info || null;
+  if (!adapterInfo && typeof adapter.requestAdapterInfo === "function") {
+    try { adapterInfo = await adapter.requestAdapterInfo(); } catch {}
+  }
+  rendererDiagnostics.adapter = {
+    selected: true,
+    vendor: adapterInfo?.vendor || null,
+    architecture: adapterInfo?.architecture || null,
+    device: adapterInfo?.device || null,
+    description: adapterInfo?.description || null,
+    features: [...adapter.features].sort(),
+    limits: {
+      maxTextureDimension2D: adapter.limits.maxTextureDimension2D,
+      maxBufferSize: adapter.limits.maxBufferSize,
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    },
+  };
   const device = await adapter.requestDevice();
+  rendererDiagnostics.device = {
+    created: true,
+    label: device.label || null,
+    features: [...device.features].sort(),
+    limits: {
+      maxTextureDimension2D: device.limits.maxTextureDimension2D,
+      maxBufferSize: device.limits.maxBufferSize,
+      maxStorageBufferBindingSize: device.limits.maxStorageBufferBindingSize,
+    },
+  };
+  device.addEventListener?.("uncapturederror", (event) => {
+    recordRendererError("uncaptured-error", event?.error?.message || event?.message || "unknown");
+  });
   const format = typeof gpu.getPreferredCanvasFormat === "function" ? gpu.getPreferredCanvasFormat() : "bgra8unorm";
   const shaderModule = device.createShaderModule({
     label: "dolphin-xfb-presenter",
@@ -2436,6 +2523,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
   try {
     context.configure({ device, format, alphaMode: "opaque" });
   } catch (e) {
+    recordRendererError("validation", `context.configure: ${e?.message || e}`);
     postStatus(`WebGPU context.configure failed: ${e?.message || e}`);
   }
   const state = {
@@ -2456,6 +2544,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
   };
 
   device.lost.then((info) => {
+    recordRendererError("device-lost", info?.message || info?.reason || "unknown");
     if (renderGpu?.device === device) {
       renderGpu = null;
       renderBackend = "webgpu-lost";
@@ -4115,16 +4204,19 @@ function drainWebGpuCmdRing() {
   };
   const submitEnc = () => {
     if (!enc) return;
-    try { q.submit([enc.finish()]); } catch (e) {}
+    try { q.submit([enc.finish()]); } catch (e) {
+      recordRendererError("submit-error", e?.message || e);
+    }
     enc = null;
     if (errScope) {
       errScope = false;
       dev.popErrorScope().then((er) => {
+        if (er) recordRendererError("validation", er.message);
         if (er && !self._wgValErr) {
           self._wgValErr = true;
           console.log(`[webgpu-exec] VALIDATION: ${String(er.message).slice(0, 320)}`);
         }
-      }).catch(() => {});
+      }).catch((error) => recordRendererError("error-scope-failure", error?.message || error));
     }
   };
   const endPass = () => {
@@ -5302,6 +5394,7 @@ function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
     });
     renderGpu.device.popErrorScope().then((err) => {
       if (err) {
+        recordRendererError("validation", err.message);
         if (!self._webGpuPipeFirstErr) {
           self._webGpuPipeFirstErr = true;
           console.log(
@@ -5317,7 +5410,7 @@ function replayCreatePipeline(pipelineId, vsShaderId, fsShaderId, topology) {
           `shader-pair pipeline proven`
         );
       }
-    }).catch(() => {});
+    }).catch((error) => recordRendererError("error-scope-failure", error?.message || error));
   } catch (e) {
     if (!self._webGpuPipeErr) {
       self._webGpuPipeErr = true;
@@ -5593,6 +5686,7 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
     pipe = renderGpu.device.createRenderPipeline(d);
     renderGpu.device.popErrorScope().then((err) => {
       if (err) {
+        recordRendererError("validation", err.message);
         webGpuObjects.pipeVar.set(key, null);
         webGpuPcfg.fail += 1;
         // DIAG: log the first ~24 distinct variant failures (not just
@@ -5610,7 +5704,7 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
             `[ok=${webGpuPcfg.ok} fail=${webGpuPcfg.fail}]`);
         }
       }
-    }).catch(() => {});
+    }).catch((error) => recordRendererError("error-scope-failure", error?.message || error));
   } catch (e) {
     webGpuPcfg.fail += 1;
     if (!self._webGpuPcfgThrew) {
