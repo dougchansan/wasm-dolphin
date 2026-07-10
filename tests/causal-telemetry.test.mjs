@@ -93,7 +93,7 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
 });
 
-test("CPU-thread save checkpoint capture happens before renderer resync", async () => {
+test("rebuilt core exports CPU-thread checkpoint capture before renderer resync", async () => {
   const source = await readFile(new URL("../core/upstream/dolphin_web_core.cpp", import.meta.url), "utf8");
   const callback = source.indexOf("State::SetOnAfterLoadCallback");
   const capture = source.indexOf("s_last_loaded_ticks_low.store", callback);
@@ -110,13 +110,16 @@ test("CPU-thread save checkpoint capture happens before renderer resync", async 
   const manifest = JSON.parse(
     await readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8")
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, [
+  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, []);
+  for (const name of [
     "_GetLastLoadedCheckpointGeneration",
     "_GetLastLoadedCoreTicksHigh",
     "_GetLastLoadedCoreTicksLow",
     "_GetLastLoadedPPCPC",
     "_SetXfbFastPaths",
-  ]);
+  ]) {
+    assert.ok(manifest.moduleExports.includes(name), `${name} must be present in the rebuilt core`);
+  }
 });
 
 test("deep merge preserves untouched telemetry branches", () => {

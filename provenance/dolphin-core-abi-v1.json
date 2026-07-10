@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f",
+  "coreId": "sha256:3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 260703,
-      "sha256": "2465f3c0d43864eb7ce0aa2f8bde33ee082e8a835b88b7d4813199f0cdfde3c8"
+      "size": 261224,
+      "sha256": "00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12800707,
-      "sha256": "03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f"
+      "size": 12807931,
+      "sha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a"
     }
   ],
   "contractSources": [
@@ -87,7 +87,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 4667,
-      "sha256": "8cf391cce9a68fa6638411c035934b3301f53a15717f6f2d3e9b4b20a6d34a64"
+      "sha256": "4e34308f5b4c14a194c0c02f1c3a3287c2a22d15d7b0796d2b7038ef3677f8e6"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
@@ -122,13 +122,7 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [
-    "_GetLastLoadedCheckpointGeneration",
-    "_GetLastLoadedCoreTicksHigh",
-    "_GetLastLoadedCoreTicksLow",
-    "_GetLastLoadedPPCPC",
-    "_SetXfbFastPaths"
-  ],
+  "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",
@@ -169,6 +163,10 @@
     "_GetFstSize",
     "_GetGameId",
     "_GetGameTitle",
+    "_GetLastLoadedCheckpointGeneration",
+    "_GetLastLoadedCoreTicksHigh",
+    "_GetLastLoadedCoreTicksLow",
+    "_GetLastLoadedPPCPC",
     "_GetMakerId",
     "_GetPPCPC",
     "_GetPlatform",
@@ -223,6 +221,7 @@
     "_SetPpcWasmJitEnabled",
     "_SetPresentationScale",
     "_SetVideoBackend",
+    "_SetXfbFastPaths",
     "_StopCore",
     "_TestDcbxLoopPattern",
     "_TestPpcWasmDirectCandidate",
