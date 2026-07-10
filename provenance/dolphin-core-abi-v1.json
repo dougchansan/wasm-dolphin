@@ -44,8 +44,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 51155,
-      "sha256": "ed4ec66669c4c061251fe6ea53023c4543591908543f6a92bc4b0ef5c4ab4b99"
+      "size": 51569,
+      "sha256": "670b7e2edd6d452bbfe88c459317cb935de147416949603c839fde3c20b9620d"
     },
     {
       "path": "src/main-profiler.js",
@@ -56,8 +56,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 282654,
-      "sha256": "f92d282ef5a0e4a117e42690d476a4f99691ec4b0caa2f00f08e0aa786056591"
+      "size": 290762,
+      "sha256": "5582912af36e2be3e8fe1460207b3b50658a574f3612cc08877a70b0fba564c6"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -68,8 +68,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 32045,
-      "sha256": "7098852452364ba969d02d8e7083a0f8c21d599e6eb12b709b26aea8190678a0"
+      "size": 32353,
+      "sha256": "60dcde6fe5068fa8275e26e59046e56f6ca31d1751443e13fbebdbc27432c97d"
     },
     {
       "path": "src/upstream-worker-protocol.js",
