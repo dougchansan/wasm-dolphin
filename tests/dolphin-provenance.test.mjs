@@ -225,6 +225,68 @@ function createLockedPatchFixture() {
   return { root, dolphin, submodule, snapshot };
 }
 
+function createDependentLockedPatchFixture() {
+  const root = mkdtempSync(join(tmpdir(), "dolphin-dependent-apply-"));
+  const dolphin = join(root, "vendor/dolphin");
+  initializeRepository(dolphin);
+  const baseCommit = commitFile(dolphin, "chain.txt", "base\n", "base");
+
+  writeFileSync(join(dolphin, "chain.txt"), "base\nfirst\n");
+  const firstPatch = execFileSync(
+    "git",
+    ["diff", "--binary", baseCommit, "--", "chain.txt"],
+    { cwd: dolphin, encoding: "utf8" }
+  );
+  git(dolphin, "add", "chain.txt");
+
+  writeFileSync(join(dolphin, "chain.txt"), "base\nfirst\nsecond\n");
+  const secondPatch = execFileSync(
+    "git",
+    ["diff", "--binary", "--", "chain.txt"],
+    { cwd: dolphin, encoding: "utf8" }
+  );
+  git(dolphin, "add", "chain.txt");
+  const rootRecord = stagedRecord(dolphin, baseCommit, "chain.txt", "M");
+  const resultTree = git(dolphin, "write-tree");
+  git(dolphin, "reset", "--hard", "--quiet", baseCommit);
+
+  const firstPatchPath = "patches/dolphin-wasm/dependent/01-first.patch";
+  const secondPatchPath = "patches/dolphin-wasm/dependent/02-second.patch";
+  mkdirSync(dirname(join(root, firstPatchPath)), { recursive: true });
+  writeFileSync(join(root, firstPatchPath), firstPatch);
+  writeFileSync(join(root, secondPatchPath), secondPatch);
+  const patches = [firstPatchPath, secondPatchPath].map((path, index) => ({
+    order: index + 1,
+    cwd: ".",
+    hashMode: "lf-normalized",
+    ...fileRecord(path, root, "lf-normalized")
+  }));
+  const lock = {
+    schemaVersion: 1,
+    upstream: { repository: dolphin, commit: baseCommit },
+    repositories: { ".": { commit: baseCommit } },
+    patches,
+    patchSeriesSha256: patchSeriesDigest(patches)
+  };
+  const snapshot = {
+    schemaVersion: 1,
+    normalization: "git-blob-lf",
+    root: {
+      baseCommit,
+      resultTree,
+      changedPathCount: 1,
+      records: [rootRecord]
+    },
+    submodules: []
+  };
+  snapshot.contentSha256 = snapshotDigest(snapshot);
+  const manifestPath = join(root, "provenance/dolphin-vendor-snapshot-v1.json");
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(join(root, "provenance/dolphin-source.lock.json"), `${JSON.stringify(lock, null, 2)}\n`);
+  writeFileSync(manifestPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+  return { root, dolphin, baseCommit, manifestPath, snapshot };
+}
+
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
@@ -420,6 +482,31 @@ test("locked patches replay exactly, are idempotent, and reject every third chec
     () => classifyLockedCheckout(fixture.dolphin, fixture.root),
     /result blob mismatch/
   );
+});
+
+test("locked patch replay applies dependent patches in order and rolls back failed attestation", () => {
+  const fixture = createDependentLockedPatchFixture();
+  try {
+    const replay = applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin });
+    assert.equal(replay.status, "applied");
+    assert.equal(replay.resultTree, fixture.snapshot.root.resultTree);
+    assert.equal(readFileSync(join(fixture.dolphin, "chain.txt"), "utf8"), "base\nfirst\nsecond\n");
+
+    git(fixture.dolphin, "reset", "--hard", "--quiet", fixture.baseCommit);
+    const rejectedSnapshot = structuredClone(fixture.snapshot);
+    rejectedSnapshot.root.resultTree = git(fixture.dolphin, "rev-parse", `${fixture.baseCommit}^{tree}`);
+    rejectedSnapshot.contentSha256 = snapshotDigest(rejectedSnapshot);
+    writeFileSync(fixture.manifestPath, `${JSON.stringify(rejectedSnapshot, null, 2)}\n`);
+
+    assert.throws(
+      () => applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin }),
+      /virtual result tree mismatch/
+    );
+    assert.equal(git(fixture.dolphin, "status", "--porcelain=v1", "--untracked-files=all"), "");
+    assert.equal(readFileSync(join(fixture.dolphin, "chain.txt"), "utf8"), "base\n");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
 });
 
 test("pinned fetch ignores a moved default branch and checks out the locked commit", () => {

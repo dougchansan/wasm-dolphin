@@ -615,6 +615,32 @@ export function fetchPinnedDolphin({
   return { destination, commit: lock.upstream.commit, state: finalState.state };
 }
 
+function preflightPatchSequence(directory, baseCommit, patches, root) {
+  const temporary = mkdtempSync(join(tmpdir(), "dolphin-patch-preflight-"));
+  const env = { GIT_INDEX_FILE: join(temporary, "index") };
+  try {
+    git(directory, ["read-tree", baseCommit], { env });
+    for (const patch of patches) {
+      try {
+        git(directory, [
+          "apply",
+          "--cached",
+          "--unidiff-zero",
+          resolve(root, patch.path)
+        ], { env });
+      } catch (error) {
+        throw new Error(
+          `Locked patch ${patch.order} for ${patch.cwd} does not apply after its locked predecessors:\n` +
+          error.message,
+          { cause: error }
+        );
+      }
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
 export function applyPinnedPatches({
   root = process.cwd(),
   dolphinDir = resolve(root, "vendor/dolphin")
@@ -635,42 +661,63 @@ export function applyPinnedPatches({
   for (const patch of lock.patches) {
     const previous = groups.at(-1);
     if (previous?.cwd === patch.cwd) {
-      previous.paths.push(resolve(root, patch.path));
+      previous.patches.push(patch);
     } else {
       invariant(!groups.some((group) => group.cwd === patch.cwd),
         `Patch repository ${patch.cwd} appears in non-contiguous groups`);
-      groups.push({ cwd: patch.cwd, paths: [resolve(root, patch.path)] });
+      groups.push({ cwd: patch.cwd, patches: [patch] });
     }
   }
 
   for (const group of groups) {
-    const directory = group.cwd === "." ? dolphinDir : resolve(dolphinDir, group.cwd);
-    const check = spawnSync("git", ["-C", directory, "apply", "--unidiff-zero", "--check", ...group.paths], {
-      encoding: "utf8",
-      stdio: "pipe"
-    });
-    invariant(check.status === 0,
-      `Locked patch group for ${group.cwd} does not apply to the pristine checkout` +
-      `${check.stderr ? `:\n${check.stderr.trim()}` : ""}`);
-    group.directory = directory;
+    group.directory = group.cwd === "." ? dolphinDir : resolve(dolphinDir, group.cwd);
+    preflightPatchSequence(
+      group.directory,
+      lock.repositories[group.cwd].commit,
+      group.patches,
+      root
+    );
   }
 
   const applied = [];
   let after;
   try {
     for (const group of groups) {
-      git(group.directory, ["apply", "--unidiff-zero", ...group.paths], { stdio: "inherit" });
-      applied.push(group);
+      for (const patch of group.patches) {
+        git(group.directory, ["apply", "--unidiff-zero", resolve(root, patch.path)], {
+          stdio: "inherit"
+        });
+        applied.push({ directory: group.directory, patch });
+      }
     }
     after = classifyLockedCheckout(dolphinDir, root);
     invariant(after.state === "snapshot", "Patch application did not produce the exact locked snapshot");
   } catch (error) {
-    for (const group of applied.reverse()) {
+    const rollbackErrors = [];
+    for (const item of applied.reverse()) {
       try {
-        git(group.directory, ["apply", "--unidiff-zero", "--reverse", ...group.paths]);
-      } catch {
-        // Preserve the original error; the caller must inspect a failed rollback.
+        git(item.directory, [
+          "apply",
+          "--unidiff-zero",
+          "--reverse",
+          resolve(root, item.patch.path)
+        ]);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
       }
+    }
+    try {
+      const rolledBack = classifyLockedCheckout(dolphinDir, root);
+      invariant(rolledBack.state === "pristine", "Patch rollback did not restore the pristine checkout");
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `Patch application failed and rollback did not restore the pristine checkout: ${error.message}`,
+        { cause: error }
+      );
     }
     throw error;
   }
