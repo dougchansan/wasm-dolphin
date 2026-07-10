@@ -994,6 +994,19 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     JSON.stringify(actualExports) === JSON.stringify(manifest.moduleExports),
     "Generated core Module exports do not match ABI v1"
   );
+  const sourceOnlyExports = manifest.sourceOnlyExportsPendingRebuild ?? [];
+  invariant(Array.isArray(sourceOnlyExports), "Pending source-only exports must be an array");
+  const activePatchText = lock.patches
+    .filter((entry) => entry.cwd === ".")
+    .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))
+    .join("\n");
+  const coreSource = readFileSync(resolve(root, "core/upstream/dolphin_web_core.cpp"), "utf8");
+  for (const name of sourceOnlyExports) {
+    invariant(/^_[A-Za-z0-9_]+$/.test(name), `Invalid pending source-only export ${name}`);
+    invariant(!actualExports.includes(name), `Pending source-only export is already in the core artifact: ${name}`);
+    invariant(activePatchText.includes(`'${name}'`), `Pending source-only export is absent from the patch set: ${name}`);
+    invariant(coreSource.includes(`${name.slice(1)}()`), `Pending source-only export is absent from the wrapper: ${name}`);
+  }
   const actualMemory = inspectMemoryContract(root);
   invariant(
     JSON.stringify(actualMemory) === JSON.stringify(manifest.memoryContract),

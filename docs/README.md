@@ -2,6 +2,8 @@
 
 - [Current status](current-status.md) — supported scope, recommended path, and
   confidence levels.
+- [Causal performance telemetry](causal-telemetry.md) — versioned core,
+  raster, presentation, worker, WebGPU, audio, and input measurements.
 - [Rendering modes](rendering-modes.md) — canonical meanings of `video` and
   `presenter` URL flags.
 - [JIT flags](jit-flags.md) — PPC-to-WASM JIT controls, safety defaults, and

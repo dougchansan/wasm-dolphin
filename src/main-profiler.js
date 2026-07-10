@@ -215,7 +215,11 @@ export class MainThreadProfiler {
       avgGapMs: p.sumGapMs / p.gapSamples,
       maxGapMs: p.maxGapMs,
       avgMixMs: p.mixSamples ? p.sumMixMs / p.mixSamples : 0,
-      maxMixMs: p.maxMixMs
+      maxMixMs: p.maxMixMs,
+      underruns: p.underrunCount || 0,
+      overruns: p.overrunCount || 0,
+      leadSeconds: p.scheduleLeadSeconds || 0,
+      driftSeconds: p.scheduleDriftSeconds || 0
     };
   }
 
@@ -256,8 +260,9 @@ export class MainThreadProfiler {
     const audio = this._audio();
     const frame = window.__lastFrameInfo || {};
     const helper = String(frame.ppcWasmHelperStats || "");
-    const under = /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "?";
-    const drop = /\bdrop:(\d+)/.exec(helper)?.[1] ?? "?";
+    const causal = frame.causalTelemetry || window.__causalTelemetry || null;
+    const under = causal?.presentation?.underrunCount ?? /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "?";
+    const drop = causal?.presentation?.droppedFrameCount ?? /\bdrop:(\d+)/.exec(helper)?.[1] ?? "?";
     return {
       elapsedS,
       loaf: this.loafSupported
@@ -286,6 +291,7 @@ export class MainThreadProfiler {
       },
       audio,
       presentationQueue: { underrun: under, drop },
+      causalTelemetry: causal,
       hostStalls: this._hostStalls(),
       topScripts: this.topScripts(6)
     };

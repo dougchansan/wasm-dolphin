@@ -7,6 +7,12 @@ import {
 } from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
+import {
+  createCausalTelemetry,
+  emptyStageWindow,
+  parseCoreProfileTelemetry,
+  stageWindowFromProfile
+} from "./causal-telemetry.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -85,6 +91,28 @@ let renderBackend = "none";
 let rendererDiagnostics = createRendererDiagnostics();
 let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
+let lastStructuredProfileWindow = emptyStageWindow();
+let causalMetricsEnabled = false;
+let lastCausalTelemetryAt = 0;
+const CAUSAL_TELEMETRY_INTERVAL_MS = 200;
+const causalAudioStats = {
+  workerMixCount: 0,
+  workerRequestedFrames: 0,
+  workerReturnedFrames: 0,
+  workerEmptyMixCount: 0,
+  workerMixLastMs: 0,
+  workerMixTotalMs: 0,
+  workerMixMaxMs: 0
+};
+const causalInputStats = {
+  workerPostApplyCount: 0,
+  workerSabApplyCount: 0,
+  workerSabGeneration: 0,
+  ageLastMs: 0,
+  ageTotalMs: 0,
+  ageSamples: 0,
+  ageMaxMs: 0
+};
 // Stall-logger state.
 let worstLoopMsLogged = 0;
 let stallCount = 0;
@@ -232,6 +260,15 @@ function recordRendererError(kind, message) {
     message: String(message || "unknown").slice(0, 1000),
   };
   rendererDiagnostics.errors.push(entry);
+  if (
+    causalMetricsEnabled &&
+    (
+      String(kind).toLowerCase().includes("webgpu") ||
+      ["validation", "uncaptured-error", "device-lost", "submit-error", "error-scope-failure"].includes(kind)
+    )
+  ) {
+    webGpuCausalStats.errorCount += 1;
+  }
   if (rendererDiagnostics.errors.length > 64) rendererDiagnostics.errors.shift();
   return entry;
 }
@@ -288,6 +325,7 @@ self.addEventListener("message", async (event) => {
 async function handleMessage(type, payload) {
   switch (type) {
     case "load":
+      causalMetricsEnabled = Boolean(payload.collectMetrics);
       if (payload.inputStateSab instanceof SharedArrayBuffer) {
         inputStateSabView = new Int32Array(payload.inputStateSab);
         lastInputStateGeneration = 0;
@@ -348,6 +386,8 @@ async function handleMessage(type, payload) {
         analogA: payload.analogA,
         analogB: payload.analogB
       });
+      recordInputAge(payload.inputSentAtEpochMs);
+      causalInputStats.workerPostApplyCount += 1;
       return {};
     case "runFrame":
       if (!presentationLoopActive) {
@@ -471,7 +511,10 @@ async function handleMessage(type, payload) {
         : { saved: false, rc, size, error: "empty/no state file" };
     }
     case "mixAudio": {
+      const mixStartedAt = causalMetricsEnabled ? performance.now() : 0;
+      const requested = Math.max(1, Math.min(4096, payload.frames | 0));
       if (!api?.mixAudio || !api?.audioBuffer || !moduleInstance?.HEAPU8) {
+        recordWorkerAudioMix(requested, 0, causalMetricsEnabled ? performance.now() - mixStartedAt : 0);
         return {
           available: false,
           frames: 0,
@@ -481,11 +524,11 @@ async function handleMessage(type, payload) {
           stats: api?.getAudioStats?.() || "audio:unavailable"
         };
       }
-      const requested = Math.max(1, Math.min(4096, payload.frames | 0));
       const channels = Math.max(1, Math.min(2, api.audioChannels?.() || 2));
       const sampleRate = Math.max(8000, api.audioSampleRate?.() || 48000);
       const maxFrames = Math.max(1, api.audioBufferFrames?.() || 4096);
       const mixed = Math.max(0, Math.min(maxFrames, api.mixAudio(requested) | 0));
+      recordWorkerAudioMix(requested, mixed, causalMetricsEnabled ? performance.now() - mixStartedAt : 0);
       const pointer = api.audioBuffer();
       const samples =
         mixed > 0 && pointer
@@ -883,6 +926,14 @@ function bindApi(module) {
     getCoreTicksHigh: optionalCwrap("GetCoreTicksHigh", "number", []),
     getCoreTicksPerSecond: optionalCwrap("GetCoreTicksPerSecond", "number", []),
     getPpcPc: optionalCwrap("GetPPCPC", "number", []),
+    getLastLoadedCoreTicksLow: optionalCwrap("GetLastLoadedCoreTicksLow", "number", []),
+    getLastLoadedCoreTicksHigh: optionalCwrap("GetLastLoadedCoreTicksHigh", "number", []),
+    getLastLoadedPpcPc: optionalCwrap("GetLastLoadedPPCPC", "number", []),
+    getLastLoadedCheckpointGeneration: optionalCwrap(
+      "GetLastLoadedCheckpointGeneration",
+      "number",
+      []
+    ),
     getCpuCoreName: optionalCwrap("GetCPUCoreName", "string", []),
     getPpcWasmBlockCompileCount: optionalCwrap("GetPpcWasmBlockCompileCount", "number", []),
     getPpcWasmBlockRunCount: optionalCwrap("GetPpcWasmBlockRunCount", "number", []),
@@ -1068,6 +1119,7 @@ function resetPresentationBuffer() {
 
 function metadataPayload() {
   const rootEntryCount = api?.getRootEntryCount() ?? -1;
+  const loadedCheckpoint = readLastLoadedCheckpoint();
   return {
     width: api?.frameWidth() ?? 320,
     height: api?.frameHeight() ?? 240,
@@ -1097,6 +1149,9 @@ function metadataPayload() {
     coreTicks: readCoreTicks(),
     coreTicksPerSecond: readCoreTicksPerSecond(),
     ppcPc: api?.getPpcPc?.() ?? 0,
+    loadedCheckpointGeneration: loadedCheckpoint.generation,
+    loadedCheckpointTicks: loadedCheckpoint.ticks,
+    loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
     cpuCoreName: api?.getCpuCoreName?.() ?? "",
     ppcWasmBlockCompileCount: api?.getPpcWasmBlockCompileCount?.() ?? 0,
     ppcWasmBlockRunCount: api?.getPpcWasmBlockRunCount?.() ?? 0,
@@ -1249,6 +1304,7 @@ function framePayload() {
   const ppcWasmHelperStats = api.getPpcWasmHelperStats?.();
   const ppcProfileStats = api.getPpcProfileStats?.();
   const videoStats = api.getVideoStats?.();
+  const loadedCheckpoint = readLastLoadedCheckpoint();
   if (renderBackend === "ogl") {
     // The videoStats `hash:` field is computed in DolphinWeb_OnXfb /
     // DolphinWeb_OnGlBackbuffer, not in DolphinWeb_OnOglSwap. For the OGL
@@ -1273,6 +1329,7 @@ function framePayload() {
   } else {
     visualSampleSource = "xfb-hash";
   }
+  const causalTelemetry = maybeCreateCausalTelemetry(videoStats);
   let frameBuffer = null;
   let transfer = [];
 
@@ -1291,6 +1348,9 @@ function framePayload() {
     coreTicks: readCoreTicks(),
     coreTicksPerSecond: readCoreTicksPerSecond(),
     ppcPc: api.getPpcPc?.() ?? 0,
+    loadedCheckpointGeneration: loadedCheckpoint.generation,
+    loadedCheckpointTicks: loadedCheckpoint.ticks,
+    loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
     cpuCoreName: api.getCpuCoreName?.() ?? "",
     ppcWasmBlockCompileCount: api.getPpcWasmBlockCompileCount?.() ?? 0,
     ppcWasmBlockRunCount: api.getPpcWasmBlockRunCount?.() ?? 0,
@@ -1336,8 +1396,72 @@ function framePayload() {
     visualSampleSource,
     oglGlError,
     frameBuffer,
-    transfer
+    transfer,
+    ...(causalTelemetry ? { causalTelemetry } : {})
   };
+}
+
+function maybeCreateCausalTelemetry(videoStats) {
+  if (!causalMetricsEnabled) return null;
+  const now = performance.now();
+  if (lastCausalTelemetryAt > 0 && now - lastCausalTelemetryAt < CAUSAL_TELEMETRY_INTERVAL_MS) {
+    return null;
+  }
+  lastCausalTelemetryAt = now;
+  const loadedCheckpoint = readLastLoadedCheckpoint();
+  return createCausalTelemetry({
+    enabled: true,
+    capturedAtMs: now,
+    core: {
+      frame: api?.getFrame?.() ?? 0,
+      ticks: readCoreTicks(),
+      ticksPerSecond: readCoreTicksPerSecond(),
+      ppcPc: api?.getPpcPc?.() ?? 0,
+      loadedCheckpointGeneration: loadedCheckpoint.generation,
+      loadedCheckpointTicks: loadedCheckpoint.ticks,
+      loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
+    },
+    softwareRaster: parseCoreProfileTelemetry(videoStats),
+    presentation: {
+      backend: renderBackend,
+      pacingMode: presentationPacingMode,
+      presentedFrames: presentedFrame,
+      fps: presentationFps,
+      rawFps: presentationRawFps,
+      loopFps: presentationLoopFps,
+      visualFps: visualChangeFps,
+      queueDepth: frameQueue.length,
+      queueTarget: presentationQueueTarget,
+      queueLimit: presentationQueueLimit,
+      queueAgeMs: presentationQueueAgeMs,
+      frameLag: presentationFrameLag,
+      underrunCount: presentationUnderrunCount,
+      droppedFrameCount: presentationDroppedFrameCount,
+      intervalAverageMs: presentationAverageIntervalMs,
+      intervalP95Ms: presentationP95IntervalMs,
+      intervalMaxMs: presentationMaxIntervalMs,
+      intervalLifetimeMaxMs: presentationLifetimeMaxIntervalMs,
+      intervalLongFrameCount: presentationLongFrameCount,
+      js: lastStructuredProfileWindow,
+    },
+    webgpu: {
+      ...webGpuCausalStats,
+      registered: Boolean(webGpuCmdRing),
+    },
+    audio: {
+      ...causalAudioStats,
+    },
+    input: {
+      workerPostApplyCount: causalInputStats.workerPostApplyCount,
+      workerSabApplyCount: causalInputStats.workerSabApplyCount,
+      workerSabGeneration: causalInputStats.workerSabGeneration,
+      ageLastMs: causalInputStats.ageLastMs,
+      ageAverageMs: causalInputStats.ageSamples > 0
+        ? causalInputStats.ageTotalMs / causalInputStats.ageSamples
+        : 0,
+      ageMaxMs: causalInputStats.ageMaxMs,
+    },
+  });
 }
 
 function startPresentationLoop() {
@@ -1506,6 +1630,11 @@ function pollInputStateFromSab() {
     return;
   }
   lastInputStateGeneration = generation;
+  causalInputStats.workerSabApplyCount += 1;
+  causalInputStats.workerSabGeneration = generation >>> 0;
+  if (inputStateSabView.length > 10) {
+    recordInputAge(Atomics.load(inputStateSabView, 10) >>> 0, true);
+  }
   const mask = Atomics.load(inputStateSabView, 0) >>> 0;
   inputMask = mask;
   api.setInputState({
@@ -2206,6 +2335,9 @@ function updatePresentationFps() {
     presentationWindowDropCount = presentationDropsSinceFps;
     visualChangeFps = Math.round((visualChangesSincePresentationFps * 1000) / profileElapsedMs);
     frameProfileStats = formatProfileWindow(profileElapsedMs);
+    if (causalMetricsEnabled) {
+      lastStructuredProfileWindow = stageWindowFromProfile(profileWindow, profileElapsedMs);
+    }
     profileWindow = createProfileWindow();
     framesSincePresentationFps = 0;
     loopsSincePresentationFps = 0;
@@ -2324,6 +2456,31 @@ function addProfileBytes(byteLength) {
   if (Number.isFinite(byteLength) && byteLength > 0) {
     profileWindow.copyBytes += byteLength;
   }
+}
+
+function recordWorkerAudioMix(requested, returned, durationMs) {
+  causalAudioStats.workerMixCount += 1;
+  causalAudioStats.workerRequestedFrames += Math.max(0, Number(requested) || 0);
+  causalAudioStats.workerReturnedFrames += Math.max(0, Number(returned) || 0);
+  if (!(returned > 0)) causalAudioStats.workerEmptyMixCount += 1;
+  if (causalMetricsEnabled && Number.isFinite(durationMs) && durationMs >= 0) {
+    causalAudioStats.workerMixLastMs = durationMs;
+    causalAudioStats.workerMixTotalMs += durationMs;
+    causalAudioStats.workerMixMaxMs = Math.max(causalAudioStats.workerMixMaxMs, durationMs);
+  }
+}
+
+function recordInputAge(sentAt, wrappedMilliseconds = false) {
+  const sent = Number(sentAt);
+  if (!Number.isFinite(sent) || sent <= 0) return;
+  const age = wrappedMilliseconds
+    ? (((Date.now() >>> 0) - (sent >>> 0)) >>> 0)
+    : Date.now() - sent;
+  if (!Number.isFinite(age) || age < 0 || age > 60000) return;
+  causalInputStats.ageLastMs = age;
+  causalInputStats.ageTotalMs += age;
+  causalInputStats.ageSamples += 1;
+  causalInputStats.ageMaxMs = Math.max(causalInputStats.ageMaxMs, age);
 }
 
 function formatProfileWindow(elapsedMs) {
@@ -2931,7 +3088,35 @@ function readCoreTicksPerSecond() {
 
 function postResult(id, result) {
   const { transfer = [], ...payload } = result ?? {};
+  if (causalMetricsEnabled) {
+    payload.telemetryTransferBytes = transfer.reduce(
+      (total, value) => total + (Number(value?.byteLength) || 0),
+      0
+    );
+  }
   self.postMessage({ id, ok: true, ...payload }, transfer);
+}
+
+function readLastLoadedCheckpoint() {
+  if (!api?.getLastLoadedCheckpointGeneration) {
+    return { generation: 0, ticks: null, ppcPc: null };
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const generationBefore = api.getLastLoadedCheckpointGeneration() >>> 0;
+    if (!generationBefore) return { generation: 0, ticks: null, ppcPc: null };
+    const low = api.getLastLoadedCoreTicksLow?.() ?? 0;
+    const high = api.getLastLoadedCoreTicksHigh?.() ?? 0;
+    const ppcPc = api.getLastLoadedPpcPc?.() ?? 0;
+    const generationAfter = api.getLastLoadedCheckpointGeneration() >>> 0;
+    if (generationBefore === generationAfter) {
+      return {
+        generation: generationAfter,
+        ticks: (high >>> 0) * 0x100000000 + (low >>> 0),
+        ppcPc
+      };
+    }
+  }
+  return { generation: 0, ticks: null, ppcPc: null };
 }
 
 function postStatus(message) {
@@ -4085,12 +4270,30 @@ const webGpuExecStats = {
   beginFb0: 0, beginFbN: 0, draw: 0, drawIdx: 0, setPipe: 0,
   setBg: 0, present: 0, missPipe: 0, missBg: 0, skipDraw: 0, lastLog: 0
 };
+const webGpuCausalStats = {
+  drainCount: 0,
+  emptyDrainCount: 0,
+  commandsProcessed: 0,
+  drainLastMs: 0,
+  drainTotalMs: 0,
+  drainMaxMs: 0,
+  backlogLast: 0,
+  backlogHighWater: 0,
+  deferredBeginPassCount: 0,
+  errorCount: 0
+};
 
 function drainWebGpuCmdRing() {
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
+  const drainStartedAt = causalMetricsEnabled ? performance.now() : 0;
   const write = Atomics.load(ring.headerI32, 0) >>> 0;
   let read = Atomics.load(ring.headerI32, 1) >>> 0;
+  const initialRead = read;
+  const backlog = (write - read) >>> 0;
+  webGpuCausalStats.drainCount += 1;
+  webGpuCausalStats.backlogLast = backlog;
+  webGpuCausalStats.backlogHighWater = Math.max(webGpuCausalStats.backlogHighWater, backlog);
   // §27 post-load watchdog: log BEFORE the empty-ring early return so
   // we see whether `write` keeps advancing (producer alive) after
   // State::Load, or freezes (producer/video-pthread stalled).
@@ -4114,7 +4317,11 @@ function drainWebGpuCmdRing() {
         `bg=${webGpuObjects.bindGroups.size}`);
     }
   }
-  if (write === read) return;
+  if (write === read) {
+    webGpuCausalStats.emptyDrainCount += 1;
+    finishWebGpuDrain(drainStartedAt, 0);
+    return;
+  }
 
   // NOTE (Day-27 audit): the Atomics.load(write) above is seq-cst.
   // The slot reads below are plain (non-atomic) Uint32/Float32 reads.
@@ -4283,7 +4490,11 @@ function drainWebGpuCmdRing() {
     const op = u32[recWord];
     if (op === WGPU_CMD_OP_BEGIN_PASS && ((read + 1) >>> 0) === write) {
       self._wgBpDefer = (self._wgBpDefer || 0) + 1;
-      if (self._wgBpDefer <= 8) { deferBeginPass = true; break; }
+      if (self._wgBpDefer <= 8) {
+        deferBeginPass = true;
+        webGpuCausalStats.deferredBeginPassCount += 1;
+        break;
+      }
       // budget exhausted: fall through and process with last revZ.
     } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
       self._wgBpDefer = 0;
@@ -5384,6 +5595,7 @@ function drainWebGpuCmdRing() {
           break;
       }
     } catch (e) {
+      webGpuCausalStats.errorCount += 1;
       if (!self._webGpuExecErr) {
         self._webGpuExecErr = true;
         console.log(`[webgpu-exec] op=${op} threw: ${e?.message || e}`);
@@ -5394,6 +5606,7 @@ function drainWebGpuCmdRing() {
   endPass();
   submitEnc();
   Atomics.store(ring.headerI32, 1, read | 0);
+  finishWebGpuDrain(drainStartedAt, (read - initialRead) >>> 0);
   // Once the cmd-ring executor has presented a real frame, IT owns the
   // canvas (renderGpu.context). The legacy runPresentationLoop blit of
   // the CPU framebuffer (presentFrame → drawFrameBytesToWebGpu) must
@@ -5401,6 +5614,15 @@ function drainWebGpuCmdRing() {
   // so that CPU buffer is stale/empty (the green that was clobbering
   // our GPU render every loop iteration).
   if (webGpuExecStats.present > 0) cmdRingOwnsCanvas = true;
+}
+
+function finishWebGpuDrain(startedAt, processed) {
+  webGpuCausalStats.commandsProcessed += Math.max(0, Number(processed) || 0);
+  if (!causalMetricsEnabled || !startedAt) return;
+  const elapsed = performance.now() - startedAt;
+  webGpuCausalStats.drainLastMs = elapsed;
+  webGpuCausalStats.drainTotalMs += elapsed;
+  webGpuCausalStats.drainMaxMs = Math.max(webGpuCausalStats.drainMaxMs, elapsed);
 }
 
 // Day-29: build a real GPURenderPipeline from a bridge-translated

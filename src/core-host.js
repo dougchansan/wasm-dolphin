@@ -7,6 +7,7 @@ import {
   requestedUpstreamCoreBuild
 } from "./upstream-worker-protocol.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
+import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -277,6 +278,19 @@ export class EmulatorHost {
     this.buttonMask = 0;
     this.adapterStatsPollMs = this.canvasOwnedByAdapter ? 250 : 0;
     this.lastAdapterStatsPollAt = 0;
+    this.causalTelemetry = null;
+    this.lastCausalTelemetryAt = 0;
+    this.hostCausalStats = {
+      rafLoopCount: 0,
+      rafLoopTotalMs: 0,
+      rafLoopLastMs: 0,
+      rafLoopMaxMs: 0,
+      renderLastMs: 0,
+      publishLastMs: 0,
+      rgbaCopyLastMs: 0,
+      putImageDataLastMs: 0,
+      drawImageLastMs: 0
+    };
     this.animationId = 0;
     this.game = {
       name: "Demo scene",
@@ -493,6 +507,14 @@ export class EmulatorHost {
     // entries. Also log the very first slow iteration regardless of
     // threshold so we have a sanity check that the logger is firing.
     const loopMs = loopEndedAt - loopStartedAt;
+    if (this.collectMetrics) {
+      this.hostCausalStats.rafLoopCount += 1;
+      this.hostCausalStats.rafLoopTotalMs += loopMs;
+      this.hostCausalStats.rafLoopLastMs = loopMs;
+      this.hostCausalStats.rafLoopMaxMs = Math.max(this.hostCausalStats.rafLoopMaxMs, loopMs);
+      this.hostCausalStats.renderLastMs = renderEndedAt - loopStartedAt;
+      this.hostCausalStats.publishLastMs = loopEndedAt - renderEndedAt;
+    }
     if (!this._mainStallFirstLogged && loopMs > 0) {
       this._mainStallFirstLogged = true;
       // eslint-disable-next-line no-console
@@ -563,8 +585,15 @@ export class EmulatorHost {
         this.oglLastSeenGen = currentGen;
         // Copy SAB-backed bytes into the non-shared ImageData buffer
         // (Chrome refuses to construct ImageData over a SAB view directly).
+        const copyStartedAt = this.collectMetrics ? performance.now() : 0;
         this.oglImageData.data.set(this.oglPixelView);
+        const putStartedAt = this.collectMetrics ? performance.now() : 0;
         this.context.putImageData(this.oglImageData, 0, 0);
+        if (this.collectMetrics) {
+          this.hostCausalStats.rgbaCopyLastMs = putStartedAt - copyStartedAt;
+          this.hostCausalStats.putImageDataLastMs = performance.now() - putStartedAt;
+          this.hostCausalStats.drawImageLastMs = 0;
+        }
         copiedThisFrame = true;
       }
       const sabT3 = performance.now();
@@ -617,9 +646,17 @@ export class EmulatorHost {
       this.nativeImageData = this.frameContext.createImageData(this.adapter.width, this.adapter.height);
     }
 
+    const copyStartedAt = this.collectMetrics ? performance.now() : 0;
     this.nativeImageData.data.set(rgba);
+    const putStartedAt = this.collectMetrics ? performance.now() : 0;
     this.frameContext.putImageData(this.nativeImageData, 0, 0);
+    const drawStartedAt = this.collectMetrics ? performance.now() : 0;
     this.context.drawImage(this.frameCanvas, 0, 0, this.canvas.width, this.canvas.height);
+    if (this.collectMetrics) {
+      this.hostCausalStats.rgbaCopyLastMs = putStartedAt - copyStartedAt;
+      this.hostCausalStats.putImageDataLastMs = drawStartedAt - putStartedAt;
+      this.hostCausalStats.drawImageLastMs = performance.now() - drawStartedAt;
+    }
   }
 
   drawFocusMarker(mask, frame) {
@@ -640,6 +677,7 @@ export class EmulatorHost {
     const frame = this.mode === "dolphin" ? this.adapter.coreFrame : this.frame;
     const presentedFrame = this.mode === "dolphin" ? this.adapter.presentedFrame : this.frame;
     this.sampleVisibleFrame(now);
+    this.updateCausalTelemetry(now);
 
     if (now - this.lastFpsTime >= 500) {
       const elapsed = now - this.lastFpsTime;
@@ -706,18 +744,51 @@ export class EmulatorHost {
       visibleSampleError: this.mode === "dolphin" ? this.visibleSampleError : "",
       presentedFrame,
       coreTicks: this.mode === "dolphin" ? this.adapter.coreTicks : 0,
+      coreTicksPerSecond: this.mode === "dolphin" ? this.adapter.coreTicksPerSecond : 0,
       ppcPc: this.mode === "dolphin" ? this.adapter.ppcPc : 0,
+      loadedCheckpointGeneration:
+        this.mode === "dolphin" ? this.adapter.loadedCheckpointGeneration : 0,
+      loadedCheckpointTicks:
+        this.mode === "dolphin" ? this.adapter.loadedCheckpointTicks : null,
+      loadedCheckpointPpcPc:
+        this.mode === "dolphin" ? this.adapter.loadedCheckpointPpcPc : null,
       cpuCoreName: this.mode === "dolphin" ? this.adapter.cpuCoreName : "",
       ppcWasmBlockCompileCount:
         this.mode === "dolphin" ? this.adapter.ppcWasmBlockCompileCount : 0,
       ppcWasmBlockRunCount: this.mode === "dolphin" ? this.adapter.ppcWasmBlockRunCount : 0,
       ppcWasmHelperStats: this.mode === "dolphin" ? this.adapter.ppcWasmHelperStats : "",
       frameProfileStats: this.mode === "dolphin" ? this.adapter.frameProfileStats : "-",
+      causalTelemetry: this.mode === "dolphin" ? this.causalTelemetry : null,
       running: this.running,
       mode: this.mode,
       game: this.game,
       buttonMask: this.buttonMask
     });
+  }
+
+  updateCausalTelemetry(now) {
+    if (
+      !this.collectMetrics ||
+      !this.adapter?.causalTelemetry ||
+      now - this.lastCausalTelemetryAt < 200
+    ) {
+      return;
+    }
+    const count = this.hostCausalStats.rafLoopCount;
+    this.causalTelemetry = createCausalTelemetry(deepMerge(this.adapter.causalTelemetry, {
+      host: {
+        rafLoopCount: count,
+        rafLoopLastMs: this.hostCausalStats.rafLoopLastMs,
+        rafLoopAverageMs: count > 0 ? this.hostCausalStats.rafLoopTotalMs / count : 0,
+        rafLoopMaxMs: this.hostCausalStats.rafLoopMaxMs,
+        renderLastMs: this.hostCausalStats.renderLastMs,
+        publishLastMs: this.hostCausalStats.publishLastMs,
+        rgbaCopyLastMs: this.hostCausalStats.rgbaCopyLastMs,
+        putImageDataLastMs: this.hostCausalStats.putImageDataLastMs,
+        drawImageLastMs: this.hostCausalStats.drawImageLastMs
+      }
+    }));
+    this.lastCausalTelemetryAt = now;
   }
 
   measureGameSpeed(coreTicks, ticksPerSecond, elapsedMs) {

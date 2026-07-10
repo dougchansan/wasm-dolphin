@@ -25,15 +25,15 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "c9449017e7acc9b6c6ab942292b874392890f7cd41c8326368e98bf40662a01e",
+  "patchSeriesSha256": "f66a08ce77f731dc2b0819fde4f295f81bceb785230549b88e5963e003dbabf9",
   "patches": [
     {
       "order": 1,
       "cwd": ".",
       "path": "patches/dolphin-wasm/snapshot/0001-browser-platform-core.patch",
       "hashMode": "lf-normalized",
-      "size": 84299,
-      "sha256": "539fc9310f8d5c31fd0662e43f521d3d5730d37d12ac9be5cf8d124e3f0d8132"
+      "size": 84417,
+      "sha256": "90c09843ced0fc6f68808f2e97b3b654785dfd74a0addd93cf974426e06c89ac"
     },
     {
       "order": 2,

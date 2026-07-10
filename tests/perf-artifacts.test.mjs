@@ -125,6 +125,10 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
   labelOnly.fixture.battleCheckpoint.verified = false;
   assert.throws(() => assertRunProvenance(labelOnly), /battle\/XFB checkpoint/);
 
+  const unknownTelemetry = validManifest();
+  unknownTelemetry.causalTelemetrySchema.version = 2;
+  assert.throws(() => assertRunProvenance(unknownTelemetry), /Unsupported causal telemetry schema/);
+
   assert.equal(assertRunProvenance(validManifest()).fixture.saveStateLoaded, true);
 });
 
@@ -170,6 +174,25 @@ test("served identity and observed battle checkpoint reject mismatches", () => {
   assert.equal(assertBattleCheckpoint(fixed).verified, true);
   assert.equal(assertBattleCheckpoint({ ...fixed, frame: 95 }).verified, true);
   assert.throws(() => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks + 1 }), /coreTicks/);
+});
+
+test("battle checkpoint prefers the CPU-thread after-load capture and retains the legacy poll", () => {
+  const checkpoint = parseBattleCheckpoint({
+    frame: 77,
+    coreTicks: 15166151316,
+    ppcPc: -1,
+    loadedCheckpointGeneration: 3,
+    loadedCheckpointTicks: 15166162443,
+    loadedCheckpointPpcPc: -2144030364,
+    width: 640,
+    height: 480,
+    ppcWasmHelperStats: "video xfb:77 640x480 hash:4b2d0a3b nz:2048",
+  });
+  assert.equal(checkpoint.coreTicks, 15166162443);
+  assert.equal(checkpoint.ppcPc, -2144030364);
+  assert.equal(checkpoint.checkpointObservationSource, "cpu-thread-after-load");
+  assert.equal(checkpoint.legacyCoreTicks, 15166151316);
+  assert.equal(checkpoint.legacyPpcPc, -1);
 });
 
 test("served closure extraction includes core-host and detects a changed dependency", () => {
@@ -264,6 +287,12 @@ test("locked build provenance rejects valid-looking source, toolchain, and JS mu
   const jsResult = validateLockedBuildProvenance(jsMutation);
   assert.equal(jsResult.verified, false);
   assert.ok(jsResult.failures.some((failure) => failure.includes("js.sha256")));
+
+  const pendingRebuild = structuredClone(provenance);
+  pendingRebuild.locked.abiManifest.sourceOnlyExportsPendingRebuild = ["_GetLastLoadedCoreTicksLow"];
+  const pendingResult = validateLockedBuildProvenance(pendingRebuild);
+  assert.equal(pendingResult.verified, false);
+  assert.ok(pendingResult.failures.some((failure) => failure.includes("sourceOnlyExportsPendingRebuild")));
 });
 
 test("qualification requires clean git, exact video/presenter identity, and locked evidence", () => {
@@ -286,6 +315,7 @@ test("qualification requires clean git, exact video/presenter identity, and lock
   manifest.benchmark.cacheState = "cold";
   manifest.hostCore = { abiVersion: 1 };
   manifest.eventSchema = { version: 1 };
+  manifest.causalTelemetrySchema = { version: 1 };
   manifest.buildProvenance = validLockedBuildProvenance();
   manifest.upstream = { dolphinSha: manifest.buildProvenance.locked.sourceLock.upstream.commit };
   manifest.patches = { hashes: manifest.buildProvenance.locked.sourceLock.patches.map((patch) => patch.sha256) };
@@ -689,6 +719,7 @@ function validManifest() {
       saveStateLoaded: true,
       battleCheckpoint: { verified: true },
     },
+    causalTelemetrySchema: { version: 1 },
     servedApplication: { verified: true, manifestSha256: "e".repeat(64) },
   };
 }

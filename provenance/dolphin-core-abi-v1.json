@@ -20,20 +20,44 @@
     {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
-      "size": 38436,
-      "sha256": "f53463f6d3c32c2442d632c2319eb7e6c203388421d328711ada8b287004cc67"
+      "size": 40001,
+      "sha256": "4bfc9cc73b15c64ffe846c1f8c58030326e713f69a8048fbd2afa69a2864be15"
+    },
+    {
+      "path": "src/app.js",
+      "hashMode": "lf-normalized",
+      "size": 39953,
+      "sha256": "66c55be3002d905f45c26a9633b902ce89ef22eaddeba18b78ebd77397bbaf03"
+    },
+    {
+      "path": "src/audio.js",
+      "hashMode": "lf-normalized",
+      "size": 8576,
+      "sha256": "a4d46dd19ce907d3bd57684e4902a3b00a916c81cfbc0daccf38bd8e503c7295"
+    },
+    {
+      "path": "src/causal-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 9912,
+      "sha256": "6a362d0f3bee17d42b5e0d62d0eb582229a90beb6b0d4096747b3ffd3174a6ae"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 47811,
-      "sha256": "f8028599d9115c8464fdee34bf13d6c5bef27b7573ecdccbfb8c59a13cdaffe9"
+      "size": 50999,
+      "sha256": "b029033fa203284c277c741ed6e36f70fb8b010dc4578cb6e1d806d19e621c22"
+    },
+    {
+      "path": "src/main-profiler.js",
+      "hashMode": "lf-normalized",
+      "size": 16968,
+      "sha256": "9301ee171741924eeb07409d783858d44f85e2fea510cfc05c939e5df1b762a8"
     },
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 269957,
-      "sha256": "c90b48ccffcc19ece9533c731254378e02ce172bfdc5fa0698480a9fc85892ad"
+      "size": 278256,
+      "sha256": "49b61937ab4782c5aa6fe865f8cdcbf8445177b2bc0fe22755011e601408edb6"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -44,8 +68,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 26193,
-      "sha256": "c3beb6edf32d453d52222d07f49be19c939b8e25961fdc049bcc96dc89b6256c"
+      "size": 29977,
+      "sha256": "4855a8380733577d940ab77747cef73a5637ae81ddedc44f245dad98fbddd5b9"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -80,6 +104,12 @@
     }
   },
   "memoryContractStatus": "consistent",
+  "sourceOnlyExportsPendingRebuild": [
+    "_GetLastLoadedCheckpointGeneration",
+    "_GetLastLoadedCoreTicksHigh",
+    "_GetLastLoadedCoreTicksLow",
+    "_GetLastLoadedPPCPC"
+  ],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",

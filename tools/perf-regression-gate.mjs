@@ -4,6 +4,10 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  CAUSAL_TELEMETRY_SCHEMA_VERSION,
+  flattenCausalTelemetry
+} from "../src/causal-telemetry.js";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
@@ -356,6 +360,7 @@ async function runScenario(scenario, context) {
     manifest.buildProvenance.verification = validateLockedBuildProvenance(manifest.buildProvenance);
     manifest.hostCore = context.buildProvenance.hostCore;
     manifest.eventSchema = { version: PERF_EVENT_SCHEMA_VERSION };
+    manifest.causalTelemetrySchema = { version: CAUSAL_TELEMETRY_SCHEMA_VERSION };
     manifest.upstream = context.buildProvenance.upstream;
     manifest.patches = context.buildProvenance.patches;
     manifest.toolchain = context.buildProvenance.toolchain;
@@ -409,7 +414,11 @@ async function runScenario(scenario, context) {
         samples.at(-1),
         Number(saveStateLoad.response?.coreTicksPerSecond) || 0
       );
-      samples.push({ ...sample, ...parseProfileMetrics(sample.helper, sample.profile) });
+      samples.push({
+        ...sample,
+        ...parseProfileMetrics(sample.helper, sample.profile),
+        ...flattenCausalTelemetry(sample.causalTelemetry)
+      });
       if (index % Math.max(1, Math.round(10000 / context.sampleMs)) === 0) {
         console.log(
           `[perf-gate] ${scenario.name} t=${elapsedSeconds.toFixed(1)} ` +
@@ -435,6 +444,11 @@ async function runScenario(scenario, context) {
   }
 
   if (!samples.length) invalidReasons.push("no timed samples were collected");
+  if (samples.some((sample) => sample.causalTelemetrySchemaVersion !== CAUSAL_TELEMETRY_SCHEMA_VERSION)) {
+    invalidReasons.push(
+      `missing or unsupported causal telemetry schema (expected ${CAUSAL_TELEMETRY_SCHEMA_VERSION})`
+    );
+  }
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
   const fatalEvidence = findFatalRuntimeEvidence({
@@ -873,6 +887,7 @@ async function readSample(page, elapsedSeconds) {
       visibleHash,
       visibleError,
       visibleChanged,
+      causalTelemetry: info.causalTelemetry || window.__causalTelemetry || null,
     };
   }, elapsedSeconds);
 }

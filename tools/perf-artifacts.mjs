@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",
@@ -41,6 +42,7 @@ export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "fixture.saveStateLoaded",
   "fixture.battleCheckpoint.verified",
   "servedApplication.verified",
+  "causalTelemetrySchema.version",
 ]);
 
 export const REQUIRED_QUALIFICATION_PROVENANCE = Object.freeze([
@@ -124,6 +126,12 @@ export function assertRunProvenance(manifest, required = REQUIRED_RUN_PROVENANCE
   if (manifest.benchmark.inputScriptMode !== "none") {
     throw new Error("Fixed-battle timing requires benchmark.inputScriptMode=none");
   }
+  if (manifest.causalTelemetrySchema.version !== CAUSAL_TELEMETRY_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported causal telemetry schema: expected ${CAUSAL_TELEMETRY_SCHEMA_VERSION}, ` +
+      `got ${manifest.causalTelemetrySchema.version}`
+    );
+  }
   if (!manifest.fixture.isoVerified || !manifest.fixture.saveStateVerified) {
     throw new Error("Fixed-battle fixture hashes were not verified");
   }
@@ -182,6 +190,9 @@ export function evaluateQualificationProvenance(manifest) {
   }
   if (manifest?.eventSchema?.version !== PERF_EVENT_SCHEMA_VERSION) {
     missing.push(`eventSchema.version=${PERF_EVENT_SCHEMA_VERSION}`);
+  }
+  if (manifest?.causalTelemetrySchema?.version !== CAUSAL_TELEMETRY_SCHEMA_VERSION) {
+    missing.push(`causalTelemetrySchema.version=${CAUSAL_TELEMETRY_SCHEMA_VERSION}`);
   }
   const lockedVerification = validateLockedBuildProvenance(manifest?.buildProvenance || {});
   if (manifest?.buildProvenance?.verification?.verified !== true) {
@@ -271,6 +282,10 @@ export function validateLockedBuildProvenance(provenance = {}) {
   }
 
   require(abiManifest?.abiVersion === HOST_CORE_ABI_VERSION, `locked.abiManifest.abiVersion=${HOST_CORE_ABI_VERSION}`);
+  require(
+    (abiManifest?.sourceOnlyExportsPendingRebuild ?? []).length === 0,
+    "locked.abiManifest.sourceOnlyExportsPendingRebuild must be empty for qualification"
+  );
   exact(abiManifest?.upstreamCommit, sourceLock?.upstream?.commit, "locked.abiManifest.upstreamCommit");
   require(sha(String(abiManifest?.coreId || "").replace(/^sha256:/, "")), "locked.abiManifest.coreId");
   require(Array.isArray(abiManifest?.artifacts), "locked.abiManifest.artifacts");
@@ -480,10 +495,18 @@ export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], ren
 export function parseBattleCheckpoint(framePayload) {
   const helper = String(framePayload?.ppcWasmHelperStats || "");
   const xfbHash = /\bvideo\s+xfb:\d+[^|]*\bhash:([0-9a-f]+)/i.exec(helper)?.[1]?.toLowerCase() || null;
+  const loadedGeneration = Number(framePayload?.loadedCheckpointGeneration) || 0;
+  const loadedTicks = Number(framePayload?.loadedCheckpointTicks);
+  const loadedPpcPc = Number(framePayload?.loadedCheckpointPpcPc);
+  const hasLoadedCheckpoint = loadedGeneration > 0 && Number.isFinite(loadedTicks) && Number.isFinite(loadedPpcPc);
   return {
     frame: Number(framePayload?.frame),
-    coreTicks: Number(framePayload?.coreTicks),
-    ppcPc: Number(framePayload?.ppcPc),
+    coreTicks: hasLoadedCheckpoint ? loadedTicks : Number(framePayload?.coreTicks),
+    ppcPc: hasLoadedCheckpoint ? loadedPpcPc : Number(framePayload?.ppcPc),
+    checkpointObservationSource: hasLoadedCheckpoint ? "cpu-thread-after-load" : "legacy-worker-poll",
+    loadedCheckpointGeneration: loadedGeneration,
+    legacyCoreTicks: Number(framePayload?.coreTicks),
+    legacyPpcPc: Number(framePayload?.ppcPc),
     xfbHash,
     width: Number(framePayload?.width),
     height: Number(framePayload?.height),

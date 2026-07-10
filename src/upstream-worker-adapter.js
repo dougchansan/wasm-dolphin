@@ -3,6 +3,12 @@ import {
   DEFAULT_UPSTREAM_CORE_URL,
   verifyUpstreamCoreWasm
 } from "./upstream-worker-protocol.js";
+import {
+  countTransferBytes,
+  createCausalTelemetry,
+  deepMerge,
+  estimateMessageBytes
+} from "./causal-telemetry.js";
 
 const DEFAULT_WORKER_URL = new URL("./upstream-discio-worker.js", import.meta.url).href;
 
@@ -121,6 +127,9 @@ export class UpstreamWorkerAdapter {
     this.coreTicks = 0;
     this.coreTicksPerSecond = 486000000;
     this.ppcPc = 0;
+    this.loadedCheckpointGeneration = 0;
+    this.loadedCheckpointTicks = null;
+    this.loadedCheckpointPpcPc = null;
     this.cpuCoreName = "";
     this.ppcWasmBlockCompileCount = 0;
     this.ppcWasmBlockRunCount = 0;
@@ -128,13 +137,26 @@ export class UpstreamWorkerAdapter {
     this.frameProfileStats = "-";
     this.frameData = null;
     this.lastInputStateSignature = "";
+    this.workerCausalTelemetry = null;
+    this.causalTelemetry = null;
+    this.trafficStats = {
+      mainToWorker: createTrafficDirection(),
+      workerToMain: createTrafficDirection()
+    };
+    this.inputTelemetry = {
+      mainStateChangeCount: 0,
+      mainPostCount: 0,
+      mainSabWriteCount: 0,
+      mainSabGeneration: 0
+    };
     // SharedArrayBuffer-backed input state. Bypasses postMessage queue.
     // Slots: 0=mask, 1=stickX, 2=stickY, 3=cStickX, 4=cStickY,
     //        5=triggerLeft, 6=triggerRight, 7=analogA, 8=analogB,
     //        9=generation (incremented on every write so the worker can
-    //                       detect a new value without re-reading every slot).
+    //                       detect a new value without re-reading every slot),
+    //        10=Date.now() low 32 bits for input-age telemetry.
     if (typeof SharedArrayBuffer === "function") {
-      this.inputStateSab = new SharedArrayBuffer(40); // 10 * Int32
+      this.inputStateSab = new SharedArrayBuffer(44); // 11 * Int32
       this.inputStateView = new Int32Array(this.inputStateSab);
     } else {
       this.inputStateSab = null;
@@ -320,6 +342,8 @@ export class UpstreamWorkerAdapter {
       return;
     }
     this.lastInputStateSignature = signature;
+    this.inputTelemetry.mainStateChangeCount += 1;
+    const inputSentAtEpochMs = Date.now();
 
     if (this.inputStateView) {
       // Write each slot, then bump the generation counter last so the worker
@@ -333,7 +357,9 @@ export class UpstreamWorkerAdapter {
       Atomics.store(this.inputStateView, 6, triggerRight);
       Atomics.store(this.inputStateView, 7, analogA);
       Atomics.store(this.inputStateView, 8, analogB);
-      Atomics.add(this.inputStateView, 9, 1);
+      Atomics.store(this.inputStateView, 10, inputSentAtEpochMs | 0);
+      this.inputTelemetry.mainSabGeneration = (Atomics.add(this.inputStateView, 9, 1) + 1) >>> 0;
+      this.inputTelemetry.mainSabWriteCount += 1;
     }
     // Always also send via postMessage. Belt-and-suspenders: if the worker
     // is between SAB-poll iterations when an input arrives (e.g. it's
@@ -349,8 +375,10 @@ export class UpstreamWorkerAdapter {
       triggerLeft,
       triggerRight,
       analogA,
-      analogB
+      analogB,
+      inputSentAtEpochMs
     });
+    this.inputTelemetry.mainPostCount += 1;
   }
 
   runFrame() {
@@ -520,9 +548,10 @@ export class UpstreamWorkerAdapter {
 
     const id = this.nextId;
     this.nextId += 1;
+    recordTraffic(this.trafficStats.mainToWorker, "request", type, payload, transfer, this.collectMetrics);
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, type });
       this.worker.postMessage({ id, type, payload }, transfer);
     });
   }
@@ -532,6 +561,7 @@ export class UpstreamWorkerAdapter {
       return;
     }
 
+    recordTraffic(this.trafficStats.mainToWorker, "oneWay", type, payload, transfer, this.collectMetrics);
     this.worker.postMessage({ type, payload }, transfer);
   }
 
@@ -592,6 +622,19 @@ export class UpstreamWorkerAdapter {
   }
 
   _handleMessageInner(message) {
+    const pendingForTraffic = this.pending.get(message?.id);
+    const incomingType = pendingForTraffic?.type || message?.type || "unknown";
+    recordIncomingTraffic(
+      this.trafficStats.workerToMain,
+      pendingForTraffic ? "response" : "notification",
+      incomingType,
+      message,
+      this.collectMetrics
+    );
+    if (message?.causalTelemetry) {
+      this.workerCausalTelemetry = message.causalTelemetry;
+      this.refreshCausalTelemetry();
+    }
     if (message?.type === "status") {
       this.onStatus(message.message);
       return;
@@ -632,6 +675,10 @@ export class UpstreamWorkerAdapter {
   }
 
   applyMetadata(response) {
+    if (response?.causalTelemetry) {
+      this.workerCausalTelemetry = response.causalTelemetry;
+      this.refreshCausalTelemetry();
+    }
     this.width = response.width || this.width;
     this.height = response.height || this.height;
     if (Number.isFinite(response.coreTicks)) {
@@ -642,6 +689,15 @@ export class UpstreamWorkerAdapter {
     }
     if (Number.isFinite(response.ppcPc)) {
       this.ppcPc = response.ppcPc >>> 0;
+    }
+    if (Number.isFinite(response.loadedCheckpointGeneration)) {
+      this.loadedCheckpointGeneration = response.loadedCheckpointGeneration >>> 0;
+    }
+    if (Number.isFinite(response.loadedCheckpointTicks)) {
+      this.loadedCheckpointTicks = response.loadedCheckpointTicks;
+    }
+    if (Number.isFinite(response.loadedCheckpointPpcPc)) {
+      this.loadedCheckpointPpcPc = response.loadedCheckpointPpcPc;
     }
     if (response.cpuCoreName) {
       this.cpuCoreName = response.cpuCoreName;
@@ -735,4 +791,54 @@ export class UpstreamWorkerAdapter {
       this.frameData = new Uint8ClampedArray(response.frameBuffer);
     }
   }
+
+  refreshCausalTelemetry() {
+    if (!this.collectMetrics || !this.workerCausalTelemetry) {
+      this.causalTelemetry = null;
+      return;
+    }
+    this.causalTelemetry = createCausalTelemetry(deepMerge(this.workerCausalTelemetry, {
+      workerTraffic: cloneTrafficStats(this.trafficStats),
+      input: { ...this.inputTelemetry }
+    }));
+  }
+}
+
+function createTrafficDirection() {
+  return {
+    requestCount: 0,
+    oneWayCount: 0,
+    responseCount: 0,
+    notificationCount: 0,
+    transferBytes: 0,
+    estimatedPayloadBytes: 0,
+    byType: {}
+  };
+}
+
+function recordTraffic(direction, kind, type, payload, transfer, detailed) {
+  if (kind === "request") direction.requestCount += 1;
+  else direction.oneWayCount += 1;
+  direction.transferBytes += countTransferBytes(transfer);
+  if (detailed) {
+    direction.estimatedPayloadBytes += estimateMessageBytes(payload);
+    direction.byType[type] = (direction.byType[type] || 0) + 1;
+  }
+}
+
+function recordIncomingTraffic(direction, kind, type, message, detailed) {
+  if (kind === "response") direction.responseCount += 1;
+  else direction.notificationCount += 1;
+  direction.transferBytes += Math.max(0, Number(message?.telemetryTransferBytes) || 0);
+  if (detailed) {
+    direction.estimatedPayloadBytes += estimateMessageBytes(message);
+    direction.byType[type] = (direction.byType[type] || 0) + 1;
+  }
+}
+
+function cloneTrafficStats(stats) {
+  return Object.fromEntries(Object.entries(stats).map(([direction, value]) => [
+    direction,
+    { ...value, byType: { ...value.byType } }
+  ]));
 }

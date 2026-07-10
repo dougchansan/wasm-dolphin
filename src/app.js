@@ -1,6 +1,7 @@
 import { AudioController } from "./audio.js";
 import { EmulatorHost } from "./core-host.js";
 import { startMainThreadProfiler } from "./main-profiler.js";
+import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import {
   CONTROL_LABELS,
   formatControlLabel,
@@ -116,6 +117,8 @@ let gamepadPressed = new Set();
 let gamepadInputState = null;
 let combinedPressed = new Set();
 let lastFrameInfo = null;
+let lastCausalTelemetry = null;
+let lastCausalTelemetryCapturedAt = -1;
 let currentSettings = readSettingsFromSearch(window.location.search);
 
 const audio = new AudioController();
@@ -236,12 +239,23 @@ host
   });
 
 function handleFrame(info) {
+  if (
+    info.causalTelemetry &&
+    info.causalTelemetry.capturedAtMs !== lastCausalTelemetryCapturedAt
+  ) {
+    lastCausalTelemetry = createCausalTelemetry(deepMerge(info.causalTelemetry, {
+      audio: audio.causalTelemetry()
+    }));
+    lastCausalTelemetryCapturedAt = info.causalTelemetry.capturedAtMs;
+  }
+  if (lastCausalTelemetry) info.causalTelemetry = lastCausalTelemetry;
   lastFrameInfo = info;
   // Expose to the validator. Reading via window is cheaper than DOM
   // querySelector + textContent parsing and preserves structured
   // numeric fields (histogram array, stddev) without round-tripping
   // through human-readable strings.
   window.__lastFrameInfo = info;
+  window.__causalTelemetry = info.causalTelemetry || null;
   updateScreenHud(info);
   updateRuntimeControls(info);
 
