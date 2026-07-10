@@ -60,6 +60,7 @@ async function main() {
   const requireBaseline = cli.requireBaseline || process.env.PERF_REQUIRE_BASELINE === "1";
   const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
   const headed = process.env.PERF_PROBE_HEADED === "1";
+  const continueInvalidCheckpoint = process.env.PERF_CONTINUE_INVALID_CHECKPOINT === "1";
   const corePath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm");
 
   if (requireBaseline && !baselinePath) {
@@ -93,6 +94,7 @@ async function main() {
       baseUrl,
       buildProvenance,
       chromium,
+      continueInvalidCheckpoint,
       coreArtifact,
       corePath,
       durationSeconds,
@@ -352,6 +354,7 @@ async function runScenario(scenario, context) {
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
+    manifest.benchmark.continueInvalidCheckpoint = context.continueInvalidCheckpoint;
     manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
     manifest.buildProvenance = structuredClone(context.buildProvenance.buildProvenance);
     manifest.buildProvenance.evidenceBundle = await packageBuildProvenance(
@@ -395,7 +398,20 @@ async function runScenario(scenario, context) {
     }
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
-    const battleCheckpoint = assertBattleCheckpoint(parseBattleCheckpoint(response));
+    const observedBattleCheckpoint = parseBattleCheckpoint(response);
+    let battleCheckpoint;
+    try {
+      battleCheckpoint = assertBattleCheckpoint(observedBattleCheckpoint);
+    } catch (error) {
+      if (!context.continueInvalidCheckpoint) throw error;
+      invalidReasons.push(error.message || String(error));
+      battleCheckpoint = {
+        ...observedBattleCheckpoint,
+        verified: false,
+        diagnosticContinuation: true,
+        error: error.message || String(error)
+      };
+    }
     manifest.fixture.battleCheckpoint = battleCheckpoint;
     await resumeAfterBattleCheckpoint(page);
     saveStateLoad.postLoadProgress = await waitForPostLoadProgress(page);
@@ -405,7 +421,7 @@ async function runScenario(scenario, context) {
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
     manifest.benchmark.timingStartedAt = new Date().toISOString();
-    assertRunProvenance(manifest);
+    if (!context.continueInvalidCheckpoint) assertRunProvenance(manifest);
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
     const startedAt = Date.now();

@@ -284,8 +284,11 @@ test("worker diagnostics structurally retain fatal catches and RPCs are bounded"
   assert.match(gateSource, /loadStateFileWithTimeout\(page/);
   assert.match(
     gateSource,
-    /renderer = withExpectedRendererIdentity\(await readRendererDiagnostics\(page\), scenario\.params\);\s+manifest\.renderer = renderer;\s+const battleCheckpoint = assertBattleCheckpoint/
+    /renderer = withExpectedRendererIdentity\(await readRendererDiagnostics\(page\), scenario\.params\);\s+manifest\.renderer = renderer;\s+const observedBattleCheckpoint = parseBattleCheckpoint/
   );
+  assert.match(gateSource, /PERF_CONTINUE_INVALID_CHECKPOINT/);
+  assert.match(gateSource, /diagnosticContinuation: true/);
+  assert.match(gateSource, /if \(!context\.continueInvalidCheckpoint\) assertRunProvenance\(manifest\)/);
 });
 
 test("locked build provenance rejects valid-looking source, toolchain, and JS mutations", () => {
