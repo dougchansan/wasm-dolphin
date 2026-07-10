@@ -26,8 +26,8 @@
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 39953,
-      "sha256": "66c55be3002d905f45c26a9633b902ce89ef22eaddeba18b78ebd77397bbaf03"
+      "size": 40001,
+      "sha256": "df4042525e84bae6d9c3efd4c29d0427f0ab37501022e21496af9876a9d84b9a"
     },
     {
       "path": "src/audio.js",
@@ -44,8 +44,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 50999,
-      "sha256": "b029033fa203284c277c741ed6e36f70fb8b010dc4578cb6e1d806d19e621c22"
+      "size": 51155,
+      "sha256": "ed4ec66669c4c061251fe6ea53023c4543591908543f6a92bc4b0ef5c4ab4b99"
     },
     {
       "path": "src/main-profiler.js",
@@ -56,8 +56,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 278256,
-      "sha256": "49b61937ab4782c5aa6fe865f8cdcbf8445177b2bc0fe22755011e601408edb6"
+      "size": 282654,
+      "sha256": "f92d282ef5a0e4a117e42690d476a4f99691ec4b0caa2f00f08e0aa786056591"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -68,8 +68,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 29977,
-      "sha256": "4855a8380733577d940ab77747cef73a5637ae81ddedc44f245dad98fbddd5b9"
+      "size": 32045,
+      "sha256": "7098852452364ba969d02d8e7083a0f8c21d599e6eb12b709b26aea8190678a0"
     },
     {
       "path": "src/upstream-worker-protocol.js",
