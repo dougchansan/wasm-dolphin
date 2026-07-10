@@ -130,9 +130,10 @@ software rasterizer → EFB → XFB (YUV encode) → WebGPU presenter → <canva
 
 The main measured smoothness limit on the default path is the software GPU:
 game timing can approach its target while the rasterizer produces relatively
-few distinct frames. Current XFB encode/decode samples are only low
-single-digit milliseconds, so the exact raster/TEV/backlog subphase still needs
-instrumentation. Two knobs expose the tradeoff:
+few distinct frames. Three profiler runs averaged about 59.7 presentation FPS
+but only 12.8 unique visual FPS, with 78.3% sampled stale-source reuse. Raster,
+TEV, texture, FIFO, and XFB phase counters now identify where to optimize
+without changing correctness. Two knobs expose the tradeoff:
 
 #### Pacing
 
@@ -159,13 +160,14 @@ one per 4×4 cell. None is literal full quality; `fastsw=1` remains the crisp
 default. Results are scene-dependent—see the
 [measured performance audit](docs/performance-audit-2026-07-10.md).
 
-### Rendering: WebGPU hardware backend (experimental, parked)
+### Rendering: WebGPU hardware backend (experimental)
 
 `?video=wgpu` selects the true WebGPU hardware renderer command path, intended
-to bypass the software-raster unique-frame ceiling. The current classifier
-reaches real draws and present completion, but post-draw EFB readbacks remain
-zero, so it can show a diagnostic pattern instead of game frames and is **not**
-the default. The next boundary is draw-to-EFB correctness, not presentation.
+to bypass the software-raster unique-frame ceiling. On the validation GPU, the
+first completed 108-draw EFB pass contains nonzero color and the fixed battle
+is visible. This does not isolate which individual draw first changed the EFB.
+Replay still averages only about 68% game speed and 30 presents/s in the
+retained JIT-off runs, so it is **not** the default.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.
