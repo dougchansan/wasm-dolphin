@@ -1,4 +1,4 @@
-export const CAUSAL_TELEMETRY_SCHEMA_VERSION = 1;
+export const CAUSAL_TELEMETRY_SCHEMA_VERSION = 2;
 
 const finite = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 const nullable = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
@@ -70,6 +70,7 @@ export function createCausalTelemetry(overrides = {}) {
         intervalLifetimeMaxMs: 0,
         intervalLongFrameCount: 0,
         js: emptyStageWindow(),
+        gpuCompletion: emptyGpuCompletionTelemetry(),
       },
       webgpu: {
         registered: false,
@@ -113,6 +114,7 @@ export function createCausalTelemetry(overrides = {}) {
         mainStateChangeCount: 0,
         mainPostCount: 0,
         mainSabWriteCount: 0,
+        mainGeneration: 0,
         mainSabGeneration: 0,
         workerPostApplyCount: 0,
         workerSabApplyCount: 0,
@@ -120,6 +122,7 @@ export function createCausalTelemetry(overrides = {}) {
         ageLastMs: 0,
         ageAverageMs: 0,
         ageMaxMs: 0,
+        visible: emptyInputVisibleLatencyTelemetry(),
       },
       host: {
         rafLoopCount: 0,
@@ -249,6 +252,10 @@ export function flattenCausalTelemetry(value) {
     causalJsDrawMs: telemetry.presentation.js.draw.averageMs,
     causalJsHashMs: telemetry.presentation.js.hash.averageMs,
     causalJsPresentMs: telemetry.presentation.js.present.averageMs,
+    causalGpuCompletionEnabled: telemetry.presentation.gpuCompletion.enabled,
+    causalGpuCompletionMs: telemetry.presentation.gpuCompletion.lastMs,
+    causalGpuCompletionP95Ms: telemetry.presentation.gpuCompletion.p95Ms,
+    causalGpuCompletionInFlight: telemetry.presentation.gpuCompletion.inFlight,
     causalPresentationQueueDepth: telemetry.presentation.queueDepth,
     causalPresentationQueueAgeMs: telemetry.presentation.queueAgeMs,
     causalPresentationQueueDepthHighWater: telemetry.presentation.queueDepthHighWater,
@@ -270,7 +277,12 @@ export function flattenCausalTelemetry(value) {
     causalAudioUnderruns: telemetry.audio.underrunCount,
     causalInputAgeMs: telemetry.input.ageLastMs,
     causalInputPostCount: telemetry.input.mainPostCount,
+    causalInputGeneration: telemetry.input.mainGeneration,
     causalInputSabGeneration: telemetry.input.mainSabGeneration,
+    causalInputVisibleEnabled: telemetry.input.visible.enabled,
+    causalInputCorePollAgeMs: telemetry.input.visible.pollAgeLastMs,
+    causalInputVisibleAgeMs: telemetry.input.visible.visibleAgeLastMs,
+    causalInputPollToVisibleMs: telemetry.input.visible.pollToVisibleLastMs,
   };
   return valid
     ? flattened
@@ -301,6 +313,59 @@ function emptyTrafficDirection() {
     transferBytes: 0,
     estimatedPayloadBytes: 0,
     byType: {},
+  };
+}
+
+function emptyGpuCompletionTelemetry() {
+  return {
+    schema: "wasm-dolphin.gpu-completion.v1",
+    enabled: false,
+    sampleEvery: 30,
+    submitCount: 0,
+    sampleRequestCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    lastMs: 0,
+    averageMs: 0,
+    maxMs: 0,
+    p95Ms: 0,
+    unsupportedCount: 0,
+    inFlight: 0,
+    inFlightHighWater: 0,
+    lastError: "",
+    byRoute: {},
+  };
+}
+
+function emptyInputVisibleLatencyTelemetry() {
+  return {
+    schema: "wasm-dolphin.input-visible-latency.v1",
+    enabled: false,
+    meaning: "host-to-next-distinct-frame-after-core-poll",
+    causalVisualAttribution: false,
+    appliedCount: 0,
+    duplicateApplyCount: 0,
+    supersededCount: 0,
+    corePollCount: 0,
+    visibleCount: 0,
+    applyAgeLastMs: 0,
+    pollAgeLastMs: 0,
+    visibleAgeLastMs: 0,
+    pollToVisibleLastMs: 0,
+    lastCompletedGeneration: 0,
+    lastCompletedCoreFrame: 0,
+    sourceCounts: {},
+    pendingGeneration: 0,
+    pendingInputMask: 0,
+    applyAgeAverageMs: 0,
+    applyAgeP95Ms: 0,
+    pollAgeAverageMs: 0,
+    pollAgeP95Ms: 0,
+    visibleAgeAverageMs: 0,
+    visibleAgeP95Ms: 0,
+    visibleAgeMaxMs: 0,
+    pollToVisibleAverageMs: 0,
+    pollToVisibleP95Ms: 0,
   };
 }
 

@@ -650,7 +650,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

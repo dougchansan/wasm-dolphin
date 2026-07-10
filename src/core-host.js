@@ -15,6 +15,8 @@ import {
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
+import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
+import { requestedInputLatencyDiagnostics } from "./input-latency-telemetry.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -65,6 +67,8 @@ export class EmulatorHost {
     this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.wgpuReplayDiagnostics = requestedWgpuReplayDiagnostics(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
+    this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
+    this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
     // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
@@ -265,7 +269,9 @@ export class EmulatorHost {
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,
             wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
-            wgpuAtomicPassReplay: this.wgpuAtomicPassReplay
+            wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+            gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+            inputLatencyDiagnostics: this.inputLatencyDiagnostics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";

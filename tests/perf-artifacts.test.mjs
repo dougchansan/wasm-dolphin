@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
@@ -129,7 +130,7 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
   assert.throws(() => assertRunProvenance(labelOnly), /battle\/XFB checkpoint/);
 
   const unknownTelemetry = validManifest();
-  unknownTelemetry.causalTelemetrySchema.version = 2;
+  unknownTelemetry.causalTelemetrySchema.version = CAUSAL_TELEMETRY_SCHEMA_VERSION + 1;
   assert.throws(() => assertRunProvenance(unknownTelemetry), /Unsupported causal telemetry schema/);
 
   assert.equal(assertRunProvenance(validManifest()).fixture.saveStateLoaded, true);
@@ -365,7 +366,7 @@ test("qualification requires clean git, exact video/presenter identity, and lock
   manifest.benchmark.cacheState = "cold";
   manifest.hostCore = { abiVersion: 1 };
   manifest.eventSchema = { version: 1 };
-  manifest.causalTelemetrySchema = { version: 1 };
+  manifest.causalTelemetrySchema = { version: CAUSAL_TELEMETRY_SCHEMA_VERSION };
   manifest.buildProvenance = validLockedBuildProvenance();
   manifest.upstream = { dolphinSha: manifest.buildProvenance.locked.sourceLock.upstream.commit };
   manifest.patches = { hashes: manifest.buildProvenance.locked.sourceLock.patches.map((patch) => patch.sha256) };
@@ -518,8 +519,8 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
     samples: [
       {
         helper: "video xfb:10 | metrics:on | jit:off",
-        causalTelemetrySchemaVersion: 1,
-        causalTelemetry: { schemaVersion: 1 },
+        causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        causalTelemetry: { schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION },
       },
     ],
   });
@@ -547,7 +548,7 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
     evaluateMetricsModeEvidence({
       requested: "0",
       diagnostics: { enabled: true, helperStatsCalls: 1, profileStatsCalls: 1, profileTimeSamples: 1 },
-      samples: [{ helper: "metrics:on", causalTelemetrySchemaVersion: 1, causalTelemetry: {} }],
+      samples: [{ helper: "metrics:on", causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION, causalTelemetry: {} }],
     }).failures.join(" | "),
     /requested metrics=0.*enabled=true.*helperStatsCalls=1.*causal telemetry was present/
   );
@@ -890,7 +891,7 @@ function validManifest() {
       saveStateLoaded: true,
       battleCheckpoint: { verified: true },
     },
-    causalTelemetrySchema: { version: 1 },
+    causalTelemetrySchema: { version: CAUSAL_TELEMETRY_SCHEMA_VERSION },
     servedApplication: { verified: true, manifestSha256: "e".repeat(64) },
   };
 }

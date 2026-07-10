@@ -59,6 +59,8 @@ export class UpstreamWorkerAdapter {
     legacyOneWayAck = false,
     wgpuReplayDiagnostics = false,
     wgpuAtomicPassReplay = true,
+    gpuCompletionDiagnostics = false,
+    inputLatencyDiagnostics = false,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -104,6 +106,8 @@ export class UpstreamWorkerAdapter {
     this.legacyOneWayAck = Boolean(legacyOneWayAck);
     this.wgpuReplayDiagnostics = Boolean(wgpuReplayDiagnostics);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
+    this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
+    this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -170,6 +174,7 @@ export class UpstreamWorkerAdapter {
       mainStateChangeCount: 0,
       mainPostCount: 0,
       mainSabWriteCount: 0,
+      mainGeneration: 0,
       mainSabGeneration: 0
     };
     // SharedArrayBuffer-backed input state. Bypasses postMessage queue.
@@ -248,6 +253,8 @@ export class UpstreamWorkerAdapter {
       coreSelection: this.coreSelectionTelemetry(window.location.href),
       wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+      gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+      inputLatencyDiagnostics: this.inputLatencyDiagnostics,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,
@@ -375,6 +382,9 @@ export class UpstreamWorkerAdapter {
     this.lastInputStateSignature = signature;
     this.inputTelemetry.mainStateChangeCount += 1;
     const inputSentAtEpochMs = Date.now();
+    let inputGeneration = (this.inputTelemetry.mainGeneration + 1) >>> 0;
+    if (inputGeneration === 0) inputGeneration = 1;
+    this.inputTelemetry.mainGeneration = inputGeneration;
 
     if (this.inputStateView) {
       // Write each slot, then bump the generation counter last so the worker
@@ -389,7 +399,8 @@ export class UpstreamWorkerAdapter {
       Atomics.store(this.inputStateView, 7, analogA);
       Atomics.store(this.inputStateView, 8, analogB);
       Atomics.store(this.inputStateView, 10, inputSentAtEpochMs | 0);
-      this.inputTelemetry.mainSabGeneration = (Atomics.add(this.inputStateView, 9, 1) + 1) >>> 0;
+      Atomics.store(this.inputStateView, 9, inputGeneration | 0);
+      this.inputTelemetry.mainSabGeneration = inputGeneration;
       this.inputTelemetry.mainSabWriteCount += 1;
     }
     // Always also send via postMessage. Belt-and-suspenders: if the worker
@@ -407,7 +418,8 @@ export class UpstreamWorkerAdapter {
       triggerRight,
       analogA,
       analogB,
-      inputSentAtEpochMs
+      inputSentAtEpochMs,
+      inputGeneration
     });
     this.inputTelemetry.mainPostCount += 1;
   }

@@ -2,7 +2,7 @@
 
 `?metrics=1` exposes `window.__causalTelemetry` and includes the same object in
 `window.__lastFrameInfo.causalTelemetry`. The object has
-`schemaVersion: 1`; consumers must reject unknown versions rather than guessing
+`schemaVersion: 2`; consumers must reject unknown versions rather than guessing
 at field meanings. Existing `ppcWasmHelperStats` and `frameProfileStats`
 strings remain available for compatibility.
 
@@ -18,11 +18,11 @@ schema.
 | --- | --- |
 | `core` | frame, live worker-observed ticks/PC, tick rate, and CPU-thread after-load checkpoint generation/ticks/PC |
 | `softwareRaster` | source XFB count/dimensions/stride/hash/nonzero count, XFB interval/decode, video-output sync/publish/total, and software encode/convert/copy times |
-| `presentation` | backend, pacing and fresh-frame route, immediate/queued/tick-repaint counts, queue current/high-water depth and last/average/max age, lag, underruns/drops, interval and FPS fields, plus structured JS capture/copy/draw/hash/present stage windows |
+| `presentation` | backend, pacing and fresh-frame route, immediate/queued/tick-repaint counts, queue current/high-water depth and last/average/max age, lag, underruns/drops, interval and FPS fields, structured JS stage windows, and opt-in asynchronous GPU-completion samples |
 | `webgpu` | command-ring registration, drain/empty/processed counts, drain duration, backlog/high-water, deferrals, and errors |
 | `workerTraffic` | request/one-way/response/notification counts, actual transferable bytes, estimated payload bytes, and per-type counts |
 | `audio` | worker mix duration/count/frames, pump gaps/skips, mix round-trip, observable schedule underrun/overrun, lead, and drift |
-| `input` | changed states, message posts, SAB writes/generation, worker applies, and observed input age |
+| `input` | changed states, message/SAB generation, worker applies, observed transport age, and opt-in host→core-poll→next-distinct-frame propagation bounds |
 | `host` | rAF loop/render/publish duration and main-thread RGBA copy, `putImageData`, and `drawImage` duration |
 
 Counts and directly available byte totals are kept cheaply. Stage timers,
@@ -30,6 +30,14 @@ payload estimates, structured parsing, and snapshot cloning are enabled only
 by `metrics=1`. The structured snapshot is throttled to at most five updates
 per second so normal frame and audio messages do not carry a large telemetry
 object.
+
+GPU completion is default-off and enabled with `gpucomplete=1`. It calls
+`GPUQueue.onSubmittedWorkDone()` once per 30 successful submits without awaiting
+the promise in the presentation loop. `inputlatency=1` attaches one generation
+to both SAB and postMessage delivery, confirms that generation by observing the
+core's pad-poll mask/count, and records the next distinct presented frame. The
+input value is a propagation bound: animated scenes can change without the
+input causing that frame, so `causalVisualAttribution` is deliberately false.
 
 ## Save-state checkpoint timing
 

@@ -32,8 +32,13 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.presentation.queueAgeAverageMs, 0);
   assert.equal(value.presentation.queueAgeMaxMs, 0);
   assert.equal(value.presentation.js.capture.count, 0);
+  assert.equal(value.presentation.gpuCompletion.enabled, false);
+  assert.equal(value.presentation.gpuCompletion.completedCount, 0);
   assert.equal(value.audio.underrunCount, 0);
   assert.equal(value.input.ageLastMs, 0);
+  assert.equal(value.input.mainGeneration, 0);
+  assert.equal(value.input.visible.enabled, false);
+  assert.equal(value.input.visible.causalVisualAttribution, false);
 });
 
 test("core profile text is promoted without changing the compatibility string", () => {
@@ -100,9 +105,24 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       queueAgeMs: 0,
       queueAgeAverageMs: 0,
       queueAgeMaxMs: 0,
+      gpuCompletion: {
+        enabled: true,
+        lastMs: 3.5,
+        p95Ms: 4.5,
+        inFlight: 1,
+      },
     },
     webgpu: { backlogLast: 3 },
-    input: { ageLastMs: 4 },
+    input: {
+      ageLastMs: 4,
+      mainGeneration: 7,
+      visible: {
+        enabled: true,
+        pollAgeLastMs: 5,
+        visibleAgeLastMs: 18,
+        pollToVisibleLastMs: 13,
+      },
+    },
   });
   const flat = flattenCausalTelemetry(value);
   assert.equal(flat.causalTelemetrySchemaVersion, CAUSAL_TELEMETRY_SCHEMA_VERSION);
@@ -116,8 +136,17 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalPresentationQueueDepthHighWater, 0);
   assert.equal(flat.causalPresentationQueueAgeAverageMs, 0);
   assert.equal(flat.causalPresentationQueueAgeMaxMs, 0);
+  assert.equal(flat.causalGpuCompletionEnabled, true);
+  assert.equal(flat.causalGpuCompletionMs, 3.5);
+  assert.equal(flat.causalGpuCompletionP95Ms, 4.5);
+  assert.equal(flat.causalGpuCompletionInFlight, 1);
   assert.equal(flat.causalWgpuBacklog, 3);
   assert.equal(flat.causalInputAgeMs, 4);
+  assert.equal(flat.causalInputGeneration, 7);
+  assert.equal(flat.causalInputVisibleEnabled, true);
+  assert.equal(flat.causalInputCorePollAgeMs, 5);
+  assert.equal(flat.causalInputVisibleAgeMs, 18);
+  assert.equal(flat.causalInputPollToVisibleMs, 13);
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
 });
 

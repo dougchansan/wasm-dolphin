@@ -173,6 +173,8 @@ if (process.env.SHORTPREFIX) url.searchParams.set("shortprefix", process.env.SHO
 if (process.env.SMEARCOMPILE) url.searchParams.set("smearcompile", process.env.SMEARCOMPILE);
 if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.FASTMEMHOIST);
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
+if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPUCOMPLETE);
+if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
 // §28cx in-page main-thread profiler passthrough (?mainprof=1). Headless can
 // only validate the tooling emits — real-Chrome contention is the authoritative
 // signal — but it confirms activation and dumps the audio-pump cadence +
@@ -1423,6 +1425,7 @@ async function readSample(page, elapsedSeconds) {
         : null,
       presentationFrameLag: Number(info.presentationFrameLag) || 0,
       presentationQueueAgeMs: Number(info.presentationQueueAgeMs) || 0,
+      causalTelemetry: info.causalTelemetry || window.__causalTelemetry || null,
       // Parsed from helper string (worker doesn't surface these to DOM yet).
       helperDropCount: helperDropMatch ? Number(helperDropMatch[1]) : 0,
       helperUnderrunCount: helperUnderrunMatch ? Number(helperUnderrunMatch[1]) : 0,

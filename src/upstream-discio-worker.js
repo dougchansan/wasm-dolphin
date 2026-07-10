@@ -24,6 +24,11 @@ import {
   FRESH_FRAME_DELIVERY,
   freshFrameDeliveryForPacing
 } from "./presentation-pacing.js";
+import { createGpuCompletionTracker } from "./gpu-completion-telemetry.js";
+import {
+  createInputVisibleLatencyTracker,
+  parsePadPollStats
+} from "./input-latency-telemetry.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -105,6 +110,10 @@ let wgpuReplayClassifierGeneration = 0;
 let wgpuPresentCompletionProbeStarted = false;
 let wgpuClassifierEfbReadbackPending = false;
 let wgpuAtomicPassReplay = true;
+let gpuCompletionDiagnostics = false;
+let gpuCompletionTracker = createGpuCompletionTracker();
+let inputLatencyDiagnostics = false;
+let inputVisibleLatencyTracker = createInputVisibleLatencyTracker();
 let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
 let lastStructuredProfileWindow = emptyStageWindow();
@@ -407,6 +416,14 @@ async function handleMessage(type, payload) {
       collectMetrics = Boolean(payload.collectMetrics);
       metricsDiagnostics = createMetricsDiagnostics();
       metricsDiagnostics.enabled = collectMetrics;
+      gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
+      gpuCompletionTracker = createGpuCompletionTracker({
+        enabled: gpuCompletionDiagnostics
+      });
+      inputLatencyDiagnostics = Boolean(payload.inputLatencyDiagnostics);
+      inputVisibleLatencyTracker = createInputVisibleLatencyTracker({
+        enabled: inputLatencyDiagnostics
+      });
       legacyOneWayAck = Boolean(payload.legacyOneWayAck);
       workerTransportStats.legacyOneWayAck = legacyOneWayAck;
       if (payload.inputStateSab instanceof SharedArrayBuffer) {
@@ -463,6 +480,12 @@ async function handleMessage(type, payload) {
       return {};
     case "setInputState":
       inputMask = payload.mask >>> 0;
+      recordInputApplied({
+        generation: payload.inputGeneration,
+        inputMask,
+        sentAtEpochMs: payload.inputSentAtEpochMs,
+        source: "post"
+      });
       api?.setInputState?.({
         mask: inputMask,
         stickX: payload.stickX,
@@ -1592,6 +1615,7 @@ function maybeCreateCausalTelemetry(videoStats) {
       intervalLifetimeMaxMs: presentationLifetimeMaxIntervalMs,
       intervalLongFrameCount: presentationLongFrameCount,
       js: lastStructuredProfileWindow,
+      gpuCompletion: gpuCompletionTracker.snapshot(),
     },
     webgpu: {
       ...webGpuCausalStats,
@@ -1609,6 +1633,7 @@ function maybeCreateCausalTelemetry(videoStats) {
         ? causalInputStats.ageTotalMs / causalInputStats.ageSamples
         : 0,
       ageMaxMs: causalInputStats.ageMaxMs,
+      visible: inputVisibleLatencyTracker.snapshot(),
     },
   });
 }
@@ -1790,6 +1815,12 @@ function pollInputStateFromSab() {
   }
   const mask = Atomics.load(inputStateSabView, 0) >>> 0;
   inputMask = mask;
+  recordInputApplied({
+    generation: generation >>> 0,
+    inputMask: mask,
+    sentAtEpochMs: wrappedEpochMilliseconds(Atomics.load(inputStateSabView, 10) >>> 0),
+    source: "sab"
+  });
   api.setInputState({
     mask,
     stickX: Atomics.load(inputStateSabView, 1),
@@ -2421,6 +2452,7 @@ function recordVisualFrameHash(hash) {
   }
 
   visualFrameHash = hash >>> 0;
+  recordInputVisibleObservation(visualFrameHash);
   if (lastVisualFrameHash && visualFrameHash !== lastVisualFrameHash) {
     visualChangesSincePresentationFps += 1;
   }
@@ -2658,6 +2690,46 @@ function recordInputAge(sentAt, wrappedMilliseconds = false) {
   causalInputStats.ageTotalMs += age;
   causalInputStats.ageSamples += 1;
   causalInputStats.ageMaxMs = Math.max(causalInputStats.ageMaxMs, age);
+}
+
+function wrappedEpochMilliseconds(lowBits) {
+  const now = Date.now();
+  const age = (((now >>> 0) - (Number(lowBits) >>> 0)) >>> 0);
+  return age <= 60000 ? now - age : now;
+}
+
+function currentPadPollStats() {
+  if (!inputLatencyDiagnostics || typeof api?.getVideoStats !== "function") return null;
+  try {
+    return parsePadPollStats(api.getVideoStats());
+  } catch {
+    return null;
+  }
+}
+
+function recordInputApplied({ generation, inputMask: mask, sentAtEpochMs, source }) {
+  if (!inputLatencyDiagnostics) return;
+  const baseline = currentPadPollStats();
+  inputVisibleLatencyTracker.recordApplied({
+    generation,
+    inputMask: mask,
+    sentAtEpochMs,
+    baselinePollCount: baseline?.pollCount ?? 0,
+    baselineVisualHash: visualFrameHash,
+    source
+  });
+}
+
+function recordInputVisibleObservation(hash) {
+  if (!inputLatencyDiagnostics || !inputVisibleLatencyTracker.hasPending()) return;
+  const pad = currentPadPollStats();
+  if (!pad) return;
+  inputVisibleLatencyTracker.recordObservation({
+    pollCount: pad.pollCount,
+    inputMask: pad.inputMask,
+    visualHash: hash,
+    coreFrame: api?.getFrame?.() ?? 0
+  });
 }
 
 function formatProfileWindow(elapsedMs) {
@@ -2947,6 +3019,7 @@ self.__dolphinWebGpuClear = function (r, g, b) {
     });
     pass.end();
     gpu.device.queue.submit([encoder.finish()]);
+    gpuCompletionTracker.recordSubmittedWork(gpu.device.queue, "real-clear");
   } catch (e) {
     recordRendererError("real-clear-error", e?.message || e);
     postStatus(`WebGPU real-clear error: ${e?.message || e}`);
@@ -3135,6 +3208,7 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
   pass.draw(3);
   pass.end();
   gpu.device.queue.submit([encoder.finish()]);
+  gpuCompletionTracker.recordSubmittedWork(gpu.device.queue, "software-present");
 }
 
 function webGpuUploadSource(gpu, frameView, rowBytes, bytesPerRow, height) {
@@ -4717,6 +4791,7 @@ function drainWebGpuCmdRing() {
     let submitted = false;
     try {
       q.submit([enc.finish()]);
+      gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
       submitted = true;
     } catch (e) {
       recordRendererError("submit-error", e?.message || e);
