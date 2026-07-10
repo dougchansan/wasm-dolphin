@@ -53,6 +53,9 @@ slow, experimental, and not the recommended path.
   its next-distinct-frame result is not yet causal input-to-photon.
 - Sound is working; retained software and hardware diagnostics had no audio
   underruns.
+- The clean promoted-core gate averaged 100.077% game speed, 59.333
+  presentation FPS, and 14.095 unique visual FPS, but failed because one slice
+  fell to 91.696%, below the 95% minimum target.
 
 ## Current decisions
 

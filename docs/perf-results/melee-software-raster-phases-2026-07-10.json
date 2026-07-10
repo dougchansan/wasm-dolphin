@@ -157,5 +157,45 @@
     "sampledSourceFrameCount": 4912,
     "sampledStaleFrameCount": 3915,
     "sampledStaleFrameRatio": 0.7970276872964169
+  },
+  "promotedPerfGate": {
+    "rawPath": ".omx/next/promoted-perf-gate",
+    "repositoryCommit": "e0598737f56fd8f3f477906708647829227332df",
+    "repositoryDirty": false,
+    "durationSeconds": 20,
+    "headed": true,
+    "wasmSha256": "158dde37602442bf1dacf42328501082b46b47768b2455946fcb4c596fcdb5ea",
+    "verdict": "FAIL",
+    "qualificationEligible": true,
+    "qualificationPassed": false,
+    "failure": "minimum game speed 91.69633866488267% was below the 95% target",
+    "fullTimedWindow": {
+      "gameSpeedMeanPercent": 100.07668388326637,
+      "gameSpeedMinPercent": 91.69633866488267,
+      "coreFpsMean": 59.992632751681825,
+      "presentationFpsMean": 59.333333333333336,
+      "uniqueVisualFpsMean": 14.095238095238095
+    },
+    "steadyStateWindow": {
+      "startsAfterSeconds": 5,
+      "gameSpeedMeanPercent": 98.629484075843,
+      "gameSpeedMinPercent": 91.69633866488267,
+      "coreFpsMean": 59.16937343242737,
+      "presentationFpsMean": 59.4375,
+      "uniqueVisualFpsMean": 13.625
+    },
+    "jit": {
+      "compiledBlocks": 650,
+      "blockRuns": 45270,
+      "runsPerCompile": 69.64615384615385,
+      "emitFailures": 0,
+      "compileFailures": 0
+    },
+    "softwareRaster": {
+      "instrumentationActivated": true,
+      "sampledStaleFrameRatioFinal": 0.7979474021808852,
+      "fifoDistanceUnderflowCount": 0
+    },
+    "audioUnderruns": 0
   }
 }

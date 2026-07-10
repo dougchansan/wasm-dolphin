@@ -85,3 +85,28 @@ sampled sources split exactly into 997 unique plus 3,915 stale frames.
 That run overlapped the independent clean build and stretched a configured
 20-second window to roughly 101 seconds. It is activation evidence only and
 contributes no performance result.
+
+## Promoted default-core gate
+
+After promotion, a clean headed `npm run perf:gate` ran from commit
+`e0598737f56fd8f3f477906708647829227332df` against the normal core URL. The
+20-second fixed-battle run was provenance-eligible but reported `FAIL` because
+minimum game speed was 91.696%, below the 95% target.
+
+| Metric | Full timed window | Steady window after 5 s |
+| --- | ---: | ---: |
+| Game speed mean | 100.077% | 98.629% |
+| Game speed minimum | 91.696% | 91.696% |
+| Core FPS mean | 59.993 | 59.169 |
+| Presentation FPS mean | 59.333 | 59.438 |
+| Unique visual FPS mean | 14.095 | 13.625 |
+
+The guarded JIT compiled 650 blocks and ran them 45,270 times (69.65
+runs/compile), with zero emit or compile failures. Raster instrumentation
+activated, FIFO distance underflow was zero, the final sampled stale-source
+ratio was 79.79%, and audio underruns were zero. Raw output is under
+`.omx/next/promoted-perf-gate/`.
+
+This is the cleanest current summary: average emulation throughput reached the
+target, but a low slice still failed the gate and unique visual cadence stayed
+near 14 FPS. The promoted core is not being described as lag-free.

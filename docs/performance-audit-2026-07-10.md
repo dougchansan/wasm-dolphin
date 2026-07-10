@@ -85,6 +85,7 @@ is in [the WGPU replay and latency package](perf-results/wgpu-replay-and-latency
 | WGPU latency diagnostic | 62.140 | 37.000 | 30.550 | 27 sampled canvas hashes | Diagnostics enabled; not a performance baseline |
 | Software phase profile, metrics off mean | 99.903 | 59.960 | 59.020 | 12.783 | Three 20 s runs |
 | Software phase profile, metrics on mean | 101.077 | 60.627 | 59.670 | 12.767 | Three 20 s runs; no slowdown resolved above variation |
+| Promoted clean JIT-on gate, 20 s | 100.077 mean / 91.696 min | 59.993 | 59.333 | 14.095 | `FAIL`: minimum game speed below 95% |
 
 The presenter fallback and WGPU rows are not interleaved general-performance
 comparisons. One run or one GPU does not establish a universal backend winner.
