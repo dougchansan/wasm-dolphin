@@ -96,6 +96,8 @@ let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
 let lastStructuredProfileWindow = emptyStageWindow();
 let causalMetricsEnabled = false;
+let collectMetrics = false;
+let metricsDiagnostics = createMetricsDiagnostics();
 let lastCausalTelemetryAt = 0;
 const CAUSAL_TELEMETRY_INTERVAL_MS = 200;
 const causalAudioStats = {
@@ -278,6 +280,19 @@ function createRendererDiagnostics() {
   };
 }
 
+function createMetricsDiagnostics() {
+  return {
+    enabled: false,
+    helperStatsCalls: 0,
+    profileStatsCalls: 0,
+    profileTimeSamples: 0,
+  };
+}
+
+function metricsDiagnosticsPayload() {
+  return { ...metricsDiagnostics, enabled: collectMetrics };
+}
+
 function recordRendererError(kind, message) {
   const entry = {
     atMs: Number(performance.now().toFixed(3)),
@@ -303,6 +318,7 @@ function rendererDiagnosticsPayload() {
     ...rendererDiagnostics,
     coreSelection: { ...rendererDiagnostics.coreSelection },
     activePresenterBackend: renderBackend,
+    metrics: metricsDiagnosticsPayload(),
     errors: rendererDiagnostics.errors.map((entry) => ({ ...entry })),
     emscriptenPrintErr: [...rendererDiagnostics.emscriptenPrintErr],
     statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
@@ -366,6 +382,9 @@ async function handleMessage(type, payload) {
   switch (type) {
     case "load":
       causalMetricsEnabled = Boolean(payload.collectMetrics);
+      collectMetrics = Boolean(payload.collectMetrics);
+      metricsDiagnostics = createMetricsDiagnostics();
+      metricsDiagnostics.enabled = collectMetrics;
       legacyOneWayAck = Boolean(payload.legacyOneWayAck);
       workerTransportStats.legacyOneWayAck = legacyOneWayAck;
       if (payload.inputStateSab instanceof SharedArrayBuffer) {
@@ -1166,9 +1185,24 @@ function resetPresentationBuffer() {
   presentationQueueAgeMs = 0;
 }
 
+function readDetailedCoreStat(name, readStat) {
+  if (!collectMetrics || typeof readStat !== "function") {
+    return null;
+  }
+
+  const counter = `${name}Calls`;
+  if (counter in metricsDiagnostics) {
+    metricsDiagnostics[counter] += 1;
+  }
+  return readStat();
+}
+
 function metadataPayload() {
   const rootEntryCount = api?.getRootEntryCount() ?? -1;
   const loadedCheckpoint = readLastLoadedCheckpoint();
+  const helperStats = readDetailedCoreStat("helperStats", api?.getPpcWasmHelperStats);
+  const profileStats = readDetailedCoreStat("profileStats", api?.getPpcProfileStats);
+  const videoStats = api?.getVideoStats?.();
   return {
     width: api?.frameWidth() ?? 320,
     height: api?.frameHeight() ?? 240,
@@ -1205,9 +1239,10 @@ function metadataPayload() {
     ppcWasmBlockCompileCount: api?.getPpcWasmBlockCompileCount?.() ?? 0,
     ppcWasmBlockRunCount: api?.getPpcWasmBlockRunCount?.() ?? 0,
     ppcWasmHelperStats: joinedStats(
-      api?.getPpcWasmHelperStats?.(),
-      api?.getVideoStats?.(),
-      api?.getPpcProfileStats?.()
+      helperStats,
+      videoStats,
+      profileStats,
+      `metrics:${collectMetrics ? "on" : "off"}`
     )
   };
 }
@@ -1350,8 +1385,8 @@ function framePayload() {
   const height = api.frameHeight();
   const pointer = api.frameBuffer();
   const length = width * height * 4;
-  const ppcWasmHelperStats = api.getPpcWasmHelperStats?.();
-  const ppcProfileStats = api.getPpcProfileStats?.();
+  const ppcWasmHelperStats = readDetailedCoreStat("helperStats", api?.getPpcWasmHelperStats);
+  const ppcProfileStats = readDetailedCoreStat("profileStats", api?.getPpcProfileStats);
   const videoStats = api.getVideoStats?.();
   const loadedCheckpoint = readLastLoadedCheckpoint();
   if (renderBackend === "ogl") {
@@ -1407,6 +1442,7 @@ function framePayload() {
       ppcWasmHelperStats,
       videoStats,
       ppcProfileStats,
+      `metrics:${collectMetrics ? "on" : "off"}`,
       `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}` +
       // §28v: extra on-screen telemetry for the user's screenshots —
       // JIT cache size/new-compiles (compile-burst visibility) +
@@ -1710,7 +1746,6 @@ function runPresentationLoop() {
       // ring over (handleWebGpuCmdRing) and only matters for
       // ?video=wgpu. Cheap when empty (one atomic load).
       drainWebGpuCmdRing();
-      const now = performance.now();
       const loopStartedAt = performance.now();
       // Pump host jobs every loop iteration. The previous 100ms rate-limit
       // capped pumpHostJobs at 10Hz post-boot, which starves CoreTiming when
@@ -1718,31 +1753,29 @@ function runPresentationLoop() {
       // for game-clock progress. Pumping on every iteration (~60Hz when
       // healthy) lets the core advance even under Chrome's worker timer
       // throttling.
-      const pumpStartedAt = performance.now();
+      const pumpStartedAt = startProfileSample();
       api.pumpHostJobs?.();
-      stages.pump = performance.now() - pumpStartedAt;
-      addProfileTime("pump", stages.pump);
-      lastHostPumpTime = now;
+      stages.pump = finishProfileSample("pump", pumpStartedAt);
+      lastHostPumpTime = loopStartedAt;
       if (!coreBoot.accepted) {
-        const runStartedAt = performance.now();
-        if (!self._firstRunFrameLogged) {
+        const firstRunFrame = !self._firstRunFrameLogged;
+        const runStartedAt = collectMetrics || firstRunFrame ? performance.now() : 0;
+        if (firstRunFrame) {
           self._firstRunFrameLogged = true;
           console.log(`[boot-phase] FIRST api.runFrame() at perf.now=${runStartedAt.toFixed(1)}ms`);
         }
         api.runFrame?.();
-        stages.run = performance.now() - runStartedAt;
-        addProfileTime("run", stages.run);
+        stages.run = finishProfileSample("run", runStartedAt);
       }
 
-      const apiStartedAt = performance.now();
+      const apiStartedAt = startProfileSample();
       const width = api.frameWidth();
       const height = api.frameHeight();
       const pointer = api.frameBuffer();
       const coreFrame = api.getFrame?.() ?? 0;
-      stages.api = performance.now() - apiStartedAt;
-      addProfileTime("api", stages.api);
+      stages.api = finishProfileSample("api", apiStartedAt);
       maybeEnablePpcWasmJit(coreFrame);
-      const presentStartedAt = performance.now();
+      const presentStartedAt = startProfileSample();
       if (cmdRingOwnsCanvas) {
         // The WebGPU hardware renderer presents the canvas itself via
         // the cmd-ring executor; skip the legacy CPU-framebuffer blit
@@ -1770,7 +1803,7 @@ function runPresentationLoop() {
       } else if (coreFrame !== lastPresentedCoreFrame) {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
       }
-      stages.present = performance.now() - presentStartedAt;
+      stages.present = collectMetrics ? performance.now() - presentStartedAt : 0;
       updatePresentationFps();
       maybeDisablePpcWasmJit(coreFrame);
       const loopMs = performance.now() - loopStartedAt;
@@ -2011,7 +2044,7 @@ function recordOglSwapDelta(swapCount) {
 }
 
 function captureFrameForPacedPresentation(width, height, pointer, length, coreFrame) {
-  const captureStartedAt = performance.now();
+  const captureStartedAt = startProfileSample();
   if (coreFrame === lastCapturedCoreFrame || width <= 0 || height <= 0 || pointer <= 0 || length <= 0) {
     return;
   }
@@ -2022,9 +2055,9 @@ function captureFrameForPacedPresentation(width, height, pointer, length, coreFr
     presentationDropsSinceFps += 1;
   }
 
-  const copyStartedAt = performance.now();
+  const copyStartedAt = startProfileSample();
   const bytes = moduleInstance.HEAPU8.slice(pointer, pointer + length);
-  addProfileTime("copy", performance.now() - copyStartedAt);
+  finishProfileSample("copy", copyStartedAt);
   addProfileBytes(length);
 
   frameQueue.push({
@@ -2035,7 +2068,7 @@ function captureFrameForPacedPresentation(width, height, pointer, length, coreFr
     width
   });
   lastCapturedCoreFrame = coreFrame;
-  addProfileTime("capture", performance.now() - captureStartedAt);
+  finishProfileSample("capture", captureStartedAt);
 }
 
 function startPacedPresentation() {
@@ -2062,7 +2095,7 @@ function schedulePacedPresentation() {
 }
 
 function runPacedPresentation(timestamp = performance.now()) {
-  const pacedStartedAt = performance.now();
+  const pacedStartedAt = startProfileSample();
   try {
     const now = timestamp;
     if (!pacedPresentationPrimed) {
@@ -2091,7 +2124,7 @@ function runPacedPresentation(timestamp = performance.now()) {
       nextPacedPresentationTime += PACED_PRESENTATION_INTERVAL_MS;
     } while (nextPacedPresentationTime < now - PACED_PRESENTATION_INTERVAL_MS);
     schedulePacedPresentation();
-    addProfileTime("paced", performance.now() - pacedStartedAt);
+    finishProfileSample("paced", pacedStartedAt);
   }
 }
 
@@ -2114,12 +2147,13 @@ let _lastFrameLength = 0;
 let _lastFrameCopy = null;
 let _lastFrameCopyValid = false;
 function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?.() ?? 0) {
-  const presentStartedAt = performance.now();
+  const firstPaint = !_firstPaintLogged;
+  const presentStartedAt = collectMetrics || firstPaint ? performance.now() : 0;
   if (coreFrame === lastPresentedCoreFrame) {
     updatePresentationFps();
     return;
   }
-  if (!_firstPaintLogged) {
+  if (firstPaint) {
     _firstPaintLogged = true;
     console.log(`[boot-phase] FIRST paint coreFrame=${coreFrame} at perf.now=${presentStartedAt.toFixed(1)}ms (${width}x${height})`);
   }
@@ -2149,7 +2183,7 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
     _lastFrameCopyValid = true;
   }
 
-  const drawStartedAt = performance.now();
+  const drawStartedAt = startProfileSample();
   if (renderGpu) {
     drawFrameToWebGpu(width, height, pointer, length);
   } else if (renderGl) {
@@ -2165,13 +2199,13 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   if (frameView && oglPixelSabView && oglMetaSabView) {
     publishOglSabFrame(width, height, frameView);
   }
-  addProfileTime("draw", performance.now() - drawStartedAt);
+  finishProfileSample("draw", drawStartedAt);
 
-  const hashStartedAt = performance.now();
+  const hashStartedAt = startProfileSample();
   recordVisualFrameHash(hashFrameBytes(frameView));
-  addProfileTime("hash", performance.now() - hashStartedAt);
+  finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
-  addProfileTime("present", performance.now() - presentStartedAt);
+  finishProfileSample("present", presentStartedAt);
 }
 
 let oglSabLastPublishMs = 0;
@@ -2248,13 +2282,13 @@ function maybeReportOglSabRates(now) {
 }
 
 function presentFrameBytes(width, height, bytes, coreFrame) {
-  const presentStartedAt = performance.now();
+  const presentStartedAt = startProfileSample();
   if (coreFrame === lastPresentedCoreFrame) {
     updatePresentationFps();
     return;
   }
 
-  const drawStartedAt = performance.now();
+  const drawStartedAt = startProfileSample();
   if (renderGpu) {
     drawFrameBytesToWebGpu(width, height, bytes);
   } else if (renderGl) {
@@ -2262,7 +2296,7 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
   } else if (renderContext) {
     drawFrameBytesToCanvas(width, height, bytes);
   }
-  addProfileTime("draw", performance.now() - drawStartedAt);
+  finishProfileSample("draw", drawStartedAt);
 
   // §28cx tick-flicker fix (REAL one): feed the tick re-paint cache from THIS
   // clean paced frame. `bytes` is the queue entry's own stable copy, with dims
@@ -2279,11 +2313,11 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
     _lastFrameCopyValid = true;
   }
 
-  const hashStartedAt = performance.now();
+  const hashStartedAt = startProfileSample();
   recordVisualFrameHash(hashFrameBytes(bytes));
-  addProfileTime("hash", performance.now() - hashStartedAt);
+  finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
-  addProfileTime("present", performance.now() - presentStartedAt);
+  finishProfileSample("present", presentStartedAt);
 }
 
 function hashFrameBytes(bytes) {
@@ -2383,11 +2417,13 @@ function updatePresentationFps() {
     presentationWindowUnderrunCount = presentationUnderrunsSinceFps;
     presentationWindowDropCount = presentationDropsSinceFps;
     visualChangeFps = Math.round((visualChangesSincePresentationFps * 1000) / profileElapsedMs);
-    frameProfileStats = formatProfileWindow(profileElapsedMs);
-    if (causalMetricsEnabled) {
+    if (collectMetrics) {
+      frameProfileStats = formatProfileWindow(profileElapsedMs);
       lastStructuredProfileWindow = stageWindowFromProfile(profileWindow, profileElapsedMs);
+      profileWindow = createProfileWindow();
+    } else {
+      frameProfileStats = "metrics:off";
     }
-    profileWindow = createProfileWindow();
     framesSincePresentationFps = 0;
     loopsSincePresentationFps = 0;
     visualChangesSincePresentationFps = 0;
@@ -2486,8 +2522,22 @@ function createProfileWindow() {
   };
 }
 
+function startProfileSample() {
+  return collectMetrics ? performance.now() : 0;
+}
+
+function finishProfileSample(name, startedAt) {
+  if (!collectMetrics) {
+    return 0;
+  }
+
+  const elapsedMs = performance.now() - startedAt;
+  addProfileTime(name, elapsedMs);
+  return elapsedMs;
+}
+
 function addProfileTime(name, elapsedMs) {
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+  if (!collectMetrics || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
     return;
   }
 
@@ -2499,10 +2549,11 @@ function addProfileTime(name, elapsedMs) {
 
   profileWindow[msKey] += elapsedMs;
   profileWindow[countKey] += 1;
+  metricsDiagnostics.profileTimeSamples += 1;
 }
 
 function addProfileBytes(byteLength) {
-  if (Number.isFinite(byteLength) && byteLength > 0) {
+  if (collectMetrics && Number.isFinite(byteLength) && byteLength > 0) {
     profileWindow.copyBytes += byteLength;
   }
 }
