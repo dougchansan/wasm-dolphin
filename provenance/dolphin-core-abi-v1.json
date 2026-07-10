@@ -76,6 +76,12 @@
       "hashMode": "lf-normalized",
       "size": 4035,
       "sha256": "425591a53af94edf1afc211dd3d3e096d877f57bdfae59f545c64f88bbbc61d0"
+    },
+    {
+      "path": "src/wgpu-replay-diagnostics.js",
+      "hashMode": "lf-normalized",
+      "size": 7558,
+      "sha256": "e9b4b13cc418e8210e2f9013d1f39f1545339942fbea30bf2d6b09cb57be0d25"
     }
   ],
   "memoryContract": {

@@ -20,6 +20,8 @@
   rollback flag, and measurement counters.
 - [WebGPU Naga bridge](webgpu-naga-bridge.md) — SPIR-V-to-WGSL ABI, ownership,
   failure handling, and patched C++ integration.
+- [True WebGPU replay classifier](wgpu-real-classifier.md) — bounded pass,
+  resource, EFB-mutation, draw, and present diagnostics for `video=wgpu`.
 - [Core roadmap](core-roadmap.md) — longer-term core work.
 - [OGL performance plan](ogl-performance-plan.md) — diagnostic OGL research.
 - [Upstream WASM probe](upstream-wasm-probe.md) — upstream integration notes.
