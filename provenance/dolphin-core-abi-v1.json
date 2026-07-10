@@ -80,8 +80,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 7558,
-      "sha256": "e9b4b13cc418e8210e2f9013d1f39f1545339942fbea30bf2d6b09cb57be0d25"
+      "size": 8674,
+      "sha256": "af52a7e0f631348ed46a71e99cd9a644fe2506b612d753bbee3c69c321ee6df7"
     }
   ],
   "memoryContract": {

@@ -56,6 +56,7 @@ export class UpstreamWorkerAdapter {
     collectMetrics = false,
     legacyOneWayAck = false,
     wgpuReplayDiagnostics = false,
+    wgpuAtomicPassReplay = true,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -98,6 +99,7 @@ export class UpstreamWorkerAdapter {
     this.collectMetrics = Boolean(collectMetrics);
     this.legacyOneWayAck = Boolean(legacyOneWayAck);
     this.wgpuReplayDiagnostics = Boolean(wgpuReplayDiagnostics);
+    this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -239,6 +241,7 @@ export class UpstreamWorkerAdapter {
       legacyOneWayAck: this.legacyOneWayAck,
       coreSelection: this.coreSelectionTelemetry(window.location.href),
       wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
+      wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,

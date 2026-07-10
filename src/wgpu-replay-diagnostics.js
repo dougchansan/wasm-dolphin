@@ -5,6 +5,10 @@ export function requestedWgpuReplayDiagnostics(search = globalThis.location?.sea
   return new URLSearchParams(search).get("wgpuclassify") === "1";
 }
 
+export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuatomic") !== "0";
+}
+
 export function selectAtomicReplayLimit({
   read,
   write,
@@ -40,6 +44,7 @@ export function selectAtomicReplayLimit({
 export function createWgpuReplayClassifier({
   maxEvents = DEFAULT_MAX_EVENTS,
   maxMissingIdsPerKind = DEFAULT_MAX_MISSING_IDS_PER_KIND,
+  scope = "session",
   now = () => performance.now()
 } = {}) {
   const events = [];
@@ -52,6 +57,7 @@ export function createWgpuReplayClassifier({
     beginCount: 0,
     explicitEndCount: 0,
     splitAtDrainCount: 0,
+    heldIncompletePassCount: 0,
     recordsOutsidePass: 0
   };
   const missingResources = {
@@ -66,7 +72,9 @@ export function createWgpuReplayClassifier({
     clearCount: 0,
     drawCount: 0,
     readbackCount: 0,
+    postDrawReadbackCount: 0,
     nonzeroReadbackCount: 0,
+    drawCountAtLastReadback: 0,
     lastNonzeroBytes: 0,
     lastMaxByte: 0
   };
@@ -117,6 +125,11 @@ export function createWgpuReplayClassifier({
     recordEvent("state-outside-pass", { op, recordIndex });
   }
 
+  function recordAtomicHold({ recordIndex = 0, writeIndex = 0 } = {}) {
+    passAtomicity.heldIncompletePassCount += 1;
+    recordEvent("incomplete-pass-held", { recordIndex, writeIndex });
+  }
+
   function recordMissingResource({ kind = "unknown", id = 0 } = {}) {
     missingResources.total += 1;
     missingResources.counts[kind] = (missingResources.counts[kind] || 0) + 1;
@@ -145,9 +158,16 @@ export function createWgpuReplayClassifier({
     }
   }
 
-  function recordEfbReadback({ framebufferId = 0, nonzeroBytes = 0, maxByte = 0 } = {}) {
+  function recordEfbReadback({
+    framebufferId = 0,
+    nonzeroBytes = 0,
+    maxByte = 0,
+    drawCountAtEncode = efbMutation.drawCount
+  } = {}) {
     efbMutation.framebufferId = framebufferId >>> 0;
     efbMutation.readbackCount += 1;
+    efbMutation.drawCountAtLastReadback = drawCountAtEncode;
+    if (drawCountAtEncode > 0) efbMutation.postDrawReadbackCount += 1;
     efbMutation.lastNonzeroBytes = nonzeroBytes;
     efbMutation.lastMaxByte = maxByte;
     if (nonzeroBytes > 0) {
@@ -160,6 +180,14 @@ export function createWgpuReplayClassifier({
         recordEvent("first-nonzero-efb", { framebufferId, nonzeroBytes, maxByte });
       }
     }
+  }
+
+  function captureEfbDrawCount() {
+    return efbMutation.drawCount;
+  }
+
+  function needsPostDrawEfbReadback(minimumDrawCount = 64) {
+    return efbMutation.drawCount >= minimumDrawCount && efbMutation.postDrawReadbackCount === 0;
   }
 
   function recordPresentCommand({ recordIndex = 0 } = {}) {
@@ -184,7 +212,7 @@ export function createWgpuReplayClassifier({
       passAtomicity.explicitEndCount ? "pass" : "pending";
     missingResources.status = missingResources.total ? "fail" : "pending";
     efbMutation.status = efbMutation.nonzeroReadbackCount ? "pass" :
-      efbMutation.drawCount && efbMutation.readbackCount ? "fail" : "pending";
+      efbMutation.postDrawReadbackCount ? "fail" : "pending";
     presentSubmission.status = presentSubmission.errorCount ? "fail" :
       presentSubmission.completedCount ? "pass" : presentSubmission.submittedCount ? "running" : "pending";
 
@@ -192,11 +220,16 @@ export function createWgpuReplayClassifier({
     if (passAtomicity.splitAtDrainCount) classifier = { status: "fail", code: "PASS_SPLIT_AT_DRAIN" };
     else if (missingResources.total) classifier = { status: "fail", code: "MISSING_RESOURCES" };
     else if (efbMutation.nonzeroReadbackCount && presentSubmission.completedCount) classifier = { status: "pass", code: "PASS" };
-    else if (efbMutation.drawCount && efbMutation.readbackCount) classifier = { status: "fail", code: "EFB_DRAW_NO_MUTATION" };
+    else if (efbMutation.postDrawReadbackCount) classifier = { status: "fail", code: "EFB_DRAW_NO_MUTATION" };
+    else if (efbMutation.drawCount && efbMutation.readbackCount) classifier = {
+      status: "running",
+      code: "WAITING_FOR_POST_DRAW_EFB_READBACK"
+    };
     else if (firstRealDraw.status === "pass") classifier = { status: "running", code: "WAITING_FOR_EFB_READBACK" };
 
     return structuredClone({
       schema: "wasm-dolphin.wgpu-replay-classifier.v1",
+      scope,
       classifier,
       stages: {
         passAtomicity,
@@ -215,10 +248,13 @@ export function createWgpuReplayClassifier({
     recordPassBegin,
     recordPassEnd,
     recordStateOutsidePass,
+    recordAtomicHold,
     recordMissingResource,
     recordEfbClear,
     recordRealDraw,
     recordEfbReadback,
+    captureEfbDrawCount,
+    needsPostDrawEfbReadback,
     recordPresentCommand,
     recordSubmission,
     recordPresentCompletion,

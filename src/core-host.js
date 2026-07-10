@@ -7,7 +7,10 @@ import {
   requestedLegacyOneWayAck,
   requestedUpstreamCoreBuild
 } from "./upstream-worker-protocol.js";
-import { requestedWgpuReplayDiagnostics } from "./wgpu-replay-diagnostics.js";
+import {
+  requestedWgpuAtomicPassReplay,
+  requestedWgpuReplayDiagnostics
+} from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 
@@ -57,6 +60,7 @@ export class EmulatorHost {
     this.collectMetrics = requestedCollectMetrics();
     this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.wgpuReplayDiagnostics = requestedWgpuReplayDiagnostics(window.location.search);
+    this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
     // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
@@ -253,7 +257,8 @@ export class EmulatorHost {
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,
-            wgpuReplayDiagnostics: this.wgpuReplayDiagnostics
+            wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
+            wgpuAtomicPassReplay: this.wgpuAtomicPassReplay
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";
