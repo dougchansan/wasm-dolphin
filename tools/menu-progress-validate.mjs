@@ -1437,6 +1437,13 @@ async function capture(page, name) {
 }
 
 async function importPlaywright() {
+  if (process.env.PLAYWRIGHT_MODULE) {
+    const configured = path.resolve(process.env.PLAYWRIGHT_MODULE);
+    if (!existsSync(configured)) {
+      throw new Error(`PLAYWRIGHT_MODULE does not exist: ${configured}`);
+    }
+    return import(pathToFileURL(configured).href);
+  }
   const local = path.join(root, ".omx", "browser-probe", "node_modules", "playwright", "index.mjs");
   if (existsSync(local)) return import(pathToFileURL(local).href);
   return import("playwright");
