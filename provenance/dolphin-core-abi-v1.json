@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+  "coreId": "sha256:158dde37602442bf1dacf42328501082b46b47768b2455946fcb4c596fcdb5ea",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 261224,
-      "sha256": "00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658"
+      "size": 261633,
+      "sha256": "56c62ffc376806049b3442d66df5b72a8685796e39ab79931282fcb286a3b163"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12807931,
-      "sha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a"
+      "size": 12815061,
+      "sha256": "158dde37602442bf1dacf42328501082b46b47768b2455946fcb4c596fcdb5ea"
     }
   ],
   "contractSources": [
@@ -117,7 +117,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 4667,
-      "sha256": "4e34308f5b4c14a194c0c02f1c3a3287c2a22d15d7b0796d2b7038ef3677f8e6"
+      "sha256": "ca8acc002c214f247d0e2b8e51ddb324767d6bf1422f497de35cde4f9dca5f49"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
@@ -158,9 +158,7 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [
-    "_SetSoftwareRasterProfileEnabled"
-  ],
+  "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",
@@ -258,6 +256,7 @@
     "_SetPpcProfileEnabled",
     "_SetPpcWasmJitEnabled",
     "_SetPresentationScale",
+    "_SetSoftwareRasterProfileEnabled",
     "_SetVideoBackend",
     "_SetXfbFastPaths",
     "_StopCore",
@@ -318,8 +317,8 @@
     }
   },
   "limitations": [
-    "The active snapshot series captures the ignored vendor delta, but a hermetic rebuild has not yet proven byte or behavioral parity with this baked artifact.",
+    "Two independent builds matched the baked JS, WASM, code, and data identities; gameplay validation remains machine- and scene-specific.",
     "Legacy patches 0001-0009 are research history and are deliberately excluded from the active source lock.",
-    "Runtime selection by core content hash is not yet implemented; the current URL remains the compatibility selector."
+    "The true hardware WebGPU renderer remains experimental and GPU-dependent despite fixed-battle validation on one AMD GPU."
   ]
 }

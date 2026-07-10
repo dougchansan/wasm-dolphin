@@ -232,8 +232,8 @@ test("rebuilt core exports CPU-thread checkpoint capture before renderer resync"
   const manifest = JSON.parse(
     await readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8")
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_SetSoftwareRasterProfileEnabled"]);
-  assert.ok(!manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
+  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, []);
+  assert.ok(manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
   for (const name of [
     "_GetLastLoadedCheckpointGeneration",
     "_GetLastLoadedCoreTicksHigh",

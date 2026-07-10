@@ -44,7 +44,7 @@ test("the locked Dolphin patch reaches each measured phase without changing rend
   assert.doesNotMatch(patch, /fast_software_raster\s*[=+\-]/);
 });
 
-test("the bridge exposes the profiler as pending until a parity rebuild", async () => {
+test("the parity-built core exports the software raster profiler", async () => {
   const [bridge, manifest] = await Promise.all([
     readFile(new URL("../core/upstream/dolphin_web_discio.cpp", import.meta.url), "utf8"),
     readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8").then(JSON.parse),
@@ -55,6 +55,6 @@ test("the bridge exposes the profiler as pending until a parity rebuild", async 
     bridge,
     /void DolphinWeb_RecordVideoOutputProfile[\s\S]*?RasterProfile::PublishGeneratedFrame\(\)/,
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_SetSoftwareRasterProfileEnabled"]);
-  assert.ok(!manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
+  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, []);
+  assert.ok(manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
 });
