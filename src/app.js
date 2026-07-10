@@ -5,10 +5,12 @@ import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import {
   CONTROL_LABELS,
   formatControlLabel,
+  gamepadInputsEqual,
   inputStateFromPressed,
   mergePressedSets,
   readGamepadInput,
   resolveKeyboardButton,
+  selectPreferredGamepad,
   updatePressedSet
 } from "./input.js";
 import {
@@ -115,6 +117,7 @@ const keyboardPressed = new Set();
 let touchPressed = new Set();
 let gamepadPressed = new Set();
 let gamepadInputState = null;
+let lastGamepadInput = null;
 let combinedPressed = new Set();
 let lastFrameInfo = null;
 let lastCausalTelemetry = null;
@@ -801,6 +804,7 @@ function wireGamepadPolling() {
     return;
   }
   const debugGamepad = params.get("gamepaddebug") === "1";
+  const legacyGamepadPoll = params.get("legacygamepadpoll") === "1";
   let _gpLastLog = 0;
   let _gpHud = null;
   if (debugGamepad) {
@@ -842,14 +846,7 @@ function wireGamepadPolling() {
     // assumptions. Fall back to first non-null only if no standard pad
     // is present. Among multiple standard pads, the one with the highest
     // button count usually wins (Xbox Wireless = 17, generic = fewer).
-    const list = Array.from(pads).filter(Boolean);
-    const standard = list.filter((p) => p?.mapping === "standard");
-    const firstPad =
-      (standard.length
-        ? standard.reduce((best, p) =>
-            (p.buttons?.length || 0) > (best.buttons?.length || 0) ? p : best,
-            standard[0])
-        : list[0]) || null;
+    const firstPad = selectPreferredGamepad(pads);
 
     if (debugGamepad) {
       const now = performance.now();
@@ -885,9 +882,14 @@ function wireGamepadPolling() {
       }
     }
 
-    const gamepadInput = readGamepadInput(firstPad);
-    gamepadPressed = gamepadInput.pressed;
-    gamepadInputState = firstPad ? gamepadInput.state : null;
+    const nextGamepadInput = firstPad ? readGamepadInput(firstPad) : null;
+    if (!legacyGamepadPoll && gamepadInputsEqual(lastGamepadInput, nextGamepadInput)) {
+      return;
+    }
+
+    lastGamepadInput = nextGamepadInput;
+    gamepadPressed = nextGamepadInput?.pressed ?? new Set();
+    gamepadInputState = nextGamepadInput?.state ?? null;
 
     if (gamepadPressed.size > 0) {
       syncInput("Gamepad");

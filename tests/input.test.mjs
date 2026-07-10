@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -11,6 +12,8 @@ import {
   pressedFromGamepad,
   readGamepadInput,
   resolveKeyboardButton,
+  gamepadInputsEqual,
+  selectPreferredGamepad,
   updatePressedSet
 } from "../src/input.js";
 
@@ -42,7 +45,7 @@ test("pressed set updates are immutable", () => {
 
 test("gamepad buttons and axes map into pressed controls", () => {
   const gamepad = {
-    axes: [0.5, -0.5, -0.75, 0.75],
+    axes: [0.75, -0.75, -0.75, 0.75],
     buttons: Array.from({ length: 16 }, () => ({ pressed: false }))
   };
   gamepad.buttons[0].pressed = true;
@@ -77,8 +80,55 @@ test("gamepad input exposes analog GameCube pad state", () => {
   assert.equal(state.triggerRight, 0xbf);
   assert.equal(state.stickX, 0xe0);
   assert.equal(state.stickY, 0xe0);
-  assert.equal(state.cStickX, 0x50);
-  assert.equal(state.cStickY, 0x50);
+  assert.equal(state.cStickX, 0x5b);
+  assert.equal(state.cStickY, 0x5b);
+});
+
+test("analog movement below the digital deadzone stays analog-only", () => {
+  const gamepad = {
+    axes: [0.5, -0.5, 0, 0],
+    buttons: Array.from({ length: 16 }, () => ({ pressed: false, value: 0 }))
+  };
+
+  const { pressed, state } = readGamepadInput(gamepad);
+
+  assert.equal(pressed.has("STICK_RIGHT"), false);
+  assert.equal(pressed.has("STICK_UP"), false);
+  assert.ok(state.stickX > DEFAULT_PAD_STATE.stickX);
+  assert.ok(state.stickY > DEFAULT_PAD_STATE.stickY);
+});
+
+test("preferred gamepad selection avoids phantom non-standard devices", () => {
+  const phantom = { mapping: "", buttons: Array(32) };
+  const firstStandard = { mapping: "standard", buttons: Array(12) };
+  const fullStandard = { mapping: "standard", buttons: Array(17) };
+
+  assert.equal(selectPreferredGamepad([phantom, firstStandard, fullStandard]), fullStandard);
+  assert.equal(selectPreferredGamepad([phantom, null]), phantom);
+  assert.equal(selectPreferredGamepad([null]), null);
+});
+
+test("gamepad equality follows the quantized state sent to Dolphin", () => {
+  const neutralPad = {
+    axes: [0, 0, 0, 0],
+    buttons: Array.from({ length: 16 }, () => ({ pressed: false, value: 0 }))
+  };
+  const same = readGamepadInput(neutralPad);
+  const equivalent = readGamepadInput(neutralPad);
+  const moved = readGamepadInput({ ...neutralPad, axes: [0.75, 0, 0, 0] });
+
+  assert.equal(gamepadInputsEqual(same, equivalent), true);
+  assert.equal(gamepadInputsEqual(same, moved), false);
+  assert.equal(gamepadInputsEqual(null, null), true);
+  assert.equal(gamepadInputsEqual(null, same), false);
+});
+
+test("gamepad polling suppresses unchanged sync work with a legacy control", async () => {
+  const source = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  assert.match(source, /legacygamepadpoll/);
+  assert.match(source, /selectPreferredGamepad\(pads\)/);
+  assert.match(source, /gamepadInputsEqual\(lastGamepadInput, nextGamepadInput\)/);
 });
 
 test("digital input produces neutral analog defaults with pressed extremes", () => {
