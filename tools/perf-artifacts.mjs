@@ -930,6 +930,43 @@ export function evaluateMetricsModeEvidence({ requested, diagnostics = {}, sampl
   return { enabled, failures };
 }
 
+export function evaluateSoftwareRasterInstrumentationEvidence({ required = false, samples = [] } = {}) {
+  if (!required) return { required: false, activated: false, maxima: {}, failures: [] };
+
+  const rasterSamples = samples
+    .map((sample) => sample?.causalTelemetry?.softwareRaster)
+    .filter((value) => value && typeof value === "object");
+  const fields = [
+    "rasterTraversalCount",
+    "rasterTraversalTimedSampleCount",
+    "tevPixelCount",
+    "tevTimedSampleCount",
+    "textureSampleCount",
+    "textureTimedSampleCount",
+    "fifoAgeSampleCount",
+    "xfbGenerationCount",
+    "frameGenerationCount",
+    "sampledSourceFrameCount",
+  ];
+  const maxima = Object.fromEntries(
+    fields.map((field) => [
+      field,
+      Math.max(0, ...rasterSamples.map((sample) => Number(sample[field]) || 0)),
+    ])
+  );
+  const missing = fields.filter((field) => !(maxima[field] > 0));
+  const profileEnabled = rasterSamples.some((sample) => sample.profileEnabled === true);
+  const failures = [];
+  if (!profileEnabled) failures.push("software raster profileEnabled=true was not sampled");
+  if (missing.length) failures.push(`software raster counters did not activate: ${missing.join(", ")}`);
+  return {
+    required: true,
+    activated: profileEnabled && missing.length === 0,
+    maxima,
+    failures,
+  };
+}
+
 export async function collectRunMetadata({
   root,
   url,

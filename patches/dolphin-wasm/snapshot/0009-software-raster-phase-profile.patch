@@ -1,0 +1,196 @@
+diff --git a/Source/Core/VideoBackends/Software/Rasterizer.cpp b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+index ced6b9a242..32d864b0aa 100644
+--- a/Source/Core/VideoBackends/Software/Rasterizer.cpp
++++ b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+@@ -20,6 +20,10 @@
+ #include "VideoCommon/VideoCommon.h"
+ #include "VideoCommon/XFMemory.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include "dolphin_web_raster_profile.h"
++#endif
++
+ namespace Rasterizer
+ {
+ #ifdef __EMSCRIPTEN__
+@@ -168,6 +172,10 @@ static void Draw(s32 x, s32 y, s32 xi, s32 yi)
+   if (fast_software_raster > 0 && ((x | y) & 1) != 0)
+     return;
+ 
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::RecordRasterCandidatePixel();
++#endif
++
+   INCSTAT(g_stats.this_frame.rasterized_pixels);
+ 
+   s32 z = (s32)std::clamp<float>(ZSlope.GetValue(x, y), 0.0f, 16777215.0f);
+@@ -389,6 +397,10 @@ static void DrawTriangleFrontFace(const OutputVertexData* v0, const OutputVertex
+                                   const OutputVertexData* v2,
+                                   const BPFunctions::ScissorRect& scissor)
+ {
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::SampledScope profile_scope(
++      DolphinWeb::RasterProfile::Phase::RasterTraversal);
++#endif
+   // The zslope should be updated now, even if the triangle is rejected by the scissor test, as
+   // zfreeze depends on it
+   UpdateZSlope(v0, v1, v2, scissor.x_off, scissor.y_off);
+diff --git a/Source/Core/VideoBackends/Software/SWGfx.cpp b/Source/Core/VideoBackends/Software/SWGfx.cpp
+index 386bd66530..784ee652f8 100644
+--- a/Source/Core/VideoBackends/Software/SWGfx.cpp
++++ b/Source/Core/VideoBackends/Software/SWGfx.cpp
+@@ -16,6 +16,10 @@
+ #include "VideoCommon/NativeVertexFormat.h"
+ #include "VideoCommon/Present.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include "dolphin_web_raster_profile.h"
++#endif
++
+ namespace SW
+ {
+ SWGfx::SWGfx(std::unique_ptr<SWOGLWindow> window) : m_window(std::move(window))
+@@ -113,6 +117,9 @@ std::unique_ptr<AbstractPipeline> SWGfx::CreatePipeline(const AbstractPipelineCo
+ void SWGfx::ShowImage(const AbstractTexture* source_texture,
+                       const MathUtil::Rectangle<int>& source_rc)
+ {
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::PublishGeneratedFrame();
++#endif
+   if (!IsHeadless())
+     m_window->ShowImage(source_texture, source_rc);
+ }
+diff --git a/Source/Core/VideoBackends/Software/Tev.cpp b/Source/Core/VideoBackends/Software/Tev.cpp
+index 7b254cb490..7cff2667bf 100644
+--- a/Source/Core/VideoBackends/Software/Tev.cpp
++++ b/Source/Core/VideoBackends/Software/Tev.cpp
+@@ -21,6 +21,10 @@
+ #include "VideoCommon/VideoCommon.h"
+ #include "VideoCommon/XFMemory.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include "dolphin_web_raster_profile.h"
++#endif
++
+ static inline s16 Clamp255(s16 in)
+ {
+   return std::clamp<s16>(in, 0, 255);
+@@ -386,6 +390,13 @@ void Tev::Indirect(unsigned int stageNum, s32 s, s32 t)
+ 
+ void Tev::Draw()
+ {
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::SampledScope profile_scope(
++      DolphinWeb::RasterProfile::Phase::TevPixel);
++  DolphinWeb::RasterProfile::RecordTevStages(
++      static_cast<std::uint64_t>(bpmem.genMode.numindstages) +
++      static_cast<std::uint64_t>(bpmem.genMode.numtevstages) + 1);
++#endif
+   ASSERT(Position[0] >= 0 && Position[0] < s32(EFB_WIDTH));
+   ASSERT(Position[1] >= 0 && Position[1] < s32(EFB_HEIGHT));
+ 
+diff --git a/Source/Core/VideoBackends/Software/TextureSampler.cpp b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+index 000dfc632b..befe33eb88 100644
+--- a/Source/Core/VideoBackends/Software/TextureSampler.cpp
++++ b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+@@ -15,6 +15,10 @@
+ #include "VideoCommon/BPMemory.h"
+ #include "VideoCommon/TextureDecoder.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include "dolphin_web_raster_profile.h"
++#endif
++
+ #define ALLOW_MIPMAP 1
+ 
+ namespace TextureSampler
+@@ -71,6 +75,10 @@ static inline void AddTexel(const u8* inTexel, u32* outTexel, u32 fract)
+ 
+ void Sample(s32 s, s32 t, s32 lod, bool linear, u8 texmap, u8* sample)
+ {
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::SampledScope profile_scope(
++      DolphinWeb::RasterProfile::Phase::TextureSample);
++#endif
+   int baseMip = 0;
+   bool mipLinear = false;
+ 
+diff --git a/Source/Core/VideoCommon/CMakeLists.txt b/Source/Core/VideoCommon/CMakeLists.txt
+index 69a0968e4d..c7fbe232d0 100644
+--- a/Source/Core/VideoCommon/CMakeLists.txt
++++ b/Source/Core/VideoCommon/CMakeLists.txt
+@@ -289,6 +289,10 @@ if(FFmpeg_FOUND)
+   endif()
+ endif()
+ 
++if(EMSCRIPTEN AND DOLPHIN_WASM_SHARED_SOURCE_DIR)
++  target_include_directories(videocommon PRIVATE "${DOLPHIN_WASM_SHARED_SOURCE_DIR}")
++endif()
++
+ if(MSVC)
+   # Add precompiled header
+   target_link_libraries(videocommon PRIVATE use_pch)
+diff --git a/Source/Core/VideoCommon/CommandProcessor.cpp b/Source/Core/VideoCommon/CommandProcessor.cpp
+index bfd2f036fa..3358214e8e 100644
+--- a/Source/Core/VideoCommon/CommandProcessor.cpp
++++ b/Source/Core/VideoCommon/CommandProcessor.cpp
+@@ -23,6 +23,7 @@
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+ #include <pthread.h>
++#include "dolphin_web_raster_profile.h"
+ #endif
+ 
+ namespace CommandProcessor
+@@ -409,7 +410,11 @@ void CommandProcessorManager::GatherPipeBursted()
+   if (m_fifo.bFF_HiWatermark.load(std::memory_order_relaxed) != 0)
+     m_system.GetCoreTiming().ForceExceptionCheck(0);
+ 
+-  m_fifo.CPReadWriteDistance.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
++  const u32 previous_distance =
++      m_fifo.CPReadWriteDistance.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
++#ifdef __EMSCRIPTEN__
++  DolphinWeb::RasterProfile::RecordFifoBurst(previous_distance, GPFifo::GATHER_PIPE_SIZE);
++#endif
+ 
+   m_system.GetFifo().RunGpu();
+ 
+diff --git a/Source/Core/VideoCommon/Fifo.cpp b/Source/Core/VideoCommon/Fifo.cpp
+index 2d3f0c3a9d..dc982f46b9 100644
+--- a/Source/Core/VideoCommon/Fifo.cpp
++++ b/Source/Core/VideoCommon/Fifo.cpp
+@@ -35,6 +35,7 @@
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+ #include <pthread.h>
++#include "dolphin_web_raster_profile.h"
+ #endif
+ 
+ namespace Fifo
+@@ -420,7 +421,12 @@ void FifoManager::RunGpuLoop()
+ #endif
+ 
+             fifo.CPReadPointer.store(readPtr, std::memory_order_relaxed);
+-            fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
++            const u32 previous_distance = fifo.CPReadWriteDistance.fetch_sub(
++                GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
++#ifdef __EMSCRIPTEN__
++            DolphinWeb::RasterProfile::RecordFifoConsume(
++                previous_distance - GPFifo::GATHER_PIPE_SIZE);
++#endif
+             if ((write_ptr - m_video_buffer_read_ptr) == 0)
+             {
+               fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
+@@ -560,7 +566,11 @@ int FifoManager::RunGpuOnCpu(int ticks)
+       fifo.CPReadPointer.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
+     }
+ 
+-    fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
++    const u32 previous_distance = fifo.CPReadWriteDistance.fetch_sub(
++        GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
++#ifdef __EMSCRIPTEN__
++    DolphinWeb::RasterProfile::RecordFifoConsume(previous_distance - GPFifo::GATHER_PIPE_SIZE);
++#endif
+   }
+ 
+   command_processor.SetCPStatusFromGPU();

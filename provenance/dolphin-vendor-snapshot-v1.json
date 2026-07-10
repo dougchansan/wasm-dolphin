@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42",
-    "changedPathCount": 88,
+    "resultTree": "6efee0a74614a28a9381f073301520396fde1e3f",
+    "changedPathCount": 91,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -443,9 +443,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "2839e05b7392206a2e73a61672765a3a4bb0fca3",
-        "resultBlob": "ced6b9a24291ea78d5b44222eeca1fbb589d1df6",
-        "size": 17925,
-        "sha256": "3a94e931324ab537f0951b6a7feca918aa80298f9ef44cfe48a51f9017fadb9b"
+        "resultBlob": "32d864b0aa24a86e78ba523b5859d4afc98b0a6c",
+        "size": 18228,
+        "sha256": "775b8ae444363c764589c67fb94ff10f76fa5bd9dda72e73d22819d09dc2de04"
       },
       {
         "path": "Source/Core/VideoBackends/Software/SWEfbInterface.cpp",
@@ -461,9 +461,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "7004c508644c92aa43cb753cd8b813e29ebc6355",
-        "resultBlob": "386bd6653089cc3e0e0c1e1ba8bd48ce9946dae4",
-        "size": 4872,
-        "sha256": "6556eef0a68c2c7937760d179620856d0d3dda9d8d74701676e772924aebdf76"
+        "resultBlob": "784ee652f87063138d761fcb3a0101c694314e5a",
+        "size": 5025,
+        "sha256": "a27e11dd32df2f857b2a4f83c49850ea78001825bee8522792f17714430f4ff7"
       },
       {
         "path": "Source/Core/VideoBackends/Software/SWOGLWindow.cpp",
@@ -473,6 +473,24 @@
         "resultBlob": "7f2b5f0f31eeaec994ec08727659ed68d52b5e8b",
         "size": 3908,
         "sha256": "3eaca30e5877c3d1b05644cb4d79eeda1259db938a6d8a8f690b97c178bcf76b"
+      },
+      {
+        "path": "Source/Core/VideoBackends/Software/Tev.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "7b254cb490d73c771104a6ff5a84041245820ad8",
+        "resultBlob": "7cff2667bf6c9bd152a5be270790d8b910b8cd84",
+        "size": 22939,
+        "sha256": "c7620333303bed332bf7d35a1ee0ef7ba56a147ce7f8e958047bfafe408f9dac"
+      },
+      {
+        "path": "Source/Core/VideoBackends/Software/TextureSampler.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "000dfc632bcfcfd5646c8e878be28679c3613a54",
+        "resultBlob": "befe33eb8826f99aef73a3da4a95dac4af37395e",
+        "size": 8787,
+        "sha256": "195781680bff436c70adedac6def3bf92a81cc60645fcdff74071e24976c269e"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/CMakeLists.txt",
@@ -637,13 +655,22 @@
         "sha256": "df92965cb8a387772d5bb89cef3ebdb2893f7a957b2b54299faf7191eddb5cfa"
       },
       {
+        "path": "Source/Core/VideoCommon/CMakeLists.txt",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "69a0968e4d883105ae108ffb3466bbf2d72cc91e",
+        "resultBlob": "c7fbe232d08915d08bda00c8b0b6e6c7d148a873",
+        "size": 7329,
+        "sha256": "f4f4c02345cc2db7951fb5c92d1178ee70d904e6441155f6cc598e08be76b83e"
+      },
+      {
         "path": "Source/Core/VideoCommon/CommandProcessor.cpp",
         "status": "M",
         "mode": "100644",
         "baseBlob": "1dbf466f1c9f72a7498c0fd0711a297e16698e80",
-        "resultBlob": "bfd2f036fa32d43162ac37c60028716b02eb81ee",
-        "size": 30018,
-        "sha256": "bd99e21970c55e3b19a2ac21280b51c586ed1e5c2355ebfae870ad6f17bbce4f"
+        "resultBlob": "3358214e8ef7e5523a52b100d28a8ea6ac15286e",
+        "size": 30214,
+        "sha256": "83ef6d0143ec846febd7c9537f146c6d3ab0c79151f85179da7782360761c0f2"
       },
       {
         "path": "Source/Core/VideoCommon/DriverDetails.cpp",
@@ -668,9 +695,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "f183c9365514cc908bbc3641d55ff8db8c3acfe9",
-        "resultBlob": "2d3f0c3a9d7f0c1bce14fc83f945898d72af7f36",
-        "size": 22949,
-        "sha256": "576a5a8651db68bd3fa3dad9b3e9b0919a720b765042ef222f545d3bc213e4eb"
+        "resultBlob": "dc982f46b983e5005f9b25b7fd419b366ad6d041",
+        "size": 23350,
+        "sha256": "faf453b3a50054e6b6c7e5cc634b457f6c343600c14e98ceb44c1184f8c8d46d"
       },
       {
         "path": "Source/Core/VideoCommon/FramebufferManager.cpp",
@@ -834,5 +861,5 @@
       ]
     }
   ],
-  "contentSha256": "1fb1d24047f517aa7b6edca9cac38592bb61f5dfc7c6f27206fee81cf6822902"
+  "contentSha256": "991edaaeddd509919545297b20616c7820c97de934cf8792278d2e347cbb437f"
 }

@@ -6,6 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
+import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
+
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
   assertBattleCheckpoint,
@@ -15,6 +17,7 @@ import {
   buildReplacementBlock,
   classifyGateOutcome,
   evaluateMetricsModeEvidence,
+  evaluateSoftwareRasterInstrumentationEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -548,7 +551,11 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
     evaluateMetricsModeEvidence({
       requested: "0",
       diagnostics: { enabled: true, helperStatsCalls: 1, profileStatsCalls: 1, profileTimeSamples: 1 },
-      samples: [{ helper: "metrics:on", causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION, causalTelemetry: {} }],
+      samples: [{
+        helper: "metrics:on",
+        causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        causalTelemetry: {},
+      }],
     }).failures.join(" | "),
     /requested metrics=0.*enabled=true.*helperStatsCalls=1.*causal telemetry was present/
   );
@@ -559,6 +566,42 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
       samples: [{ helper: "metrics:off", causalTelemetrySchemaVersion: null, causalTelemetry: null }],
     }).failures.join(" | "),
     /requested metrics=1.*enabled=false.*helperStatsCalls=0.*missing or unsupported causal telemetry schema/
+  );
+});
+
+test("software raster evidence requires every phase and sampled timing to activate", () => {
+  const telemetry = {
+    softwareRaster: {
+      profileEnabled: true,
+      rasterTraversalCount: 10,
+      rasterTraversalTimedSampleCount: 1,
+      tevPixelCount: 20,
+      tevTimedSampleCount: 1,
+      textureSampleCount: 30,
+      textureTimedSampleCount: 1,
+      fifoAgeSampleCount: 4,
+      xfbGenerationCount: 2,
+      frameGenerationCount: 2,
+      sampledSourceFrameCount: 2,
+    },
+  };
+  const active = evaluateSoftwareRasterInstrumentationEvidence({
+    required: true,
+    samples: [{ causalTelemetry: telemetry }],
+  });
+  assert.equal(active.activated, true);
+  assert.deepEqual(active.failures, []);
+
+  const inactive = evaluateSoftwareRasterInstrumentationEvidence({
+    required: true,
+    samples: [{ causalTelemetry: { softwareRaster: { profileEnabled: true } } }],
+  });
+  assert.equal(inactive.activated, false);
+  assert.match(inactive.failures.join(" | "), /rasterTraversalCount.*textureTimedSampleCount.*frameGenerationCount/);
+
+  assert.deepEqual(
+    evaluateSoftwareRasterInstrumentationEvidence({ required: false, samples: [] }).failures,
+    []
   );
 });
 

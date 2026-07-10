@@ -40,6 +40,43 @@ export function createCausalTelemetry(overrides = {}) {
         encodeTotalMs: null,
         encodeConvertMs: null,
         encodeCopyMs: null,
+        profileEnabled: false,
+        rasterTraversalCount: 0,
+        rasterTraversalTimedSampleCount: 0,
+        rasterTraversalSampledTotalMs: null,
+        rasterTraversalSampledAverageMs: null,
+        rasterCandidatePixelCount: 0,
+        tevPixelCount: 0,
+        tevStageCount: 0,
+        tevTimedSampleCount: 0,
+        tevSampledTotalMs: null,
+        tevSampledAverageMs: null,
+        textureSampleCount: 0,
+        textureTimedSampleCount: 0,
+        textureSampledTotalMs: null,
+        textureSampledAverageMs: null,
+        fifoBurstCount: 0,
+        fifoConsumeCount: 0,
+        fifoBytesLast: 0,
+        fifoBytesMax: 0,
+        fifoOldestPendingAgeLastMs: null,
+        fifoOldestPendingAgeMaxMs: null,
+        fifoAgeSampleCount: 0,
+        xfbGenerationCount: 0,
+        xfbGenerationLastMs: null,
+        xfbGenerationTotalMs: null,
+        xfbGenerationMaxMs: null,
+        frameGenerationCount: 0,
+        frameGenerationIntervalLastMs: null,
+        frameGenerationIntervalAverageMs: null,
+        frameGenerationIntervalMaxMs: null,
+        sampledSourceFrameCount: 0,
+        sampledUniqueFrameCount: 0,
+        sampledStaleFrameCount: 0,
+        sampledStaleFrameRatio: 0,
+        sampledStaleFrameRunLast: 0,
+        sampledStaleFrameRunMax: 0,
+        staleRepaintCount: 0,
       },
       presentation: {
         backend: "none",
@@ -180,6 +217,22 @@ export function parseCoreProfileTelemetry(text = "") {
   const nonZero = /\bnz:(\d+)/i.exec(source);
   const profile = /\bcoreprof\s+xfb_dt:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+decode:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+vo_sync:([\d.]+)\/max([\d.]+)\s+vo_pub:([\d.]+)\/max([\d.]+)\s+vo_total:([\d.]+)\/max([\d.]+)\s+swxfb:([\d.]+)\s+conv:([\d.]+)\s+copy:([\d.]+)/.exec(source);
   const number = (match, index) => nullable(match?.[index]);
+  const swphase = /\bswphase:(\d+)/i.exec(source);
+  const raster = /\brast:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const tev = /\btev:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const texture = /\btex:(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const fifo = /\bfifo:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const xfbGeneration = /\bxfbgen:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const frameGeneration = /\bframegen:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const micros = (match, index) => {
+    const value = number(match, index);
+    return value == null ? null : value / 1000;
+  };
+  const sampledAverage = (match, totalIndex, countIndex) => {
+    const totalMs = micros(match, totalIndex);
+    const count = finite(match?.[countIndex]);
+    return totalMs == null || count <= 0 ? null : totalMs / count;
+  };
   return {
     sourceXfbCount: finite(xfb?.[1]),
     sourceWidth: finite(xfb?.[2]),
@@ -202,6 +255,39 @@ export function parseCoreProfileTelemetry(text = "") {
     encodeTotalMs: number(profile, 13),
     encodeConvertMs: number(profile, 14),
     encodeCopyMs: number(profile, 15),
+    profileEnabled: swphase?.[1] === "1",
+    rasterTraversalCount: finite(raster?.[1]),
+    rasterTraversalTimedSampleCount: finite(raster?.[2]),
+    rasterTraversalSampledTotalMs: micros(raster, 3),
+    rasterTraversalSampledAverageMs: sampledAverage(raster, 3, 2),
+    rasterCandidatePixelCount: finite(raster?.[4]),
+    tevPixelCount: finite(tev?.[1]),
+    tevStageCount: finite(tev?.[2]),
+    tevTimedSampleCount: finite(tev?.[3]),
+    tevSampledTotalMs: micros(tev, 4),
+    tevSampledAverageMs: sampledAverage(tev, 4, 3),
+    textureSampleCount: finite(texture?.[1]),
+    textureTimedSampleCount: finite(texture?.[2]),
+    textureSampledTotalMs: micros(texture, 3),
+    textureSampledAverageMs: sampledAverage(texture, 3, 2),
+    fifoBurstCount: finite(fifo?.[1]),
+    fifoConsumeCount: finite(fifo?.[2]),
+    fifoBytesLast: finite(fifo?.[3]),
+    fifoBytesMax: finite(fifo?.[4]),
+    fifoOldestPendingAgeLastMs: micros(fifo, 5),
+    fifoOldestPendingAgeMaxMs: micros(fifo, 6),
+    fifoAgeSampleCount: finite(fifo?.[7]),
+    xfbGenerationCount: finite(xfbGeneration?.[1]),
+    xfbGenerationLastMs: micros(xfbGeneration, 2),
+    xfbGenerationTotalMs: micros(xfbGeneration, 3),
+    xfbGenerationMaxMs: micros(xfbGeneration, 4),
+    frameGenerationCount: finite(frameGeneration?.[1]),
+    frameGenerationIntervalLastMs: micros(frameGeneration, 2),
+    frameGenerationIntervalAverageMs:
+      finite(frameGeneration?.[5]) > 0
+        ? (finite(frameGeneration?.[3]) / 1000) / finite(frameGeneration?.[5])
+        : null,
+    frameGenerationIntervalMaxMs: micros(frameGeneration, 4),
   };
 }
 
@@ -247,6 +333,34 @@ export function flattenCausalTelemetry(value) {
     causalSourceXfbCount: telemetry.softwareRaster.sourceXfbCount,
     causalSoftwareEncodeMs: telemetry.softwareRaster.encodeTotalMs,
     causalXfbDecodeMs: telemetry.softwareRaster.xfbDecodeLastMs,
+    causalSoftwareRasterProfileEnabled: telemetry.softwareRaster.profileEnabled,
+    causalRasterTraversalCount: telemetry.softwareRaster.rasterTraversalCount,
+    causalRasterTraversalTimedSamples: telemetry.softwareRaster.rasterTraversalTimedSampleCount,
+    causalRasterTraversalSampledTotalMs: telemetry.softwareRaster.rasterTraversalSampledTotalMs,
+    causalRasterCandidatePixelCount: telemetry.softwareRaster.rasterCandidatePixelCount,
+    causalTevPixelCount: telemetry.softwareRaster.tevPixelCount,
+    causalTevStageCount: telemetry.softwareRaster.tevStageCount,
+    causalTevTimedSamples: telemetry.softwareRaster.tevTimedSampleCount,
+    causalTevSampledTotalMs: telemetry.softwareRaster.tevSampledTotalMs,
+    causalTextureSampleCount: telemetry.softwareRaster.textureSampleCount,
+    causalTextureTimedSamples: telemetry.softwareRaster.textureTimedSampleCount,
+    causalTextureSampledTotalMs: telemetry.softwareRaster.textureSampledTotalMs,
+    causalFifoBytesLast: telemetry.softwareRaster.fifoBytesLast,
+    causalFifoBytesMax: telemetry.softwareRaster.fifoBytesMax,
+    causalFifoOldestPendingAgeLastMs: telemetry.softwareRaster.fifoOldestPendingAgeLastMs,
+    causalFifoOldestPendingAgeMaxMs: telemetry.softwareRaster.fifoOldestPendingAgeMaxMs,
+    causalXfbGenerationCount: telemetry.softwareRaster.xfbGenerationCount,
+    causalXfbGenerationLastMs: telemetry.softwareRaster.xfbGenerationLastMs,
+    causalFrameGenerationCount: telemetry.softwareRaster.frameGenerationCount,
+    causalFrameGenerationIntervalLastMs: telemetry.softwareRaster.frameGenerationIntervalLastMs,
+    causalFrameGenerationIntervalAverageMs: telemetry.softwareRaster.frameGenerationIntervalAverageMs,
+    causalFrameGenerationIntervalMaxMs: telemetry.softwareRaster.frameGenerationIntervalMaxMs,
+    causalSampledSourceFrameCount: telemetry.softwareRaster.sampledSourceFrameCount,
+    causalSampledUniqueFrameCount: telemetry.softwareRaster.sampledUniqueFrameCount,
+    causalSampledStaleFrameCount: telemetry.softwareRaster.sampledStaleFrameCount,
+    causalSampledStaleFrameRatio: telemetry.softwareRaster.sampledStaleFrameRatio,
+    causalSampledStaleFrameRunMax: telemetry.softwareRaster.sampledStaleFrameRunMax,
+    causalStaleRepaintCount: telemetry.softwareRaster.staleRepaintCount,
     causalJsCaptureMs: telemetry.presentation.js.capture.averageMs,
     causalJsCopyMs: telemetry.presentation.js.copy.averageMs,
     causalJsDrawMs: telemetry.presentation.js.draw.averageMs,

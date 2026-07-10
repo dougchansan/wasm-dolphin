@@ -17,6 +17,11 @@ import {
   stageWindowFromProfile
 } from "./causal-telemetry.js";
 import {
+  createFrameReuseTelemetry,
+  frameReuseTelemetryPayload,
+  recordSampledSourceFrame
+} from "./frame-reuse-telemetry.js";
+import {
   createWgpuReplayClassifier,
   selectAtomicReplayLimit
 } from "./wgpu-replay-diagnostics.js";
@@ -224,6 +229,7 @@ let presentationQueueDepthHighWater = 0;
 let immediateFreshFrameCount = 0;
 let queuedFreshFrameCount = 0;
 let tickRepaintCount = 0;
+let frameReuseTelemetry = createFrameReuseTelemetry();
 let lastCapturedCoreFrame = -1;
 let coreBoot = {
   attempted: false,
@@ -425,6 +431,7 @@ async function handleMessage(type, payload) {
       inputVisibleLatencyTracker = createInputVisibleLatencyTracker({
         enabled: inputLatencyDiagnostics
       });
+      frameReuseTelemetry = createFrameReuseTelemetry();
       legacyOneWayAck = Boolean(payload.legacyOneWayAck);
       workerTransportStats.legacyOneWayAck = legacyOneWayAck;
       if (payload.inputStateSab instanceof SharedArrayBuffer) {
@@ -949,6 +956,7 @@ async function loadCore({
   api.setPresentationScale?.(Number(presentationScale));
   api.setFastSoftwareRaster?.(Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)));
   api.setXfbFastPaths?.((Number(xfbFastPaths) || 0) & 3);
+  api.setSoftwareRasterProfileEnabled?.(collectMetrics ? 1 : 0);
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -1026,6 +1034,10 @@ function bindApi(module) {
     setXfbFastPaths:
       typeof module._SetXfbFastPaths === "function"
         ? (flags) => ccall("SetXfbFastPaths", "number", ["number"], [flags | 0])
+        : null,
+    setSoftwareRasterProfileEnabled:
+      typeof module._SetSoftwareRasterProfileEnabled === "function"
+        ? (enabled) => ccall("SetSoftwareRasterProfileEnabled", "number", ["number"], [enabled ? 1 : 0])
         : null,
     setCachedInterpreterDisableMask:
       typeof module._SetCachedInterpreterDisableMask === "function"
@@ -1586,7 +1598,10 @@ function maybeCreateCausalTelemetry(videoStats) {
       loadedCheckpointTicks: loadedCheckpoint.ticks,
       loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
     },
-    softwareRaster: parseCoreProfileTelemetry(videoStats),
+    softwareRaster: {
+      ...parseCoreProfileTelemetry(videoStats),
+      ...frameReuseTelemetryPayload(frameReuseTelemetry, tickRepaintCount),
+    },
     presentation: {
       backend: renderBackend,
       pacingMode: presentationPacingMode,
@@ -2313,7 +2328,7 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   finishProfileSample("draw", drawStartedAt);
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(frameView));
+  recordVisualFrameHash(hashFrameBytes(frameView), true);
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -2425,7 +2440,7 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
   }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(bytes));
+  recordVisualFrameHash(hashFrameBytes(bytes), true);
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -2449,13 +2464,16 @@ function hashFrameBytes(bytes) {
   return hash >>> 0;
 }
 
-function recordVisualFrameHash(hash) {
+function recordVisualFrameHash(hash, sampledSourceFrame = false) {
   if (!hash) {
     return;
   }
 
   visualFrameHash = hash >>> 0;
-  recordInputVisibleObservation(visualFrameHash);
+      recordInputVisibleObservation(visualFrameHash);
+      if (sampledSourceFrame && causalMetricsEnabled) {
+        recordSampledSourceFrame(frameReuseTelemetry, visualFrameHash);
+      }
   if (lastVisualFrameHash && visualFrameHash !== lastVisualFrameHash) {
     visualChangesSincePresentationFps += 1;
   }

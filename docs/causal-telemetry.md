@@ -6,6 +6,10 @@
 at field meanings. Existing `ppcWasmHelperStats` and `frameProfileStats`
 strings remain available for compatibility.
 
+Schema v2 adds metrics-gated software-raster phase and sampled stale-frame
+fields. See [Software raster phase profiling](software-raster-profiling.md) for
+sampling semantics and the required parity-rebuild handoff.
+
 The performance gate writes the complete object to `samples.json` and each
 `sample` event in `events.jsonl`. `samples.csv` contains the JSON object plus
 fixed `causal*` columns for the main classification fields. A run manifest
@@ -17,7 +21,7 @@ schema.
 | Group | Measurements |
 | --- | --- |
 | `core` | frame, live worker-observed ticks/PC, tick rate, and CPU-thread after-load checkpoint generation/ticks/PC |
-| `softwareRaster` | source XFB count/dimensions/stride/hash/nonzero count, XFB interval/decode, video-output sync/publish/total, and software encode/convert/copy times |
+| `softwareRaster` | source XFB identity/timing, software encode/convert/copy, sampled traversal/TEV/texture phases, FIFO age/bytes, XFB and frame generation, and sampled stale-frame reuse |
 | `presentation` | backend, pacing and fresh-frame route, immediate/queued/tick-repaint counts, queue current/high-water depth and last/average/max age, lag, underruns/drops, interval and FPS fields, structured JS stage windows, and opt-in asynchronous GPU-completion samples |
 | `webgpu` | command-ring registration, drain/empty/processed counts, drain duration, backlog/high-water, deferrals, and errors |
 | `workerTraffic` | request/one-way/response/notification counts, actual transferable bytes, estimated payload bytes, and per-type counts |

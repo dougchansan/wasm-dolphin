@@ -20,8 +20,14 @@
     {
       "path": "core/upstream/dolphin_web_discio.cpp",
       "hashMode": "lf-normalized",
-      "size": 37142,
-      "sha256": "0fec5f15d1323f52e8036ac00dd382eeada01b83e9461f99cf88a49e0208bef7"
+      "size": 38909,
+      "sha256": "faa1d663976134022d6c041834a052f87b8d280f423421cf549049d35d9d06f8"
+    },
+    {
+      "path": "core/upstream/dolphin_web_raster_profile.h",
+      "hashMode": "lf-normalized",
+      "size": 12961,
+      "sha256": "c373ae98c2b21c98b9b4a9fd7db44bf06bffbd085c89d459c6593bb086710137"
     },
     {
       "path": "core/upstream/dolphin_web_xfb_fastpaths.h",
@@ -50,8 +56,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 12783,
-      "sha256": "34b6330984ef5ee438835806bc7fb900bb6dff9c1f63131c0bc48fbc50c9f1e0"
+      "size": 16817,
+      "sha256": "be929663605c10a7fa47a7ef3e831d020aa58b78a0a6c721d19c235898302202"
     },
     {
       "path": "src/core-host.js",
@@ -72,6 +78,12 @@
       "sha256": "3ea5319cf5707b75edd951d0e2d504ef056e6b72acb46b3f679b031d6d4e056a"
     },
     {
+      "path": "src/frame-reuse-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 1695,
+      "sha256": "92edb198e314d429cbf6671b289a64e17d3e4d258921af2dff2ed71eb21da519"
+    },
+    {
       "path": "src/main-profiler.js",
       "hashMode": "lf-normalized",
       "size": 16968,
@@ -86,8 +98,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 295438,
-      "sha256": "f1dc54b580904bca8874452274c889c07ad464953f940d66de02123275ac8474"
+      "size": 293576,
+      "sha256": "8d40ca3e2a30f40330b00854ce6f6671c7fafb6ea7df3a91b9b5e95165a4dbd9"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -140,7 +152,9 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [],
+  "sourceOnlyExportsPendingRebuild": [
+    "_SetSoftwareRasterProfileEnabled"
+  ],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",

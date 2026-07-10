@@ -4,6 +4,8 @@
   confidence levels.
 - [Causal performance telemetry](causal-telemetry.md) — versioned core,
   raster, presentation, worker, WebGPU, audio, and input measurements.
+- [Software raster phase profiling](software-raster-profiling.md) —
+  metrics-gated traversal, TEV, texture, FIFO, XFB, and stale-frame evidence.
 - [Rendering modes](rendering-modes.md) — canonical meanings of `video` and
   `presenter` URL flags.
 - [JIT flags](jit-flags.md) — PPC-to-WASM JIT controls, safety defaults, and

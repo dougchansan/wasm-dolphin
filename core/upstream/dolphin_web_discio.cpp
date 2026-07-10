@@ -27,6 +27,7 @@
 #include "VideoCommon/Statistics.h"
 
 #include "dolphin_web_xfb_fastpaths.h"
+#include "dolphin_web_raster_profile.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/atomic.h>
@@ -361,6 +362,32 @@ std::string XfbProfileStats()
   return out.str();
 }
 
+std::string RasterProfileStats()
+{
+  if (!DolphinWeb::RasterProfile::Enabled())
+    return {};
+  const DolphinWeb::RasterProfile::Snapshot profile = DolphinWeb::RasterProfile::Capture();
+
+  std::ostringstream out;
+  out << " swphase:1"
+      << " rast:" << profile.raster.calls << "/" << profile.raster.timed_samples << "/"
+      << profile.raster.sampled_total_us << "/" << profile.raster_candidate_pixels
+      << " tev:" << profile.tev.calls << "/" << profile.tev_stages << "/"
+      << profile.tev.timed_samples << "/" << profile.tev.sampled_total_us
+      << " tex:" << profile.texture.calls << "/" << profile.texture.timed_samples << "/"
+      << profile.texture.sampled_total_us
+      << " fifo:" << profile.fifo_burst_count << "/" << profile.fifo_consume_count << "/"
+      << profile.fifo_bytes_last << "/" << profile.fifo_bytes_max << "/"
+      << profile.fifo_age_last_us << "/" << profile.fifo_age_max_us << "/"
+      << profile.fifo_age_sample_count
+      << " xfbgen:" << profile.xfb_generation_count << "/" << profile.xfb_generation_last_us
+      << "/" << profile.xfb_generation_total_us << "/" << profile.xfb_generation_max_us
+      << " framegen:" << profile.frame_generation_count << "/"
+      << profile.frame_interval_last_us << "/" << profile.frame_interval_total_us << "/"
+      << profile.frame_interval_max_us << "/" << profile.frame_interval_count;
+  return out.str();
+}
+
 std::string OglSwapStats()
 {
   std::ostringstream out;
@@ -546,6 +573,15 @@ int SetXfbFastPaths(int flags)
   return static_cast<int>(normalized);
 }
 
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int SetSoftwareRasterProfileEnabled(int enabled)
+{
+  DolphinWeb::RasterProfile::SetEnabled(enabled != 0);
+  return DolphinWeb::RasterProfile::Enabled() ? 1 : 0;
+}
+
 void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t publish_us,
                                          std::uint32_t total_us)
 {
@@ -574,6 +610,7 @@ void DolphinWeb_RecordSoftwareXfbEncodeProfile(std::uint32_t convert_us, std::ui
   s_last_sw_xfb_width.store(width, std::memory_order_relaxed);
   s_last_sw_xfb_height.store(height, std::memory_order_relaxed);
   s_last_sw_xfb_dst_height.store(dst_height, std::memory_order_relaxed);
+  DolphinWeb::RasterProfile::RecordXfbGeneration(total_us);
 }
 
 int MountDisc(const char* path)
@@ -866,11 +903,12 @@ const char* GetVideoStats()
     std::ostringstream out;
     out << "xfb:0 vi_top:" << std::hex << vi.GetXFBAddressTop()
         << " vi_bottom:" << vi.GetXFBAddressBottom() << std::dec
-        << " hz:" << vi.GetTargetRefreshRate() << PadDebugStats() << OglSwapStats();
+        << " hz:" << vi.GetTargetRefreshRate() << PadDebugStats() << OglSwapStats()
+        << RasterProfileStats();
     current_video_stats = out.str();
     return current_video_stats.c_str();
   }
-  current_video_stats = s_video_stats + OglSwapStats();
+  current_video_stats = s_video_stats + OglSwapStats() + RasterProfileStats();
   return current_video_stats.c_str();
 }
 

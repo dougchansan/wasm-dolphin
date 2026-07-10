@@ -34,6 +34,12 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.presentation.js.capture.count, 0);
   assert.equal(value.presentation.gpuCompletion.enabled, false);
   assert.equal(value.presentation.gpuCompletion.completedCount, 0);
+  assert.equal(value.softwareRaster.profileEnabled, false);
+  assert.equal(value.softwareRaster.rasterTraversalCount, 0);
+  assert.equal(value.softwareRaster.tevPixelCount, 0);
+  assert.equal(value.softwareRaster.textureSampleCount, 0);
+  assert.equal(value.softwareRaster.fifoOldestPendingAgeLastMs, null);
+  assert.equal(value.softwareRaster.sampledStaleFrameRatio, 0);
   assert.equal(value.audio.underrunCount, 0);
   assert.equal(value.input.ageLastMs, 0);
   assert.equal(value.input.mainGeneration, 0);
@@ -46,7 +52,10 @@ test("core profile text is promoted without changing the compatibility string", 
     "video xfb:77 640x480 stride:1280 present:320x240 hash:4b2d0a3b nz:2048 " +
     "coreprof xfb_dt:16.7 avg:17.1 max:41.2 decode:1.3 avg:1.4 max:2.8 " +
     "vo_sync:0.2/max0.6 vo_pub:0.3/max0.7 vo_total:0.5/max1.1 " +
-    "swxfb:0.9 conv:0.8 copy:0.1";
+    "swxfb:0.9 conv:0.8 copy:0.1 " +
+    "swphase:1 rast:120/4/840/4096 tev:1024/8192/2/410 tex:4096/2/260 " +
+    "fifo:128/127/64/512/900/2400/127 xfbgen:77/900/69300/1800 " +
+    "framegen:77/16600/1278200/41000/76";
   assert.deepEqual(parseCoreProfileTelemetry(source), {
     sourceXfbCount: 77,
     sourceWidth: 640,
@@ -69,6 +78,36 @@ test("core profile text is promoted without changing the compatibility string", 
     encodeTotalMs: 0.9,
     encodeConvertMs: 0.8,
     encodeCopyMs: 0.1,
+    profileEnabled: true,
+    rasterTraversalCount: 120,
+    rasterTraversalTimedSampleCount: 4,
+    rasterTraversalSampledTotalMs: 0.84,
+    rasterTraversalSampledAverageMs: 0.21,
+    rasterCandidatePixelCount: 4096,
+    tevPixelCount: 1024,
+    tevStageCount: 8192,
+    tevTimedSampleCount: 2,
+    tevSampledTotalMs: 0.41,
+    tevSampledAverageMs: 0.205,
+    textureSampleCount: 4096,
+    textureTimedSampleCount: 2,
+    textureSampledTotalMs: 0.26,
+    textureSampledAverageMs: 0.13,
+    fifoBurstCount: 128,
+    fifoConsumeCount: 127,
+    fifoBytesLast: 64,
+    fifoBytesMax: 512,
+    fifoOldestPendingAgeLastMs: 0.9,
+    fifoOldestPendingAgeMaxMs: 2.4,
+    fifoAgeSampleCount: 127,
+    xfbGenerationCount: 77,
+    xfbGenerationLastMs: 0.9,
+    xfbGenerationTotalMs: 69.3,
+    xfbGenerationMaxMs: 1.8,
+    frameGenerationCount: 77,
+    frameGenerationIntervalLastMs: 16.6,
+    frameGenerationIntervalAverageMs: 16.818421052631578,
+    frameGenerationIntervalMaxMs: 41,
   });
 });
 
@@ -93,7 +132,20 @@ test("traffic byte accounting deduplicates views of the same transferred buffer"
 test("CSV flattening carries the exact causal schema and decision fields", () => {
   const value = createCausalTelemetry({
     core: { ticks: 55 },
-    softwareRaster: { encodeTotalMs: 1.25 },
+    softwareRaster: {
+      encodeTotalMs: 1.25,
+      profileEnabled: true,
+      rasterTraversalCount: 120,
+      tevPixelCount: 1024,
+      textureSampleCount: 4096,
+      fifoOldestPendingAgeMaxMs: 2.4,
+      sampledSourceFrameCount: 10,
+      sampledUniqueFrameCount: 4,
+      sampledStaleFrameCount: 6,
+      sampledStaleFrameRatio: 0.6,
+      sampledStaleFrameRunMax: 3,
+      staleRepaintCount: 2,
+    },
     presentation: {
       freshFrameDelivery: "immediate",
       legacyTickQueue: false,
@@ -128,6 +180,14 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalTelemetrySchemaVersion, CAUSAL_TELEMETRY_SCHEMA_VERSION);
   assert.equal(flat.causalCoreTicks, 55);
   assert.equal(flat.causalSoftwareEncodeMs, 1.25);
+  assert.equal(flat.causalSoftwareRasterProfileEnabled, true);
+  assert.equal(flat.causalRasterTraversalCount, 120);
+  assert.equal(flat.causalTevPixelCount, 1024);
+  assert.equal(flat.causalTextureSampleCount, 4096);
+  assert.equal(flat.causalFifoOldestPendingAgeMaxMs, 2.4);
+  assert.equal(flat.causalSampledStaleFrameRatio, 0.6);
+  assert.equal(flat.causalSampledStaleFrameRunMax, 3);
+  assert.equal(flat.causalStaleRepaintCount, 2);
   assert.equal(flat.causalFreshFrameDelivery, "immediate");
   assert.equal(flat.causalLegacyTickQueue, false);
   assert.equal(flat.causalImmediateFreshFrameCount, 9);
@@ -167,7 +227,8 @@ test("rebuilt core exports CPU-thread checkpoint capture before renderer resync"
   const manifest = JSON.parse(
     await readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8")
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, []);
+  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_SetSoftwareRasterProfileEnabled"]);
+  assert.ok(!manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
   for (const name of [
     "_GetLastLoadedCheckpointGeneration",
     "_GetLastLoadedCoreTicksHigh",

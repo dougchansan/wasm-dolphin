@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722",
+  "patchSeriesSha256": "30f0f5faceffe3ef6ea40b22c620b4c97e6ac36b0beb7e3043b829e8d12ea56c",
   "patches": [
     {
       "order": 1,
@@ -93,6 +93,14 @@
     },
     {
       "order": 9,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0009-software-raster-phase-profile.patch",
+      "hashMode": "lf-normalized",
+      "size": 7380,
+      "sha256": "96c4a5ee0cb55f0dcd6464110b7614a8d82c79cd8596711485b2522266ff55aa"
+    },
+    {
+      "order": 10,
       "cwd": "Externals/SFML/SFML",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "hashMode": "lf-normalized",
@@ -100,7 +108,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 10,
+      "order": 11,
       "cwd": "Externals/xxhash/xxHash",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",
