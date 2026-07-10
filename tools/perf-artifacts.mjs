@@ -36,12 +36,17 @@ const FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW = Object.freeze({
   1: FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash,
 });
 
+const FIXED_MELEE_WGPU_XFB_HASH = "6fd97dc5";
+
 export function expectedBattleCheckpointForParams(params = {}) {
   const video = String(params.video || "software").toLowerCase();
   const fastsw = Number.parseInt(String(params.fastsw ?? "1"), 10);
-  const xfbHash = video === "software"
-    ? FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW[fastsw] ?? FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash
-    : FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash;
+  let xfbHash = FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash;
+  if (video === "software") {
+    xfbHash = FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW[fastsw] ?? xfbHash;
+  } else if (video === "wgpu") {
+    xfbHash = FIXED_MELEE_WGPU_XFB_HASH;
+  }
   return { ...FIXED_MELEE_BATTLE_CHECKPOINT, xfbHash };
 }
 

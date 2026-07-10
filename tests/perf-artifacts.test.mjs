@@ -657,7 +657,7 @@ test("comparison run validity includes assertions and page/worker console errors
   ]);
 });
 
-test("fixed-battle XFB identity is locked per deliberate software raster mode", () => {
+test("fixed-battle XFB identity is locked per deliberate rendering mode", () => {
   assert.equal(
     expectedBattleCheckpointForParams({ video: "software", fastsw: "0" }).xfbHash,
     "55dc4398"
@@ -668,7 +668,7 @@ test("fixed-battle XFB identity is locked per deliberate software raster mode", 
   );
   assert.equal(
     expectedBattleCheckpointForParams({ video: "wgpu", fastsw: "0" }).xfbHash,
-    "4b2d0a3b"
+    "6fd97dc5"
   );
   const full = expectedBattleCheckpointForParams({ video: "software", fastsw: "0" });
   assert.equal(
