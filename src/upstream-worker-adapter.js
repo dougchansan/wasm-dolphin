@@ -60,9 +60,13 @@ export class UpstreamWorkerAdapter {
     oglSabWidth = 0,
     oglSabHeight = 0
   } = {}) {
+    this.requestedCoreUrl = coreUrl;
+    this.requestedCoreSha256 = expectedCoreSha256;
     this.coreUrl = coreUrl;
     this.expectedCoreSha256 = expectedCoreSha256;
     this.coreCandidatePreflighted = false;
+    this.coreFallbackReason = null;
+    this.fallbackBeforeCanvasTransfer = false;
     this.workerUrl = workerUrl;
     this.onStatus = onStatus;
     this.canvas = canvas;
@@ -186,6 +190,8 @@ export class UpstreamWorkerAdapter {
         this.coreCandidatePreflighted = true;
       } catch (error) {
         this.onStatus(`Candidate core rejected; rolling back to pinned baseline: ${error.message}`);
+        this.coreFallbackReason = error.message;
+        this.fallbackBeforeCanvasTransfer = true;
         this.coreUrl = DEFAULT_UPSTREAM_CORE_URL;
         this.expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256;
         this.coreCandidatePreflighted = true;
@@ -229,6 +235,7 @@ export class UpstreamWorkerAdapter {
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
       legacyOneWayAck: this.legacyOneWayAck,
+      coreSelection: this.coreSelectionTelemetry(window.location.href),
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,
@@ -589,6 +596,19 @@ export class UpstreamWorkerAdapter {
     return { ...this.workerTransportStats };
   }
 
+  coreSelectionTelemetry(baseUrl = globalThis.location?.href) {
+    return {
+      requestedCoreSha256: this.requestedCoreSha256,
+      requestedCoreUrl: resolveUrlForTelemetry(this.requestedCoreUrl, baseUrl),
+      activeCoreSha256: this.expectedCoreSha256,
+      activeCoreUrl: resolveUrlForTelemetry(this.coreUrl, baseUrl),
+      fallbackReason: this.coreFallbackReason,
+      fallbackBeforeCanvasTransfer: Boolean(
+        this.coreFallbackReason && this.fallbackBeforeCanvasTransfer
+      )
+    };
+  }
+
   drawDetachedOglBitmap(bitmap, width, height) {
     if (!bitmap) return;
     if (!this.visibleCanvas) {
@@ -875,4 +895,12 @@ function cloneTrafficStats(stats) {
     direction,
     { ...value, byType: { ...value.byType } }
   ]));
+}
+
+function resolveUrlForTelemetry(value, baseUrl) {
+  try {
+    return new URL(value, baseUrl).href;
+  } catch {
+    return String(value || "");
+  }
 }

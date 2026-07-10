@@ -260,6 +260,14 @@ function createRendererDiagnostics() {
     videoBackendEvidence: "not-configured",
     requestedPresenterBackend: null,
     activePresenterBackend: "none",
+    coreSelection: {
+      requestedCoreSha256: null,
+      requestedCoreUrl: null,
+      activeCoreSha256: null,
+      activeCoreUrl: null,
+      fallbackReason: null,
+      fallbackBeforeCanvasTransfer: false,
+    },
     fallback: null,
     adapter: null,
     device: null,
@@ -293,6 +301,7 @@ function recordRendererError(kind, message) {
 function rendererDiagnosticsPayload() {
   return {
     ...rendererDiagnostics,
+    coreSelection: { ...rendererDiagnostics.coreSelection },
     activePresenterBackend: renderBackend,
     errors: rendererDiagnostics.errors.map((entry) => ({ ...entry })),
     emscriptenPrintErr: [...rendererDiagnostics.emscriptenPrintErr],
@@ -397,6 +406,7 @@ async function handleMessage(type, payload) {
         fastSoftwareRaster: payload.fastSoftwareRaster,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
+        reportedCoreSelection: payload.coreSelection,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -607,12 +617,18 @@ async function loadCore({
   fastSoftwareRaster = 0,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
+  reportedCoreSelection = null,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
     return moduleInstance;
   }
   rendererDiagnostics = createRendererDiagnostics();
+  rendererDiagnostics.coreSelection = normalizedCoreSelection(
+    reportedCoreSelection,
+    nextCoreUrl,
+    expectedCoreSha256
+  );
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
@@ -3144,6 +3160,25 @@ function postResult(request, result) {
     workerTransportStats.requestSuccessRepliesSent += 1;
   }
   self.postMessage(planned.reply, planned.transfer);
+}
+
+function normalizedCoreSelection(reported, activeCoreUrl, activeCoreSha256) {
+  const resolvedActiveUrl = new URL(activeCoreUrl, self.location.href).href;
+  const fallbackReason = reported?.fallbackReason
+    ? String(reported.fallbackReason).slice(0, 1000)
+    : null;
+  return {
+    requestedCoreSha256: String(
+      reported?.requestedCoreSha256 || activeCoreSha256 || ""
+    ),
+    requestedCoreUrl: String(reported?.requestedCoreUrl || resolvedActiveUrl),
+    activeCoreSha256: String(activeCoreSha256 || ""),
+    activeCoreUrl: resolvedActiveUrl,
+    fallbackReason,
+    fallbackBeforeCanvasTransfer: Boolean(
+      fallbackReason && reported?.fallbackBeforeCanvasTransfer
+    ),
+  };
 }
 
 function workerTransportTelemetry() {

@@ -130,6 +130,13 @@ validation, real-clear/show-image failures, WASM link/runtime errors, and
 presenter fallbacks invalidate the run instead of disappearing behind the
 latest status.
 
+Content-addressed core fallback is explicit in
+`rendererDiagnostics.coreSelection`: it records requested and active core
+URLs/SHA-256 values, the preflight failure reason, and whether rollback
+happened before canvas transfer. A candidate-core 404 remains a console error
+unless a dedicated rollback-smoke test declares that exact failure expected;
+the generic performance gate must not ignore 404s broadly.
+
 For a bounded A/B screen, pass
 [`melee-screening.example.json`](melee-screening.example.json) with
 `--comparison-config`. Screening is exactly two fresh-process A/B/B/A and

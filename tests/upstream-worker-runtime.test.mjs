@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  DEFAULT_UPSTREAM_CORE_SHA256,
+  DEFAULT_UPSTREAM_CORE_URL
+} from "../src/upstream-worker-protocol.js";
+
 test("worker suppresses only one-way successes and legacy mode restores acknowledgements", async (t) => {
   const originalFetch = globalThis.fetch;
   const originalSelf = globalThis.self;
@@ -68,12 +73,31 @@ test("worker suppresses only one-way successes and legacy mode restores acknowle
       id: 3,
       type: "load",
       payload: {
-        coreUrl: "http://127.0.0.1:8080/cores/dolphin/dolphin-core-upstream.js",
-        legacyOneWayAck: true
+        coreUrl: DEFAULT_UPSTREAM_CORE_URL,
+        expectedCoreSha256: DEFAULT_UPSTREAM_CORE_SHA256,
+        legacyOneWayAck: true,
+        coreSelection: {
+          requestedCoreSha256: "f".repeat(64),
+          requestedCoreUrl: "http://127.0.0.1:8080/build/core-candidates/missing/dolphin-core-upstream.js",
+          activeCoreSha256: "untrusted-host-value",
+          activeCoreUrl: "http://invalid.example/untrusted.js",
+          fallbackReason: "Core WASM fetch returned 404",
+          fallbackBeforeCanvasTransfer: true
+        }
       }
     }
   });
   assert.equal(posted.at(-1).message.ok, false, "test load should fail before core import");
+
+  await messageHandler({ data: { id: 4, type: "rendererDiagnostics", payload: {} } });
+  assert.deepEqual(posted.at(-1).message.coreSelection, {
+    requestedCoreSha256: "f".repeat(64),
+    requestedCoreUrl: "http://127.0.0.1:8080/build/core-candidates/missing/dolphin-core-upstream.js",
+    activeCoreSha256: DEFAULT_UPSTREAM_CORE_SHA256,
+    activeCoreUrl: new URL(DEFAULT_UPSTREAM_CORE_URL, globalThis.self.location.href).href,
+    fallbackReason: "Core WASM fetch returned 404",
+    fallbackBeforeCanvasTransfer: true
+  });
 
   await messageHandler({
     data: { type: "setAudioMuted", payload: { muted: true }, oneWay: true }
