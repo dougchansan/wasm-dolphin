@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-10T23:00:01.822Z",
+  "createdAt": "2026-07-10T23:48:24.455Z",
   "coreId": "sha256:a239ee47209605f20f7c078f61567cd90d4adb9a718fc3dc71060a178d006995",
   "repository": {
-    "commit": "d851b336ca1c9de7da036b73145d3116aef6ec59",
-    "status": "M core/upstream/dolphin_web_discio.cpp\n M core/upstream/dolphin_web_raster_profile.h\n M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M docs/software-raster-profiling.md\n M package.json\n M provenance/dolphin-core-abi-v1.json\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/causal-telemetry.js\n M src/core-host.js\n M src/input-visual-marker.js\n M src/upstream-discio-worker.js\n M src/upstream-worker-adapter.js\n M src/upstream-worker-protocol.js\n M src/wgpu-pass-state-cache.js\n M src/wgpu-replay-diagnostics.js\n M tests/causal-telemetry.test.mjs\n M tests/input-visual-marker.test.mjs\n M tests/jit-correlated-slice-source.test.mjs\n M tests/jit-diagnostics-analyze.test.mjs\n M tests/software-raster-profile-source.test.mjs\n M tests/upstream-worker-protocol.test.mjs\n M tests/wgpu-pass-state-cache.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n M tools/configure-upstream-wasm.mjs\n M tools/jit-diagnostics-analyze.mjs\n M tools/menu-progress-validate.mjs\n M tools/perf-regression-gate.mjs\n M tools/software-texture-hot-case-parity.cpp\n?? docs/input-to-photon-validation.md\n?? docs/perf-results/melee-core-timing-phase-attribution-template.md\n?? docs/perf-results/wgpu-ubo-screening.json\n?? patches/dolphin-wasm/snapshot/0017-software-texture-i4-hot-case.patch\n?? patches/dolphin-wasm/snapshot/0018-core-timing-phase-attribution.patch\n?? patches/dolphin-wasm/snapshot/0019-webgpu-ubo-slice-cache.patch\n?? patches/dolphin-wasm/snapshot/0020-software-tev-exact-tuple-profile.patch\n?? patches/dolphin-wasm/snapshot/0021-software-tev-hot-case.patch\n?? tests/configure-upstream.test.mjs\n?? tests/input-photon-marker-plumbing.test.mjs\n?? tests/tev-hot-case-source.test.mjs\n?? tools/software-tev-hot-case-parity.cpp\n?? tools/test-software-tev-hot-cases.mjs\n?? tools/test-software-texture-hot-cases.mjs\n?? tools/update-core-abi.mjs\n?? tools/update-dolphin-provenance.mjs"
+    "commit": "1560ba7d69435cebf583a0c41a0a3202f46deedd",
+    "status": ""
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
