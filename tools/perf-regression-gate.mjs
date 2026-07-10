@@ -29,6 +29,7 @@ import {
   parseProfileMetrics,
   recordsToCsv,
   summarizeComparison,
+  summarizeJitMetrics,
   summarizeTimedMetricWindows,
   validateComparisonConfig,
   validateLockedBuildProvenance,
@@ -544,6 +545,7 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, co
   const metrics = {
     fullTimedWindow,
     steadyState,
+    jit: summarizeJitMetrics(timedWindow),
     // Compatibility aliases now explicitly point at the complete timed
     // window. Consumers that exclude warmup must request steadyState.*.
     gameSpeed: fullTimedWindow.gameSpeed,
@@ -905,6 +907,8 @@ async function readSample(page, elapsedSeconds) {
       gameSpeed: read("#gameSpeedCounter"),
       gap: read("#presentationGapCounter"),
       wasmJit: read("#ppcWasmJit"),
+      ppcWasmBlockCompileCount: Number(info.ppcWasmBlockCompileCount) || 0,
+      ppcWasmBlockRunCount: Number(info.ppcWasmBlockRunCount) || 0,
       helper: info.ppcWasmHelperStats || read("#ppcWasmHelperStats"),
       profile: info.frameProfileStats || read("#frameProfileStats"),
       coreTicks: Number(info.coreTicks) || Number(read("#coreTicks")) || 0,

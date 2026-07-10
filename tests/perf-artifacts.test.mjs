@@ -22,6 +22,7 @@ import {
   parseBattleCheckpoint,
   recordsToCsv,
   summarizeComparison,
+  summarizeJitMetrics,
   summarizeNumeric,
   summarizeTimedMetricWindows,
   validateLockedBuildProvenance,
@@ -436,6 +437,43 @@ test("comparison run validity includes assertions and page/worker console errors
     "run failure: compilefail=1",
     "console error: [worker:core:error] device lost",
   ]);
+});
+
+test("JIT summaries expose reuse and reject stale exported counters", () => {
+  const healthy = summarizeJitMetrics([
+    {
+      ppcWasmBlockCompileCount: 100,
+      ppcWasmBlockRunCount: 4000,
+      helper: "tier:guarded jit attempts:120 compiled:100 emitfail:0 compilefail:0 | jit:on",
+    },
+    {
+      ppcWasmBlockCompileCount: 140,
+      ppcWasmBlockRunCount: 7000,
+      helper: "tier:guarded jit attempts:180 compiled:140 emitfail:0 compilefail:0 | jit:on",
+    },
+  ]);
+  assert.deepEqual(healthy, {
+    exportedCompileCount: 140,
+    exportedRunCount: 7000,
+    helperAttemptCount: 180,
+    helperCompileCount: 140,
+    emitFailureCount: 0,
+    compileFailureCount: 0,
+    activeSampleCount: 2,
+    runToCompileRatio: 50,
+    countersConsistent: true,
+  });
+
+  const stale = summarizeJitMetrics([
+    {
+      ppcWasmBlockCompileCount: 0,
+      ppcWasmBlockRunCount: 0,
+      helper: "tier:guarded jit attempts:3114 compiled:1436 emitfail:9 compilefail:0 | jit:on",
+    },
+  ]);
+  assert.equal(stale.countersConsistent, false);
+  assert.equal(stale.runToCompileRatio, null);
+  assert.equal(stale.emitFailureCount, 9);
 });
 
 test("metrics experiment evidence accepts intentional causal suppression only when activated", () => {

@@ -853,6 +853,36 @@ export function evaluateRunValidity({ invalidReasons = [], failures = [], consol
   return { valid: uniqueReasons.length === 0, invalidReasons: uniqueReasons };
 }
 
+export function summarizeJitMetrics(samples = []) {
+  const maximumField = (name) => Math.max(0, ...samples.map((sample) => Number(sample?.[name]) || 0));
+  const maximumHelper = (pattern) => {
+    let maximum = 0;
+    for (const sample of samples) {
+      const match = pattern.exec(String(sample?.helper || ""));
+      if (match) maximum = Math.max(maximum, Number(match[1]) || 0);
+    }
+    return maximum;
+  };
+  const exportedCompileCount = maximumField("ppcWasmBlockCompileCount");
+  const exportedRunCount = maximumField("ppcWasmBlockRunCount");
+  const helperAttemptCount = maximumHelper(/\bjit attempts:(\d+)/);
+  const helperCompileCount = maximumHelper(/\bcompiled:(\d+)/);
+  const emitFailureCount = maximumHelper(/\bemitfail:(\d+)/);
+  const compileFailureCount = maximumHelper(/\bcompilefail:(\d+)/);
+  const activeSampleCount = samples.filter((sample) => /\bjit:on\b/.test(String(sample?.helper || ""))).length;
+  return {
+    exportedCompileCount,
+    exportedRunCount,
+    helperAttemptCount,
+    helperCompileCount,
+    emitFailureCount,
+    compileFailureCount,
+    activeSampleCount,
+    runToCompileRatio: exportedCompileCount > 0 ? exportedRunCount / exportedCompileCount : null,
+    countersConsistent: exportedCompileCount === helperCompileCount,
+  };
+}
+
 export function evaluateMetricsModeEvidence({ requested, diagnostics = {}, samples = [] } = {}) {
   const enabled = String(requested) === "1";
   const failures = [];
