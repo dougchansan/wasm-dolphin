@@ -157,7 +157,8 @@ function run(command, args, options = {}) {
     cwd: options.cwd ?? process.cwd(),
     encoding: "utf8",
     stdio: options.stdio ?? "pipe",
-    env: options.env ? { ...process.env, ...options.env } : process.env
+    env: options.env ? { ...process.env, ...options.env } : process.env,
+    maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024
   });
   if (result.error || result.status !== 0) {
     const detail = [result.stderr, result.stdout, result.error?.message].filter(Boolean).join("\n").trim();
@@ -222,7 +223,35 @@ function parsePorcelainStatus(output) {
   return entries;
 }
 
+function assertStandardIndexFlags(directory) {
+  const output = git(directory, ["ls-files", "--debug", "-z"]).stdout;
+  const problems = [];
+  let cursor = 0;
+  while (cursor < output.length) {
+    const nul = output.indexOf("\0", cursor);
+    invariant(nul >= cursor, "Malformed NUL-delimited Git index debug output");
+    const path = normalizedPath(output.slice(cursor, nul));
+    const remainder = output.slice(nul + 1);
+    const match = remainder.match(/\tflags: ([0-9a-f]+)(?:\r?\n|$)/i);
+    invariant(match, `Missing Git index flags for ${path}`);
+    const raw = match[1].toLowerCase();
+    const value = Number.parseInt(raw, 16);
+    if (value !== 0) {
+      const names = [];
+      if ((value & 0x00008000) !== 0) names.push("assume-unchanged");
+      if ((value & 0x00200000) !== 0) names.push("fsmonitor-valid");
+      if ((value & 0x20000000) !== 0) names.push("intent-to-add");
+      if ((value & 0x40000000) !== 0) names.push("skip-worktree/sparse");
+      problems.push(`${path}:${names.length > 0 ? names.join("+") : `flags=0x${raw}`}`);
+    }
+    cursor = nul + 1 + match.index + match[0].length;
+  }
+  invariant(problems.length === 0,
+    `Nonstandard Git index flags are forbidden in ${directory}: [${problems.join(", ")}]`);
+}
+
 function repositoryStatus(directory, ignoreSubmodules = "none") {
+  assertStandardIndexFlags(directory);
   const result = git(directory, [
     "status",
     "--porcelain=v1",

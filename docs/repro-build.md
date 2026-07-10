@@ -60,7 +60,9 @@ git -C vendor/dolphin rev-parse HEAD
 
 The durable patched identity is the virtual result tree. Re-running the patch
 command classifies the complete root and submodule status, rejects extra dirty
-or untracked paths, recomputes every result blob and tree, and reports:
+or untracked paths, rejects index flags that can hide changes (including
+assume-unchanged and skip-worktree), recomputes every result blob and tree, and
+reports:
 
 ```text
 verified result tree 021ca35004bcb8bd1c4a7bf745c798e2874135e1

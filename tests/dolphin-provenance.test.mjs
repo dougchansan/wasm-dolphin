@@ -296,6 +296,71 @@ test("ABI verification rejects mutations to every declared contract", () => {
 
 test("locked patches replay exactly, are idempotent, and reject every third checkout state", () => {
   const fixture = createLockedPatchFixture();
+  const hiddenIndexCases = [
+    {
+      directory: fixture.dolphin,
+      path: ".gitignore",
+      set: "--assume-unchanged",
+      clear: "--no-assume-unchanged",
+      expected: /assume-unchanged/,
+      dirty: "hidden-root-assume.tmp\n",
+      restore: ""
+    },
+    {
+      directory: fixture.dolphin,
+      path: ".gitignore",
+      set: "--skip-worktree",
+      clear: "--no-skip-worktree",
+      expected: /skip-worktree\/sparse/,
+      dirty: "hidden-root-skip.tmp\n",
+      restore: ""
+    },
+    {
+      directory: fixture.submodule,
+      path: "sub.txt",
+      set: "--assume-unchanged",
+      clear: "--no-assume-unchanged",
+      expected: /assume-unchanged/,
+      dirty: "hidden submodule assume\n",
+      restore: "sub base\n"
+    },
+    {
+      directory: fixture.submodule,
+      path: "sub.txt",
+      set: "--skip-worktree",
+      clear: "--no-skip-worktree",
+      expected: /skip-worktree\/sparse/,
+      dirty: "hidden submodule skip\n",
+      restore: "sub base\n"
+    }
+  ];
+  for (const item of hiddenIndexCases) {
+    git(item.directory, "update-index", item.set, "--", item.path);
+    writeFileSync(join(item.directory, item.path), item.dirty);
+    try {
+      assert.throws(
+        () => applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin }),
+        item.expected
+      );
+    } finally {
+      git(item.directory, "update-index", item.clear, "--", item.path);
+      writeFileSync(join(item.directory, item.path), item.restore);
+    }
+    assert.match(git(item.directory, "ls-files", "-v", "--", item.path), /^H /);
+    assert.match(git(item.directory, "ls-files", "-t", "--", item.path), /^H /);
+  }
+  const intentPath = join(fixture.dolphin, "intent-to-add.tmp");
+  writeFileSync(intentPath, "intent\n");
+  git(fixture.dolphin, "add", "--intent-to-add", "--", "intent-to-add.tmp");
+  try {
+    assert.throws(
+      () => applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin }),
+      /intent-to-add/
+    );
+  } finally {
+    git(fixture.dolphin, "reset", "--", "intent-to-add.tmp");
+    rmSync(intentPath);
+  }
   assert.equal(classifyLockedCheckout(fixture.dolphin, fixture.root).state, "pristine");
   const replay = applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin });
   assert.equal(replay.status, "applied");
@@ -380,6 +445,24 @@ test("pinned fetch ignores a moved default branch and checks out the locked comm
   assert.equal(git(destination, "rev-parse", "HEAD"), pinned);
   assert.equal(readFileSync(join(destination, "source.txt"), "utf8").trim(), "pinned");
   assert.throws(() => assertExactCommit(pinned, moved), /commit mismatch/);
+
+  git(destination, "update-index", "--assume-unchanged", "--", ".gitignore");
+  writeFileSync(join(destination, ".gitignore"), "hidden-fetch.tmp\n");
+  try {
+    assert.throws(
+      () => fetchPinnedDolphin({
+        root: harness,
+        destination,
+        repository: origin,
+        updateSubmodules: false
+      }),
+      /Nonstandard Git index flags.*assume-unchanged/s
+    );
+  } finally {
+    git(destination, "update-index", "--no-assume-unchanged", "--", ".gitignore");
+    writeFileSync(join(destination, ".gitignore"), "");
+  }
+  assert.match(git(destination, "ls-files", "-v", "--", ".gitignore"), /^H /);
 
   writeFileSync(join(destination, ".gitignore"), "hostile-sentinel.tmp\n");
   writeFileSync(join(destination, "hostile-sentinel.tmp"), "hidden extra\n");
