@@ -15,9 +15,13 @@ export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
 export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
   // Recorded from the paused, exact-state checkpoint. The harness pauses the
   // core before State::LoadAs so these values are tied to save bytes rather
-  // than wall-clock delay after loading.
+  // than wall-clock delay after loading. Dolphin advances a small number of
+  // timing ticks while finishing load bookkeeping before the after-load
+  // callback runs. Keep that scheduler noise bounded to ~0.1 ms at 486 MHz;
+  // PC, XFB hash, dimensions, and fixture hashes remain exact.
   frame: null,
   coreTicks: 15166162443,
+  coreTicksTolerance: 50_000,
   ppcPc: -2144030364,
   xfbHash: "4b2d0a3b",
   width: 640,
@@ -517,14 +521,31 @@ export function assertBattleCheckpoint(checkpoint, expected = FIXED_MELEE_BATTLE
   const required = ["frame", "coreTicks", "ppcPc", "xfbHash", "width", "height"];
   const missing = required.filter((field) => checkpoint?.[field] === null || checkpoint?.[field] === undefined || checkpoint?.[field] === "");
   if (missing.length) throw new Error(`Battle/XFB checkpoint is incomplete: ${missing.join(", ")}`);
+  const coreTicksTolerance = Math.max(0, Number(expected.coreTicksTolerance) || 0);
+  const coreTicksDelta = expected.coreTicks == null
+    ? null
+    : Number(checkpoint.coreTicks) - Number(expected.coreTicks);
   const mismatches = [];
   for (const field of required) {
-    if (expected[field] != null && checkpoint[field] !== expected[field]) {
+    if (field === "coreTicks" && expected[field] != null) {
+      if (!Number.isFinite(coreTicksDelta) || Math.abs(coreTicksDelta) > coreTicksTolerance) {
+        mismatches.push(
+          `${field}: expected ${expected[field]}, got ${checkpoint[field]} ` +
+          `(delta ${coreTicksDelta}, tolerance ${coreTicksTolerance})`
+        );
+      }
+    } else if (expected[field] != null && checkpoint[field] !== expected[field]) {
       mismatches.push(`${field}: expected ${expected[field]}, got ${checkpoint[field]}`);
     }
   }
   if (mismatches.length) throw new Error(`Battle/XFB checkpoint mismatch: ${mismatches.join("; ")}`);
-  return { ...checkpoint, verified: true };
+  return {
+    ...checkpoint,
+    expectedCoreTicks: expected.coreTicks ?? null,
+    coreTicksDelta,
+    coreTicksTolerance,
+    verified: true,
+  };
 }
 
 export function validateComparisonConfig(value) {
