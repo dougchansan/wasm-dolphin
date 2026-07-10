@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "30f0f5faceffe3ef6ea40b22c620b4c97e6ac36b0beb7e3043b829e8d12ea56c",
+  "patchSeriesSha256": "7ff3d22c40ad2249d9dc8a8949c5847a1c4736518757ca0fc22e92bbb915cdfd",
   "patches": [
     {
       "order": 1,
@@ -101,6 +101,14 @@
     },
     {
       "order": 10,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0010-jit-emit-diagnostics.patch",
+      "hashMode": "lf-normalized",
+      "size": 3940,
+      "sha256": "455064f141d570ad7284e04c0b97b08626f0052e5f02d987e51f526a0e035ca9"
+    },
+    {
+      "order": 11,
       "cwd": "Externals/SFML/SFML",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "hashMode": "lf-normalized",
@@ -108,7 +116,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 11,
+      "order": 12,
       "cwd": "Externals/xxhash/xxHash",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",

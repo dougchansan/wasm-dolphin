@@ -1,0 +1,72 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -387,3 +387,5 @@ u32 s_ppc_profile_window_collision_count = 0;
+ constexpr u32 PPC_PROFILE_SAMPLE_MASK = 1023;
+ std::array<u32, 64 * 1024> s_wasm_direct_reject_key_counts{};
++std::array<u32, 64 * 1024> s_wasm_emit_fail_key_counts{};
++std::array<u32, 64 * 1024> s_wasm_emit_fail_sample_pcs{};
+ std::array<u32, 64 * 1024> s_wasm_helper_key_counts{};
+@@ -5413,3 +5415,3 @@ bool EmitWasmSupportedIntegerInstruction(std::vector<u8>& body, const WasmStateL
+ // #define DOLPHIN_WEB_DISABLE_FASTOTHER_31SUBFEX_ALONE  // subfex(136) alone
+-#define DOLPHIN_WEB_DISABLE_FASTOTHER_31ADDZEX_ALONE  // addzex(202) alone
++// #define DOLPHIN_WEB_DISABLE_FASTOTHER_31ADDZEX_ALONE  // addzex(202) alone
+ // Pairs:
+@@ -7337,4 +7339,5 @@ std::vector<u8> BuildWasmCachedInterpreterBlock(std::span<const PPCAnalyst::Code
+                                                 const WasmStateLayout& layout, u32 next_pc,
+                                                 bool write_npc,
+-                                                bool allow_interpret_fallback = false)
++                                                bool allow_interpret_fallback = false,
++                                                bool record_emit_failure = false)
+ {
+@@ -7448,4 +7451,12 @@ std::vector<u8> BuildWasmCachedInterpreterBlock(std::span<const PPCAnalyst::Code
+       if (!allow_interpret_fallback)
+       {
++        if (record_emit_failure)
++        {
++          const u32 key = (op.inst.OPCD << 10) | op.inst.SUBOP10;
++          ++s_wasm_block_emit_fail_count;
++          ++s_wasm_emit_fail_key_counts[key];
++          if (s_wasm_emit_fail_sample_pcs[key] == 0)
++            s_wasm_emit_fail_sample_pcs[key] = op.address;
++        }
+         s_gpr_rc.active = false;  // §28cx C1: don't leak cache state on abort
+         s_fmh_plan.active = false;  // §28cz: don't leak hoist plan on abort
+@@ -10670,9 +10681,8 @@ bool CachedInterpreter::TryWriteWasmBlock(JitBlock& code_block, JitBlock::JitBlo
+   const u32 block_next_pc = did_merge ? merge_next_pc : nextPC;
+   const std::vector<u8> bytes =
+       BuildWasmCachedInterpreterBlock(ops, layout, block_next_pc, write_npc,
+-                                      !s_wasm_jit_direct_only);
++                                      !s_wasm_jit_direct_only, true);
+   if (bytes.empty())
+   {
+-    ++s_wasm_block_emit_fail_count;
+     LogWasmBlockReject("emit", nullptr, 0, js.blockStart, code_block.m_num_instructions);
+     return false;
+@@ -11205,4 +11215,26 @@ std::string CachedInterpreter::GetPpcWasmHelperStats() const
+   }
+ 
++  std::vector<std::pair<u32, u32>> hot_emit_failures;
++  hot_emit_failures.reserve(8);
++  for (std::size_t key = 0; key < s_wasm_emit_fail_key_counts.size(); ++key)
++  {
++    const u32 count = s_wasm_emit_fail_key_counts[key];
++    if (count != 0)
++      hot_emit_failures.emplace_back(count, static_cast<u32>(key));
++  }
++  const std::size_t emit_failure_top_count =
++      std::min<std::size_t>(hot_emit_failures.size(), 8);
++  std::partial_sort(hot_emit_failures.begin(),
++                    hot_emit_failures.begin() + emit_failure_top_count,
++                    hot_emit_failures.end(),
++                    [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
++  for (std::size_t i = 0; i < emit_failure_top_count; ++i)
++  {
++    const u32 count = hot_emit_failures[i].first;
++    const u32 key = hot_emit_failures[i].second;
++    out << " | emitkey" << (key >> 10) << "/" << (key & 0x3ff) << ":" << count
++        << "@" << std::hex << s_wasm_emit_fail_sample_pcs[key] << std::dec;
++  }
++
+   std::vector<std::pair<u32, u32>> hot_direct_rejects;
+   hot_direct_rejects.reserve(16);

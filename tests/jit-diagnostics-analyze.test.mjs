@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   classifyJitDiagnostics,
   findMostDiagnosticHelper,
@@ -57,4 +58,12 @@ test("classifies a CoreTiming Advance spike independently from JIT compilation",
 
 test("selects the helper carrying the strongest final diagnostics", () => {
   assert.equal(findMostDiagnosticHelper({ samples: [{ helper: "emitfail:0" }, { helper }] }), helper);
+});
+
+test("active JIT source disables no emitter at compile time and records failure keys", () => {
+  const patch = readFileSync("patches/dolphin-wasm/snapshot/0010-jit-emit-diagnostics.patch", "utf8");
+  assert.match(patch, /^-#define DOLPHIN_WEB_DISABLE_FASTOTHER_31ADDZEX_ALONE/m);
+  assert.match(patch, /^\+\/\/ #define DOLPHIN_WEB_DISABLE_FASTOTHER_31ADDZEX_ALONE/m);
+  assert.match(patch, /emitkey/);
+  assert.match(patch, /s_wasm_emit_fail_key_counts\[key\]/);
 });

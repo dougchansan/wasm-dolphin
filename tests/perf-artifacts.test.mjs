@@ -6,8 +6,6 @@ import path from "node:path";
 import test from "node:test";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
-import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
-
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
   assertBattleCheckpoint,
