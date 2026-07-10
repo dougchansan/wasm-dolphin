@@ -27,10 +27,10 @@ real-time play possible inside the browser sandbox.
 | Area | State |
 |------|-------|
 | Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
-| PPC→WASM JIT with GPR register cache | ⚠️ Default-on; current emit failures and benefit need classification |
+| PPC→WASM JIT with GPR register cache | ⚠️ Default-on; old `addzex` failures are fixed, benefit remains scene-dependent |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
 | Audio | ✅ Worker-fed/tuned audio buffering |
-| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — draws submit, but the EFB remains zero |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Fixed battle visible on one validation GPU; still slow and experimental |
 | Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
 
 The default configuration is the recommended, locally validated
@@ -105,8 +105,9 @@ registers are held in WASM locals for the life of a block (loaded in the
 prologue, flushed at block end and around calls) instead of round-tripping to
 the emulated register file on every access.
 
-- A historical local A/B reported **+38% raw throughput**, but the current
-  fixed-scene audit found emit failures and did not reproduce that claim.
+- A historical local A/B reported **+38% raw throughput**. The eight later
+  fixed-scene emit failures were all an accidental `addzex` diagnostic disable
+  and are fixed, but no current repeated A/B reproduces the +38% claim.
 - Escape hatch: `?regalloc=0` disables it.
 - `?smearcompile=1` (default-on) spreads JIT compilation to reduce mid-match
   compile bursts.
@@ -129,9 +130,10 @@ software rasterizer → EFB → XFB (YUV encode) → WebGPU presenter → <canva
 
 The main measured smoothness limit on the default path is the software GPU:
 game timing can approach its target while the rasterizer produces relatively
-few distinct frames. Current XFB encode/decode samples are only low
-single-digit milliseconds, so the exact raster/TEV/backlog subphase still needs
-instrumentation. Two knobs expose the tradeoff:
+few distinct frames. Three profiler runs averaged about 59.7 presentation FPS
+but only 12.8 unique visual FPS, with 78.3% sampled stale-source reuse. Raster,
+TEV, texture, FIFO, and XFB phase counters now identify where to optimize
+without changing correctness. Two knobs expose the tradeoff:
 
 #### Pacing
 
@@ -158,13 +160,14 @@ one per 4×4 cell. None is literal full quality; `fastsw=1` remains the crisp
 default. Results are scene-dependent—see the
 [measured performance audit](docs/performance-audit-2026-07-10.md).
 
-### Rendering: WebGPU hardware backend (experimental, parked)
+### Rendering: WebGPU hardware backend (experimental)
 
 `?video=wgpu` selects the true WebGPU hardware renderer command path, intended
-to bypass the software-raster unique-frame ceiling. The current classifier
-reaches real draws and present completion, but post-draw EFB readbacks remain
-zero, so it can show a diagnostic pattern instead of game frames and is **not**
-the default. The next boundary is draw-to-EFB correctness, not presentation.
+to bypass the software-raster unique-frame ceiling. On the validation GPU, the
+first completed 108-draw EFB pass contains nonzero color and the fixed battle
+is visible. This does not isolate which individual draw first changed the EFB.
+Replay still averages only about 68% game speed and 30 presents/s in the
+retained JIT-off runs, so it is **not** the default.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.

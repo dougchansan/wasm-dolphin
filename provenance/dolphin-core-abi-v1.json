@@ -1,27 +1,33 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+  "coreId": "sha256:f7ce56729d92404082994f97900dc0efb8fe66019b4e179f2321b7822377f523",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 261224,
-      "sha256": "00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658"
+      "size": 261851,
+      "sha256": "19bcf1c3b7eea6ee5c67d6ac089e6d5751f632d85c3a84baec447ddf64cc23c8"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12807931,
-      "sha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a"
+      "size": 12846988,
+      "sha256": "f7ce56729d92404082994f97900dc0efb8fe66019b4e179f2321b7822377f523"
     }
   ],
   "contractSources": [
     {
       "path": "core/upstream/dolphin_web_discio.cpp",
       "hashMode": "lf-normalized",
-      "size": 37142,
-      "sha256": "0fec5f15d1323f52e8036ac00dd382eeada01b83e9461f99cf88a49e0208bef7"
+      "size": 43746,
+      "sha256": "2d1cca6e8aa81e08ed473d97b86b094cb9a7a4eaa9cd71071b033a61e96078e5"
+    },
+    {
+      "path": "core/upstream/dolphin_web_raster_profile.h",
+      "hashMode": "lf-normalized",
+      "size": 29854,
+      "sha256": "25f259550e9fd07d24bf03ecde8f0cb8e651144818e6a6b3903d1a14be2a5a7f"
     },
     {
       "path": "core/upstream/dolphin_web_xfb_fastpaths.h",
@@ -50,14 +56,44 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 10789,
-      "sha256": "5b944479b7e29551e8324ecf8add7170674b3d3ccbbb1f914add0e15ca0765fe"
+      "size": 27650,
+      "sha256": "1e09f1140ef7683fc245993467cc0ce8d7ffedd304ebc3e9cd8088b60bcd1744"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 51952,
-      "sha256": "8ab348585e66ec3d07051391f649bc5f96f1d99d4867e40886fa195c4bae88a6"
+      "size": 54151,
+      "sha256": "9335a40b051f1904662074b10bc304b5e2e1bc1f567f76847c5bd3ed7be80476"
+    },
+    {
+      "path": "src/gpu-completion-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 4560,
+      "sha256": "8ee06e05e6062cb0e805ac5cd9a44d6aabc80a3ec6a5b607c593c2f2d25aa051"
+    },
+    {
+      "path": "src/input-latency-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 6293,
+      "sha256": "f5717dc093fc7db8c56063ef45fd9ae2dcbff2495c28e39f82232d6453d12923"
+    },
+    {
+      "path": "src/input-transport.js",
+      "hashMode": "lf-normalized",
+      "size": 2802,
+      "sha256": "4890d0a507543bf0e8d2f71ad10b72fa2775fb1b571b13e05f2225127a6facfa"
+    },
+    {
+      "path": "src/input-visual-marker.js",
+      "hashMode": "lf-normalized",
+      "size": 11693,
+      "sha256": "b4ed3850c6f2ea94b5f9ce898aa3f8085bebb6442ab903ffb6e689558e34a6bf"
+    },
+    {
+      "path": "src/frame-reuse-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 1695,
+      "sha256": "92edb198e314d429cbf6671b289a64e17d3e4d258921af2dff2ed71eb21da519"
     },
     {
       "path": "src/main-profiler.js",
@@ -74,32 +110,44 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 292783,
-      "sha256": "2d634efaf59a8968530f3f0b9d5d04bbb8919d95b62f432308e64acbe882baed"
+      "size": 345763,
+      "sha256": "2900fc3b075bce55c65cc71df8a334c26d0d1b2ca7277d5d9a2fddf30f92aa53"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 20189,
-      "sha256": "786d9429acdef46d0135be3e60a819138fe0f58e608c2a301ec608f218784f8f"
+      "size": 20246,
+      "sha256": "bd719473098f192545148df4733ec9539bd4300e19753c5e04098d1484312133"
     },
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 32598,
-      "sha256": "4a23fcac6a9ef63200948f615b4c16c7253c33bc6633e24fdd64c83a498a315c"
+      "size": 35088,
+      "sha256": "4b4951e3bfe573745017da24ddf380c27b21bc012cf0e9b1229da08b49536c76"
     },
     {
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 4667,
-      "sha256": "4e34308f5b4c14a194c0c02f1c3a3287c2a22d15d7b0796d2b7038ef3677f8e6"
+      "sha256": "42a1270037e4bd0bcedc2133f48033334b06f7c097f0803b47f94b84deeccbc1"
+    },
+    {
+      "path": "src/wgpu-pass-state-cache.js",
+      "hashMode": "lf-normalized",
+      "size": 11045,
+      "sha256": "fd9bdb6f982c0ee16465d9b2998c596929f4634cf075e285761eb0264cffc8f1"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 8674,
-      "sha256": "af52a7e0f631348ed46a71e99cd9a644fe2506b612d753bbee3c69c321ee6df7"
+      "size": 25008,
+      "sha256": "c908351655b732402e9da320767a1180bd251b67fb8f8a6ad21aa9052726eea2"
+    },
+    {
+      "path": "src/wgpu-upload-watermark.js",
+      "hashMode": "lf-normalized",
+      "size": 2808,
+      "sha256": "00f9fb14c250c90ec65915b1b66b3b78b4b2fb1964fe7d18368fd656511fa51b"
     }
   ],
   "memoryContract": {
@@ -189,6 +237,7 @@
     "_GetRootEntryPath",
     "_GetRootEntrySize",
     "_GetVideoStats",
+    "_GetWebGpuStateCacheStats",
     "_LoadCoreState",
     "_LoadState",
     "_LoadStateFile",
@@ -226,7 +275,9 @@
     "_SetPpcProfileEnabled",
     "_SetPpcWasmJitEnabled",
     "_SetPresentationScale",
+    "_SetSoftwareRasterProfileEnabled",
     "_SetVideoBackend",
+    "_SetWebGpuStateCacheEnabled",
     "_SetXfbFastPaths",
     "_StopCore",
     "_TestDcbxLoopPattern",
@@ -286,8 +337,8 @@
     }
   },
   "limitations": [
-    "The active snapshot series captures the ignored vendor delta, but a hermetic rebuild has not yet proven byte or behavioral parity with this baked artifact.",
+    "Two independent builds matched the baked JS, WASM, code, and data identities; gameplay validation remains machine- and scene-specific.",
     "Legacy patches 0001-0009 are research history and are deliberately excluded from the active source lock.",
-    "Runtime selection by core content hash is not yet implemented; the current URL remains the compatibility selector."
+    "The true hardware WebGPU renderer remains experimental and GPU-dependent despite fixed-battle validation on one AMD GPU."
   ]
 }

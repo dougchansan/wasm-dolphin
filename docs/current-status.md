@@ -22,12 +22,14 @@ quality for distinct-frame cadence, but can also reduce game speed in some
 scenes. `fastsw=1` is the balanced/crisp default; literal full-resolution
 software rasterization is `fastsw=0`.
 
-The true WebGPU hardware renderer is selected with `video=wgpu`. It is
-experimental and parked. On the current validation machine, command transport
-reaches real draws and present completion, but post-draw EFB readbacks remain
-zero (`EFB_DRAW_NO_MUTATION`), so the canvas stops at a diagnostic pattern
-instead of game content. Wii and broader GameCube compatibility are not the
-current focus.
+The true WebGPU hardware renderer is selected with `video=wgpu`. It remains
+experimental and is not the recommended path. On the current validation
+machine it now reaches the direct-loaded Kirby-versus-Link battle, presents a
+changing game image, and an immediate post-pass readback proves that the first
+completed EFB pass mutates its target. It is still far from full speed: two
+JIT-off fixed-battle runs with bounded replay averaged about 68% game speed and
+30 submitted presents/s. Results remain GPU- and machine-dependent. Wii and
+broader GameCube compatibility are not the current focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |
@@ -35,9 +37,10 @@ current focus.
 | Core/game speed | Near 100% on modern desktop Chrome | Needs machine-specific metrics |
 | Unique visual FPS | Software-raster limited | Known limitation |
 | Audio | Worker-fed/tuned, but validate per run | Medium |
-| True WebGPU hardware renderer | Experimental, GPU-dependent | Low/medium |
+| True WebGPU hardware renderer | Fixed battle visible; slow and experimental | Medium on one GPU, low generally |
 | General compatibility | Unverified | Low |
 
 Record machine-specific evidence in
 [the latest Melee evidence package](perf-results/melee-performance-evidence-2026-07-10.md)
+and [software-raster phase result](perf-results/melee-software-raster-phases-2026-07-10.md)
 rather than treating these status statements as universal benchmark results.

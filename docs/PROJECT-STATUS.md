@@ -1,10 +1,12 @@
 # Project status — measured checkpoint
 
-This is the current repository checkpoint after the seven-part browser
-performance program. For exact machine, fixture, commit, raw-artifact hashes,
-and verdicts, use the
-[2026-07-10 performance audit](performance-audit-2026-07-10.md) and its
-[evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
+This is the current checkpoint after the evidence-driven browser performance
+program and its five-priority follow-up. For exact machines, fixtures, commits,
+raw paths, and attribution limits, use the
+[current performance audit](performance-audit-2026-07-10.md),
+[software evidence](perf-results/melee-performance-evidence-2026-07-10.md),
+[JIT diagnosis](perf-results/melee-jit-diagnostics-2026-07-10.md), and
+[hardware-WGPU evidence](perf-results/wgpu-replay-and-latency-2026-07-10.md).
 
 ## Product direction
 
@@ -17,58 +19,66 @@ browser WebGPU:
 
 Melee is the only best-supported target. Near-100% game speed describes core
 timing, not 60 distinct visual frames per second. The true hardware renderer is
-`video=wgpu`; it remains experimental and is not the recommended path.
+`video=wgpu`; it now renders the fixed battle on the validation GPU, but remains
+slow, experimental, and not the recommended path.
 
 ## What the fixed-battle evidence established
 
-- The exact Kirby-versus-Link save loads directly. Qualification does not
-  navigate menus, pause at character select, or send gameplay input.
+- Every current validation run loads the exact Kirby-versus-Link save directly.
+  It does not navigate menus or stop at character select.
 - The dominant visible limit on the recommended path is distinct software
-  frame production. In the repeated full-versus-balanced screen, both arms
-  sustained about 100% game speed and 60 presentation FPS, while visual cadence
-  was 5.903 FPS for `fastsw=0` and 13.556 FPS for `fastsw=1`.
-- Core/game-speed stalls also contribute. The strict 60-second JIT-on run
-  averaged 92.751% game speed and fell to 65.049%; it did not pass.
-- An avoidable tick presentation queue averaged 12.678 ms. Immediate delivery
-  reduced measured queue age to zero in six valid blocks and is retained, with
-  `legacytickqueue=1` as rollback.
-- XFB row reuse, identity decode, and both combined measured +1.049%, +1.735%,
-  and +2.503%. All missed the declared 3% screening threshold and remain
-  default-off.
-- Observer metrics, host animation-frame work, software presentation, and audio
-  did not classify as the primary throughput bottleneck on the measured
-  machine. Input-to-photon latency remains unmeasured.
-- The WGPU pthread transport now works independently of JIT caching. Hardware
-  WGPU reaches real draws and present completion, but bounded post-draw EFB
-  readbacks remain zero (`EFB_DRAW_NO_MUTATION`).
-- Two independent upstream-core builds matched byte-for-byte. Source, patch,
-  toolchain, ABI, JS, WASM, and build identities are pinned and verified.
+  frame production. Prior repeated screens held about 100% game speed and 60
+  presentation FPS while `fastsw=1` produced about 13.6 unique visual FPS.
+- The rebuilt raster profiler now activates traversal, TEV, texture, FIFO,
+  EFB-to-XFB encode, source-generation, and stale-reuse counters. Its activation
+  smoke measured a 79.7% sampled stale-source ratio; the run overlapped a clean
+  build and is not a performance benchmark.
+- The first completed hardware-WGPU EFB pass mutated its target: an immediate
+  readback after 108 draws contained 182,949 nonzero color bytes. The visible
+  green/checker output came from legacy software repaint paths overwriting the
+  hardware-owned canvas; those paths are now suppressed after hardware present.
+- WGPU upload bytes can no longer be overwritten while pending commands still
+  reference them. A monotonic producer/consumer watermark and bounded staging
+  preserve upload lifetime across ring wrap.
+- After correctness, the 16,384-record replay pump reduced two-run mean backlog
+  high-water from 58,850.5 to 16,384 and raised submitted present cadence from
+  19.68 to 29.94 FPS. Mean game speed moved only from 67.12% to 68.205%; this is
+  still far from full speed.
+- All eight old JIT emit failures were attempts at one opcode, `addzex`, which
+  had been disabled accidentally at compile time. The rebuilt diagnostic
+  recorded zero emit failures. The longest sampled CPU slices were VI/CoreTiming
+  work, not JIT compile bursts.
+- GPU completion and input-to-visible boundaries are now measurable. The first
+  hardware input run matched six applied/core-polled/visible generations, but
+  its next-distinct-frame result is not yet causal input-to-photon.
+- Sound is working; retained software and hardware diagnostics had no audio
+  underruns.
+- The clean promoted-core gate averaged 100.077% game speed, 59.333
+  presentation FPS, and 14.095 unique visual FPS, but failed because one slice
+  fell to 91.696%, below the 95% minimum target.
 
 ## Current decisions
 
 | Area | Decision |
 | --- | --- |
 | Software hybrid | Keep as the default playable route |
-| Immediate tick delivery | Retain; confirmed latency improvement |
 | `fastsw=1` | Keep as balanced default; visual cadence remains limited |
-| XFB fast paths | Keep optional/default-off; measured below threshold |
-| JIT defaults | Do not change until emit failures and warm/cold benefit are classified |
-| Audio buffering | Keep; no software-run underruns or overruns were observed |
-| Hardware WGPU | Park as experimental until the first real draw mutates the EFB |
-| Generated core artifacts | Do not change without a provenance-qualified rebuild |
+| Raster profiling | Metrics-gated; use only to choose a measured hot phase |
+| JIT defaults | Keep correctness-sensitive features off; retain runtime escape hatches |
+| Audio buffering | Keep until a separate latency A/B preserves zero underruns |
+| Hardware WGPU | Continue experimentally; bounded replay pump on, `wgpupump=0` rollback |
+| Generated core artifacts | Promote only after independent parity, exact-save validation, and provenance checks |
 
 ## Next engineering order
 
-1. Instrument software raster traversal, TEV, texture sampling, FIFO generation
-   age, and stale-XFB reuse.
-2. Classify the eight guarded-JIT emit failures and long CPU slices without
-   enabling correctness-sensitive flags.
-3. Fix first-draw WGPU state so a real draw mutates the EFB, then address the
-   large replay backlog.
-4. Add separate GPU-completion and input-to-visible latency diagnostics.
-5. Optimize only the measured dominant raster/JIT phase and require state/XFB
-   parity plus repeated headed confirmation before promotion.
+1. Specialize one measured high-volume TEV/texture pixel case with strict
+   pixel/XFB parity and repeated visual-cadence evidence.
+2. Coalesce redundant WGPU state/command records and cache stable replay state,
+   one reversible change at a time.
+3. Attribute long VI/CoreTiming slices against raster, XFB, and wait phases.
+4. Window GPU-completion samples to the steady battle and classify queue spikes.
+5. Add a deterministic input-caused visual marker before calling the current
+   next-distinct-frame metric input-to-photon.
 
-No strict end-to-end performance qualification has passed yet. The audit is a
-bottleneck classification and optimization decision record, not a claim that
-the browser build is now lag-free.
+No strict end-to-end qualification currently supports a claim that the browser
+build is universally lag-free or that hardware WGPU is ready as the default.

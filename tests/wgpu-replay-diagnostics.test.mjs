@@ -5,8 +5,14 @@ import test from "node:test";
 import {
   createWgpuReplayClassifier,
   requestedWgpuAtomicPassReplay,
+  requestedWgpuDeepReplayDiagnostics,
+  requestedWgpuDetachedPresenter,
+  requestedWgpuLoadEpochFence,
+  requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
-  selectAtomicReplayLimit
+  requestedWgpuStateCache,
+  selectAtomicReplayLimit,
+  summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
 
 test("WGPU replay diagnostics are opt-in", () => {
@@ -50,25 +56,100 @@ test("classifier distinguishes draws, zero EFB, nonzero EFB, and present complet
   const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
   classifier.recordPassBegin({ framebufferId: 14, recordIndex: 1 });
   classifier.recordEfbClear({ framebufferId: 14, rgba: [0, 0, 0, 0] });
-  classifier.recordRealDraw({ framebufferId: 14, indexed: true, pipelineId: 79 });
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    indexed: true,
+    pipelineId: 79,
+    efb: true,
+    state: {
+      pipeline: { id: 79, resolved: true, colorFormat: "rgba8unorm", depthFormat: "depth32float" },
+      bindGroups: [31, 32, 33],
+      vertexBuffer: { id: 7, offset: 0 },
+      indexBuffer: { id: 8, format: "uint16", offset: 0 },
+      viewport: [0, 0, 640, 528, 0, 1],
+      scissor: [0, 0, 640, 528]
+    }
+  });
   classifier.recordPassEnd({ reason: "explicit", recordIndex: 8 });
   classifier.recordPresentCommand({ recordIndex: 9 });
   classifier.recordSubmission({ reason: "present", submitted: true });
-  classifier.recordEfbReadback({ framebufferId: 14, nonzeroBytes: 0, maxByte: 0 });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 0,
+    maxByte: 0,
+    presentSequence: 1
+  });
 
   let snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "EFB_DRAW_NO_MUTATION");
   assert.equal(snapshot.stages.firstRealDraw.status, "pass");
+  assert.equal(snapshot.stages.firstEfbDraw.status, "pass");
+  assert.equal(snapshot.stages.firstEfbDraw.pipelineId, 79);
+  assert.deepEqual(snapshot.stages.firstEfbDraw.state.bindGroups, [31, 32, 33]);
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.status, "pass");
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.pipelineId, 79);
   assert.equal(snapshot.stages.firstNonzeroEfb.status, "pending");
   assert.equal(snapshot.stages.presentSubmission.submittedCount, 1);
 
-  classifier.recordEfbReadback({ framebufferId: 14, nonzeroBytes: 12, maxByte: 255 });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 12,
+    maxByte: 255,
+    presentSequence: 871
+  });
   classifier.recordPresentCompletion({ completed: true });
   snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "PASS");
   assert.equal(snapshot.stages.efbMutation.status, "pass");
   assert.equal(snapshot.stages.firstNonzeroEfb.status, "pass");
+  assert.equal(snapshot.stages.firstNonzeroEfb.presentSequence, 871);
+  assert.equal(snapshot.stages.firstNonzeroEfb.readbackOrdinal, 2);
   assert.equal(snapshot.stages.presentSubmission.completedCount, 1);
+});
+
+test("legacy deep replay probes are default-off with an explicit rollback", () => {
+  assert.equal(requestedWgpuDeepReplayDiagnostics(""), false);
+  assert.equal(requestedWgpuDeepReplayDiagnostics("?wgpudeepdiag=1"), true);
+  assert.equal(requestedWgpuDeepReplayDiagnostics("?wgpudeepdiag=0"), false);
+});
+
+test("load fencing is opt-in while real-WGPU replay pumping has a rollback", () => {
+  assert.equal(requestedWgpuLoadEpochFence(""), false);
+  assert.equal(requestedWgpuLoadEpochFence("?wgpuloadfence=1"), true);
+  assert.equal(requestedWgpuReplayPump(""), false);
+  assert.equal(requestedWgpuReplayPump("", true), true);
+  assert.equal(requestedWgpuReplayPump("?wgpupump=1"), true);
+  assert.equal(requestedWgpuReplayPump("?wgpupump=0", true), false);
+  assert.equal(requestedWgpuDetachedPresenter(""), false);
+  assert.equal(requestedWgpuDetachedPresenter("?wgpudetached=1"), true);
+});
+
+test("first EFB draw evidence is immutable and remains bounded", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  assert.equal(classifier.needsFirstEfbDrawState(), true);
+
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    pipelineId: 22,
+    efb: true,
+    state: { pipeline: { id: 22 }, bindGroups: [1, 2, 3] }
+  });
+  assert.equal(classifier.needsFirstEfbDrawState(), false);
+  assert.equal(classifier.needsFirstEfbDrawState(true), true);
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    pipelineId: 9001,
+    indexed: true,
+    efb: true,
+    state: { pipeline: { id: 9001 }, bindGroups: [4, 5, 6] }
+  });
+  assert.equal(classifier.needsFirstEfbDrawState(true), false);
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.stages.firstEfbDraw.pipelineId, 22);
+  assert.deepEqual(snapshot.stages.firstEfbDraw.state.bindGroups, [1, 2, 3]);
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.pipelineId, 9001);
+  assert.deepEqual(snapshot.stages.firstIndexedEfbDraw.state.bindGroups, [4, 5, 6]);
 });
 
 test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => {
@@ -79,7 +160,7 @@ test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => 
   let snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "WAITING_FOR_POST_DRAW_EFB_READBACK");
   assert.equal(snapshot.stages.efbMutation.postDrawReadbackCount, 0);
-  assert.equal(classifier.needsPostDrawEfbReadback(1), true);
+  assert.equal(classifier.needsPostDrawEfbReadback(1, 1), true);
 
   classifier.recordEfbReadback({
     framebufferId: 14,
@@ -90,6 +171,106 @@ test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => 
   snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "EFB_DRAW_NO_MUTATION");
   assert.equal(snapshot.stages.efbMutation.postDrawReadbackCount, 1);
+});
+
+test("pass-state caching is opt-in with an explicit boolean override", () => {
+  assert.equal(requestedWgpuStateCache(""), false);
+  assert.equal(requestedWgpuStateCache("", true), true);
+  assert.equal(requestedWgpuStateCache("?wgpustatecache=1"), true);
+  assert.equal(requestedWgpuStateCache("?wgpustatecache=0", true), false);
+});
+
+test("an immediate first completed EFB pass readback is independent of present-time evidence", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  assert.equal(classifier.needsFirstEfbPassReadback(14), false);
+
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    indexed: true,
+    pipelineId: 79,
+    efb: true
+  });
+  assert.equal(classifier.needsFirstEfbPassReadback(15), false);
+  assert.equal(classifier.needsFirstEfbPassReadback(14), true);
+  assert.equal(classifier.beginFirstEfbPassReadback({
+    framebufferId: 14,
+    passEndRecordIndex: 108,
+    drawCountAtEncode: classifier.captureEfbDrawCount()
+  }), true);
+  assert.equal(classifier.beginFirstEfbPassReadback({ framebufferId: 14 }), false);
+
+  let snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.code, "WAITING_FOR_FIRST_EFB_PASS_READBACK");
+  assert.equal(snapshot.stages.firstEfbPassReadback.status, "running");
+  assert.equal(snapshot.stages.firstEfbPassReadback.passEndRecordIndex, 108);
+  assert.equal(snapshot.stages.firstEfbPassReadback.drawCountAtEncode, 1);
+
+  assert.equal(classifier.recordFirstEfbPassReadback({
+    nonzeroBytes: 0,
+    nonzeroColorBytes: 0,
+    sampledBytes: 4096,
+    maxByte: 0
+  }), true);
+  assert.equal(classifier.recordFirstEfbPassReadback({ nonzeroBytes: 12 }), false);
+
+  snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.code, "FIRST_EFB_PASS_NO_MUTATION");
+  assert.equal(snapshot.stages.firstEfbPassReadback.status, "fail");
+  assert.equal(snapshot.stages.firstEfbPassReadback.readbackCount, 1);
+  assert.equal(snapshot.stages.firstEfbPassReadback.sampledBytes, 4096);
+  assert.equal(snapshot.stages.efbMutation.readbackCount, 0);
+  assert.equal(snapshot.stages.firstNonzeroEfb.status, "pending");
+
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 12,
+    nonzeroColorBytes: 9,
+    maxByte: 255,
+    presentSequence: 871
+  });
+  classifier.recordPresentCompletion({ completed: true });
+  snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.code, "FIRST_EFB_PASS_NO_MUTATION_LATER_PRESENT_MUTATION");
+  assert.equal(snapshot.stages.firstEfbPassReadback.status, "fail");
+  assert.equal(snapshot.stages.efbMutation.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.firstNonzeroEfb.presentSequence, 871);
+});
+
+test("a nonzero immediate first EFB pass readback proves pass mutation", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 79, efb: true });
+  assert.equal(classifier.beginFirstEfbPassReadback({
+    framebufferId: 14,
+    passEndRecordIndex: 21
+  }), true);
+  assert.equal(classifier.recordFirstEfbPassReadback({
+    nonzeroBytes: 16,
+    nonzeroColorBytes: 12,
+    sampledBytes: 64,
+    maxByte: 255
+  }), true);
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.status, "pass");
+  assert.equal(snapshot.classifier.code, "FIRST_EFB_PASS_MUTATED");
+  assert.equal(snapshot.stages.firstEfbPassReadback.status, "pass");
+  assert.equal(snapshot.stages.firstEfbPassReadback.nonzeroColorBytes, 12);
+  assert.equal(snapshot.stages.firstEfbPassReadback.maxByte, 255);
+  assert.equal(snapshot.stages.efbMutation.readbackCount, 0);
+  assert.equal(snapshot.stages.firstNonzeroEfb.status, "pending");
+});
+
+test("an immediate first EFB pass readback error is classified explicitly", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 79, efb: true });
+  assert.equal(classifier.beginFirstEfbPassReadback({ framebufferId: 14 }), true);
+  assert.equal(classifier.recordFirstEfbPassReadback({ error: new Error("map failed") }), true);
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.status, "fail");
+  assert.equal(snapshot.classifier.code, "FIRST_EFB_PASS_READBACK_ERROR");
+  assert.equal(snapshot.stages.firstEfbPassReadback.status, "error");
+  assert.equal(snapshot.stages.firstEfbPassReadback.error, "Error: map failed");
 });
 
 test("missing-resource evidence and event storage stay bounded", () => {
@@ -144,6 +325,100 @@ test("atomic replay limit remains correct across the uint32 ring-index wrap", ()
   );
 });
 
+test("ring-range summaries expose a pending pass and upload pressure", () => {
+  const records = new Map([
+    [100, { op: 12 }],
+    [101, { op: 6, uploadBytes: 1536, uploadPointer: 0x1200 }],
+    [102, { op: 20 }]
+  ]);
+  const summary = summarizeWgpuReplayRange({
+    read: 100,
+    write: 103,
+    recordAt: (index) => records.get(index),
+    uploadArenaBase: 0x1000,
+    uploadArenaSize: 0x1000
+  });
+
+  assert.equal(summary.recordCount, 3);
+  assert.equal(summary.beginPassCount, 1);
+  assert.equal(summary.endPassCount, 0);
+  assert.equal(summary.openPassDepth, 1);
+  assert.equal(summary.uploadBufferCount, 1);
+  assert.equal(summary.uploadBytes, 1536);
+  assert.equal(summary.uploadPointerWrapCount, 0);
+  assert.equal(summary.uploadReferencesInArena, 1);
+  assert.equal(summary.potentialArenaOverwrite, false);
+  assert.equal(summary.firstOp, 12);
+  assert.equal(summary.lastOp, 20);
+});
+
+test("classifier correlates load epoch, EFB, XFB, and backbuffer mutation", () => {
+  const classifier = createWgpuReplayClassifier({
+    generation: 7,
+    now: incrementingClock()
+  });
+  classifier.recordLoadBoundary({
+    readIndex: 100,
+    writeIndex: 103,
+    uploadReadIndex: 4096,
+    summary: {
+      recordCount: 3,
+      beginPassCount: 1,
+      endPassCount: 0,
+      openPassDepth: 1
+    }
+  });
+  classifier.recordDrainEpoch({
+    readIndex: 100,
+    writeIndex: 110100,
+    replayLimit: 104,
+    processed: 4,
+    presentCount: 1,
+    summary: { uploadBytes: 64 * 1024 * 1024, potentialArenaOverwrite: true }
+  });
+  classifier.recordPresentationReadback({
+    kind: "efb",
+    framebufferId: 14,
+    nonzeroBytes: 4096,
+    nonzeroColorBytes: 3072,
+    nonzeroAlphaBytes: 1024,
+    sampledBytes: 8192,
+    maxByte: 255,
+    presentSequence: 2
+  });
+  classifier.recordPresentationReadback({
+    kind: "xfb",
+    framebufferId: 47,
+    nonzeroBytes: 2048,
+    sampledBytes: 8192,
+    maxByte: 239,
+    presentSequence: 2
+  });
+  classifier.recordPresentationReadback({
+    kind: "backbuffer",
+    framebufferId: 0,
+    sourceTextureId: 47,
+    nonzeroBytes: 1024,
+    sampledBytes: 4096,
+    maxByte: 239,
+    presentSequence: 2
+  });
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.generation, 7);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.pendingRecords, 3);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.uploadReadIndex, 4096);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.openPassDepth, 1);
+  assert.equal(snapshot.stages.ringEpoch.backlogHighWater, 110000);
+  assert.equal(snapshot.stages.ringEpoch.highWaterSummary.potentialArenaOverwrite, true);
+  assert.equal(snapshot.stages.ringEpoch.drainSamples.length, 1);
+  assert.equal(snapshot.stages.presentationChain.efb.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.xfb.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.nonzeroColorReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.sourceTextureId, 47);
+});
+
 test("host-to-worker plumbing keeps the classifier query-gated and reportable", async () => {
   const [host, adapter, worker] = await Promise.all([
     readFile(new URL("../src/core-host.js", import.meta.url), "utf8"),
@@ -152,16 +427,55 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   ]);
 
   assert.match(host, /requestedWgpuReplayDiagnostics\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuDeepReplayDiagnostics\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuDetachedPresenter\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuLoadEpochFence\(window\.location\.search\)/);
+  assert.match(
+    host,
+    /requestedWgpuReplayPump\(\s*window\.location\.search,\s*this\.videoBackend === "WebGPU-Real"\s*\)/
+  );
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
+  assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
+  assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
+  assert.match(adapter, /wgpuLoadEpochFence: this\.wgpuLoadEpochFence/);
+  assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
-  assert.match(worker, /wgpuReplayDiagnostics\s+\? createWgpuReplayClassifier\(\{ scope: "core-load" \}\)/);
-  assert.match(worker, /createWgpuReplayClassifier\(\{ scope: "load-state-file" \}\)/);
+  assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
+  assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
+  assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
+  assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
+  assert.match(worker, /wgpuDetachedPresenter: payload\.wgpuDetachedPresenter/);
+  assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
+  assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
+  assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
+  assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
+  assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
+  assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
+  assert.match(worker, /scope: "load-state-file",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /classifierGeneration === wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuReplayClassifier: wgpuReplayClassifier\?\.snapshot\(\) \?\? null/);
   assert.match(worker, /const replayLimit = wgpuAtomicPassReplay\s+\? selectAtomicReplayLimit/);
+  assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
+  assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);
+  assert.match(worker, /Atomics\.load\(ring\.headerI32, 3\)/);
+  assert.match(worker, /type: "detachedWgpuFrame"/);
+  assert.match(worker, /scheduleDetachedWgpuBitmap\(q\)/);
   assert.match(worker, /while \(read !== replayLimit\)/);
   assert.match(worker, /endPass\("drain-boundary", read\)/);
+});
+
+test("worker reads the first completed EFB pass before later presents can clear it", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    worker,
+    /beginFirstEfbPassReadback\(\{[\s\S]*?framebufferId: endedFramebufferId[\s\S]*?copyTextureToBuffer[\s\S]*?submitEnc\("first-efb-pass-readback"\)/
+  );
+  assert.match(worker, /recordFirstEfbPassReadback\(\{[\s\S]*?nonzeroColorBytes/);
 });
 
 function incrementingClock() {

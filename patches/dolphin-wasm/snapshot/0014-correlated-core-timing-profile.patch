@@ -1,0 +1,604 @@
+diff --git a/Source/Core/Core/CoreTiming.cpp b/Source/Core/Core/CoreTiming.cpp
+index fad0e6e..247a30c 100644
+--- a/Source/Core/Core/CoreTiming.cpp
++++ b/Source/Core/Core/CoreTiming.cpp
+@@ -6,6 +6,7 @@
+ #include <algorithm>
+ #include <mutex>
+ #include <string>
++#include <string_view>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -26,6 +27,9 @@
+ #include "Core/HW/SystemTimers.h"
+ #include "Core/PowerPC/PowerPC.h"
+ #include "Core/System.h"
++#ifdef __EMSCRIPTEN__
++#include "Core/WasmTimingProfile.h"
++#endif
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <atomic>
+@@ -451,20 +455,33 @@ void CoreTimingManager::Advance()
+     std::ranges::pop_heap(m_event_queue, std::ranges::greater{});
+     m_event_queue.pop_back();
+ #ifdef __EMSCRIPTEN__
+-    // §28cp per-event callback timing. Logs to console when ANY single
++    // §28cp metrics-gated per-event callback timing. Logs when ANY single
+     // event callback exceeds 5ms wall time — these are the spikes that
+     // produce the 60ms advMax spike seen in §28co. Per-event so we can
+     // identify by NAME which scheduled event is the culprit (DSP audio
+     // mix, VI vsync, audio worklet feed, OS interrupts, etc.).
+-    const auto _cb_start = std::chrono::steady_clock::now();
+-    evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+-    const auto _cb_end = std::chrono::steady_clock::now();
+-    const u32 _cb_us = static_cast<u32>(
+-        std::chrono::duration_cast<std::chrono::microseconds>(_cb_end - _cb_start).count());
+-    if (_cb_us > 5000)
++    const bool profile_event = DolphinWeb::WasmTimingProfile::IsSliceActive();
++    if (profile_event)
++    {
++      const u32 wait_us_at_start = DolphinWeb::WasmTimingProfile::CurrentAttributedWaitUs();
++      const auto callback_start = DolphinWeb::WasmTimingProfile::Clock::now();
++      evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
++      const u32 callback_us = DolphinWeb::WasmTimingProfile::ElapsedMicros(
++          callback_start, DolphinWeb::WasmTimingProfile::Clock::now());
++      const std::string_view name =
++          evt.type->name ? std::string_view{*evt.type->name} : std::string_view{};
++      DolphinWeb::WasmTimingProfile::RecordCoreTimingEvent(name, callback_us, wait_us_at_start);
++      if (callback_us > 5000)
++      {
++        const char* event_name = name.empty() ? "?" : evt.type->name->c_str();
++        EM_ASM(
++            { console.log('[ct-slow-event] name=' + UTF8ToString($0) + ' us=' + $1); }, event_name,
++            static_cast<int>(callback_us));
++      }
++    }
++    else
+     {
+-      const char* _name = (evt.type->name && !evt.type->name->empty()) ? evt.type->name->c_str() : "?";
+-      EM_ASM({ console.log('[ct-slow-event] name=' + UTF8ToString($0) + ' us=' + $1); }, _name, static_cast<int>(_cb_us));
++      evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+     }
+ #else
+     evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+@@ -531,6 +548,10 @@ void CoreTimingManager::SleepUntil(TimePoint time_point)
+     // Count amount of time sleeping for analytics
+     const TimePoint time_after_sleep = Clock::now();
+     m_system.GetPerfMetrics().CountThrottleSleep(time_after_sleep - time);
++#ifdef __EMSCRIPTEN__
++    DolphinWeb::WasmTimingProfile::RecordThrottleWaitUs(
++        DolphinWeb::WasmTimingProfile::ElapsedMicros(time, time_after_sleep));
++#endif
+   }
+   else
+   {
+diff --git a/Source/Core/Core/HW/VideoInterface.cpp b/Source/Core/Core/HW/VideoInterface.cpp
+index e4ada4e..0bda6ef 100644
+--- a/Source/Core/Core/HW/VideoInterface.cpp
++++ b/Source/Core/Core/HW/VideoInterface.cpp
+@@ -27,6 +27,9 @@
+ #include "Core/ConfigManager.h"
+ #include "Core/Core.h"
+ #include "Core/CoreTiming.h"
++#ifdef __EMSCRIPTEN__
++#include "Core/WasmTimingProfile.h"
++#endif
+ #include "Core/FifoPlayer/FifoPlayer.h"
+ #include "Core/HW/MMIO.h"
+ #include "Core/HW/ProcessorInterface.h"
+@@ -927,7 +930,9 @@ void VideoInterfaceManager::Update(u64 ticks)
+ 
+ #ifdef __EMSCRIPTEN__
+   // §28cq sub-stage timing inside VICallback's Update().
+-  const auto _vi_begin = std::chrono::steady_clock::now();
++  const bool _vi_profile = DolphinWeb::WasmTimingProfile::IsSliceActive();
++  const auto _vi_begin =
++      _vi_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+   bool _vi_did_begin_field = false;
+   bool _vi_did_end_field = false;
+ #endif
+@@ -960,7 +965,8 @@ void VideoInterfaceManager::Update(u64 ticks)
+ #endif
+   }
+ #ifdef __EMSCRIPTEN__
+-  const auto _vi_after_fields = std::chrono::steady_clock::now();
++  const auto _vi_after_fields =
++      _vi_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+ #endif
+ 
+   // If this half-line is at a field boundary, deal with frame stepping before potentially
+@@ -970,7 +976,8 @@ void VideoInterfaceManager::Update(u64 ticks)
+     Core::Callback_NewField(m_system);
+ 
+ #ifdef __EMSCRIPTEN__
+-  const auto _vi_after_cbnewfield = std::chrono::steady_clock::now();
++  const auto _vi_after_cbnewfield =
++      _vi_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+ #endif
+ 
+   auto& core_timing = m_system.GetCoreTiming();
+@@ -994,15 +1001,27 @@ void VideoInterfaceManager::Update(u64 ticks)
+     m_half_line_of_next_si_poll += 2 * si.GetPollXLines();
+   }
+ #ifdef __EMSCRIPTEN__
+-  const auto _vi_after_si = std::chrono::steady_clock::now();
+-  const u32 _vi_fields_us = static_cast<u32>(std::chrono::duration_cast<std::chrono::microseconds>(_vi_after_fields - _vi_begin).count());
+-  const u32 _vi_cbnewfield_us = static_cast<u32>(std::chrono::duration_cast<std::chrono::microseconds>(_vi_after_cbnewfield - _vi_after_fields).count());
+-  const u32 _vi_si_us = static_cast<u32>(std::chrono::duration_cast<std::chrono::microseconds>(_vi_after_si - _vi_after_cbnewfield).count());
+-  if (_vi_fields_us > 5000 || _vi_cbnewfield_us > 5000 || _vi_si_us > 5000)
++  if (_vi_profile)
+   {
+-    const char* _which = _vi_did_begin_field ? "BeginField" : _vi_did_end_field ? "EndField" : "(none)";
+-    EM_ASM({ console.log('[vi-subtiming] which=' + UTF8ToString($0) + ' fields=' + $1 + 'us cbNewField=' + $2 + 'us siPoll=' + $3 + 'us halfline=' + $4); },
+-           _which, _vi_fields_us, _vi_cbnewfield_us, _vi_si_us, m_half_line_count);
++    const auto _vi_after_si = std::chrono::steady_clock::now();
++    const u32 _vi_fields_us =
++        DolphinWeb::WasmTimingProfile::ElapsedMicros(_vi_begin, _vi_after_fields);
++    const u32 _vi_cbnewfield_us =
++        DolphinWeb::WasmTimingProfile::ElapsedMicros(_vi_after_fields, _vi_after_cbnewfield);
++    const u32 _vi_si_us =
++        DolphinWeb::WasmTimingProfile::ElapsedMicros(_vi_after_cbnewfield, _vi_after_si);
++    if (_vi_fields_us > 5000 || _vi_cbnewfield_us > 5000 || _vi_si_us > 5000)
++    {
++      const char* _which = _vi_did_begin_field ? "BeginField" :
++                           _vi_did_end_field   ? "EndField" :
++                                                 "(none)";
++      EM_ASM(
++          {
++            console.log('[vi-subtiming] which=' + UTF8ToString($0) + ' fields=' + $1 +
++                        'us cbNewField=' + $2 + 'us siPoll=' + $3 + 'us halfline=' + $4);
++          },
++          _which, _vi_fields_us, _vi_cbnewfield_us, _vi_si_us, m_half_line_count);
++    }
+   }
+ #endif
+ 
+diff --git a/Source/Core/Core/HW/DVD/DVDThread.cpp b/Source/Core/Core/HW/DVD/DVDThread.cpp
+index e7b40fa..f03498a 100644
+--- a/Source/Core/Core/HW/DVD/DVDThread.cpp
++++ b/Source/Core/Core/HW/DVD/DVDThread.cpp
+@@ -19,6 +19,9 @@
+ #include "Core/ConfigManager.h"
+ #include "Core/Core.h"
+ #include "Core/CoreTiming.h"
++#ifdef __EMSCRIPTEN__
++#include "Core/WasmTimingProfile.h"
++#endif
+ #include "Core/HW/DVD/DVDInterface.h"
+ #include "Core/HW/DVD/FileMonitor.h"
+ #include "Core/HW/Memmap.h"
+@@ -246,7 +249,20 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
+   {
+     while (true)
+     {
++#ifdef __EMSCRIPTEN__
++      const bool profile_wait = DolphinWeb::WasmTimingProfile::IsSliceActive();
++      const auto wait_started_at = profile_wait ?
++                                       DolphinWeb::WasmTimingProfile::Clock::now() :
++                                       DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+       m_result_queue.WaitForData();
++#ifdef __EMSCRIPTEN__
++      if (profile_wait)
++      {
++        DolphinWeb::WasmTimingProfile::RecordDvdWaitUs(DolphinWeb::WasmTimingProfile::ElapsedMicros(
++            wait_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++      }
++#endif
+       m_result_queue.Pop(result);
+       if (result.first.id == id)
+         break;
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index b3e0f91..fb44b64 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -31,6 +31,9 @@
+ #include "Core/ConfigManager.h"
+ #include "Core/Core.h"
+ #include "Core/CoreTiming.h"
++#ifdef __EMSCRIPTEN__
++#include "Core/WasmTimingProfile.h"
++#endif
+ #include "Core/HLE/HLE.h"
+ #include "Core/HW/CPU.h"
+ #include "Core/HW/GPFifo.h"
+@@ -331,6 +334,7 @@ extern "C" void DolphinWeb_RecordModuleUs(int dt_us)
+ {
+   if (dt_us < 0) return;
+   const u32 dt = static_cast<u32>(dt_us);
++  DolphinWeb::WasmTimingProfile::RecordCompileUs(dt);
+   s_wasm_module_us_total.fetch_add(dt, std::memory_order_relaxed);
+   u32 prev_max = s_wasm_module_us_max.load(std::memory_order_relaxed);
+   while (dt > prev_max &&
+@@ -346,6 +350,7 @@ extern "C" void DolphinWeb_RecordModuleUs(int dt_us)
+ extern "C" void DolphinWeb_RecordInstanceUs(int dt_us)
+ {
+   if (dt_us < 0) return;
++  DolphinWeb::WasmTimingProfile::RecordCompileUs(static_cast<u32>(dt_us));
+   s_wasm_instance_us_total.fetch_add(static_cast<u32>(dt_us), std::memory_order_relaxed);
+   u32 prev_max = s_wasm_instance_us_max.load(std::memory_order_relaxed);
+   while (static_cast<u32>(dt_us) > prev_max &&
+@@ -7867,11 +7872,9 @@ void CachedInterpreter::Run()
+   const CPU::State* state_ptr = m_system.GetCPU().GetStatePtr();
+   while (*state_ptr == CPU::State::Running)
+   {
+-    // §28cn per-slice wall-time profiling. Start timestamp captured before
+-    // the slice's Advance + ExecuteOneBlock loop; end timestamp after the
+-    // do/while. dt_us tells us how long the CPU pthread was busy on this
+-    // slice. >16000us = blew one frame at 60Hz.
+-    const auto _slice_start = std::chrono::steady_clock::now();
++    // §28cn metrics-gated per-slice wall-time profiling. The timestamp below
++    // spans Advance + ExecuteOneBlock; >16000us means the CPU pthread crossed
++    // one 60Hz frame budget, including intentional waits.
+     // §28ce: peak burst stats — snapshot last slice's totals into the
+     // burst-max atomics, then reset the per-slice counters before entering
+     // the new slice. Done unconditionally (independent of throttle gate)
+@@ -7897,10 +7900,17 @@ void CachedInterpreter::Run()
+       s_wasm_compile_us_this_slice = 0;
+     }
+     // Start new timing slice
++    // Metrics-off runs avoid all per-slice clocks. BeginSlice also resets
++    // the exclusive wait/work attribution for this one CoreTiming slice.
++    const bool _profile_slice = DolphinWeb::WasmTimingProfile::BeginSlice();
++    const auto _slice_start =
++        _profile_slice ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+     // NOTE: Exceptions may change PC
+-    const auto _advance_start = std::chrono::steady_clock::now();
++    const auto _advance_start =
++        _profile_slice ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+     core_timing.Advance();
+-    const auto _advance_end = std::chrono::steady_clock::now();
++    const auto _advance_end =
++        _profile_slice ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+ 
+     do
+     {
+@@ -7912,41 +7922,43 @@ void CachedInterpreter::Run()
+     // it AFTER the slice has run, just before the reset zeros it on the
+     // next iteration). Actually we need the read BEFORE the next iteration
+     // resets it — so capture it on this iteration's tail.
+-    const auto _slice_end = std::chrono::steady_clock::now();
+-    const u32 _slice_us = static_cast<u32>(
+-        std::chrono::duration_cast<std::chrono::microseconds>(_slice_end - _slice_start).count());
+-    const u32 _advance_us = static_cast<u32>(
+-        std::chrono::duration_cast<std::chrono::microseconds>(_advance_end - _advance_start).count());
+-    const u32 _exec_us = static_cast<u32>(
+-        std::chrono::duration_cast<std::chrono::microseconds>(_slice_end - _advance_end).count());
+-    // §28co per-stage maxes — CAS-update.
+-    {
+-      u32 prev = s_runloop_advance_max_us.load(std::memory_order_relaxed);
+-      while (_advance_us > prev &&
+-             !s_runloop_advance_max_us.compare_exchange_weak(prev, _advance_us,
+-                                                             std::memory_order_relaxed)) {}
+-    }
+-    {
+-      u32 prev = s_runloop_exec_max_us.load(std::memory_order_relaxed);
+-      while (_exec_us > prev &&
+-             !s_runloop_exec_max_us.compare_exchange_weak(prev, _exec_us,
+-                                                          std::memory_order_relaxed)) {}
+-    }
+-    const u32 _compile_us = s_wasm_compile_us_this_slice;
+-    const u32 _run_only_us = _slice_us > _compile_us ? (_slice_us - _compile_us) : 0;
+-    s_runloop_total_us.fetch_add(_slice_us, std::memory_order_relaxed);
+-    s_runloop_slice_count.fetch_add(1, std::memory_order_relaxed);
+-    {
+-      u32 prev = s_runloop_max_per_slice_us.load(std::memory_order_relaxed);
+-      while (_slice_us > prev &&
+-             !s_runloop_max_per_slice_us.compare_exchange_weak(prev, _slice_us,
++    if (_profile_slice)
++    {
++      const auto _slice_end = std::chrono::steady_clock::now();
++      const u32 _slice_us = DolphinWeb::WasmTimingProfile::ElapsedMicros(_slice_start, _slice_end);
++      const u32 _advance_us =
++          DolphinWeb::WasmTimingProfile::ElapsedMicros(_advance_start, _advance_end);
++      const u32 _exec_us = DolphinWeb::WasmTimingProfile::ElapsedMicros(_advance_end, _slice_end);
++      DolphinWeb::WasmTimingProfile::FinishSlice(_slice_us, _advance_us, _exec_us);
++      // §28co per-stage maxes — CAS-update.
++      {
++        u32 prev = s_runloop_advance_max_us.load(std::memory_order_relaxed);
++        while (_advance_us > prev &&
++               !s_runloop_advance_max_us.compare_exchange_weak(prev, _advance_us,
+                                                                std::memory_order_relaxed)) {}
+-    }
+-    {
+-      u32 prev = s_runloop_max_run_only_us.load(std::memory_order_relaxed);
+-      while (_run_only_us > prev &&
+-             !s_runloop_max_run_only_us.compare_exchange_weak(prev, _run_only_us,
+-                                                              std::memory_order_relaxed)) {}
++      }
++      {
++        u32 prev = s_runloop_exec_max_us.load(std::memory_order_relaxed);
++        while (_exec_us > prev &&
++               !s_runloop_exec_max_us.compare_exchange_weak(prev, _exec_us,
++                                                            std::memory_order_relaxed)) {}
++      }
++      const u32 _compile_us = s_wasm_compile_us_this_slice;
++      const u32 _run_only_us = _slice_us > _compile_us ? (_slice_us - _compile_us) : 0;
++      s_runloop_total_us.fetch_add(_slice_us, std::memory_order_relaxed);
++      s_runloop_slice_count.fetch_add(1, std::memory_order_relaxed);
++      {
++        u32 prev = s_runloop_max_per_slice_us.load(std::memory_order_relaxed);
++        while (_slice_us > prev &&
++               !s_runloop_max_per_slice_us.compare_exchange_weak(prev, _slice_us,
++                                                                 std::memory_order_relaxed)) {}
++      }
++      {
++        u32 prev = s_runloop_max_run_only_us.load(std::memory_order_relaxed);
++        while (_run_only_us > prev &&
++               !s_runloop_max_run_only_us.compare_exchange_weak(prev, _run_only_us,
++                                                                std::memory_order_relaxed)) {}
++      }
+     }
+   }
+ }
+@@ -10877,6 +10889,7 @@ extern "C" void SetPpcProfileEnabled(int enabled)
+   if (next_enabled && !s_ppc_block_profile_enabled)
+     ResetPpcBlockProfile();
+   s_ppc_block_profile_enabled = next_enabled;
++  DolphinWeb::WasmTimingProfile::SetEnabled(next_enabled);
+ }
+ 
+ extern "C" const char* GetPpcProfileStats()
+@@ -11056,6 +11069,13 @@ extern "C" const char* GetPpcWasmHelperStats()
+   out << "runloop:" << runloop_count << "slices/avg" << runloop_avg
+       << "us/max" << runloop_max << "us/runOnlyMax" << runloop_runonly_max << "us"
+       << "/advMax" << runloop_advance_max << "us/execMax" << runloop_exec_max << "us ";
++  const DolphinWeb::WasmTimingProfile::WorstSlice worst_slice =
++      DolphinWeb::WasmTimingProfile::CaptureWorstSlice();
++  out << "sliceprof:total=" << worst_slice.total_us << ",advance=" << worst_slice.advance_us
++      << ",execute=" << worst_slice.execute_us << ",compile=" << worst_slice.compile_us
++      << ",throttle=" << worst_slice.throttle_wait_us << ",dvd=" << worst_slice.dvd_wait_us
++      << ",video=" << worst_slice.video_work_us
++      << ",event=" << DolphinWeb::WasmTimingProfile::EventName(worst_slice.event) << " ";
+   out << "reject:" << s_wasm_direct_tier_reject_count << " ";
+   out << s_wasm_helper_call_count << " calls, " << s_wasm_helper_halt_count << " halt";
+   out << " | imports system:" << s_wasm_system_call_count << " fp:" << s_wasm_fp_call_count
+diff --git a/Source/Core/Core/WasmTimingProfile.h b/Source/Core/Core/WasmTimingProfile.h
+new file mode 100644
+index 0000000..13c8b37
+--- /dev/null
++++ b/Source/Core/Core/WasmTimingProfile.h
+@@ -0,0 +1,240 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#ifdef __EMSCRIPTEN__
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <limits>
++#include <string_view>
++
++namespace DolphinWeb::WasmTimingProfile
++{
++using Clock = std::chrono::steady_clock;
++
++enum class EventKind : std::uint32_t
++{
++  None,
++  VICallback,
++  FinishReadDVDThread,
++  OtherCoreTiming,
++};
++
++struct WorstSlice
++{
++  std::uint32_t total_us = 0;
++  std::uint32_t advance_us = 0;
++  std::uint32_t execute_us = 0;
++  std::uint32_t compile_us = 0;
++  std::uint32_t throttle_wait_us = 0;
++  std::uint32_t dvd_wait_us = 0;
++  std::uint32_t video_work_us = 0;
++  EventKind event = EventKind::None;
++};
++
++struct CurrentSlice
++{
++  bool active = false;
++  std::uint32_t compile_us = 0;
++  std::uint32_t throttle_wait_us = 0;
++  std::uint32_t dvd_wait_us = 0;
++  std::uint32_t video_work_us = 0;
++  std::uint32_t longest_event_us = 0;
++  EventKind longest_event = EventKind::None;
++};
++
++struct WorstSliceStorage
++{
++  std::atomic<std::uint32_t> sequence{0};
++  std::atomic<std::uint32_t> total_us{0};
++  std::atomic<std::uint32_t> advance_us{0};
++  std::atomic<std::uint32_t> execute_us{0};
++  std::atomic<std::uint32_t> compile_us{0};
++  std::atomic<std::uint32_t> throttle_wait_us{0};
++  std::atomic<std::uint32_t> dvd_wait_us{0};
++  std::atomic<std::uint32_t> video_work_us{0};
++  std::atomic<std::uint32_t> event{static_cast<std::uint32_t>(EventKind::None)};
++};
++
++inline std::atomic<bool> s_enabled{false};
++inline thread_local CurrentSlice s_current_slice{};
++inline WorstSliceStorage s_worst_slice{};
++
++inline std::uint32_t SaturatingAdd(std::uint32_t left, std::uint32_t right)
++{
++  constexpr std::uint32_t MAX = std::numeric_limits<std::uint32_t>::max();
++  return right > MAX - left ? MAX : left + right;
++}
++
++inline std::uint32_t ElapsedMicros(Clock::time_point begin, Clock::time_point end)
++{
++  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
++  if (elapsed <= 0)
++    return 0;
++  return static_cast<std::uint32_t>(
++      std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
++}
++
++inline void ResetWorstSlice()
++{
++  s_worst_slice.sequence.fetch_add(1, std::memory_order_acq_rel);
++  s_worst_slice.total_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.advance_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.execute_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.compile_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.throttle_wait_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_wait_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.video_work_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.event.store(static_cast<std::uint32_t>(EventKind::None), std::memory_order_relaxed);
++  s_worst_slice.sequence.fetch_add(1, std::memory_order_release);
++}
++
++inline void SetEnabled(bool enabled)
++{
++  const bool was_enabled = s_enabled.exchange(enabled, std::memory_order_acq_rel);
++  s_current_slice = {};
++  if (enabled && !was_enabled)
++    ResetWorstSlice();
++}
++
++inline bool BeginSlice()
++{
++  s_current_slice = {};
++  s_current_slice.active = s_enabled.load(std::memory_order_acquire);
++  return s_current_slice.active;
++}
++
++inline bool IsSliceActive()
++{
++  return s_current_slice.active;
++}
++
++inline EventKind ClassifyEvent(std::string_view name)
++{
++  if (name == "VICallback")
++    return EventKind::VICallback;
++  if (name == "FinishReadDVDThread")
++    return EventKind::FinishReadDVDThread;
++  return name.empty() ? EventKind::None : EventKind::OtherCoreTiming;
++}
++
++inline const char* EventName(EventKind event)
++{
++  switch (event)
++  {
++  case EventKind::VICallback:
++    return "VICallback";
++  case EventKind::FinishReadDVDThread:
++    return "FinishReadDVDThread";
++  case EventKind::OtherCoreTiming:
++    return "other-core-timing";
++  case EventKind::None:
++  default:
++    return "none";
++  }
++}
++
++inline std::uint32_t CurrentAttributedWaitUs();
++
++inline void RecordCoreTimingEvent(std::string_view name, std::uint32_t elapsed_us,
++                                  std::uint32_t wait_us_at_start)
++{
++  if (!s_current_slice.active)
++    return;
++  const EventKind event = ClassifyEvent(name);
++  if (event == EventKind::VICallback)
++  {
++    const std::uint32_t wait_us_at_end = CurrentAttributedWaitUs();
++    const std::uint32_t nested_wait_us =
++        wait_us_at_end >= wait_us_at_start ? wait_us_at_end - wait_us_at_start : 0;
++    const std::uint32_t exclusive_us =
++        elapsed_us > nested_wait_us ? elapsed_us - nested_wait_us : 0;
++    s_current_slice.video_work_us = SaturatingAdd(s_current_slice.video_work_us, exclusive_us);
++  }
++  if (elapsed_us > s_current_slice.longest_event_us)
++  {
++    s_current_slice.longest_event_us = elapsed_us;
++    s_current_slice.longest_event = event;
++  }
++}
++
++inline void RecordCompileUs(std::uint32_t elapsed_us)
++{
++  if (s_current_slice.active)
++    s_current_slice.compile_us = SaturatingAdd(s_current_slice.compile_us, elapsed_us);
++}
++
++inline void RecordThrottleWaitUs(std::uint32_t elapsed_us)
++{
++  if (s_current_slice.active)
++  {
++    s_current_slice.throttle_wait_us = SaturatingAdd(s_current_slice.throttle_wait_us, elapsed_us);
++  }
++}
++
++inline void RecordDvdWaitUs(std::uint32_t elapsed_us)
++{
++  if (s_current_slice.active)
++    s_current_slice.dvd_wait_us = SaturatingAdd(s_current_slice.dvd_wait_us, elapsed_us);
++}
++
++inline std::uint32_t CurrentAttributedWaitUs()
++{
++  return SaturatingAdd(s_current_slice.throttle_wait_us, s_current_slice.dvd_wait_us);
++}
++
++inline void FinishSlice(std::uint32_t total_us, std::uint32_t advance_us, std::uint32_t execute_us)
++{
++  if (!s_current_slice.active)
++    return;
++  s_current_slice.active = false;
++
++  if (total_us <= s_worst_slice.total_us.load(std::memory_order_relaxed))
++    return;
++
++  s_worst_slice.sequence.fetch_add(1, std::memory_order_acq_rel);
++  s_worst_slice.total_us.store(total_us, std::memory_order_relaxed);
++  s_worst_slice.advance_us.store(std::min(advance_us, total_us), std::memory_order_relaxed);
++  s_worst_slice.execute_us.store(std::min(execute_us, total_us), std::memory_order_relaxed);
++  s_worst_slice.compile_us.store(std::min(s_current_slice.compile_us, execute_us),
++                                 std::memory_order_relaxed);
++  s_worst_slice.throttle_wait_us.store(std::min(s_current_slice.throttle_wait_us, advance_us),
++                                       std::memory_order_relaxed);
++  s_worst_slice.dvd_wait_us.store(std::min(s_current_slice.dvd_wait_us, advance_us),
++                                  std::memory_order_relaxed);
++  s_worst_slice.video_work_us.store(std::min(s_current_slice.video_work_us, advance_us),
++                                    std::memory_order_relaxed);
++  s_worst_slice.event.store(static_cast<std::uint32_t>(s_current_slice.longest_event),
++                            std::memory_order_relaxed);
++  s_worst_slice.sequence.fetch_add(1, std::memory_order_release);
++}
++
++inline WorstSlice CaptureWorstSlice()
++{
++  WorstSlice snapshot;
++  std::uint32_t before = 0;
++  std::uint32_t after = 0;
++  do
++  {
++    before = s_worst_slice.sequence.load(std::memory_order_acquire);
++    if ((before & 1U) != 0)
++      continue;
++    snapshot.total_us = s_worst_slice.total_us.load(std::memory_order_relaxed);
++    snapshot.advance_us = s_worst_slice.advance_us.load(std::memory_order_relaxed);
++    snapshot.execute_us = s_worst_slice.execute_us.load(std::memory_order_relaxed);
++    snapshot.compile_us = s_worst_slice.compile_us.load(std::memory_order_relaxed);
++    snapshot.throttle_wait_us = s_worst_slice.throttle_wait_us.load(std::memory_order_relaxed);
++    snapshot.dvd_wait_us = s_worst_slice.dvd_wait_us.load(std::memory_order_relaxed);
++    snapshot.video_work_us = s_worst_slice.video_work_us.load(std::memory_order_relaxed);
++    snapshot.event = static_cast<EventKind>(s_worst_slice.event.load(std::memory_order_relaxed));
++    after = s_worst_slice.sequence.load(std::memory_order_acquire);
++  } while (before != after || (after & 1U) != 0);
++  return snapshot;
++}
++}  // namespace DolphinWeb::WasmTimingProfile
++
++#endif  // __EMSCRIPTEN__
+

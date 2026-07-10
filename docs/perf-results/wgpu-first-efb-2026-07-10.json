@@ -1,0 +1,102 @@
+{
+  "schema": "wasm-dolphin.wgpu-first-efb-evidence.v1",
+  "generatedAt": "2026-07-10",
+  "status": "diagnostic-only",
+  "qualification": {
+    "eligible": false,
+    "reason": "The hardware-WGPU XFB checkpoint is intentionally invalid and presentation/visual FPS remain zero. These runs classify replay behavior; they do not qualify gameplay performance."
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logicalCpuCount": 32,
+    "gpuVendor": "amd",
+    "gpuArchitecture": "rdna-4",
+    "chrome": "149.0.7827.201",
+    "platform": "Windows 10.0.26200 x64"
+  },
+  "fixture": {
+    "scene": "Melee Kirby vs Link fixed battle",
+    "isoSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+    "saveStateSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+    "coreWasmSha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a"
+  },
+  "nonzeroEfbObservation": {
+    "commit": "44e5553d8c749b4986807e8600ff69f295036c7c",
+    "durationSeconds": 30,
+    "urlFlags": "video=wgpu&presenter=webgpu&wgpuclassify=1&nojitcache=1&metrics=1",
+    "classifier": "PASS",
+    "firstNonzeroPresentSequence": 871,
+    "nonzeroBytes": 920925,
+    "sampledBytes": 1351680,
+    "maxByte": 255,
+    "subsequentObservation": "Two later 15-second runs and one 35-second run ended with only zero EFB samples, so mutation timing is not deterministic and the renderer is not qualified.",
+    "raw": {
+      "manifest": ".omx/wgpu-first-efb/baseline/software-stable/manifest.json",
+      "manifestSha256": "a234912951d40d7dd84af58f21c79043d003bc7e76421f5788cfb05f3992cea9",
+      "summarySha256": "7d1bbf7651a34f78a9c6e7cae22fb606a86c972d6061026a98c82d82b18c7891",
+      "screenshotSha256": "299677d4110d14d91df412803388d28a9d873f936cc1beb7ec3f7d3fa4a592a0"
+    }
+  },
+  "firstDrawState": {
+    "utilityDraw": {
+      "pipelineId": 22,
+      "draw": "draw(3, 1, 0)",
+      "framebufferId": 14,
+      "loadOp": "load",
+      "colorFormat": "rgba8unorm",
+      "depthFormat": "depth32float",
+      "pipeline": "fs#21 vs#1 wm15 blend0 depth1/1/7",
+      "bindGroups": [59, 410, 61],
+      "viewport": [0, 0, 640, 528, 0, 1]
+    },
+    "firstIndexedDraw": {
+      "pipelineId": 420,
+      "draw": "drawIndexed(6, 1, 36840, 29467, 0)",
+      "framebufferId": 14,
+      "pipeline": "fs#419 vs#418 wm7 blend0 depth0/0/7",
+      "bindGroups": [59, 421, 61],
+      "vertexBuffer": { "id": 70, "offset": 0 },
+      "indexBuffer": { "id": 71, "format": "uint16", "offset": 0 },
+      "viewport": [0, 0, 256, 256, 5.960464477539063e-8, 1],
+      "scissor": [0, 0, 256, 256]
+    },
+    "missingResources": 0,
+    "validationErrors": 0,
+    "rawManifest": ".omx/wgpu-first-efb/indexed-state/software-stable/manifest.json",
+    "rawManifestSha256": "65d3a38f3b9ace79e8d36ea245cf4440eccb010002a81218095ad48aae24b83b"
+  },
+  "deepProbeScreen": {
+    "change": "Default off historical per-draw shader, UV, vertex-snapshot, and EFB draw-map probes; restore with wgpudeepdiag=1.",
+    "wasmJit": 0,
+    "durationSecondsPerRun": 15,
+    "pairs": [
+      {
+        "controlGameSpeedPercent": 52.806,
+        "candidateGameSpeedPercent": 60.732,
+        "controlCoreFps": 31.709,
+        "candidateCoreFps": 36.395,
+        "controlDrainNanosecondsPerCommand": 2708.7,
+        "candidateDrainNanosecondsPerCommand": 2209.7
+      },
+      {
+        "controlGameSpeedPercent": 68.848,
+        "candidateGameSpeedPercent": 70.91,
+        "controlCoreFps": 41.266,
+        "candidateCoreFps": 42.499,
+        "controlDrainNanosecondsPerCommand": 1710.9,
+        "candidateDrainNanosecondsPerCommand": 1581.5
+      }
+    ],
+    "interpretation": "Both pairs moved game speed, core FPS, and replay cost per command in the favorable direction. Runs are diagnostic/non-qualifying and do not establish a stable gameplay gain.",
+    "rawHashes": {
+      "control1Manifest": "65d3a38f3b9ace79e8d36ea245cf4440eccb010002a81218095ad48aae24b83b",
+      "control1Summary": "091429c02baf669b18ec90532ba82d16c532cdc7e4c4f6319e6e759a21c6e6e2",
+      "candidate1Manifest": "9aadb5ecd1c7e6b3cd3d73050072e9bb173d6930d3bebf547a03d4a50dbcb952",
+      "candidate1Summary": "493993e1163d820f7b509c01200fb41a454c9c06308f1a8ead965f96e25f25ae",
+      "control2Manifest": "8133605ccc531bfe2239417db899c476142fb6e587cb7d5d342a1133389c5502",
+      "control2Summary": "77c571963bdbe8e1a07211e5b7994f80c272e418890171805179bbf7167d90f6",
+      "candidate2Manifest": "156390f35d10c6df6d277b13d3e874e8def04a894e83636df6c3988caa8fc50f",
+      "candidate2Summary": "a7872e6822967d4e5d768a3d4e4cecdaa9c43e7a1c14e291f017fe514392d248"
+    }
+  }
+}

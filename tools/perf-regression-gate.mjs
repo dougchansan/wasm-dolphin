@@ -21,6 +21,7 @@ import {
   classifyGateOutcome,
   describeFile,
   evaluateMetricsModeEvidence,
+  evaluateSoftwareRasterInstrumentationEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -485,6 +486,11 @@ async function runScenario(scenario, context) {
       samples,
     }).failures
   );
+  const softwareRasterInstrumentation = evaluateSoftwareRasterInstrumentationEvidence({
+    required: scenario.params.video === "software" && String(scenario.params.metrics) === "1",
+    samples,
+  });
+  invalidReasons.push(...softwareRasterInstrumentation.failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
   const fatalEvidence = findFatalRuntimeEvidence({
@@ -503,6 +509,7 @@ async function runScenario(scenario, context) {
     consoleErrors,
     invalidReasons
   );
+  summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
     if (renderer) manifest.renderer = renderer;
@@ -650,7 +657,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "wgpustatecache"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

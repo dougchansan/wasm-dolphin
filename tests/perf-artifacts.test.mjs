@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
@@ -14,6 +15,7 @@ import {
   buildReplacementBlock,
   classifyGateOutcome,
   evaluateMetricsModeEvidence,
+  evaluateSoftwareRasterInstrumentationEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -22,6 +24,7 @@ import {
   parseProfileMetrics,
   parseBattleCheckpoint,
   recordsToCsv,
+  resolveCoreArtifactPath,
   summarizeComparison,
   summarizeJitMetrics,
   summarizeNumeric,
@@ -29,6 +32,22 @@ import {
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
+
+test("run metadata resolves the core selected by coreid", () => {
+  const hash = "a".repeat(64);
+  assert.equal(
+    resolveCoreArtifactPath("repo", `http://127.0.0.1/?coreid=sha256:${hash}`),
+    path.join("repo", "build", "core-candidates", hash, "dolphin-core-upstream.wasm")
+  );
+  assert.equal(
+    resolveCoreArtifactPath("repo", "http://127.0.0.1/?video=software"),
+    path.join("repo", "cores", "dolphin", "dolphin-core-upstream.wasm")
+  );
+  assert.throws(
+    () => resolveCoreArtifactPath("repo", "http://127.0.0.1/?coreid=not-a-hash"),
+    /SHA-256/
+  );
+});
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {
   const helper =
@@ -129,7 +148,7 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
   assert.throws(() => assertRunProvenance(labelOnly), /battle\/XFB checkpoint/);
 
   const unknownTelemetry = validManifest();
-  unknownTelemetry.causalTelemetrySchema.version = 2;
+  unknownTelemetry.causalTelemetrySchema.version = CAUSAL_TELEMETRY_SCHEMA_VERSION + 1;
   assert.throws(() => assertRunProvenance(unknownTelemetry), /Unsupported causal telemetry schema/);
 
   assert.equal(assertRunProvenance(validManifest()).fixture.saveStateLoaded, true);
@@ -365,7 +384,7 @@ test("qualification requires clean git, exact video/presenter identity, and lock
   manifest.benchmark.cacheState = "cold";
   manifest.hostCore = { abiVersion: 1 };
   manifest.eventSchema = { version: 1 };
-  manifest.causalTelemetrySchema = { version: 1 };
+  manifest.causalTelemetrySchema = { version: CAUSAL_TELEMETRY_SCHEMA_VERSION };
   manifest.buildProvenance = validLockedBuildProvenance();
   manifest.upstream = { dolphinSha: manifest.buildProvenance.locked.sourceLock.upstream.commit };
   manifest.patches = { hashes: manifest.buildProvenance.locked.sourceLock.patches.map((patch) => patch.sha256) };
@@ -518,8 +537,8 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
     samples: [
       {
         helper: "video xfb:10 | metrics:on | jit:off",
-        causalTelemetrySchemaVersion: 1,
-        causalTelemetry: { schemaVersion: 1 },
+        causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        causalTelemetry: { schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION },
       },
     ],
   });
@@ -547,7 +566,11 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
     evaluateMetricsModeEvidence({
       requested: "0",
       diagnostics: { enabled: true, helperStatsCalls: 1, profileStatsCalls: 1, profileTimeSamples: 1 },
-      samples: [{ helper: "metrics:on", causalTelemetrySchemaVersion: 1, causalTelemetry: {} }],
+      samples: [{
+        helper: "metrics:on",
+        causalTelemetrySchemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        causalTelemetry: {},
+      }],
     }).failures.join(" | "),
     /requested metrics=0.*enabled=true.*helperStatsCalls=1.*causal telemetry was present/
   );
@@ -558,6 +581,42 @@ test("metrics experiment evidence accepts intentional causal suppression only wh
       samples: [{ helper: "metrics:off", causalTelemetrySchemaVersion: null, causalTelemetry: null }],
     }).failures.join(" | "),
     /requested metrics=1.*enabled=false.*helperStatsCalls=0.*missing or unsupported causal telemetry schema/
+  );
+});
+
+test("software raster evidence requires every phase and sampled timing to activate", () => {
+  const telemetry = {
+    softwareRaster: {
+      profileEnabled: true,
+      rasterTraversalCount: 10,
+      rasterTraversalTimedSampleCount: 1,
+      tevPixelCount: 20,
+      tevTimedSampleCount: 1,
+      textureSampleCount: 30,
+      textureTimedSampleCount: 1,
+      fifoAgeSampleCount: 4,
+      xfbGenerationCount: 2,
+      frameGenerationCount: 2,
+      sampledSourceFrameCount: 2,
+    },
+  };
+  const active = evaluateSoftwareRasterInstrumentationEvidence({
+    required: true,
+    samples: [{ causalTelemetry: telemetry }],
+  });
+  assert.equal(active.activated, true);
+  assert.deepEqual(active.failures, []);
+
+  const inactive = evaluateSoftwareRasterInstrumentationEvidence({
+    required: true,
+    samples: [{ causalTelemetry: { softwareRaster: { profileEnabled: true } } }],
+  });
+  assert.equal(inactive.activated, false);
+  assert.match(inactive.failures.join(" | "), /rasterTraversalCount.*textureTimedSampleCount.*frameGenerationCount/);
+
+  assert.deepEqual(
+    evaluateSoftwareRasterInstrumentationEvidence({ required: false, samples: [] }).failures,
+    []
   );
 });
 
@@ -890,7 +949,7 @@ function validManifest() {
       saveStateLoaded: true,
       battleCheckpoint: { verified: true },
     },
-    causalTelemetrySchema: { version: 1 },
+    causalTelemetrySchema: { version: CAUSAL_TELEMETRY_SCHEMA_VERSION },
     servedApplication: { verified: true, manifestSha256: "e".repeat(64) },
   };
 }

@@ -2,170 +2,200 @@
 
 ## Outcome
 
-The current smoothness problem is a combination, but the dominant visible
-limit on the recommended path is now clear:
+The browser does not have one universal FPS bottleneck. The measured fixed
+Kirby-versus-Link battle separates into two materially different paths:
 
-1. software raster/XFB production yields far fewer distinct frames than the
-   emulator and presenter can advance;
-2. game-speed stalls still occur, especially in longer runs and with the
-   guarded PPC-to-WASM JIT;
-3. an avoidable 12.7 ms average presentation queue was removed and confirmed;
-4. browser presentation, observer metrics, worker messaging, and audio are not
-   the primary software-path throughput bottlenecks on this machine;
-5. true hardware WebGPU is not slow game rendering—it is still incorrect. The
-   transport now reaches real draws, but the EFB stays zero and command replay
-   itself consumes substantial worker time.
+1. On the recommended software-hybrid path, emulation and presentation can
+   stay near 60 Hz while the software raster/XFB source changes much less
+   often. Distinct-frame production is the primary smoothness limit.
+2. On the true hardware-WGPU path, the first completed EFB pass does mutate
+   its target and the battle is now visibly rendered. The prior green/checker
+   screen was caused by legacy software repaint paths overwriting the
+   WGPU-owned canvas.
+3. Hardware WGPU is still not full speed. In the final three-pair JIT-off
+   cache A/B it averaged about 70% game speed and 36 presentation FPS. Stable
+   state suppression removed about 40% of replay records but did not improve
+   cadence, so command replay and GPU queueing remain substantial.
+4. The eight observed JIT emit failures were eight attempts at one opcode,
+   `addzex`, disabled accidentally at compile time. Removing that diagnostic
+   disable produced zero emit failures in the rebuilt diagnostic. A correlated
+   57.590 ms tuple measured 57.235 ms of throttle, 0.255 ms of video, 0.009 ms
+   of execution, and no compile or DVD time.
+5. A generation-coded 32×32 marker now measures causal input-to-browser-canvas
+   visibility. Six exact transitions averaged 54.185 ms and p95 82.300 ms.
+   This excludes compositor, scanout, panel, and photons. Audio had zero
+   underruns in that retained software run.
 
-No strict end-to-end performance qualification passed. The final recommended
-60-second run is a provenance-eligible `FAIL`, and the 180-second no-JIT soak is
-valid mechanics evidence but `NON_QUALIFYING`. The only statistical gate pass
-is the relative tick queue-latency comparison.
+No result in this report means that hardware WGPU is release-ready or that one
+machine's game-speed figure generalizes. Raw paths, exact artifacts, rejected
+runs, and attribution limits are retained alongside every claim.
 
-## Seven-part completion tasklist
+## Five-priority follow-up tasklist
 
-- [x] Freeze upstream source, patch set, artifacts, and ABI provenance.
-- [x] Prove hermetic rebuild parity with two independent builds.
-- [x] Direct-load the exact Kirby-versus-Link save and preserve raw A/B data.
-- [x] Instrument and classify the true WebGPU hardware-renderer failure.
-- [x] Add versioned causal timing and JIT/runtime observability.
-- [x] Measure candidate changes and retain only validated, reversible defaults.
-- [x] Run strict, soak, fallback, and WGPU diagnostics; package evidence and
-  rollback guidance.
+- [x] Validate nonzero raster traversal, TEV, texture, FIFO-age, XFB, source
+  generation, and stale-reuse counters on the parity-built final core.
+- [x] Establish WGPU EFB mutation and remove the competing green/checker
+  presentation source.
+- [x] Classify the eight JIT emit failures and long CPU slices.
+- [x] Reduce WGPU replay backlog only after visible correctness was established.
+- [x] Add GPU-completion and input-to-visible latency measurements.
+
+All five priorities now have implementation and direct-save evidence. Patch
+`0016` specializes only the two measured CMPR cases and passed 463,348 exact
+production-decoder comparisons. Three headed pairs improved unique cadence by
+7.16% descriptively, so it is provisionally retained rather than called a
+qualified win. Atomic WGPU transactions are also retained; stable-state
+suppression remains default-off after its six-run diagnostic.
+
+The final raw paths, hashes, accepted results, and rejected qualifications are
+packaged in [the next-program evidence](perf-results/melee-next-program-2026-07-10.md).
 
 ## Test record
 
 | Field | Value |
 | --- | --- |
-| Machine | Windows x64 `10.0.26200`; AMD Ryzen 9 9950X3D; 32 logical CPUs; 134,876,049,408 bytes RAM |
-| Browser/GPU | Headed Chrome `149.0.7827.201`; AMD `rdna-4` WebGPU adapter |
-| Final behavior commit | `58655af00013c2cab708e317f417eaa190e964d3` on `perf/integration` |
-| Final strict-run commit | `7189271e7075135a674993841b0c5acc564afd1b` |
-| Core build record | Repository commit `07a69d3ba28fd6deb68fa1810f4fea7fd5b19ddd` |
+| Machine | Windows x64 `10.0.26200`; AMD Ryzen 9 9950X3D; 32 logical CPUs; 128 GiB RAM |
+| Historical software evidence browser | Headed Chrome `149.0.7827.201` |
+| Raster/JIT/marker/WGPU next-program browser | Headed Chrome `143.0.7499.4` |
+| Branch | `perf/next-program` |
 | Upstream Dolphin | `e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1` |
-| Core artifact | 12,807,931 bytes; SHA-256 `3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a` |
-| Scene | Direct-loaded Melee Kirby vs Link fixed battle; no gameplay input |
+| Scene | Direct-loaded Melee Kirby vs Link fixed battle; no menu or character-select driving |
 | ROM/save | SHA-256 `1018b65a…7c67` / `620879e2…56d1` |
 
-The full fixture hashes, aggregate rows, comparison decisions, raw paths, and
-raw-file hashes are in the
-[evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
+The original software qualification evidence is in
+[the Melee performance package](perf-results/melee-performance-evidence-2026-07-10.md).
+Historical hardware evidence is in
+[the WGPU replay and latency package](perf-results/wgpu-replay-and-latency-2026-07-10.md);
+the final `f7ce…` candidate is in
+[the next-program package](perf-results/melee-next-program-2026-07-10.md).
 
 ## Bottleneck classification
 
 | Bottleneck candidate | Evidence | Confidence | Next action |
 | --- | --- | --- | --- |
-| CPU/game speed | Strict JIT-on run: 92.751% mean, 65.049% min, 55.581 core FPS. JIT compiled 1,030 blocks and ran them 223,724 times (217.2 runs/compile), but recorded 8 emit failures. The 180 s no-JIT soak averaged 88.009% with a 51.345% min. | High that CPU/game-speed stalls contribute; medium on JIT versus scene/raster attribution | Classify the 8 emit failures and long CPU slices; run warm/cold balanced JIT tests before changing defaults. |
-| Software raster/XFB | Full `fastsw=0` and balanced `fastsw=1` both held ~100% game speed and ~60 presentation FPS, but unique visual cadence was 5.903 versus 13.556 FPS. Last sampled encode cost averaged 12.7 versus 0.8 ms. Even balanced output remains far below 60 distinct FPS. XFB row/decode/both effects were +1.049%, +1.735%, and +2.503%, all below the 3% screen threshold. | High that distinct-frame production is the leading visible limit; medium on the exact raster/TEV subphase | Instrument raster block traversal, TEV, texture sampling, FIFO generation age, and stale-XFB reuse before a high-risk raster refactor. |
-| Presentation/canvas | Six valid blocks/24 runs: queued tick averaged 12.678 ms queue age; immediate tick was 0. Effect 100%, CI `[100,100]`, exact `p=0.03125`. Presentation rose 39.110→57.680 FPS while game speed changed -0.15% and visual cadence -0.91% descriptively. Software WebGPU present/draw/hash were roughly sub-millisecond. | High that queue latency existed and is removed; high that JS presentation is not the current distinct-frame ceiling | Keep immediate tick with `legacytickqueue=1` rollback; add GPU-completion timing before further presenter changes. |
-| WebGPU hardware renderer | Before the transport fix, `nojitcache=1` skipped the WGPU pthread listener and the producer dropped records. After decoupling, the ring registers and atomic replay reaches 394,160 real EFB draws and present completion, with 0 pass splits/outside-pass records. Nine post-draw EFB readbacks are all zero: `EFB_DRAW_NO_MUTATION`. The post-fix run averaged 47.622% game speed and 0 game presentation/visual FPS. | High | Debug first-draw uniforms, vertex state, depth/stencil, formats, and raster state; do not optimize replay until a nonzero EFB exists. |
-| JS worker/message/copy | Metrics-off screen: -0.252%, CI `[-0.742,0.238]`, `p=1`, rejected. Software-path host rAF work is about 0.1 ms average; present work is sub-millisecond. WGPU replay is a separate problem: post-fix drain total 8.394 s/30 s, max 221.48 ms, backlog high-water 108,858. | High that software host overhead is secondary; high that experimental WGPU replay is expensive | Keep metrics toggle/ACK cleanup as hygiene. Batch or budget WGPU replay only after image correctness. |
-| Audio | Sound is present. Strict run: 3,062 mixes, ~0.37 ms/mix, ~15 ms pump cadence, zero underruns/overruns. The 180 s soak also had zero underruns/overruns. Scheduled lead is ~131 ms, a latency tradeoff rather than a throughput failure. | High for this machine/run set | Preserve buffering; test 120/100/80 ms lead separately with a zero-underrun gate before lowering latency. |
-| Input latency | Qualifying runs intentionally send no input. Queue latency is measured, but end-to-end input-to-photon is not. The 2 ms polling cadence remains; unchanged gamepad states now early-out. | Low | Add a separate, non-qualifying direct-save input-generation test from host→worker→pad poll→XFB→present. Never reintroduce menu/character-select automation. |
-| Build flags | Two independent builds matched exactly: normalized JS, WASM, code, data, source, and toolchain. Build uses Release `-O3 -pthread -msimd128 -flto`; assertions and growth are off and shared memory is fixed at 1.5 GiB. No flag A/B established a runtime win. | High on reproducibility; low that flags are the current bottleneck | Keep flags. Test one content-addressed build variant at a time only after ABI/provenance qualification. |
+| CPU/game speed | The correlated worst tuple was 57.590 ms: throttle 57.235 ms, video 0.255 ms, execute 0.009 ms, compile/DVD 0, and 0.091 ms unattributed. Whole-run compile max was 0.744 ms; emit and compile failures were zero. | High that this long class is pacing wait rather than CPU/JIT saturation | Keep throttle and JIT safety defaults; capture a separate DVD-owned tuple before attributing 9–16 ms `FinishReadDVDThread` callbacks. |
+| Software raster/XFB | The two dominant CMPR cases held 72.16–73.79% of sampled texture work. Their strict-parity specialization moved three-pair visual mean from 12.843 to 13.763 FPS and stale ratio from 80.057% to 77.614%. | High that source-frame pixel work is the default-path smoothness ceiling; medium on the provisional gain | Retain the exact-predicate CMPR path provisionally; specialize another case only after independent parity and repeated clean-tree A/B. |
+| Presentation/canvas | Immediate tick delivery removed about 12.7 ms average queue age in the prior 24-run comparison. Software WebGPU submit/draw/hash work was sub-millisecond and sampled GPU completion was about 2.8–3.2 ms. Presentation remained near 60 while distinct frames remained low. | High that software presentation is not the current unique-frame ceiling | Keep immediate tick; preserve `legacytickqueue=1` rollback and GPU-completion sampling. |
+| WebGPU hardware renderer | A final zero-error smoke found 182,949 nonzero EFB color bytes after the first completed 120-draw pass. It averaged 69.18% game speed and 35.88 presentation FPS; backlog high-water was 62,737. | High on this AMD validation GPU; low for general GPU compatibility | Reduce replay granularity and submission cost without weakening upload lifetime or atomic pass publication. |
+| JS worker/message/copy | Producer stable-state suppression reduced commands/s 39.75%, commands/EFB draw 39.43%, and backlog high-water 38.62%. Drain total fell only 3.38%, while game/presentation did not improve. | High that replay record volume is material but not the only WGPU cost | Keep `wgpustatecache=1` default-off; profile the remaining uploads, resource churn, draws, and queue submissions per pass. |
+| Audio | Sound is present. The retained hardware input/latency run had zero underruns; prior software runs also had zero underruns/overruns. Buffer lead is a latency tradeoff, not the measured throughput blocker. | High for retained runs | Keep buffering unchanged until a separate lead A/B preserves zero underruns. |
+| Input latency | The 32×32 exact-generation marker passed 6/6 applied/polled/submitted/completed/browser-visible transitions. Input-event to browser canvas averaged 54.185 ms, p95 82.300 ms. | High for the instrumented browser-canvas boundary; low for physical display generalization | Use `INPUTMARKEROBSERVE=0` plus a camera/photodiode for compositor-to-photon measurement. |
+| Build flags | Release configuration already uses `-O3`, pthreads, SIMD128, LTO, fixed shared memory, and no assertions/growth. Earlier independent builds matched. No build-flag A/B established a runtime win. | High on reproducibility; low that flags are the active bottleneck | Keep flags stable; only compare one content-addressed variant at a time after final parity. |
 
 ## Main measured results
 
-| Evidence | Game speed mean/min | Core FPS mean | Presentation FPS mean | Unique visual FPS mean | Verdict |
+| Evidence | Game speed % | Core FPS | Presentation FPS | Unique/visual FPS | Interpretation |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Recommended path, JIT on, 60 s | 92.751 / 65.049 | 55.581 | 52.689 | 10.557 | `FAIL` |
-| No-JIT stability soak, 180 s | 88.009 / 51.345 | 52.752 | 49.204 | 11.000 | `NON_QUALIFYING` |
-| Full software raster, four runs | 100.018 / — | 59.958 | 59.677 | 5.903 | Game-speed `SCREENING_REJECT` |
-| Balanced software raster, four runs | 100.118 / — | 60.027 | 58.976 | 13.556 | Game-speed `SCREENING_REJECT` |
-| WebGL fallback, one run | 100.279 / 94.738 | 60.115 | 58.774 | 13.452 | `NON_QUALIFYING` route check |
-| 2D fallback, one run | 100.355 / 69.211 | 60.164 | 59.032 | 14.000 | `NON_QUALIFYING` route check |
-| WGPU post-fix, one diagnostic | 47.622 / 39.564 | 28.546 | 0 | 0 | `FAIL`, `EFB_DRAW_NO_MUTATION` |
+| Recommended path, prior strict JIT-on 60 s | 92.751 mean | 55.581 | 52.689 | 10.557 | Qualification failed its game-speed gate |
+| Full software raster, prior four-run mean | 100.018 | 59.958 | 59.677 | 5.903 | Distinct-frame limited |
+| Balanced software raster, prior four-run mean | 100.118 | 60.027 | 58.976 | 13.556 | Distinct-frame limited |
+| WGPU pump off, two-run mean | 67.120 | — | 19.680 | Canvas changed in both runs | Backlog high-water 58,850.5 |
+| WGPU pump on, two-run mean | 68.205 | — | 29.940 | Canvas changed in both runs | Backlog high-water 16,384 |
+| WGPU latency diagnostic | 62.140 | 37.000 | 30.550 | 27 sampled canvas hashes | Diagnostics enabled; not a performance baseline |
+| Software phase profile, metrics off mean | 99.903 | 59.960 | 59.020 | 12.783 | Three 20 s runs |
+| Software phase profile, metrics on mean | 101.077 | 60.627 | 59.670 | 12.767 | Three 20 s runs; no slowdown resolved above variation |
+| Promoted clean JIT-on gate, 20 s | 100.077 mean / 91.696 min | 59.993 | 59.333 | 14.095 | `FAIL`: minimum game speed below 95% |
+| CMPR baseline, three-run mean | 100.610 | 60.353 | 59.333 | 12.843 | Dirty-tree diagnostic |
+| CMPR candidate, three-run mean | 99.647 | 60.037 | 59.353 | 13.763 | +7.16% visual; provisional |
+| Final atomic WGPU smoke | 69.180 | 41.760 | 35.880 | 21/21 changing hashes | Correctness pass, not full speed |
+| WGPU cache off, three-run mean | 70.277 | 42.097 | 36.803 | 21/21 per run | 227,730 commands/s |
+| WGPU cache on, three-run mean | 69.960 | 42.000 | 36.237 | 21/21 per run | 137,206 commands/s; remains off by default |
+| Final 32×32 marker run | 99.000 | 59.500 | 59.900 | 14.100 | 54.185 ms input-to-browser-canvas average |
 
-The fallback rows are not interleaved comparisons. Their single-run means do
-not establish a faster presenter.
+The presenter fallback and WGPU rows are not interleaved general-performance
+comparisons. One run or one GPU does not establish a universal backend winner.
 
 ## Optimization decisions
 
 | Candidate | Result | Decision |
 | --- | --- | --- |
-| Immediate tick fresh-frame delivery | Confirmation pass: 100% queue-age reduction, `p=0.03125`; no material game/visual regression | Retained by default; rollback `legacytickqueue=1` |
-| XFB encoded-row reuse | +1.049%, CI `[0.197,1.902]` | Keep optional/default-off |
-| XFB identity decode | +1.735%, CI `[1.466,2.003]` | Keep optional/default-off |
-| Combined XFB fast paths | +2.503%, CI `[2.401,2.605]` | Keep optional/default-off; below 3% threshold |
-| Disable detailed observer metrics | -0.252%, CI `[-0.742,0.238]` | No performance claim; retain functional toggle |
-| WGPU atomic pass replay | Synthetic boundary tests pass; headed atomic replay recorded zero split/outside-pass records | Retained for experimental WGPU; rollback `wgpuatomic=0` |
-| Always-on pthread renderer transport | Restored command replay under `nojitcache=1`; advanced classifier from `WAITING_FOR_DRAW` to `EFB_DRAW_NO_MUTATION` | Retained; no claim that game rendering works |
-| JIT regalloc/smear/correctness-sensitive flags | Base guarded JIT has 8 emit failures; no valid foundation for lever tuning | Defaults unchanged; `blockmerge`, `shortprefix`, `fastmemhoist` remain off |
-| Audio lead/buffering | Zero underruns in software evidence | Unchanged |
+| Immediate tick fresh-frame delivery | Prior confirmation removed queue age without a material game/visual regression | Retained; `legacytickqueue=1` rollback |
+| WGPU canvas ownership | Hardware-present success now prevents legacy tick/show-image overwrite; visible battle and changing hashes confirmed | Retained; correctness fix |
+| First completed EFB-pass readback | `FIRST_EFB_PASS_MUTATED`, 182,949 nonzero color bytes after 108 draws | Retained as opt-in classifier; does not claim one individual draw |
+| Monotonic WGPU upload watermark | Prevents producer reuse until JS has synchronously consumed upload bytes; focused wrap/order/drop tests pass | Retained; correctness prerequisite |
+| Bounded WGPU replay pump | Two-run means: backlog −72.16%, presentation +52.13%, p95 submit interval −34.56%, game speed +1.085 points | On by default only for `video=wgpu`; `wgpupump=0` rollback |
+| Atomic WGPU pass publication | Final smoke: begin/end 10,925/10,925, zero split/outside/drop/abort/timeout, nonzero first completed pass | Retained correctness prerequisite; `wgpuatomic=0` diagnostic rollback |
+| WGPU stable-state suppression | About 40% fewer replay records and 38.62% lower backlog, but no cadence gain; five arms missed the strict first-pass classifier gate | Keep default-off; opt in with `wgpustatecache=1` |
+| CMPR exact-predicate specialization | 463,348 exact decoder comparisons passed; paired visual deltas all positive, mean +7.16% | Provisionally retained; patch-level rollback |
+| Correlated core timing | One 57.590 ms tuple was 99.38% pacing wait, with zero compile time | Retained as metrics-only attribution |
+| Deterministic input marker | Strict 6/6 causal generation parity; 54.185 ms average to browser canvas | Retained as opt-in diagnostic; never call it input-to-photon |
+| `addzex` emitter restore | All eight old failures were the same accidental compile-time disable; rebuilt diagnostic recorded zero | Retained; runtime `disable=wasmaddze` escape hatch remains |
+| Correctness-sensitive JIT flags | No evidence authorizes enabling block merge, short prefix, or fastmem hoist | Defaults unchanged |
+| Audio buffering | Zero underruns in retained evidence | Unchanged |
 
 ## Ranked optimization backlog
 
 | Rank | Optimization/refactor | Area | Risk | Expected gain | Measurement method |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | Add raster/TEV/texture/FIFO-generation-age phase counters | Software raster | Low | Classification of the primary measured software-path route toward higher unique FPS | Exact save, balanced blocks; phase sums, generation age, stale-XFB count |
-| 2 | Fix first real WGPU draw→EFB mutation | Hardware renderer | High | Potentially removes the CPU-raster ceiling if correctness is reached | Clear/triangle/checker/translated shader/first draw ladder; EFB readbacks |
-| 3 | Classify/fix JIT emit failures and long compile/run slices | CPU/JIT | High | Could remove severe game-speed lows | Cold/warm blocks, emit categories, 217× reuse baseline, state/hash parity |
-| 4 | Bound and batch WGPU command-ring drain after correctness | WGPU/JS | High | Current replay consumes seconds of worker time and creates 100k-scale backlog | Drain total/max/backlog, game speed, audio gaps, GPU errors |
-| 5 | Specialize only the measured hot raster traversal/TEV states | Software raster | High | Direct distinct-frame improvement | Byte/state/XFB parity plus confirmation visual/game metrics |
-| 6 | Add browser GPU-completion timestamps | Presentation | Low | Classification only | Submit→completion latency and outstanding work by presenter |
-| 7 | Timestamp input-to-visible response | Input | Low | Measurement, then latency work | Direct-save generation markers; p50/p95 per boundary |
-| 8 | Transfer/reuse audio buffers or introduce an SAB ring | Audio/worker | Medium | Small allocation/copy reduction; unlikely to be FPS-class | Mix RTT, allocations, bytes, underruns, input latency |
-| 9 | Revisit combined XFB paths only with a lower product threshold | XFB | Medium | Measured ~2.5%; cannot solve visual ceiling | Six-block confirmation if product policy changes |
-| 10 | Prune unused CMake dependency probes | Build | Medium | Configure/build time only | Clean configure wall time and identical artifacts |
+| 1 | Profile and reduce WGPU upload/resource/draw records after exact-state suppression | Hardware WGPU | Medium | Attack the remaining ~137k commands/s and queue work | Records/pass by opcode, bytes/pass, drain/encode/submit/GPU windows, strict mutation gate |
+| 2 | Select the next stable software traversal/texture case | Software raster | High | Further unique-frame gain on the default path | Seeded top-case stability, production byte parity, clean three-pair visual/stale A/B |
+| 3 | Window GPU completion around the settled battle | Both presenters | Low | Remove boot/save maxima from steady-state conclusions | Warm-scene p50/p95/max and outstanding submissions |
+| 4 | Capture a DVD-owned correlated slice | CPU/core | Low | Separate result-queue wait from RAM copy/finish work | Nested DVD tuple with the same 80% ownership gate |
+| 5 | Measure physical input-to-photon latency | Input/display | Low | Complete the user-feel latency chain | `INPUTMARKEROBSERVE=0`, high-speed camera/photodiode, browser timestamps |
+| 6 | Revisit JIT hot blocks only after warm/cold replay data | PPC/WASM JIT | High | Potential game-speed low reduction; no expected direct unique-FPS gain | Compile/run/helper profile, state hashes, warm/cold fixed-save blocks |
+| 7 | Test lower audio lead with a zero-underrun gate | Audio/latency | Medium | Lower feel latency, not throughput | 120/100/80 ms balanced runs; underrun and marker p95 |
+| 8 | Test build variants one flag at a time | Build | Medium | Unknown CPU/raster gain; possible load-size change | Independent parity builds plus fixed-save repeated A/B |
 
 Risk definitions: Low is instrumentation/logging with no intended behavior
-change; Medium is a local reversible refactor with clear tests; High is a
-correctness-sensitive emulator, renderer, or JIT change.
+change. Medium is a local reversible refactor with clear tests. High is a
+correctness-sensitive emulator, renderer, raster, or JIT change.
 
 ## Immediate implementation plan
 
-### Today — completed
+### Today — instrumentation and baselines completed
 
-- Pinned upstream, patch, vendor-tree, toolchain, ABI, and core identities.
-- Replayed the patch series transactionally and proved two independent builds
-  byte-identical.
-- Changed qualification to direct-load the exact Kirby/Link save; no menu or
-  character-select driving remains.
-- Added raw JSON/CSV/events/screenshots/manifests and causal timing across the
-  core, XFB/output, presentation, worker, WGPU, audio, input, and host.
-- Ran strict/default, 180-second soak, repeated raster/XFB/metrics screens,
-  six-block tick confirmation, fallback checks, and WGPU classifiers.
-- Retained immediate tick and the WGPU transport/atomicity fixes; rejected
-  default promotion of sub-threshold XFB/metrics candidates.
+- Two independent builds are byte-identical, and every profiler counter
+  activates on the exact save.
+- Three balanced-order `metrics=0`/`metrics=1` pairs are archived. Paired
+  game-speed differences were +4.47, +1.23, and -2.18 points, so no profiler
+  slowdown is resolved above variation.
+- Metrics-on runs averaged a 78.26% sampled stale-source ratio and zero FIFO
+  distance underflows.
 
 ### Next — low-risk wins
 
-- Instrument software raster subphases and stale-frame generation age.
-- Add a separate direct-save input latency diagnostic.
-- Add GPU queue-completion timing and archive raw `.omx` bundles with the hash
-  ledger.
-- Classify the eight JIT emit failures without changing default JIT flags.
+- Window GPU completion to the steady battle rather than boot/save load.
+- Capture a DVD-owned correlated tuple; the VI pacing tuple is complete.
+- Break the remaining WGPU record stream down by opcode/pass after state
+  suppression.
+- Preserve raw JSON/CSV/events and exact core/browser/fixture hashes.
 
 ### Then — high-impact renderer/JIT work
 
-- Make the first real WGPU draw mutate the EFB, then reduce replay backlog.
-- Optimize the measured dominant raster/TEV phase with strict output parity.
-- Re-evaluate guarded JIT only after emit failures are zero and warm/cold cache
-  comparisons are valid.
+- Reduce WGPU uploads/resource churn in small, independently reversible
+  changes; stable-state suppression alone did not improve cadence.
+- Optimize only a second software raster case shown stable by seeded counters.
+- Revisit JIT block generation only after warm/cold evidence and correctness
+  hashes; do not turn on sensitive flags by default.
 
 ## Concrete code changes and rollback
 
-| File/module | Exact problem and change | How tested | Rollback |
+| File/module | Exact problem and proposed/implemented change | How to test | Rollback |
 | --- | --- | --- | --- |
-| `src/presentation-pacing.js`; worker presentation loop | Tick mode queued fresh frames despite its contract. Fresh frames now present immediately; duplicate tick repaint remains. Added queue-age/depth/delivery counters. | Unit tests plus 24-run confirmation | `legacytickqueue=1` |
-| `src/upstream-discio-worker.js::installDolphinPthreadChannels` | `nojitcache=1` skipped essential WGPU/OGL pthread listeners. Renderer transport is now always installed; cache broadcast/listener/lazy fill remain gated. | 118 passed tests, 2 expected skips, provenance, and headed WGPU post-fix classifier | Revert `1f84298`; temporary WGPU workaround is omit `nojitcache=1` |
-| `src/wgpu-replay-diagnostics.js`; worker replay | Black/green output had no bounded failure classifier and passes could split at drain snapshots. Added ordered classifier and atomic pass replay. | Synthetic diagnostics and headed pass/draw/readback evidence | `wgpuatomic=0`; omit `wgpuclassify=1` |
-| `core/upstream/dolphin_web_xfb_fastpaths.h`, `dolphin_web_discio.cpp`, patched `SWEfbInterface.cpp` | Added independently selectable byte-identical row reuse and identity decode. | Exhaustive parity plus three repeated screens | `xfbfast=0` (default) |
-| `tools/perf-regression-gate.mjs`, `tools/perf-artifacts.mjs` | Old validation could stop at character select, compare inconsistent runs, or reject valid load timing noise. It now direct-loads the exact save, locks per-raster XFB identity, bounds one scheduler slice, records raw evidence, and enforces activation/provenance. | Fixture/checkpoint/provenance/comparison unit tests and headed runs | Revert harness-only commits; never restore menu driving for qualification |
-| Worker metrics collection and causal telemetry | Metrics-off still needed explicit proof that observer work was actually absent. Added mode-aware counter/schema checks. | 8 valid metrics A/B runs | `metrics=1` |
-| `src/app.js`/`src/input.js` gamepad path | Unchanged 500 Hz states caused avoidable host/worker churn. Quantized unchanged states early-out. | Input unit tests; no live input-to-photon claim | `legacygamepadpoll=1` |
-| Worker adapter/protocol reply planner | Known one-way controls received discarded success replies. Only whitelisted successful ACKs are suppressed; errors remain replies. | Transport tests and counters | `legacyonewayack=1` |
-| Fetch/patch/configure/build/provenance tools | Moving/incomplete source and cumulative patch preflight prevented exact reproduction. Added locked ordered transactional replay and independent build comparison. | Fresh fetch/patch twice, exact build A/B, provenance verifier | Use the content-addressed known core; do not qualify unlocked builds |
+| `core/upstream/dolphin_web_raster_profile.h`; patch `0009` | Hot phases and FIFO pressure were invisible. Added sampled TLS phase counters, batched FIFO counters, consumer-observed backlog age, saturated distance accounting, and epoch reset. | Rebuilt exact-save metrics run; require activation/nonzero fields, finite ages, `fifouf=0`; compare metrics off/on. | Disable with `metrics=0`; revert profile patch/header. |
+| `core/upstream/dolphin_web_discio.cpp::DolphinWeb_RecordVideoOutputProfile` | The old frame hook was not reached on the browser path. Publish source-generation cadence at the reached `Video_OutputXFB` bridge. | Frame count and intervals must advance with XFB output. | Revert bridge publication; existing presentation metrics remain. |
+| `src/upstream-discio-worker.js::drainWebGpuCmdRing` | Later clears made present-time EFB samples ambiguous. Encode one opt-in readback immediately after the first completed EFB pass with draws. | Classifier unit tests and exact-save `FIRST_EFB_PASS_MUTATED`. | Omit `wgpuclassify=1`. |
+| `src/upstream-discio-worker.js` canvas ownership paths | Legacy tick and show-image repaint overwrote successful hardware output with stale green/checker pixels. Claim ownership after successful hardware submit and suppress those repaint paths. | Headed exact-save screenshot, changing hashes, nonzero present count, zero GPU validation errors. | Revert ownership guards to reproduce only; no runtime flag is recommended. |
+| `patches/dolphin-wasm/snapshot/0011-webgpu-upload-watermark.patch`; `src/wgpu-upload-watermark.js` | A 32 MiB upload arena could wrap while old commands still referenced overwritten bytes. Added producer/consumer watermarks, bounded wait, ordered suffix staging, and dropped-tail rollback. | Uint32 wrap/order model, source contract tests, headed replay with zero errors. | Revert protocol patch and JS together; never mix versions. |
+| `src/core-host.js`; `src/wgpu-replay-diagnostics.js` | Sparse replay polling allowed a 59k-record backlog after correctness. Default the 16,384-record pump only for `WebGPU-Real`, honoring explicit 0/1. | Two repeated fixed-save runs per arm; record backlog, cadence, game speed, drain and errors. | `wgpupump=0`. |
+| Patches `0012` and `0016`; `tools/software-texture-hot-case-parity.cpp` | Exact TEV/texture cases and sampled work share were unknown. Added seeded case profiles, then one Emscripten-only exact CMPR predicate with generic fallback. | Three seeded runs, 463,348 production-decoder parity samples, three balanced headed pairs. | Revert patch `0016`; no URL flag is implied. |
+| Patches `0013` and `0015`; `src/wgpu-pass-state-cache.js`; `src/wgpu-upload-watermark.js` | Partial passes and redundant state records inflated or corrupted replay. Publish complete passes with one release store; suppress only exact successfully-published state repeats; rebase staged upload windows wrap-safely. | Atomicity/source tests, zero-error mutation smoke, balanced cache A/B. | `wgpuatomic=0` for legacy diagnostics; omit `wgpustatecache=1`; never mix protocol versions. |
+| JIT snapshot patch `0010`; `tools/jit-diagnostics-analyze.mjs`; analyzer evidence | `addzex` was compiled out by a diagnostic define, manufacturing eight failures. Removed the define while retaining the runtime disable and per-op stats. The schema-v2 analyzer now accepts a correlated timing tuple, applies an 80% ownership threshold, and preserves deduplicated legacy-log fallback. | Rebuild/exact-save `emitfail=0`; focused parser cases for every owner, mixed timing, tuple precedence, and partial worker/main mirroring. | `disable=wasmaddze` for JIT rollback; omit the structured tuple to retain legacy analyzer behavior. |
+| `src/gpu-completion-telemetry.js`; worker submit sites | Queue submission time did not show GPU completion or outstanding work. Sample `queue.onSubmittedWorkDone()` with bounded cadence. | Unit tests plus software/hardware exact-save samples; no unhandled promise errors. | Omit `gpucomplete=1`. |
+| `src/input-latency-telemetry.js`; host/worker input path | Host apply, core poll, and next visible change were not correlated. Added sequence-bound transport/poll/visible timestamps and safe WGPU readback baselines. | Six scripted state changes; match applied/polled/visible counts; reject validation-error runs. | Omit `inputlatency=1`. |
+| `src/input-transport.js`; `src/input-visual-marker.js`; marker observer | Legacy input transport could tear, and next-distinct-frame was non-causal. Added a seqlock SAB generation and exact generation-coded 32×32 marker through core poll, submission, GPU completion, and browser-canvas readback. | Strict 6/6 parity, monotonic timestamps, zero mismatch/expiry/read/drop counters. | Omit `inputlatency=1`; use `INPUTMARKEROBSERVE=0` for external sensing. |
+| `tools/menu-progress-validate.mjs`; `tools/perf-artifacts.mjs` | Runs lacked uniform raw causal fields and could be mistaken for menu progression. Preserve JSON/CSV/events/metadata and direct-load the supplied exact save with input disabled. | Fixture hashes, scene marker, save-load success, raw artifact tests. | Revert harness-only changes; never restore menu driving for qualification. |
 
 ## Limits and remaining unknowns
 
-- Unique visual FPS is a hash-based changing-frame cadence, not a perceptual
-  motion-quality score.
-- The full-vs-balanced screen statistically gated game speed, not visual FPS;
-  the visual difference is a consistent descriptive result across four runs
-  per arm.
-- Input-to-photon remains unmeasured because qualification correctly sends no
-  gameplay input.
-- Hardware WGPU still shows a diagnostic pattern rather than game content.
-- The current recommended URL still includes `wasmjit=1`; the audit does not
-  authorize changing that default from one machine's invalid JIT evidence.
+- Unique visual FPS is a sampled changing-frame hash, not a perceptual quality
+  score.
+- The final EFB smoke proves the first completed 120-draw pass mutates its
+  target. It does not isolate which individual draw first changed a byte.
+- Current WGPU numbers are JIT-off diagnostics on one AMD GPU, not a general
+  performance claim.
+- GPU-completion whole-run maxima include boot and save-load transients.
+- The measured worst correlated slice is pacing-owned. DVD result-queue wait
+  still needs its own worst-slice tuple; this run's retained tuple had `dvd=0`.
+- The 32×32 marker is causal to the browser canvas, not to physical photons.
 - Wii and general GameCube compatibility remain out of scope.

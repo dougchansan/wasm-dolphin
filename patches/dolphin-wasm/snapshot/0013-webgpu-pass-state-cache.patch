@@ -1,0 +1,475 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index ced488d..9f9cd3e 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 789c492..c8691da 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -11,6 +11,16 @@
+ 
+ namespace WebGPU
+ {
++namespace
++{
++std::atomic<u64> s_dropped_record_count{0};
++}
++
++u64 GetWebGpuCommandDroppedRecordCount()
++{
++  return s_dropped_record_count.load(std::memory_order_relaxed);
++}
++
+ // Ring capacity. A complex Melee frame is hundreds of GX draws, each
+ // ~SET_PIPELINE + 3×SET_BIND_GROUP + 2×SET_*_BUFFER + DRAW_INDEXED +
+ // CREATE_BIND_GROUP + UBO upload — easily a few thousand records — and
+@@ -123,6 +133,7 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+       if (++spins >= kMaxSpins)
+       {
+         ++m_dropped;
++        s_dropped_record_count.fetch_add(1, std::memory_order_relaxed);
+         if (m_dropped == 1 || (m_dropped % 10000) == 0)
+         {
+           EM_ASM(
+@@ -467,21 +467,21 @@ void WebGPUCommandStream::PushBeginPass(u32 fb_id, float r, float g, float b, fl
+   Push(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetPipeline(u32 pipeline_id)
++bool WebGPUCommandStream::PushSetPipeline(u32 pipeline_id)
+ {
+   if (!m_header || pipeline_id == 0)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetPipeline);
+   rec.arg.u[0] = pipeline_id;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_offsets,
++bool WebGPUCommandStream::PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_offsets,
+                                            u32 num_dyn)
+ {
+   if (!m_header || bg_id == 0)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetBindGroup);
+   rec.arg.u[0] = slot;
+@@ -493,31 +493,31 @@ void WebGPUCommandStream::PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_o
+   rec.arg.u[2] = num_dyn;
+   for (u32 i = 0; i < num_dyn; i++)
+     rec.arg.u[3 + i] = dyn_offsets[i];
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset)
++bool WebGPUCommandStream::PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset)
+ {
+   if (!m_header || buf_id == 0)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetVertexBuffer);
+   rec.arg.u[0] = slot;
+   rec.arg.u[1] = buf_id;
+   rec.arg.u[2] = offset;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset)
++bool WebGPUCommandStream::PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset)
+ {
+   if (!m_header || buf_id == 0)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetIndexBuffer);
+   rec.arg.u[0] = buf_id;
+   rec.arg.u[1] = fmt;
+   rec.arg.u[2] = offset;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+ void WebGPUCommandStream::PushSetViewport(float x, float y, float w, float h, float min_d,
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 925f74b..9ce90bc 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -168,6 +168,10 @@ static_assert(sizeof(CmdRingHeader) == 20,
+ static_assert(sizeof(CmdRingHeader) == 20,
+               "CmdRingHeader must stay 20 bytes (JS bridge assumes fixed layout)");
+ 
++// A nonzero count means replay may contain a partial pass and invalidates
++// renderer performance evidence for the process.
++u64 GetWebGpuCommandDroppedRecordCount();
++
+ class WebGPUCommandStream
+ {
+ public:
+@@ -223,14 +223,14 @@ public:
+ 
+   void PushBeginPass(u32 fb_id, float r, float g, float b, float a, u32 load_op,
+                      u32 depth_fb_id);
+-  void PushSetPipeline(u32 pipeline_id);
++  bool PushSetPipeline(u32 pipeline_id);
+   // dyn_offsets: per-draw uniform-ring byte offsets, one per
+   // dynamic-offset layout entry (group0: 4; groups 1/2: 0). Each must
+   // be a multiple of minUniformBufferOffsetAlignment (256).
+-  void PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_offsets = nullptr,
++  bool PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_offsets = nullptr,
+                         u32 num_dyn = 0);
+-  void PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset);
+-  void PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset);
++  bool PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset);
++  bool PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset);
+   void PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
+   void PushSetScissor(u32 x, u32 y, u32 w, u32 h);
+   void PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 461c93e..3192f48 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -33,8 +33,11 @@
+ #include "VideoCommon/VideoConfig.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstdint>
+ #include <cstring>
++#include <iterator>
++#include <sstream>
+ #include <string>
+ #include <vector>
+ 
+@@ -43,6 +46,38 @@
+ 
+ namespace WebGPU
+ {
++namespace
++{
++std::atomic<bool> s_state_cache_enabled{false};
++std::atomic<u64> s_pipeline_records_suppressed{0};
++std::atomic<u64> s_bind_group_records_suppressed[3]{};
++std::atomic<u64> s_vertex_buffer_records_suppressed{0};
++std::atomic<u64> s_index_buffer_records_suppressed{0};
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
++{
++  // This flag controls only whether already-recorded state is suppressed. It
++  // does not publish any associated data, so acquire/release ordering would
++  // add fences to every draw without providing a synchronization guarantee.
++  s_state_cache_enabled.store(enabled != 0, std::memory_order_relaxed);
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
++{
++  static std::string stats;
++  std::ostringstream out;
++  out << "wgstate:" << (s_state_cache_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " pipe:" << s_pipeline_records_suppressed.load(std::memory_order_relaxed)
++      << " bg:" << s_bind_group_records_suppressed[0].load(std::memory_order_relaxed) << ","
++      << s_bind_group_records_suppressed[1].load(std::memory_order_relaxed) << ","
++      << s_bind_group_records_suppressed[2].load(std::memory_order_relaxed)
++      << " vb:" << s_vertex_buffer_records_suppressed.load(std::memory_order_relaxed)
++      << " ib:" << s_index_buffer_records_suppressed.load(std::memory_order_relaxed)
++      << " wgdrop:" << GetWebGpuCommandDroppedRecordCount();
++  stats = out.str();
++  return stats.c_str();
++}
+ // Day-18: WebGPUGfx is a "SWGfx without a GL window". CreateTexture /
+ // CreateFramebuffer return Software's classes (SWTexture / SWFramebuffer)
+ // so the Software rasteriser's `static_cast<SWTexture*>(...)` calls work
+@@ -750,12 +781,111 @@ void WebGPUGfx::SetScissorRect(const MathUtil::Rectangle<int>& rc)
+ static constexpr u32 kUsageUniform = 0x40 | 0x8;
+ static constexpr u32 kUsageStorage = 0x80 | 0x8;
+ 
++void WebGPUGfx::ResetRecordedPassState()
++{
++  m_last_set_pipeline_id = 0;
++  if (!s_state_cache_enabled.load(std::memory_order_relaxed))
++    return;
++  std::fill(std::begin(m_last_bind_group_id), std::end(m_last_bind_group_id), 0);
++  std::fill(std::begin(m_last_bind_group_dynamic_count),
++            std::end(m_last_bind_group_dynamic_count), 0);
++  m_last_vertex_buffer_id = 0;
++  m_last_vertex_buffer_offset = 0;
++  m_last_index_buffer_id = 0;
++  m_last_index_buffer_format = 0;
++  m_last_index_buffer_offset = 0;
++}
++
++bool WebGPUGfx::SetRecordedPipeline(u32 pipeline_id)
++{
++  if (s_state_cache_enabled.load(std::memory_order_relaxed) &&
++      m_last_set_pipeline_id == pipeline_id)
++  {
++    s_pipeline_records_suppressed.fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  if (!m_cmd_stream.PushSetPipeline(pipeline_id))
++    return false;
++  m_last_set_pipeline_id = pipeline_id;
++  return true;
++}
++
++bool WebGPUGfx::SetRecordedBindGroup(u32 slot, u32 bind_group_id, const u32* dynamic_offsets,
++                                     u32 dynamic_offset_count)
++{
++  if (!s_state_cache_enabled.load(std::memory_order_relaxed))
++    return m_cmd_stream.PushSetBindGroup(slot, bind_group_id, dynamic_offsets,
++                                         dynamic_offset_count);
++  if (slot >= 3 || dynamic_offset_count > 4)
++    return m_cmd_stream.PushSetBindGroup(slot, bind_group_id, dynamic_offsets,
++                                         dynamic_offset_count);
++
++  bool unchanged = m_last_bind_group_id[slot] == bind_group_id &&
++                   m_last_bind_group_dynamic_count[slot] == dynamic_offset_count;
++  for (u32 i = 0; unchanged && i < dynamic_offset_count; ++i)
++    unchanged = m_last_bind_group_dynamic_offsets[slot][i] == dynamic_offsets[i];
++  if (unchanged)
++  {
++    s_bind_group_records_suppressed[slot].fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  if (!m_cmd_stream.PushSetBindGroup(slot, bind_group_id, dynamic_offsets, dynamic_offset_count))
++    return false;
++  m_last_bind_group_id[slot] = bind_group_id;
++  m_last_bind_group_dynamic_count[slot] = dynamic_offset_count;
++  for (u32 i = 0; i < dynamic_offset_count; ++i)
++    m_last_bind_group_dynamic_offsets[slot][i] = dynamic_offsets[i];
++  return true;
++}
++
++bool WebGPUGfx::SetRecordedVertexBuffer(u32 slot, u32 buffer_id, u32 offset)
++{
++  if (!s_state_cache_enabled.load(std::memory_order_relaxed))
++    return m_cmd_stream.PushSetVertexBuffer(slot, buffer_id, offset);
++  const bool unchanged = slot == 0 && m_last_vertex_buffer_id == buffer_id &&
++                         m_last_vertex_buffer_offset == offset;
++  if (unchanged)
++  {
++    s_vertex_buffer_records_suppressed.fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  if (!m_cmd_stream.PushSetVertexBuffer(slot, buffer_id, offset))
++    return false;
++  if (slot == 0)
++  {
++    m_last_vertex_buffer_id = buffer_id;
++    m_last_vertex_buffer_offset = offset;
++  }
++  return true;
++}
++
++bool WebGPUGfx::SetRecordedIndexBuffer(u32 buffer_id, u32 format, u32 offset)
++{
++  if (!s_state_cache_enabled.load(std::memory_order_relaxed))
++    return m_cmd_stream.PushSetIndexBuffer(buffer_id, format, offset);
++  const bool unchanged = m_last_index_buffer_id == buffer_id &&
++                         m_last_index_buffer_format == format &&
++                         m_last_index_buffer_offset == offset;
++  if (unchanged)
++  {
++    s_index_buffer_records_suppressed.fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  if (!m_cmd_stream.PushSetIndexBuffer(buffer_id, format, offset))
++    return false;
++  m_last_index_buffer_id = buffer_id;
++  m_last_index_buffer_format = format;
++  m_last_index_buffer_offset = offset;
++  return true;
++}
++
+ void WebGPUGfx::EndPassIfOpen()
+ {
+   if (m_pass_open)
+   {
+     m_cmd_stream.PushEndPass();
+     m_pass_open = false;
++    ResetRecordedPassState();
+   }
+ }
+ 
+@@ -767,12 +888,12 @@ void WebGPUGfx::BeginPassIfNeeded()
+                              m_clear_col[3], m_pending_clear ? 1u : 0u, m_fb_depth_id);
+   m_pending_clear = false;
+   m_pass_open = true;
++  ResetRecordedPassState();
+   // A fresh WebGPU pass resets viewport/scissor — re-emit cached.
+   m_cmd_stream.PushSetViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3],
+                                m_viewport[4], m_viewport[5]);
+   if (m_scissor[2] > 0 && m_scissor[3] > 0)
+     m_cmd_stream.PushSetScissor(m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]);
+-  m_last_set_pipeline_id = 0;  // pipeline binding is per-pass
+ }
+ 
+ static void PutBgU32(std::vector<u8>& b, u32 v)
+@@ -783,7 +904,7 @@ static void PutBgU32(std::vector<u8>& b, u32 v)
+   b.push_back(static_cast<u8>(v >> 24));
+ }
+ 
+-void WebGPUGfx::PrepareDrawResources()
++bool WebGPUGfx::PrepareDrawResources()
+ {
+   auto& system = Core::System::GetInstance();
+ 
+@@ -800,6 +921,8 @@ void WebGPUGfx::PrepareDrawResources()
+     // fixed group-1 layout is always satisfiable for unbound slots.
+     m_dummy_tex = m_cmd_stream.PushCreateTexture(1, 1, 0, 1u | 2u | 4u | 0x10u);
+   }
++  if (m_ubo_ring == 0 || m_ssbo_bbox == 0 || m_dummy_tex == 0)
++    return false;
+ 
+   auto& vsm = system.GetVertexShaderManager();
+   {
+@@ -1015,7 +1138,8 @@ void WebGPUGfx::PrepareDrawResources()
+       }
+     }
+ #endif
+-    m_cmd_stream.PushSetBindGroup(0, m_bg0_id, dyn, 4);
++    if (m_bg0_id == 0 || !SetRecordedBindGroup(0, m_bg0_id, dyn, 4))
++      return false;
+   }
+ 
+   // Bind group 1 — samplers (b0..7 textures, b8 sampler). Rebuild
+@@ -1063,8 +1187,8 @@ void WebGPUGfx::PrepareDrawResources()
+       bg1_id = id;
+     }
+   }
+-  if (bg1_id)
+-    m_cmd_stream.PushSetBindGroup(1, bg1_id);
++  if (bg1_id == 0 || !SetRecordedBindGroup(1, bg1_id))
++    return false;
+ 
+   // Bind group 2 — bbox SSBO (b0). Fixed ⇒ build once, reuse.
+   if (m_bg2_id == 0)
+@@ -1080,8 +1204,9 @@ void WebGPUGfx::PrepareDrawResources()
+     PutBgU32(b, 0);
+     m_bg2_id = m_cmd_stream.PushCreateBindGroup(b.data(), b.size(), 2);
+   }
+-  if (m_bg2_id)
+-    m_cmd_stream.PushSetBindGroup(2, m_bg2_id);
++  if (m_bg2_id == 0 || !SetRecordedBindGroup(2, m_bg2_id))
++    return false;
++  return true;
+ }
+ 
+ void WebGPUGfx::SetPipeline(const AbstractPipeline* pipeline)
+@@ -1233,13 +1358,24 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+   BeginPassIfNeeded();
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+   {
+-    m_cmd_stream.PushSetPipeline(m_cur_pipeline_id);
+-    m_last_set_pipeline_id = m_cur_pipeline_id;
++    if (!SetRecordedPipeline(m_cur_pipeline_id))
++    {
++      m_util_uniform_mode = false;
++      return;
++    }
++  }
++  if (!PrepareDrawResources())
++  {
++    m_util_uniform_mode = false;
++    return;
+   }
+-  PrepareDrawResources();
+   const auto* vm = static_cast<const VertexManager*>(g_vertex_manager.get());
+-  if (vm && vm->GetVertexBufferId())
+-    m_cmd_stream.PushSetVertexBuffer(0, vm->GetVertexBufferId(), 0);
++  if (vm && vm->GetVertexBufferId() &&
++      !SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0))
++  {
++    m_util_uniform_mode = false;
++    return;
++  }
+   m_cmd_stream.PushDraw(num_vertices, 1, base_vertex);
+   // Utility draw consumed — revert to the GX bg0 for following draws.
+   m_util_uniform_mode = false;
+@@ -1255,18 +1391,29 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+   BeginPassIfNeeded();
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+   {
+-    m_cmd_stream.PushSetPipeline(m_cur_pipeline_id);
+-    m_last_set_pipeline_id = m_cur_pipeline_id;
++    if (!SetRecordedPipeline(m_cur_pipeline_id))
++    {
++      m_util_uniform_mode = false;
++      return;
++    }
++  }
++  if (!PrepareDrawResources())
++  {
++    m_util_uniform_mode = false;
++    return;
+   }
+-  PrepareDrawResources();
+   const auto* vm = static_cast<const VertexManager*>(g_vertex_manager.get());
+   if (!vm || vm->GetVertexBufferId() == 0 || vm->GetIndexBufferId() == 0)
+   {
+     m_util_uniform_mode = false;
+     return;
+   }
+-  m_cmd_stream.PushSetVertexBuffer(0, vm->GetVertexBufferId(), 0);
+-  m_cmd_stream.PushSetIndexBuffer(vm->GetIndexBufferId(), /*u16=*/0, 0);
++  if (!SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0) ||
++      !SetRecordedIndexBuffer(vm->GetIndexBufferId(), /*u16=*/0, 0))
++  {
++    m_util_uniform_mode = false;
++    return;
++  }
+   m_cmd_stream.PushDrawIndexed(num_indices, 1, base_index, base_vertex);
+   // Utility draw consumed — revert to the GX bg0 for following draws.
+   m_util_uniform_mode = false;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 0c98aff..06dba16 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -163,9 +163,15 @@ private:
+   // scissor since a new WebGPU pass resets them.
+   void BeginPassIfNeeded();
+   void EndPassIfOpen();
++  void ResetRecordedPassState();
++  bool SetRecordedPipeline(u32 pipeline_id);
++  bool SetRecordedBindGroup(u32 slot, u32 bind_group_id, const u32* dynamic_offsets = nullptr,
++                            u32 dynamic_offset_count = 0);
++  bool SetRecordedVertexBuffer(u32 slot, u32 buffer_id, u32 offset);
++  bool SetRecordedIndexBuffer(u32 buffer_id, u32 format, u32 offset);
+   // Upload the 3 GX UBOs (when dirty) + assemble & set the 3 fixed
+   // bind groups (uniforms / samplers / ssbo) before a draw.
+-  void PrepareDrawResources();
++  bool PrepareDrawResources();
+ 
+   // §16 per-draw uniform versioning: bump-allocate a 256-aligned slice
+   // of the persistent uniform ring, copy `data` (size bytes) into it,
+@@ -183,6 +189,14 @@ private:
+ 
+   u32 m_cur_pipeline_id = 0;
+   u32 m_last_set_pipeline_id = 0;
++  u32 m_last_bind_group_id[3] = {};
++  u32 m_last_bind_group_dynamic_count[3] = {};
++  u32 m_last_bind_group_dynamic_offsets[3][4] = {};
++  u32 m_last_vertex_buffer_id = 0;
++  u32 m_last_vertex_buffer_offset = 0;
++  u32 m_last_index_buffer_id = 0;
++  u32 m_last_index_buffer_format = 0;
++  u32 m_last_index_buffer_offset = 0;
+ 
+   float m_viewport[6] = {0, 0, 640, 480, 0.f, 1.f};
+   u32 m_scissor[4] = {0, 0, 640, 480};

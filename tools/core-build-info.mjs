@@ -25,6 +25,13 @@ function fileInfo(path, hashMode = "raw") {
   };
 }
 
+function repositoryTextFileInfo(relativePath) {
+  return {
+    ...fileInfo(resolve(root, relativePath), "lf-normalized"),
+    path: relativePath
+  };
+}
+
 function readUleb(bytes, start) {
   let value = 0;
   let shift = 0;
@@ -80,6 +87,21 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
   const vendorSnapshot = JSON.parse(readFileSync(vendorSnapshotPath, "utf8"));
   const toolchain = loadWasmToolchainLock();
   const wasm = fileInfo(wasmPath);
+  const localInputs = [
+    "core/upstream/dolphin_web_core.cpp",
+    "core/upstream/dolphin_web_discio.cpp",
+    "core/upstream/dolphin_web_raster_profile.h",
+    "core/upstream/dolphin_web_xfb_fastpaths.h",
+    "tools/jit-cache-prejs.js"
+  ].map(repositoryTextFileInfo);
+  const localInputsSha256 = sha256(Buffer.from(JSON.stringify(
+    localInputs.map(({ path, size, sha256: fileSha256, hashMode }) => ({
+      path,
+      size,
+      sha256: fileSha256,
+      hashMode
+    }))
+  )));
 
   const info = {
     schemaVersion: 1,
@@ -94,7 +116,9 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
       patchSeriesSha256: sourceLock.patchSeriesSha256,
       vendorResultTree: vendorSnapshot.root.resultTree,
       sourceLockSha256: sha256File(sourceLockPath),
-      vendorSnapshotSha256: sha256File(vendorSnapshotPath)
+      vendorSnapshotSha256: sha256File(vendorSnapshotPath),
+      localInputsSha256,
+      localInputs
     },
     toolchain: {
       lockSha256: sha256File(toolchainLockPath),

@@ -10,11 +10,21 @@ import {
 } from "./upstream-worker-protocol.js";
 import {
   requestedWgpuAtomicPassReplay,
-  requestedWgpuReplayDiagnostics
+  requestedWgpuDeepReplayDiagnostics,
+  requestedWgpuDetachedPresenter,
+  requestedWgpuLoadEpochFence,
+  requestedWgpuReplayPump,
+  requestedWgpuReplayDiagnostics,
+  requestedWgpuStateCache
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
+import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
+import {
+  requestedInputLatencyDiagnostics,
+  requestedInputReadbackDiagnostics
+} from "./input-latency-telemetry.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -64,7 +74,22 @@ export class EmulatorHost {
     this.collectMetrics = requestedCollectMetrics();
     this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.wgpuReplayDiagnostics = requestedWgpuReplayDiagnostics(window.location.search);
+    this.wgpuDeepReplayDiagnostics = requestedWgpuDeepReplayDiagnostics(window.location.search);
+    this.wgpuDetachedPresenter = requestedWgpuDetachedPresenter(window.location.search);
+    this.wgpuLoadEpochFence = requestedWgpuLoadEpochFence(window.location.search);
+    // Replaying continuously keeps the producer within a bounded 16K-record
+    // window.  Repeated fixed-battle A/B runs showed substantially lower
+    // replay age and higher presentation cadence for the real WGPU backend.
+    // `wgpupump=0` remains the explicit rollback; other backends stay off.
+    this.wgpuReplayPump = requestedWgpuReplayPump(
+      window.location.search,
+      this.videoBackend === "WebGPU-Real"
+    );
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
+    this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
+    this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
+    this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
+    this.inputReadbackDiagnostics = requestedInputReadbackDiagnostics(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
     // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
@@ -81,15 +106,20 @@ export class EmulatorHost {
       typeof SharedArrayBuffer === "function";
     this.usesMainThreadOgl =
       this.coreKind === "upstream" && this.videoBackend === "OGL" && this.oglProxyMode === "main";
+    this.usesDetachedWgpu =
+      this.coreKind === "upstream" && this.videoBackend === "WebGPU-Real" &&
+      this.wgpuDetachedPresenter;
     this.usesAdapterCanvas =
       this.coreKind === "upstream" &&
       !this.usesMainThreadOgl &&
       !this.oglSabEnabled &&
+      !this.usesDetachedWgpu &&
       Boolean(canvas.transferControlToOffscreen);
     // canvasOwnedByAdapter gates the host's stats-poll cadence (250 ms). In
     // SAB mode the visible canvas stays on main, but the *frame production*
     // still happens in the worker, so we still want the poll active.
-    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl || this.oglSabEnabled;
+    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl ||
+      this.oglSabEnabled || this.usesDetachedWgpu;
     // SAB mode keeps the visible canvas on the main thread so we can paint
     // it directly via putImageData. The host owns a 2D context here.
     this.context =
@@ -230,11 +260,13 @@ export class EmulatorHost {
             // unconditionally, which broke software mode because the default
             // proxy mode is "worker" even when the video backend is software.)
             transferCanvas:
-              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") ||
+                this.oglSabEnabled || this.usesDetachedWgpu
                 ? null
                 : transferCanvasToOffscreen,
             visibleCanvas:
-              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") ||
+                this.oglSabEnabled || this.usesDetachedWgpu
                 ? canvas
                 : null,
             oglPixelSab: this.oglPixelSab,
@@ -265,7 +297,15 @@ export class EmulatorHost {
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,
             wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
-            wgpuAtomicPassReplay: this.wgpuAtomicPassReplay
+            wgpuDeepReplayDiagnostics: this.wgpuDeepReplayDiagnostics,
+            wgpuDetachedPresenter: this.wgpuDetachedPresenter,
+            wgpuLoadEpochFence: this.wgpuLoadEpochFence,
+            wgpuReplayPump: this.wgpuReplayPump,
+            wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+            wgpuStateCache: this.wgpuStateCache,
+            gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+            inputLatencyDiagnostics: this.inputLatencyDiagnostics,
+            inputReadbackDiagnostics: this.inputReadbackDiagnostics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";

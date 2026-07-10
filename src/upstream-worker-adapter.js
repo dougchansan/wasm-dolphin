@@ -5,6 +5,10 @@ import {
   verifyUpstreamCoreWasm
 } from "./upstream-worker-protocol.js";
 import {
+  INPUT_STATE_SLOT_COUNT,
+  writeInputStateSnapshot
+} from "./input-transport.js";
+import {
   countTransferBytes,
   createCausalTelemetry,
   deepMerge,
@@ -58,7 +62,15 @@ export class UpstreamWorkerAdapter {
     collectMetrics = false,
     legacyOneWayAck = false,
     wgpuReplayDiagnostics = false,
+    wgpuDeepReplayDiagnostics = false,
+    wgpuDetachedPresenter = false,
+    wgpuLoadEpochFence = false,
+    wgpuReplayPump = false,
     wgpuAtomicPassReplay = true,
+    wgpuStateCache = false,
+    gpuCompletionDiagnostics = false,
+    inputLatencyDiagnostics = false,
+    inputReadbackDiagnostics = false,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -79,6 +91,10 @@ export class UpstreamWorkerAdapter {
     this.visibleCanvas = visibleCanvas;
     this.detachedOglContext = null;
     this.detachedOglFramesDrawn = 0;
+    this.detachedGpuFramesReceived = 0;
+    this.detachedGpuFramesDropped = 0;
+    this.detachedGpuDrawLastMs = 0;
+    this.detachedGpuDrawMaxMs = 0;
     this.videoBackend = videoBackend;
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
@@ -103,7 +119,15 @@ export class UpstreamWorkerAdapter {
     this.collectMetrics = Boolean(collectMetrics);
     this.legacyOneWayAck = Boolean(legacyOneWayAck);
     this.wgpuReplayDiagnostics = Boolean(wgpuReplayDiagnostics);
+    this.wgpuDeepReplayDiagnostics = Boolean(wgpuDeepReplayDiagnostics);
+    this.wgpuDetachedPresenter = Boolean(wgpuDetachedPresenter);
+    this.wgpuLoadEpochFence = Boolean(wgpuLoadEpochFence);
+    this.wgpuReplayPump = Boolean(wgpuReplayPump);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
+    this.wgpuStateCache = Boolean(wgpuStateCache);
+    this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
+    this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
+    this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -170,16 +194,19 @@ export class UpstreamWorkerAdapter {
       mainStateChangeCount: 0,
       mainPostCount: 0,
       mainSabWriteCount: 0,
+      mainGeneration: 0,
       mainSabGeneration: 0
     };
     // SharedArrayBuffer-backed input state. Bypasses postMessage queue.
     // Slots: 0=mask, 1=stickX, 2=stickY, 3=cStickX, 4=cStickY,
     //        5=triggerLeft, 6=triggerRight, 7=analogA, 8=analogB,
-    //        9=generation (incremented on every write so the worker can
-    //                       detect a new value without re-reading every slot),
-    //        10=Date.now() low 32 bits for input-age telemetry.
+    //        9=generation (incremented on every changed state),
+    //        10=Date.now() low 32 bits for input-age telemetry,
+    //        11=odd/even seqlock. The writer publishes odd before changing
+    //           fields and even after generation, so the worker cannot pair
+    //           a generation with fields from a concurrent later write.
     if (typeof SharedArrayBuffer === "function") {
-      this.inputStateSab = new SharedArrayBuffer(44); // 11 * Int32
+      this.inputStateSab = new SharedArrayBuffer(INPUT_STATE_SLOT_COUNT * Int32Array.BYTES_PER_ELEMENT);
       this.inputStateView = new Int32Array(this.inputStateSab);
     } else {
       this.inputStateSab = null;
@@ -247,7 +274,15 @@ export class UpstreamWorkerAdapter {
       legacyOneWayAck: this.legacyOneWayAck,
       coreSelection: this.coreSelectionTelemetry(window.location.href),
       wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
+      wgpuDeepReplayDiagnostics: this.wgpuDeepReplayDiagnostics,
+      wgpuDetachedPresenter: this.wgpuDetachedPresenter,
+      wgpuLoadEpochFence: this.wgpuLoadEpochFence,
+      wgpuReplayPump: this.wgpuReplayPump,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+      wgpuStateCache: this.wgpuStateCache,
+      gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+      inputLatencyDiagnostics: this.inputLatencyDiagnostics,
+      inputReadbackDiagnostics: this.inputReadbackDiagnostics,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,
@@ -375,21 +410,25 @@ export class UpstreamWorkerAdapter {
     this.lastInputStateSignature = signature;
     this.inputTelemetry.mainStateChangeCount += 1;
     const inputSentAtEpochMs = Date.now();
+    let inputGeneration = (this.inputTelemetry.mainGeneration + 1) >>> 0;
+    if (inputGeneration === 0) inputGeneration = 1;
+    this.inputTelemetry.mainGeneration = inputGeneration;
 
     if (this.inputStateView) {
-      // Write each slot, then bump the generation counter last so the worker
-      // sees a coherent snapshot.
-      Atomics.store(this.inputStateView, 0, mask | 0);
-      Atomics.store(this.inputStateView, 1, stickX);
-      Atomics.store(this.inputStateView, 2, stickY);
-      Atomics.store(this.inputStateView, 3, cStickX);
-      Atomics.store(this.inputStateView, 4, cStickY);
-      Atomics.store(this.inputStateView, 5, triggerLeft);
-      Atomics.store(this.inputStateView, 6, triggerRight);
-      Atomics.store(this.inputStateView, 7, analogA);
-      Atomics.store(this.inputStateView, 8, analogB);
-      Atomics.store(this.inputStateView, 10, inputSentAtEpochMs | 0);
-      this.inputTelemetry.mainSabGeneration = (Atomics.add(this.inputStateView, 9, 1) + 1) >>> 0;
+      writeInputStateSnapshot(this.inputStateView, {
+        mask,
+        stickX,
+        stickY,
+        cStickX,
+        cStickY,
+        triggerLeft,
+        triggerRight,
+        analogA,
+        analogB,
+        inputGeneration,
+        sentAtEpochMs: inputSentAtEpochMs
+      });
+      this.inputTelemetry.mainSabGeneration = inputGeneration;
       this.inputTelemetry.mainSabWriteCount += 1;
     }
     // Always also send via postMessage. Belt-and-suspenders: if the worker
@@ -407,7 +446,8 @@ export class UpstreamWorkerAdapter {
       triggerRight,
       analogA,
       analogB,
-      inputSentAtEpochMs
+      inputSentAtEpochMs,
+      inputGeneration
     });
     this.inputTelemetry.mainPostCount += 1;
   }
@@ -623,7 +663,9 @@ export class UpstreamWorkerAdapter {
 
   drawDetachedOglBitmap(bitmap, width, height) {
     if (!bitmap) return;
+    this.detachedGpuFramesReceived += 1;
     if (!this.visibleCanvas) {
+      this.detachedGpuFramesDropped += 1;
       try { bitmap.close(); } catch {}
       return;
     }
@@ -631,25 +673,40 @@ export class UpstreamWorkerAdapter {
       try {
         this.detachedOglContext = this.visibleCanvas.getContext("2d", { alpha: false });
       } catch (err) {
-        this.onStatus(`Detached OGL: cannot get 2D context on visible canvas: ${err.message}`);
+        this.onStatus(`Detached GPU presenter: cannot get 2D context: ${err.message}`);
+        this.detachedGpuFramesDropped += 1;
         try { bitmap.close(); } catch {}
         return;
       }
       if (!this.detachedOglContext) {
-        this.onStatus("Detached OGL: visible canvas has no 2D context (may already be transferred)");
+        this.onStatus("Detached GPU presenter: visible canvas has no 2D context");
+        this.detachedGpuFramesDropped += 1;
         try { bitmap.close(); } catch {}
         return;
       }
-      this.onStatus(`Detached OGL: 2D presenter live (${this.visibleCanvas.width}x${this.visibleCanvas.height})`);
+      this.onStatus(`Detached GPU presenter live (${this.visibleCanvas.width}x${this.visibleCanvas.height})`);
     }
-    this.detachedOglContext.drawImage(
-      bitmap,
-      0,
-      0,
-      this.visibleCanvas.width,
-      this.visibleCanvas.height
-    );
-    this.detachedOglFramesDrawn += 1;
+    const startedAt = this.collectMetrics ? performance.now() : 0;
+    try {
+      this.detachedOglContext.drawImage(
+        bitmap,
+        0,
+        0,
+        this.visibleCanvas.width,
+        this.visibleCanvas.height
+      );
+      this.detachedOglFramesDrawn += 1;
+      if (startedAt) {
+        this.detachedGpuDrawLastMs = performance.now() - startedAt;
+        this.detachedGpuDrawMaxMs = Math.max(
+          this.detachedGpuDrawMaxMs,
+          this.detachedGpuDrawLastMs
+        );
+      }
+    } catch (error) {
+      this.detachedGpuFramesDropped += 1;
+      this.onStatus(`Detached GPU presenter draw failed: ${error.message}`);
+    }
     try { bitmap.close(); } catch {}
   }
 
@@ -696,7 +753,8 @@ export class UpstreamWorkerAdapter {
       return;
     }
 
-    if (message?.type === "detachedOglFrame" && message.bitmap) {
+    if ((message?.type === "detachedOglFrame" ||
+         message?.type === "detachedWgpuFrame") && message.bitmap) {
       // Worker has rendered a frame to its standalone OffscreenCanvas and
       // handed us the result as an ImageBitmap. Draw onto the visible
       // canvas via 2D context. Lazily create the context on first frame.
@@ -865,7 +923,16 @@ export class UpstreamWorkerAdapter {
     }
     this.causalTelemetry = createCausalTelemetry(deepMerge(this.workerCausalTelemetry, {
       workerTraffic: cloneTrafficStats(this.trafficStats),
-      input: { ...this.inputTelemetry }
+      input: { ...this.inputTelemetry },
+      presentation: {
+        detachedBitmapReceivedCount: this.detachedGpuFramesReceived,
+        detachedBitmapDrawnCount: this.detachedOglFramesDrawn,
+        detachedBitmapDroppedCount: this.detachedGpuFramesDropped
+      },
+      host: {
+        detachedBitmapDrawLastMs: this.detachedGpuDrawLastMs,
+        detachedBitmapDrawMaxMs: this.detachedGpuDrawMaxMs
+      }
     }));
   }
 }

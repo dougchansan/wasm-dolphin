@@ -186,7 +186,7 @@ export class UpstreamMainThreadAdapter {
               ccall(
                 "SetInputState",
                 null,
-                ["number", "number", "number", "number", "number", "number", "number", "number", "number"],
+                ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
                 [
                   state.mask >>> 0,
                   state.stickX | 0,
@@ -196,7 +196,8 @@ export class UpstreamMainThreadAdapter {
                   state.triggerLeft | 0,
                   state.triggerRight | 0,
                   state.analogA | 0,
-                  state.analogB | 0
+                  state.analogB | 0,
+                  state.inputGeneration >>> 0
                 ]
               )
           : null,

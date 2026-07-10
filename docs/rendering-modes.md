@@ -13,7 +13,7 @@ software-rendered framebuffer reaches the browser canvas.
 | `video=software&presenter=webgl` | Software rasterizer + WebGL presenter | Fallback | Use if WebGPU presenter fails |
 | `video=software&presenter=canvas` or `presenter=2d` | Software rasterizer + 2D canvas | Diagnostic fallback | Slowest/simple path |
 | `video=webgpu` | Legacy/alias hybrid path, not true hardware WebGPU | Avoid in docs | Keep for compatibility if code supports it |
-| `video=wgpu` | True WebGPU hardware renderer | Experimental | May render black or only a diagnostic pattern |
+| `video=wgpu` | True WebGPU hardware renderer | Experimental | Fixed battle renders on the validation GPU; remains slow and GPU-dependent |
 | `video=ogl` | OGL/WebGL2-style path | Experimental/diagnostic | JIT defaults differ here |
 | `oglsab=1` | SharedArrayBuffer pixel transport for OGL readback | Diagnostic | Requires cross-origin isolation |
 
@@ -37,7 +37,9 @@ distinct-frame cadence but are not guaranteed to raise game speed.
 
 `video=wgpu` routes Dolphin draw work through the experimental WebGPU hardware
 backend. It depends on the [Rust/Naga shader bridge](webgpu-naga-bridge.md) and
-is not the recommended gameplay path.
+is not the recommended gameplay path. The command replay pump and bounded
+16,384-record credit window are enabled for this backend after repeated A/B
+evidence; use `wgpupump=0` only as a rollback/diagnostic comparison.
 
 `video=ogl` is an OGL/WebGL2-style diagnostic backend. Its JIT safety behavior
 is intentionally more conservative; see [JIT flags](jit-flags.md).

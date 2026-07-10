@@ -75,13 +75,17 @@ assume-unchanged and skip-worktree), recomputes every result blob and tree, and
 reports:
 
 ```text
-verified result tree a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42
+verified result tree 3cc63e7a1417574b2fab1ee0c6b483fc49343b91
 ```
 
-The active lock contains eight root snapshot patches and two patches applied in
-the pinned SFML and xxHash submodules. It captures the complete forensic delta,
-including the hardware-WebGPU/Naga call site. The ordered patch-set SHA-256 is
-`ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722`.
+The active lock contains eleven root snapshot patches and two patches applied
+in the pinned SFML and xxHash submodules. It captures the complete forensic
+delta, including the hardware-WebGPU/Naga call site, software-raster phase
+profile, JIT emitter diagnostics, and WGPU upload watermark. The ordered
+patch-set SHA-256 is
+`05fc890838da65a459ad04a57ddc91259540e00d0571475d325ec32557d9dde0`.
+The virtual vendor snapshot content SHA-256 is
+`f2345b18d9345043727ef886e18d0c060080de753d68604b1d20fc32476c34ab`.
 The older top-level
 `0001`-`0009` files remain research history and are not applied by the locked
 build. See [the bridge guide](webgpu-naga-bridge.md).
@@ -93,8 +97,8 @@ baked core:
 
 | Artifact | Canonical size | SHA-256 |
 | --- | ---: | --- |
-| `dolphin-core-upstream.js` | 261,224 bytes | `00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658` |
-| `dolphin-core-upstream.wasm` | 12,807,931 bytes | `3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a` |
+| `dolphin-core-upstream.js` | 261,633 normalized bytes | `56c62ffc376806049b3442d66df5b72a8685796e39ab79931282fcb286a3b163` |
+| `dolphin-core-upstream.wasm` | 12,815,061 bytes | `158dde37602442bf1dacf42328501082b46b47768b2455946fcb4c596fcdb5ea` |
 
 The JS digest is calculated after CRLF-to-LF normalization, and
 `.gitattributes` requires LF for core JS files. This prevents checkout line
@@ -108,12 +112,12 @@ build records with `npm run compare:core-builds -- <left> <right>`, then run the
 fixed Kirby-versus-Link save smoke on the candidate and on the default baseline.
 
 Two independent builds of this core matched byte-for-byte. The independent
-records include an identical 10,315,220-byte code section (SHA-256
-`b2b717681c4ba68a66df095765b7904fce21802b32fb7dea8587886e79e54a52`)
-and 2,452,406-byte data section (SHA-256
-`b47165d9f983a39b108a1f75a1607bbbbcda0ebf25c6170cb3f15a6a55f40c02`).
-The build and gameplay evidence are summarized in the
-[2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
+records include an identical 10,322,762-byte code section (SHA-256
+`e7de8131567eba0b8f64e1d1fcc24e4d849f553a9e425c9ff82209fe9a2b5b02`)
+and 2,451,983-byte data section (SHA-256
+`aa01b9bc6d7892a16d3d8d692248e7646b6401232eba4d853fa4b1503ae91484`).
+The current parity and gameplay evidence are summarized in the
+[software-raster phase package](perf-results/melee-software-raster-phases-2026-07-10.md).
 
 ## Known local assumptions
 
