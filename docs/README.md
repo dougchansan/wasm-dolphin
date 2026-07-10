@@ -34,8 +34,11 @@
   opt-in queue completion, legacy propagation bounds, and causal
   input-to-browser-canvas marker measurements.
 - [WGPU replay and hardware-latency diagnostics](perf-results/wgpu-replay-and-latency-2026-07-10.md) —
-  immediate EFB-pass mutation, repeated replay-pump A/B, GPU completion, and
-  GPU-readback input-to-visible evidence.
+  historical nonzero EFB-pass output, repeated replay-pump A/B, GPU
+  completion, and GPU-readback input-to-visible evidence.
+- [WGPU post-load restore classification](perf-results/wgpu-post-load-restore-classification-2026-07-10.md) —
+  zero-payload save proof, first-pass source mapping, classifier semantics,
+  and remaining depth/staging risks.
 - [Fixed-battle result CSV](perf-results/melee-kirby-link-fixed-battle-2026-07-09.csv) —
   aggregate rows for the audit's headed Chrome runs.
 - [Worker transport A/B](worker-transport.md) — one-way reply suppression,

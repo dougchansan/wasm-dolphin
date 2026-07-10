@@ -165,6 +165,8 @@ std::atomic<std::uint32_t> s_last_sw_xfb_dst_height{0};
 std::atomic<std::uint32_t> s_xfb_fast_paths{0};
 std::atomic<std::uint64_t> s_xfb_encoded_rows_reused{0};
 std::atomic<std::uint64_t> s_xfb_identity_frames_decoded{0};
+std::atomic<std::uint32_t> s_software_tev_hot_case_mode{0};
+std::atomic<std::uint32_t> s_software_tev_hot_case_generation{1};
 std::atomic<std::uint32_t> s_ogl_swap_count{0};
 std::atomic<int> s_last_ogl_worker_owned{0};
 std::atomic<int> s_last_ogl_commit_result{0};
@@ -442,7 +444,11 @@ std::string TevCaseStats(const DolphinWeb::RasterProfile::TevCaseTableSnapshot& 
       return left->samples > right->samples;
     if (left->key.structure != right->key.structure)
       return left->key.structure < right->key.structure;
-    return left->key.program_fingerprint < right->key.program_fingerprint;
+    if (left->key.program_fingerprint != right->key.program_fingerprint)
+      return left->key.program_fingerprint < right->key.program_fingerprint;
+    if (left->key.exact_word_count != right->key.exact_word_count)
+      return left->key.exact_word_count < right->key.exact_word_count;
+    return left->key.exact_words < right->key.exact_words;
   });
 
   std::uint64_t other_samples = cases.other_samples;
@@ -464,7 +470,15 @@ std::string TevCaseStats(const DolphinWeb::RasterProfile::TevCaseTableSnapshot& 
     if (i != 0)
       out << ",";
     out << std::hex << ranked[i]->key.structure << "." << ranked[i]->key.program_fingerprint
-        << std::dec << "=" << ranked[i]->samples << "/" << ranked[i]->work;
+        << std::dec;
+    if (ranked[i]->key.HasExactTuple())
+    {
+      out << "@1" << std::hex;
+      for (const std::uint32_t word : ranked[i]->key.exact_words)
+        out << "." << word;
+      out << std::dec;
+    }
+    out << "=" << ranked[i]->samples << "/" << ranked[i]->work;
   }
   return out.str();
 }
@@ -482,6 +496,10 @@ std::string RasterProfileStats()
       << profile.raster.sampled_total_us << "/" << profile.raster_candidate_pixels
       << " tev:" << profile.tev.calls << "/" << profile.tev_stages << "/"
       << profile.tev.timed_samples << "/" << profile.tev.sampled_total_us
+      << " tevhot:" << s_software_tev_hot_case_mode.load(std::memory_order_relaxed) << "/"
+      << profile.tev_hot_classified_batches << "/" << profile.tev_hot_classified_pixels << "/"
+      << profile.tev_hot_specialized_pixels << "/" << profile.tev_hot_shadow_pixels << "/"
+      << profile.tev_hot_shadow_mismatches
       << " tex:" << profile.texture.calls << "/" << profile.texture.timed_samples << "/"
       << profile.texture.sampled_total_us
       << TextureCaseStats(profile.texture_cases)
@@ -697,6 +715,29 @@ int SetSoftwareRasterProfileEnabled(int enabled)
 {
   DolphinWeb::RasterProfile::SetEnabled(enabled != 0);
   return DolphinWeb::RasterProfile::Enabled() ? 1 : 0;
+}
+
+int DolphinWeb_SoftwareTevHotCaseMode()
+{
+  return static_cast<int>(s_software_tev_hot_case_mode.load(std::memory_order_acquire));
+}
+
+unsigned int DolphinWeb_SoftwareTevHotCaseGeneration()
+{
+  return s_software_tev_hot_case_generation.load(std::memory_order_acquire);
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int SetSoftwareTevHotCaseMode(int mode)
+{
+  const std::uint32_t normalized = static_cast<std::uint32_t>(mode) & 0x3;
+  s_software_tev_hot_case_mode.store(normalized, std::memory_order_release);
+  // Reapplying the same mode deliberately clears a previously latched shadow
+  // mismatch at the next draw-batch classification boundary.
+  s_software_tev_hot_case_generation.fetch_add(1, std::memory_order_release);
+  return static_cast<int>(normalized);
 }
 
 void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t publish_us,

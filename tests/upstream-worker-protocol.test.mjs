@@ -8,6 +8,7 @@ import {
   isStrictOneWayWorkerRequest,
   planWorkerSuccessReply,
   requestedLegacyOneWayAck,
+  requestedSoftwareTevHotCaseMode,
   requestedXfbFastPaths,
   requestedUpstreamCoreBuild,
   sanitizeDiscFileName,
@@ -91,6 +92,15 @@ test("XFB fast paths remain default-off and accept independent rollback controls
   assert.equal(requestedXfbFastPaths("?xfbfast=decode"), 2);
   assert.equal(requestedXfbFastPaths("?xfbfast=both"), 3);
   assert.equal(requestedXfbFastPaths("?xfbfast=unknown"), 0);
+});
+
+test("software TEV hot cases are independently opt-in for execute and shadow", () => {
+  assert.equal(requestedSoftwareTevHotCaseMode(""), 0);
+  assert.equal(requestedSoftwareTevHotCaseMode("?swtevfast=0&swtevshadow=0"), 0);
+  assert.equal(requestedSoftwareTevHotCaseMode("?swtevfast=1"), 1);
+  assert.equal(requestedSoftwareTevHotCaseMode("?swtevshadow=1"), 2);
+  assert.equal(requestedSoftwareTevHotCaseMode("?swtevfast=1&swtevshadow=1"), 3);
+  assert.equal(requestedSoftwareTevHotCaseMode("?swtevfast=true&swtevshadow=yes"), 0);
 });
 
 test("worker error replies are never suppressible", () => {

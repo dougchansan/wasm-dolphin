@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  WGPU_REPLAY_OP_NAMES,
+  createWgpuReplayOpMetrics,
   createWgpuReplayClassifier,
   requestedWgpuAtomicPassReplay,
   requestedWgpuDeepReplayDiagnostics,
@@ -11,9 +13,57 @@ import {
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
   requestedWgpuStateCache,
+  requestedWgpuUboCache,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
+
+test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () => {
+  const metrics = createWgpuReplayOpMetrics();
+  let snapshot = metrics.snapshot({ enabled: false });
+
+  assert.equal(snapshot.enabled, false);
+  assert.equal(snapshot.opCount, 25);
+  assert.equal(WGPU_REPLAY_OP_NAMES.length, 25);
+  assert.deepEqual(snapshot.names, [...WGPU_REPLAY_OP_NAMES]);
+  for (const field of [
+    "histogram",
+    "replayCpuTotalMs",
+    "replayCpuMaxMs",
+    "uploadCopyCalls",
+    "uploadCopyBytes",
+    "uploadCopyCpuTotalMs",
+    "uploadCopyCpuMaxMs",
+    "queueUploadCalls",
+    "queueUploadBytes"
+  ]) {
+    assert.equal(snapshot[field].length, 25, `${field} must cover every wire op`);
+    assert.ok(snapshot[field].every((value) => value === 0));
+  }
+
+  assert.equal(metrics.recordReplay(6, 1.25), true);
+  assert.equal(metrics.recordReplay(6, 0.75), true);
+  assert.equal(metrics.recordReplay(24, 0.5), true);
+  assert.equal(metrics.recordReplay(25, 99), false);
+  assert.equal(metrics.recordUploadCopy(6, 1536, 0.2), true);
+  assert.equal(metrics.recordUploadCopy(8, 4096, 0.4), true);
+  assert.equal(metrics.recordQueueUpload(6, 1536), true);
+  assert.equal(metrics.recordQueueUpload(8, 4096), true);
+
+  snapshot = metrics.snapshot();
+  assert.equal(snapshot.histogram[6], 2);
+  assert.equal(snapshot.histogram[24], 1);
+  assert.equal(snapshot.replayCpuTotalMs[6], 2);
+  assert.equal(snapshot.replayCpuMaxMs[6], 1.25);
+  assert.equal(snapshot.uploadCopyCalls[6], 1);
+  assert.equal(snapshot.uploadCopyBytes[6], 1536);
+  assert.equal(snapshot.uploadCopyCpuTotalMs[8], 0.4);
+  assert.equal(snapshot.queueUploadCalls[8], 1);
+  assert.equal(snapshot.queueUploadBytes[8], 4096);
+
+  metrics.reset();
+  assert.ok(metrics.snapshot().histogram.every((value) => value === 0));
+});
 
 test("WGPU replay diagnostics are opt-in", () => {
   assert.equal(requestedWgpuReplayDiagnostics(""), false);
@@ -178,6 +228,13 @@ test("pass-state caching is opt-in with an explicit boolean override", () => {
   assert.equal(requestedWgpuStateCache("", true), true);
   assert.equal(requestedWgpuStateCache("?wgpustatecache=1"), true);
   assert.equal(requestedWgpuStateCache("?wgpustatecache=0", true), false);
+});
+
+test("UBO slice caching is default-off with an explicit boolean override", () => {
+  assert.equal(requestedWgpuUboCache(""), false);
+  assert.equal(requestedWgpuUboCache("", true), true);
+  assert.equal(requestedWgpuUboCache("?wgpuubocache=1"), true);
+  assert.equal(requestedWgpuUboCache("?wgpuubocache=0", true), false);
 });
 
 test("an immediate first completed EFB pass readback is independent of present-time evidence", () => {
@@ -436,6 +493,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   );
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
@@ -443,6 +501,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
+  assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
@@ -451,11 +510,24 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
   assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
+  assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
+  assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
   assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
   assert.match(worker, /scope: "load-state-file",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /classifierGeneration === wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuReplayClassifier: wgpuReplayClassifier\?\.snapshot\(\) \?\? null/);
+  assert.match(
+    worker,
+    /wgpuReplayOps: wgpuReplayOpMetrics\.snapshot\(\{ enabled: causalMetricsEnabled \}\)/
+  );
+  assert.match(worker, /const replayOpStartedAt = causalMetricsEnabled \? performance\.now\(\) : 0/);
+  assert.match(
+    worker,
+    /wgpuReplayOpMetrics\.recordReplay\(op, performance\.now\(\) - replayOpStartedAt\)/
+  );
+  assert.match(worker, /wgpuReplayOpMetrics\.recordUploadCopy\(/);
+  assert.match(worker, /wgpuReplayOpMetrics\.recordQueueUpload\(/);
   assert.match(worker, /const replayLimit = wgpuAtomicPassReplay\s+\? selectAtomicReplayLimit/);
   assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
   assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);

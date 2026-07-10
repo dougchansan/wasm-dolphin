@@ -56,6 +56,7 @@ export class UpstreamWorkerAdapter {
     oglProxyMode = "worker",
     oglTestClear = false,
     fastSoftwareRaster = 0,
+    softwareTevHotCaseMode = 0,
     xfbFastPaths = 0,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
@@ -68,9 +69,12 @@ export class UpstreamWorkerAdapter {
     wgpuReplayPump = false,
     wgpuAtomicPassReplay = true,
     wgpuStateCache = false,
+    wgpuUboCache = false,
     gpuCompletionDiagnostics = false,
     inputLatencyDiagnostics = false,
     inputReadbackDiagnostics = false,
+    inputPhotonDiagnostics = false,
+    inputPhotonMarker = null,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -113,6 +117,7 @@ export class UpstreamWorkerAdapter {
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.softwareTevHotCaseMode = (Number(softwareTevHotCaseMode) || 0) & 3;
     this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
@@ -125,9 +130,14 @@ export class UpstreamWorkerAdapter {
     this.wgpuReplayPump = Boolean(wgpuReplayPump);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.wgpuStateCache = Boolean(wgpuStateCache);
+    this.wgpuUboCache = Boolean(wgpuUboCache);
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
     this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
+    this.inputPhotonDiagnostics = Boolean(inputPhotonDiagnostics);
+    this.inputPhotonMarker = inputPhotonMarker && typeof inputPhotonMarker === "object"
+      ? { ...inputPhotonMarker }
+      : null;
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -267,6 +277,7 @@ export class UpstreamWorkerAdapter {
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,
+      softwareTevHotCaseMode: this.softwareTevHotCaseMode,
       xfbFastPaths: this.xfbFastPaths,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
@@ -280,9 +291,12 @@ export class UpstreamWorkerAdapter {
       wgpuReplayPump: this.wgpuReplayPump,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       wgpuStateCache: this.wgpuStateCache,
+      wgpuUboCache: this.wgpuUboCache,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
       inputReadbackDiagnostics: this.inputReadbackDiagnostics,
+      inputPhotonDiagnostics: this.inputPhotonDiagnostics,
+      inputPhotonMarker: this.inputPhotonMarker,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,

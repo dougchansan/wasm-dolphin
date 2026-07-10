@@ -1,0 +1,68 @@
+{
+  "mode": "screening",
+  "blockCount": 2,
+  "maxBlockCount": 2,
+  "hypothesis": "Exact producer UBO reuse improves fixed-battle game speed by reducing WebGPU replay uploads without changing visible output.",
+  "primaryMetric": "metrics.fixedEmulatedWork.throughputGameSpeedPercent",
+  "direction": "higher",
+  "minimumEffectPercent": 3,
+  "invalidationRules": [
+    "fixture or deterministic save-state checkpoint fails verification",
+    "requested or active backend is not WebGPU-Real with the WebGPU presenter",
+    "page, worker, WASM, WebGPU, missing-resource, drop, abort, oversize, or upload-timeout error",
+    "XFB or backbuffer has no nonzero RGB readback",
+    "cache-off reports UBO hits or cache-on reports no UBO lookups and hits",
+    "PERF_TARGET_CORE_SECONDS is absent or the fixed emulated-work target is not reached",
+    "timed samples or final screenshot are missing"
+  ],
+  "armA": {
+    "name": "wgpu-ubo-off",
+    "cacheState": "disabled",
+    "params": {
+      "video": "wgpu",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "1",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "4",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "1",
+      "gpucomplete": "0",
+      "wgpuclassify": "1",
+      "wgpupump": "1",
+      "wgpustatecache": "0",
+      "wgpuubocache": "0"
+    }
+  },
+  "armB": {
+    "name": "wgpu-ubo-on",
+    "cacheState": "disabled",
+    "params": {
+      "video": "wgpu",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "1",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "4",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "1",
+      "gpucomplete": "0",
+      "wgpuclassify": "1",
+      "wgpupump": "1",
+      "wgpustatecache": "0",
+      "wgpuubocache": "1"
+    }
+  }
+}

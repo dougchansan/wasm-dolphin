@@ -34,6 +34,7 @@ const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
 const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
 const inputMarkerCanvasObservationEnabled =
   process.env.INPUTLATENCY === "1" && process.env.INPUTMARKEROBSERVE !== "0";
+const inputPhotonEnabled = process.env.INPUTPHOTON === "1";
 const oglProxy = process.env.OGL_PROXY_MODE || "proxy";
 const videoMode = process.env.VIDEO || "ogl"; // "ogl" or "software"
 const headed = process.env.HEADED === "1" || args.headed;
@@ -180,13 +181,26 @@ if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPU
 if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
 if (process.env.INPUTREADBACK) url.searchParams.set("inputreadback", process.env.INPUTREADBACK);
 for (const [environmentName, queryName] of [
+  ["INPUTPHOTON", "inputphoton"],
+  ["INPUTPHOTONSIZE", "inputphotonsize"],
+  ["INPUTPHOTONX", "inputphotonx"],
+  ["INPUTPHOTONY", "inputphotony"],
+]) {
+  if (process.env[environmentName] != null) {
+    url.searchParams.set(queryName, process.env[environmentName]);
+  }
+}
+for (const [environmentName, queryName] of [
   ["WGPUCLASSIFY", "wgpuclassify"],
   ["WGPUPUMP", "wgpupump"],
   ["WGPUSTATECACHE", "wgpustatecache"],
+  ["WGPUUBOCACHE", "wgpuubocache"],
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
   ["WGPUATOMIC", "wgpuatomic"],
+  ["SWTEVFAST", "swtevfast"],
+  ["SWTEVSHADOW", "swtevshadow"],
 ]) {
   if (process.env[environmentName] != null) {
     url.searchParams.set(queryName, process.env[environmentName]);
@@ -197,6 +211,7 @@ for (const [environmentName, queryName] of [
 // signal — but it confirms activation and dumps the audio-pump cadence +
 // LoAF script-attribution snapshot at end of run (mainprofile.json).
 if (process.env.MAINPROF) url.searchParams.set("mainprof", process.env.MAINPROF);
+if (process.env.PPCPROF) url.searchParams.set("ppcprof", process.env.PPCPROF);
 url.searchParams.set("metrics", process.env.METRICS ?? "1");
 url.searchParams.set("probe", `menu-progress-${Date.now()}`);
 
@@ -670,6 +685,7 @@ try {
     const sample = {
       ...rawSample,
       ...parseProfileMetrics(rawSample.helper, rawSample.frameProfile),
+      ...flattenInputPhotonOverhead(rawSample.causalTelemetry),
     };
     samples.push(sample);
 
@@ -696,7 +712,10 @@ try {
       );
     }
 
-    await page.waitForTimeout(sampleMs);
+    if (index < totalSamples) {
+      const nextDeadline = startedAt + (index + 1) * sampleMs;
+      await page.waitForTimeout(Math.max(0, nextDeadline - Date.now()));
+    }
   }
 
   await capture(page, "zz-final.png");
@@ -836,6 +855,20 @@ try {
     bootMarks,
   });
   summary.inputMarkerCanvas = inputMarkerCanvasObservations?.summary ?? null;
+  summary.inputPhoton = {
+    enabled: inputPhotonEnabled,
+    mode: inputPhotonEnabled ? "external-sensor" : "off",
+    measurementBoundary: inputPhotonEnabled
+      ? "browser worker input generation through marker submission; external sensor timestamps the photon edge"
+      : "not enabled",
+    physicalPhotonTimestampCapturedByHarness: false,
+    browserCanvasObserverEnabled: inputMarkerCanvasObservationEnabled,
+    requestedSize: process.env.INPUTPHOTONSIZE || "centered-default",
+    requestedX: process.env.INPUTPHOTONX || "center",
+    requestedY: process.env.INPUTPHOTONY || "center",
+    overhead: samples.at(-1)?.causalTelemetry?.input?.marker?.overhead ?? null,
+    overheadRawOutputs: ["samples.json", "samples.csv"],
+  };
   if (inputMarkerCanvasObservationEnabled &&
       inputMarkerCanvasObservations?.summary?.acceptance?.passed !== true) {
     const reasons = inputMarkerCanvasObservations?.summary?.acceptance?.reasons || [
@@ -891,6 +924,26 @@ try {
 }
 
 if (probeError) throw probeError;
+
+function flattenInputPhotonOverhead(telemetry) {
+  const overhead = telemetry?.input?.marker?.overhead;
+  if (!overhead) return {};
+  const copyPaint = overhead.softwareFrameCopyPaint || {};
+  const padStats = overhead.padStatsPollParse || {};
+  return {
+    inputPhotonOverheadEnabled: overhead.enabled === true,
+    inputPhotonFrameCopyPaintCalls: Number(copyPaint.calls) || 0,
+    inputPhotonFrameCopyBytes: Number(copyPaint.sourceBytes) || 0,
+    inputPhotonMarkerPaintBytes: Number(copyPaint.paintedBytes) || 0,
+    inputPhotonFrameCopyPaintTotalMs: Number(copyPaint.totalMs) || 0,
+    inputPhotonFrameCopyPaintMaxMs: Number(copyPaint.maxMs) || 0,
+    inputPhotonPadStatsPollParseCalls: Number(padStats.calls) || 0,
+    inputPhotonPadStatsSourceUtf16Bytes: Number(padStats.sourceUtf16Bytes) || 0,
+    inputPhotonPadStatsPollParseTotalMs: Number(padStats.totalMs) || 0,
+    inputPhotonPadStatsPollParseMaxMs: Number(padStats.maxMs) || 0,
+    inputPhotonPadStatsPollParseFailureCount: Number(padStats.failureCount) || 0,
+  };
+}
 
 function summarize(samples, hashes, extras = {}) {
   const { audioSamples = [], longAnimationFrames = [], inputEvents = [], bootMarks = null } =

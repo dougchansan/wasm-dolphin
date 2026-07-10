@@ -1,11 +1,15 @@
 export const DEFAULT_UPSTREAM_CORE_URL = "./cores/dolphin/dolphin-core-upstream.js";
-export const DEFAULT_UPSTREAM_CORE_SHA256 = "f7ce56729d92404082994f97900dc0efb8fe66019b4e179f2321b7822377f523";
+export const DEFAULT_UPSTREAM_CORE_SHA256 = "a239ee47209605f20f7c078f61567cd90d4adb9a718fc3dc71060a178d006995";
 export const DISCIO_UPSTREAM_CORE_URL = "./cores/dolphin/dolphin-upstream.js";
 export const WORKERFS_MOUNT_DIR = "/workerfs";
 export const XFB_FAST_PATH_FLAGS = Object.freeze({
   rows: 1,
   decode: 2,
   both: 3
+});
+export const SOFTWARE_TEV_HOT_CASE_MODE = Object.freeze({
+  execute: 1,
+  shadow: 2
 });
 
 export const ONE_WAY_WORKER_REQUEST_TYPES = Object.freeze([
@@ -34,6 +38,14 @@ export function requestedXfbFastPaths(search = globalThis.location?.search ?? ""
     return XFB_FAST_PATH_FLAGS.both;
   }
   return 0;
+}
+
+export function requestedSoftwareTevHotCaseMode(search = globalThis.location?.search ?? "") {
+  const params = new URLSearchParams(search);
+  let mode = 0;
+  if (params.get("swtevfast") === "1") mode |= SOFTWARE_TEV_HOT_CASE_MODE.execute;
+  if (params.get("swtevshadow") === "1") mode |= SOFTWARE_TEV_HOT_CASE_MODE.shadow;
+  return mode;
 }
 
 export function isOneWayWorkerRequestType(type) {

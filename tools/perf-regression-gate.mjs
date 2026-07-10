@@ -27,9 +27,15 @@ import {
   expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
+  fixedWorkPollDelayMs,
   parseBattleCheckpoint,
+  parsePostLoadInputScript,
   parseProfileMetrics,
   recordsToCsv,
+  selectNextFixedWorkBenchmarkAction,
+  selectNextPostLoadBenchmarkAction,
+  serializePostLoadInputScript,
+  summarizeFixedEmulatedWork,
   summarizeComparison,
   summarizeJitMetrics,
   summarizeTimedMetricWindows,
@@ -40,6 +46,7 @@ import {
 
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
+const FIXED_WORK_POLL_INTERVAL_MS = 100;
 
 await main().catch((error) => {
   console.error(`[perf-gate] ${error.stack || error.message}`);
@@ -57,6 +64,18 @@ async function main() {
   const baseUrl = cli.baseUrl || process.env.BASE_URL || "http://127.0.0.1:8082/";
   const durationSeconds = cli.duration ?? numberEnv("DURATION", 60);
   const sampleMs = cli.sampleMs ?? numberEnv("SAMPLE_MS", 1000);
+  const targetCoreSeconds = optionalPositiveNumber(
+    cli.targetCoreSeconds ?? process.env.PERF_TARGET_CORE_SECONDS,
+    "--target-core-seconds or PERF_TARGET_CORE_SECONDS"
+  );
+  if (targetCoreSeconds != null && (!(durationSeconds > 0) || !(sampleMs > 0))) {
+    throw new Error("Fixed emulated work requires positive duration and sample interval values");
+  }
+  const postLoadInputScript = parsePostLoadInputScript(
+    cli.perfInputScript ?? process.env.PERF_INPUT_SCRIPT,
+    { durationSeconds }
+  );
+  const postLoadInputScriptCanonical = serializePostLoadInputScript(postLoadInputScript);
   const settleSeconds = numberEnv("SETTLE_SECONDS", 2);
   const tolerance = cli.tolerance ?? numberEnv("PERF_DROP_TOLERANCE", 0.05);
   const strict = cli.strict || process.env.PERF_STRICT === "1";
@@ -104,6 +123,8 @@ async function main() {
       durationSeconds,
       headed,
       outDir,
+      postLoadInputScript,
+      postLoadInputScriptCanonical,
       romFixture,
       romPath,
       sampleMs,
@@ -113,6 +134,7 @@ async function main() {
       servedApplication,
       settleSeconds,
       strict,
+      targetCoreSeconds,
       targetMode,
     };
 
@@ -174,6 +196,7 @@ async function main() {
       scene: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       baseUrl,
       durationSeconds,
+      targetCoreSeconds,
       sampleMs,
       settleSeconds,
       headed,
@@ -286,6 +309,7 @@ async function runScenario(scenario, context) {
   const consoleLines = [];
   const consoleErrors = [];
   const samples = [];
+  const inputEvents = [];
   const invalidReasons = [];
   let browser = null;
   let page = null;
@@ -294,6 +318,13 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
+  let fixedEmulatedWork = {
+    enabled: context.targetCoreSeconds != null,
+    targetCoreSeconds: context.targetCoreSeconds,
+    wallTimeCapSeconds: context.durationSeconds,
+    pollIntervalMs: context.targetCoreSeconds != null ? FIXED_WORK_POLL_INTERVAL_MS : null,
+    reachedTarget: false,
+  };
   const url = new URL(context.baseUrl);
   for (const [key, value] of Object.entries(scenario.params)) url.searchParams.set(key, value);
   url.searchParams.set("probe", `${scenario.name}-${Date.now()}`);
@@ -341,7 +372,7 @@ async function runScenario(scenario, context) {
       saveStateUrl: context.saveStateUrl,
       saveStatePath: context.saveStatePath,
       saveStateAt: 0,
-      inputScript: "none",
+      inputScript: context.postLoadInputScriptCanonical || "none",
       sceneLabel: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       artifactDescriptions: {
         rom: context.romFixture,
@@ -354,9 +385,16 @@ async function runScenario(scenario, context) {
     manifest.browser.actualChannel = browserLaunch.actualChannel;
     manifest.browser.executablePath = browserLaunch.executablePath;
     manifest.browser.launchSource = browserLaunch.source;
-    manifest.benchmark.inputScriptMode = "none";
+    manifest.benchmark.inputScriptMode = context.postLoadInputScript.length
+      ? "post-load-only"
+      : "none";
+    manifest.benchmark.inputScriptEventCount = context.postLoadInputScript.length;
+    manifest.benchmark.inputScriptScheduleOrigin = context.postLoadInputScript.length
+      ? "after-first-timed-sample"
+      : null;
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
+    manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
     manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
     manifest.benchmark.continueInvalidCheckpoint = context.continueInvalidCheckpoint;
     manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
@@ -428,32 +466,136 @@ async function runScenario(scenario, context) {
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
     manifest.benchmark.timingStartedAt = new Date().toISOString();
-    if (!context.continueInvalidCheckpoint) assertRunProvenance(manifest);
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
     const startedAt = Date.now();
-    const totalSamples = Math.ceil((context.durationSeconds * 1000) / context.sampleMs);
-    for (let index = 0; index <= totalSamples; index += 1) {
-      const elapsedSeconds = (Date.now() - startedAt) / 1000;
+    const wallTimeCapMs = context.durationSeconds * 1000;
+    const fixedWorkEnabled = context.targetCoreSeconds != null;
+    const totalSamples = fixedWorkEnabled
+      ? Math.floor(wallTimeCapMs / context.sampleMs)
+      : Math.ceil(wallTimeCapMs / context.sampleMs);
+    let sampleIndex = 0;
+    let inputIndex = 0;
+    let fixedWorkBaseline = null;
+    const collectTimedSample = async (elapsedSeconds) => {
       const sample = deriveCoreRates(
         await readSample(page, elapsedSeconds),
         samples.at(-1),
         Number(saveStateLoad.response?.coreTicksPerSecond) || 0
       );
-      samples.push({
+      const record = {
         ...sample,
         ...parseProfileMetrics(sample.helper, sample.profile),
         ...flattenCausalTelemetry(sample.causalTelemetry)
-      });
-      if (index % Math.max(1, Math.round(10000 / context.sampleMs)) === 0) {
+      };
+      samples.push(record);
+      return record;
+    };
+    while (fixedWorkEnabled || sampleIndex <= totalSamples || inputIndex < context.postLoadInputScript.length) {
+      const schedule = {
+        sampleIndex,
+        totalSamples,
+        sampleMs: context.sampleMs,
+        inputIndex,
+        inputEvents: context.postLoadInputScript,
+      };
+      const action = fixedWorkEnabled
+        ? selectNextFixedWorkBenchmarkAction({ ...schedule, wallTimeCapMs })
+        : selectNextPostLoadBenchmarkAction(schedule);
+      const deadline = startedAt + action.atMs;
+      let progressAtAction = null;
+      if (fixedWorkBaseline) {
+        const progress = await waitForFixedEmulatedWorkProgress(page, {
+          baseline: fixedWorkBaseline,
+          coreTicksPerSecond: fixedEmulatedWork.coreTicksPerSecond,
+          deadlineMs: deadline,
+          pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+          targetCoreSeconds: context.targetCoreSeconds,
+          wallTimeCapSeconds: context.durationSeconds,
+        });
+        progressAtAction = progress;
+        fixedEmulatedWork = progress.summary;
+        manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+        if (progress.summary.reachedTarget) {
+          const elapsedSeconds = (Date.now() - startedAt) / 1000;
+          await collectTimedSample(elapsedSeconds);
+          break;
+        }
+      } else {
+        await page.waitForTimeout(Math.max(0, deadline - Date.now()));
+      }
+      const elapsedSeconds = (Date.now() - startedAt) / 1000;
+
+      if (action.type === "wall-time-cap") {
+        await collectTimedSample(elapsedSeconds);
+        fixedEmulatedWork = progressAtAction.summary;
+        manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+        break;
+      }
+
+      if (action.type === "input") {
+        const dispatchStartedSeconds = elapsedSeconds;
+        if (action.event.action === "down") await page.keyboard.down(action.event.key);
+        else await page.keyboard.up(action.event.key);
+        const deliveredSeconds = (Date.now() - startedAt) / 1000;
+        inputEvents.push({
+          action: action.event.action,
+          key: action.event.key,
+          sourceIndex: action.event.index,
+          scheduledSeconds: action.event.second,
+          dispatchStartedSeconds,
+          deliveredSeconds,
+          latenessMs: Math.max(0, deliveredSeconds * 1000 - action.atMs),
+          afterBaselineSample: samples.length > 0,
+        });
+        inputIndex += 1;
+        continue;
+      }
+
+      const sample = await collectTimedSample(elapsedSeconds);
+      if (sampleIndex === 0) {
+        manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
+        if (fixedWorkEnabled) {
+          const coreTicksPerSecond = Number(sample.coreTicksPerSecond) ||
+            Number(saveStateLoad.response?.coreTicksPerSecond) || 0;
+          fixedWorkBaseline = fixedWorkObservation(sample);
+          fixedEmulatedWork = summarizeFixedEmulatedWork({
+            targetCoreSeconds: context.targetCoreSeconds,
+            coreTicksPerSecond,
+            baseline: fixedWorkBaseline,
+            observation: fixedWorkBaseline,
+            wallTimeCapSeconds: context.durationSeconds,
+            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+          });
+          manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+        }
+        if (!context.continueInvalidCheckpoint) assertRunProvenance(manifest);
+      } else if (fixedWorkEnabled) {
+        fixedEmulatedWork = action.atMs >= wallTimeCapMs && progressAtAction
+          ? progressAtAction.summary
+          : summarizeFixedEmulatedWork({
+            targetCoreSeconds: context.targetCoreSeconds,
+            coreTicksPerSecond: fixedEmulatedWork.coreTicksPerSecond,
+            baseline: fixedWorkBaseline,
+            observation: fixedWorkObservation(sample),
+            wallTimeCapSeconds: context.durationSeconds,
+            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+          });
+        manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+      }
+      if (sampleIndex % Math.max(1, Math.round(10000 / context.sampleMs)) === 0) {
         console.log(
           `[perf-gate] ${scenario.name} t=${elapsedSeconds.toFixed(1)} ` +
           `frame=${sample.frame} present=${sample.presentFps} core=${sample.coreFps} ` +
           `visual=${sample.visualFps} speed=${sample.gameSpeed}`
         );
       }
-      if (index < totalSamples) await page.waitForTimeout(context.sampleMs);
+      sampleIndex += 1;
+      if (fixedWorkEnabled && (fixedEmulatedWork.reachedTarget || action.atMs >= wallTimeCapMs)) {
+        break;
+      }
     }
+    manifest.benchmark.inputScriptDeliveredEventCount = inputEvents.length;
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
     await page.waitForTimeout(100);
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
@@ -492,6 +634,22 @@ async function runScenario(scenario, context) {
   });
   invalidReasons.push(...softwareRasterInstrumentation.failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
+  if (inputEvents.length !== context.postLoadInputScript.length) {
+    invalidReasons.push(
+      `post-load input delivered ${inputEvents.length}/${context.postLoadInputScript.length} events`
+    );
+  }
+  if (inputEvents.some((event) => !event.afterBaselineSample)) {
+    invalidReasons.push("post-load input was delivered before the timed baseline sample");
+  }
+  if (fixedEmulatedWork.enabled && fixedEmulatedWork.deltasValid !== true) {
+    invalidReasons.push("fixed emulated work did not produce valid non-negative tick/frame/time deltas");
+  }
+  if (fixedEmulatedWork.enabled && fixedEmulatedWork.reachedTarget !== true) {
+    invalidReasons.push(
+      `fixed emulated work target was not reached before the ${context.durationSeconds}s wall-time cap`
+    );
+  }
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
   const fatalEvidence = findFatalRuntimeEvidence({
     consoleLines,
@@ -510,8 +668,17 @@ async function runScenario(scenario, context) {
     invalidReasons
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
+  summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
+  summary.fixedEmulatedWork = fixedEmulatedWork;
+  summary.postLoadInput = {
+    mode: context.postLoadInputScript.length ? "post-load-only" : "none",
+    scheduledEventCount: context.postLoadInputScript.length,
+    deliveredEventCount: inputEvents.length,
+    events: inputEvents,
+  };
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
+    manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
     if (renderer) manifest.renderer = renderer;
     manifest.fixture.saveStateLoaded = Boolean(saveStateLoad?.loaded);
     manifest.fixture.loadResult = saveStateLoad;
@@ -531,6 +698,7 @@ async function runScenario(scenario, context) {
       eventsFile: "events.jsonl",
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
+      fixedEmulatedWork,
     };
     summary.qualification = manifest.qualification;
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -539,7 +707,10 @@ async function runScenario(scenario, context) {
     writeFile(path.join(scenarioDir, "console.log"), consoleLines.join("\n")),
     writeFile(path.join(scenarioDir, "samples.json"), JSON.stringify(samples, null, 2)),
     writeFile(path.join(scenarioDir, "samples.csv"), recordsToCsv(samples)),
-    writeFile(path.join(scenarioDir, "events.jsonl"), runEventsJsonl(manifest, saveStateLoad, samples)),
+    writeFile(
+      path.join(scenarioDir, "events.jsonl"),
+      runEventsJsonl(manifest, saveStateLoad, inputEvents, samples)
+    ),
     writeFile(path.join(scenarioDir, "summary.json"), JSON.stringify(summary, null, 2)),
   ]);
   return summary;
@@ -657,7 +828,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "wgpustatecache"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
@@ -884,6 +1055,7 @@ async function readSample(page, elapsedSeconds) {
   return page.evaluate((elapsedSeconds) => {
     const read = (selector) => document.querySelector(selector)?.textContent?.trim() ?? "";
     const info = window.__lastFrameInfo || {};
+    const observedAtMs = performance.now();
     const screen = document.querySelector("#screen");
     const state = (window.__perfGateState ??= { canvas: document.createElement("canvas"), context: null, lastHash: 0 });
     let visibleHash = 0;
@@ -911,6 +1083,7 @@ async function readSample(page, elapsedSeconds) {
     if (visibleHash) state.lastHash = visibleHash;
     return {
       elapsedSeconds,
+      observedAtMs,
       frame: Number(info.frame) || Number(read("#frameCounter")) || 0,
       presentFps: Number(info.presentationFps) || Number(read("#fpsCounter")) || 0,
       visualFps: Number(info.visualChangeFps) || Number(read("#visualFpsCounter")) || 0,
@@ -937,6 +1110,55 @@ async function readSample(page, elapsedSeconds) {
       causalTelemetry: info.causalTelemetry || window.__causalTelemetry || null,
     };
   }, elapsedSeconds);
+}
+
+function fixedWorkObservation(value) {
+  return {
+    coreTicks: Number(value?.coreTicks),
+    frame: Number(value?.frame),
+    observedAtMs: Number(value?.observedAtMs),
+  };
+}
+
+async function readFixedWorkProgress(page) {
+  return page.evaluate(() => {
+    const info = window.__lastFrameInfo || {};
+    return {
+      coreTicks: Number(info.coreTicks) || 0,
+      frame: Number(info.frame) || 0,
+      observedAtMs: performance.now(),
+    };
+  });
+}
+
+async function waitForFixedEmulatedWorkProgress(page, {
+  baseline,
+  coreTicksPerSecond,
+  deadlineMs,
+  pollIntervalMs,
+  targetCoreSeconds,
+  wallTimeCapSeconds,
+}) {
+  while (true) {
+    const delayMs = fixedWorkPollDelayMs({
+      nowMs: Date.now(),
+      deadlineMs,
+      pollIntervalMs,
+    });
+    if (delayMs > 0) await page.waitForTimeout(delayMs);
+    const observation = await readFixedWorkProgress(page);
+    const summary = summarizeFixedEmulatedWork({
+      targetCoreSeconds,
+      coreTicksPerSecond,
+      baseline,
+      observation,
+      wallTimeCapSeconds,
+      pollIntervalMs,
+    });
+    if (summary.reachedTarget || Date.now() >= deadlineMs) {
+      return { observation, summary };
+    }
+  }
 }
 
 function deriveCoreRates(sample, previous, fallbackTicksPerSecond = 0) {
@@ -1478,6 +1700,14 @@ function runSummaryCsv(results) {
     steadyCoreFpsMean: run.metrics.steadyState?.coreFps?.mean,
     steadyPresentationFpsMean: run.metrics.steadyState?.presentationFps?.mean,
     steadyVisualFpsMean: run.metrics.steadyState?.visualFps?.mean,
+    fixedWorkTargetCoreSeconds: run.metrics.fixedEmulatedWork?.targetCoreSeconds,
+    fixedWorkActualCoreTickDelta: run.metrics.fixedEmulatedWork?.actualCoreTickDelta,
+    fixedWorkActualFrameDelta: run.metrics.fixedEmulatedWork?.actualFrameDelta,
+    fixedWorkElapsedWallSeconds: run.metrics.fixedEmulatedWork?.elapsedWallSeconds,
+    fixedWorkReachedTarget: run.metrics.fixedEmulatedWork?.reachedTarget,
+    fixedWorkThroughputGameSpeedPercent:
+      run.metrics.fixedEmulatedWork?.throughputGameSpeedPercent,
+    fixedWorkThroughputCoreFps: run.metrics.fixedEmulatedWork?.throughputCoreFps,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,
@@ -1485,7 +1715,7 @@ function runSummaryCsv(results) {
   })));
 }
 
-function runEventsJsonl(manifest, saveStateLoad, samples) {
+function runEventsJsonl(manifest, saveStateLoad, inputEvents, samples) {
   const events = [];
   if (manifest) {
     events.push({
@@ -1508,7 +1738,26 @@ function runEventsJsonl(manifest, saveStateLoad, samples) {
       afterVerifiedLoad: true,
     });
   }
-  events.push(...samples.map((sample, index) => ({ schemaVersion: 1, event: "sample", index, ...sample })));
+  const timedEvents = [
+    ...inputEvents.map((inputEvent) => ({
+      schemaVersion: 1,
+      event: "post-load-input",
+      ...inputEvent,
+      sortSeconds: inputEvent.deliveredSeconds,
+      sortOrder: 1,
+    })),
+    ...samples.map((sample, index) => ({
+      schemaVersion: 1,
+      event: "sample",
+      index,
+      ...sample,
+      sortSeconds: sample.elapsedSeconds,
+      sortOrder: 0,
+    })),
+  ].sort((left, right) =>
+    left.sortSeconds - right.sortSeconds || left.sortOrder - right.sortOrder
+  );
+  events.push(...timedEvents.map(({ sortSeconds, sortOrder, ...event }) => event));
   return events.map((event) => JSON.stringify(event)).join("\n") + (events.length ? "\n" : "");
 }
 
@@ -1569,6 +1818,15 @@ function numberEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function optionalPositiveNumber(value, source) {
+  if (value == null || String(value).trim() === "") return null;
+  const number = Number.parseFloat(String(value));
+  if (!Number.isFinite(number) || !(number > 0)) {
+    throw new Error(`${source} requires a positive finite numeric value`);
+  }
+  return number;
+}
+
 function parseArgs(args) {
   const parsed = {
     baseline: "",
@@ -1576,11 +1834,13 @@ function parseArgs(args) {
     comparisonConfig: "",
     duration: undefined,
     outDir: "",
+    perfInputScript: undefined,
     requireBaseline: false,
     rom: "",
     sampleMs: undefined,
     saveState: "",
     strict: false,
+    targetCoreSeconds: undefined,
     targetMode: "",
     tolerance: undefined,
   };
@@ -1591,11 +1851,13 @@ function parseArgs(args) {
     else if (arg === "--comparison-config") parsed.comparisonConfig = requiredArg(args, ++index, arg);
     else if (arg === "--duration") parsed.duration = numberArg(args, ++index, arg);
     else if (arg === "--out-dir") parsed.outDir = requiredArg(args, ++index, arg);
+    else if (arg === "--perf-input-script") parsed.perfInputScript = requiredArg(args, ++index, arg);
     else if (arg === "--require-baseline") parsed.requireBaseline = true;
     else if (arg === "--rom") parsed.rom = requiredArg(args, ++index, arg);
     else if (arg === "--sample-ms") parsed.sampleMs = numberArg(args, ++index, arg);
     else if (arg === "--save-state") parsed.saveState = requiredArg(args, ++index, arg);
     else if (arg === "--strict") parsed.strict = true;
+    else if (arg === "--target-core-seconds") parsed.targetCoreSeconds = numberArg(args, ++index, arg);
     else if (arg === "--target-mode") parsed.targetMode = requiredArg(args, ++index, arg);
     else if (arg === "--tolerance") parsed.tolerance = numberArg(args, ++index, arg);
     else throw new Error(`Unknown argument: ${arg}`);

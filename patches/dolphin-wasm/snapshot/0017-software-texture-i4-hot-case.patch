@@ -1,0 +1,188 @@
+diff --git a/Source/Core/VideoBackends/Software/TextureSampler.cpp b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+index a19bd525cb..7397093ec5 100644
+--- a/Source/Core/VideoBackends/Software/TextureSampler.cpp
++++ b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+@@ -184,6 +184,26 @@ void SampleMip(s32 s, s32 t, s32 mip, bool linear, u8 texmap, u8* sample)
+   const std::span<const u8> tlut = TexDecoder_GetTmemSpan(tlutAddress);
+ 
+ #ifdef __EMSCRIPTEN__
++  bool is_measured_i4_hot_case = false;
++  if (texfmt == TextureFormat::I4 && linear && mip == 0)
++  {
++    const HotCase::I4LinearCaseState i4_case_state = {
++        texfmt,
++        linear,
++        mip,
++        static_cast<u32>(tm0.mipmap_filter.Value()),
++        static_cast<u32>(tm0.wrap_s.Value()),
++        static_cast<u32>(tm0.wrap_t.Value()),
++        texUnit.texImage1.cache_manually_managed.Value(),
++        tlutfmt,
++        IsPowerOfTwo(static_cast<u32>(image_width_minus_1 + 1)),
++        IsPowerOfTwo(static_cast<u32>(image_height_minus_1 + 1)),
++        static_cast<u32>(tm0.min_filter.Value()),
++        static_cast<u32>(tm0.mag_filter.Value()),
++    };
++    is_measured_i4_hot_case = HotCase::IsMeasuredI4LinearCase(i4_case_state);
++  }
++
+   // These two exact cases account for roughly three quarters of sampled texture decode work in
+   // the fixed Melee battle profile (keys 0xd38a01e and 0xd34a01e). TLUT state is part of those keys
+   // even though CMPR does not consult a palette. Keep the predicate deliberately narrow so every
+@@ -258,6 +278,16 @@ void SampleMip(s32 s, s32 t, s32 mip, bool linear, u8 texmap, u8* sample)
+     WrapCoord(&imageSPlus1, tm0.wrap_s, image_width_minus_1 + 1);
+     WrapCoord(&imageTPlus1, tm0.wrap_t, image_height_minus_1 + 1);
+ 
++#ifdef __EMSCRIPTEN__
++    if (is_measured_i4_hot_case)
++    {
++      HotCase::SampleI4LinearCanonical(image_src, image_width_minus_1, imageS, imageT,
++                                       imageSPlus1, imageTPlus1, static_cast<u32>(fractS),
++                                       static_cast<u32>(fractT), sample);
++      return;
++    }
++#endif
++
+     if (!(texfmt == TextureFormat::RGBA8 && texUnit.texImage1.cache_manually_managed))
+     {
+       TexDecoder_DecodeTexel(sampledTex, image_src, imageS, imageT, image_width_minus_1, texfmt,
+diff --git a/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h b/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h
+index 1d5e66c695..2a8056daf9 100644
+--- a/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h
++++ b/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h
+@@ -11,10 +11,79 @@
+ #include "Common/SpanUtils.h"
+ #include "Common/Swap.h"
+ #include "VideoCommon/LookUpTables.h"
++#include "VideoCommon/TextureDecoder.h"
+ #include "VideoCommon/TextureDecoder_Util.h"
+ 
+ namespace TextureSampler::HotCase
+ {
++// Raw register fields are retained here so this predicate can be tested without constructing global
++// BP state. The numeric encodings are the GX encodings used by PackTextureCaseKey.
++struct I4LinearCaseState
++{
++  TextureFormat texture_format;
++  bool linear;
++  s32 mip;
++  u32 mipmap_filter;
++  u32 wrap_s;
++  u32 wrap_t;
++  bool manually_managed;
++  TLUTFormat tlut_format;
++  bool width_power_of_two;
++  bool height_power_of_two;
++  u32 min_filter;
++  u32 mag_filter;
++};
++
++inline constexpr std::array<u64, 6> MEASURED_I4_LINEAR_CASE_KEYS = {
++    0x05340010, 0x05300010, 0x0d34a010, 0x0d000010, 0x0d280010, 0x0d240010,
++};
++
++// Exact union of the six I4 cases measured in three fixed-save Melee runs. Do not broaden this
++// predicate based only on format equivalence: wrap, dimensions, filtering, TLUT register state, and
++// memory ownership are all deliberately part of the dispatch contract.
++constexpr bool IsMeasuredI4LinearCase(const I4LinearCaseState& state)
++{
++  constexpr u32 mip_none = 0;
++  constexpr u32 wrap_clamp = 0;
++  constexpr u32 wrap_repeat = 1;
++  constexpr u32 filter_near = 0;
++  constexpr u32 filter_linear = 1;
++
++  if (state.texture_format != TextureFormat::I4 || !state.linear || state.mip != 0 ||
++      state.mipmap_filter != mip_none || state.manually_managed ||
++      state.min_filter != filter_linear)
++  {
++    return false;
++  }
++
++  if (state.mag_filter == filter_near)
++  {
++    return state.wrap_s == wrap_clamp && state.wrap_t == wrap_clamp &&
++           state.width_power_of_two && state.height_power_of_two &&
++           (state.tlut_format == TLUTFormat::IA8 || state.tlut_format == TLUTFormat::RGB565);
++  }
++
++  if (state.mag_filter != filter_linear)
++    return false;
++
++  if (state.wrap_s == wrap_repeat && state.wrap_t == wrap_repeat)
++  {
++    return state.width_power_of_two && state.height_power_of_two &&
++           state.tlut_format == TLUTFormat::RGB565;
++  }
++
++  if (state.wrap_s != wrap_clamp || state.wrap_t != wrap_clamp ||
++      state.width_power_of_two)
++  {
++    return false;
++  }
++
++  if (!state.height_power_of_two)
++    return state.tlut_format == TLUTFormat::IA8;
++
++  return state.tlut_format == TLUTFormat::RGB565 || state.tlut_format == TLUTFormat::RGB5A3;
++}
++
+ namespace detail
+ {
+ struct DecodedCmprBlock
+@@ -115,8 +184,55 @@ constexpr u32 Channel(u32 color, unsigned int channel)
+ {
+   return (color >> (channel * 8)) & 0xff;
+ }
++
++inline u8 DecodeI4Texel(std::span<const u8> source, int s, int t, int image_width_minus_1)
++{
++  const u16 s_block = static_cast<u16>(s >> 3);
++  const u16 t_block = static_cast<u16>(t >> 3);
++  const u16 width_blocks = static_cast<u16>((image_width_minus_1 >> 3) + 1);
++  const u32 base = (t_block * width_blocks + s_block) << 5;
++  const u16 block_s = static_cast<u16>(s & 7);
++  const u16 block_t = static_cast<u16>(t & 7);
++  const u32 block_offset = (block_t << 3) + block_s;
++  const int shift = (block_offset & 1) != 0 ? 0 : 4;
++  const u32 offset = base + (block_offset >> 1);
++  const u8 nibble = (Common::SafeSpanRead<u8>(source, offset) >> shift) & 0xf;
++  return Convert4To8(nibble);
++}
+ }  // namespace detail
+ 
++// The caller supplies the four coordinates after the canonical WrapCoord calls in SampleMip.
++// I4 produces identical RGBA channels, so one scalar interpolation is bit-identical to the four
++// generic SetTexel/AddTexel channel accumulators. SafeSpanRead retains zero-fill semantics for
++// truncated source spans.
++inline void SampleI4LinearCanonical(std::span<const u8> source, int image_width_minus_1,
++                                    int image_s, int image_t, int image_s_plus_1,
++                                    int image_t_plus_1, u32 fract_s, u32 fract_t, u8* sample)
++{
++  const u32 texels[4] = {
++      detail::DecodeI4Texel(source, image_s, image_t, image_width_minus_1),
++      detail::DecodeI4Texel(source, image_s_plus_1, image_t, image_width_minus_1),
++      detail::DecodeI4Texel(source, image_s, image_t_plus_1, image_width_minus_1),
++      detail::DecodeI4Texel(source, image_s_plus_1, image_t_plus_1, image_width_minus_1),
++  };
++  const u32 weights[4] = {
++      (128 - fract_s) * (128 - fract_t),
++      fract_s * (128 - fract_t),
++      (128 - fract_s) * fract_t,
++      fract_s * fract_t,
++  };
++
++  u32 value = texels[0] * weights[0];
++  value += texels[1] * weights[1];
++  value += texels[2] * weights[2];
++  value += texels[3] * weights[3];
++  const u8 result = static_cast<u8>(value >> 14);
++  sample[0] = result;
++  sample[1] = result;
++  sample[2] = result;
++  sample[3] = result;
++}
++
+ // Bit-exact specialization of the generic CMPR + bilinear + repeat path. The caller is responsible
+ // for restricting this to power-of-two dimensions; repeat wrapping can then use the same logical
+ // AND operation as the generic sampler. SafeSpanRead preserves the generic decoder's truncated-span

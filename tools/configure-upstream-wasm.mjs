@@ -62,7 +62,12 @@ if (!existsSync(resolvedNagaLibrary)) {
   process.exit(1);
 }
 
+// CMake runs hundreds of feature probes. Keep the original global production
+// flags so subprojects that replace their Release flags still retain LTO, but
+// make try_compile use Debug and append overrides that disable optimization
+// and LTO for probes only. Clang/Emscripten honors the last -O*/-f*lto option.
 const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0";
+const wasmDebugProbeFlags = "-O0 -fno-lto";
 const cmakeArgs = [
   cmake,
   "-S",
@@ -72,6 +77,7 @@ const cmakeArgs = [
   "-GNinja",
   `-DCMAKE_MAKE_PROGRAM=${ninja}`,
   "-DCMAKE_BUILD_TYPE=Release",
+  "-DCMAKE_TRY_COMPILE_CONFIGURATION=Debug",
   "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
   "-DUSE_SYSTEM_LIBS=OFF",
   "-DENABLE_GENERIC=ON",
@@ -107,6 +113,8 @@ const cmakeArgs = [
   "-DWITH_VPCLMULQDQ=OFF",
   `-DCMAKE_C_FLAGS:STRING=${wasmCompileFlags}`,
   `-DCMAKE_CXX_FLAGS:STRING=${wasmCompileFlags}`,
+  `-DCMAKE_C_FLAGS_DEBUG:STRING=${wasmDebugProbeFlags}`,
+  `-DCMAKE_CXX_FLAGS_DEBUG:STRING=${wasmDebugProbeFlags}`,
   `-DDOLPHIN_WASM_NAGA_WGSL_LIB=${resolvedNagaLibrary}`,
   `-DDOLPHIN_WASM_JIT_CACHE_PRE_JS=${jitCachePreJs}`,
   `-DDOLPHIN_WASM_MEMORY_PAGES=${wasmMemoryPages}`
