@@ -75,13 +75,17 @@ assume-unchanged and skip-worktree), recomputes every result blob and tree, and
 reports:
 
 ```text
-verified result tree a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42
+verified result tree 3cc63e7a1417574b2fab1ee0c6b483fc49343b91
 ```
 
-The active lock contains eight root snapshot patches and two patches applied in
-the pinned SFML and xxHash submodules. It captures the complete forensic delta,
-including the hardware-WebGPU/Naga call site. The ordered patch-set SHA-256 is
-`ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722`.
+The active lock contains eleven root snapshot patches and two patches applied
+in the pinned SFML and xxHash submodules. It captures the complete forensic
+delta, including the hardware-WebGPU/Naga call site, software-raster phase
+profile, JIT emitter diagnostics, and WGPU upload watermark. The ordered
+patch-set SHA-256 is
+`05fc890838da65a459ad04a57ddc91259540e00d0571475d325ec32557d9dde0`.
+The virtual vendor snapshot content SHA-256 is
+`f2345b18d9345043727ef886e18d0c060080de753d68604b1d20fc32476c34ab`.
 The older top-level
 `0001`-`0009` files remain research history and are not applied by the locked
 build. See [the bridge guide](webgpu-naga-bridge.md).

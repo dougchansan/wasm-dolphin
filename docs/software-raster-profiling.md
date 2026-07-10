@@ -8,11 +8,12 @@ output.
 
 ## Activation and interpretation
 
-Use the normal software-hybrid URL with `metrics=1`. The worker calls
-`SetSoftwareRasterProfileEnabled(1)` before `CoreInit`. With `metrics=0`, phase
-counters and clocks remain inactive; the hot functions retain only an inline
-disabled check. A post-rebuild metrics-on run is invalidated if any required
-phase never activates.
+Use the normal software-hybrid URL with `video=software&metrics=1`. The worker
+enables this profile only for the exact `Software Renderer` backend; WGPU,
+OGL, and the legacy `video=webgpu` alias do not pay its hot-path cost. With
+`metrics=0`, phase counters and clocks remain inactive. The enable call is a
+pre-core-initialization configuration step, not a runtime toggle. A rebuilt
+metrics-on software run is invalidated if any required phase never activates.
 
 The C++ profile is published in `GetVideoStats` as `swphase:1` and promoted to
 causal telemetry schema v2. Raw `samples.json`, `samples.csv`, and
@@ -25,30 +26,38 @@ causal telemetry schema v2. Raw `samples.json`, `samples.csv`, and
 | `tevPixelCount`, `tevStageCount` | TEV pixels and total indirect/color stages evaluated |
 | `tevTimed*` | Inclusive TEV timing samples; texture work inside those TEV calls remains included |
 | `textureSample*` | Texture sample calls and independently sampled texture time |
-| `fifo*` | Gather-pipe bursts/consumes, pending bytes, and oldest-pending wall-clock age |
+| `fifo*` | Batched gather-pipe bursts/consumes, pending bytes, and sampled continuous-backlog age |
+| `fifoDistanceUnderflowCount` | Count of impossible `<32` byte distances clamped by diagnostic instrumentation |
 | `xfbGeneration*` | XFB encode calls and exact encode time reported by the existing software XFB hook |
-| `frameGeneration*` | Software `ShowImage` calls and generation intervals |
+| `frameGeneration*` | Reached `Video_OutputXFB` bridge calls and source-generation intervals |
 | `sampledSourceFrame*` | Presenter-bound source frames classified by the existing sampled pixel hash |
 | `staleRepaintCount` | Tick paints that intentionally reuse the last stable source frame |
 
 Traversal is clocked once per 64 calls. TEV and texture sampling are clocked
-once per 4,096 calls. Counts are cumulative and exact at the most recently
-published generated frame; fields named `Sampled` are deliberately not
-extrapolated into total phase time. Compare their average sampled cost and
-work counts rather than treating sampled totals as a full-frame breakdown.
+once per 4,096 calls. Durations accumulate as nanoseconds and publish as
+microseconds so sub-microsecond calls do not all truncate to zero. Phase
+counters publish from the renderer thread at sampled-call boundaries; FIFO
+counts publish in batches of 1,024. Fields can therefore lag by one sampling
+batch. Fields named `Sampled` are deliberately not extrapolated into total
+phase time. Compare average sampled cost and work counts rather than treating
+sampled totals as a full-frame breakdown.
 
 `sampledStaleFrameRatio` is based on the existing sparse visual hash, so it is
 a classification of sampled output, not a cryptographic equality check.
-`fifoOldestPendingAge*` starts when an empty FIFO receives its first 32-byte
-gather burst and is sampled as chunks are consumed. Read it together with
-`fifoBytesLast` and `fifoBytesMax`.
+`fifoConsumerObservedBacklogAge*` is the canonical JSON/CSV name for the age of
+a continuously non-empty backlog as observed by the consumer. The deprecated
+`fifoOldestPendingAge*` fields remain equal aliases for schema-v2 compatibility;
+they do not mean true oldest-item residence time. Age is sampled once per 1,024
+consumes to avoid hundreds of thousands of clock reads per second. Read it with
+`fifoBytesLast`, `fifoBytesMax`, and the underflow counter; it is not a
+producer-to-consumer latency for every 32-byte burst.
 
-## Required rebuild handoff
+## Validated rebuild handoff
 
-The committed WASM predates this instrumentation. The ABI manifest therefore
-lists `_SetSoftwareRasterProfileEnabled` under
-`sourceOnlyExportsPendingRebuild`; no headed result may claim phase evidence
-until a new core is built and that pending list is empty.
+Do not claim phase evidence from the older candidate-C artifact: its phase
+counters remained thread-local and its FIFO age could wrap to `UINT64_MAX`.
+The validated replacement contains the epoch reset, sampled delta publication,
+reached XFB frame hook, FIFO batching, and saturated-distance counter.
 
 Produce two independent candidates before promoting generated artifacts:
 
@@ -71,11 +80,10 @@ npm run compare:core-builds -- `
   build/raster-profile-b-output/dolphin-core-upstream.build.json
 ```
 
-Only after byte/section parity should the candidate be run against the exact
-Kirby-versus-Link save with the direct-save performance gate. Run repeated
-metrics-off versus metrics-on blocks to quantify probe overhead, then retain a
-metrics-on fixed-scene run to classify the raster phases. Record the candidate
-artifact hash, Chrome version, command, URL, and raw output directory.
+The independent builds matched exactly at WASM SHA-256
+`158dde37602442bf1dacf42328501082b46b47768b2455946fcb4c596fcdb5ea`.
+Three direct-save metrics-off/on pairs and activation evidence are packaged in
+[the software-raster phase result](perf-results/melee-software-raster-phases-2026-07-10.md).
 
 Rollback is one commit: remove snapshot patch
 `0009-software-raster-phase-profile.patch`, the bridge header/export, and the

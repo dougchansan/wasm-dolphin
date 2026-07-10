@@ -27,10 +27,10 @@ real-time play possible inside the browser sandbox.
 | Area | State |
 |------|-------|
 | Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
-| PPC→WASM JIT with GPR register cache | ⚠️ Default-on; current emit failures and benefit need classification |
+| PPC→WASM JIT with GPR register cache | ⚠️ Default-on; old `addzex` failures are fixed, benefit remains scene-dependent |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
 | Audio | ✅ Worker-fed/tuned audio buffering |
-| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — draws submit, but the EFB remains zero |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Fixed battle visible on one validation GPU; still slow and experimental |
 | Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
 
 The default configuration is the recommended, locally validated
@@ -105,8 +105,9 @@ registers are held in WASM locals for the life of a block (loaded in the
 prologue, flushed at block end and around calls) instead of round-tripping to
 the emulated register file on every access.
 
-- A historical local A/B reported **+38% raw throughput**, but the current
-  fixed-scene audit found emit failures and did not reproduce that claim.
+- A historical local A/B reported **+38% raw throughput**. The eight later
+  fixed-scene emit failures were all an accidental `addzex` diagnostic disable
+  and are fixed, but no current repeated A/B reproduces the +38% claim.
 - Escape hatch: `?regalloc=0` disables it.
 - `?smearcompile=1` (default-on) spreads JIT compilation to reduce mid-match
   compile bursts.

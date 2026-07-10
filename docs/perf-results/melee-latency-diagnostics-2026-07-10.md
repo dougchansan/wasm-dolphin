@@ -61,3 +61,8 @@ tools/menu-progress-validate.mjs --base-url http://127.0.0.1:8120/ --duration
 `INPUTLATENCY=1`, `GPUCOMPLETE=1`, `WASMJIT=0`, direct save load at time zero,
 and a four-transition input script. The generated metadata files retain the
 complete URLs and artifact identities.
+
+The later real-WGPU measurement uses a mapped hardware backbuffer rather than
+the software XFB hash. Its six input transitions, queue-completion samples, and
+validation caveats are recorded separately in
+[WGPU replay and hardware-latency diagnostics](wgpu-replay-and-latency-2026-07-10.md).
