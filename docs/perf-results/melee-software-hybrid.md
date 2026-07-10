@@ -82,3 +82,42 @@ FPS values.
 See the [full audit](../performance-audit-2026-07-09.md) and
 [aggregate CSV](melee-kirby-link-fixed-battle-2026-07-09.csv) for presenter
 controls, aggressive raster modes, provenance, and caveats.
+
+## Fixed-battle gate
+
+`perf:gate` no longer navigates Melee's menus or stops at character select. It
+requires the exact ISO and Kirby-versus-Link save, verifies both SHA-256 values,
+waits for core progress, loads the save with `SAVE_STATE_AT=0`, settles, and
+only then starts the timed window. Gameplay input is always `none`; a configured
+menu-driving script is rejected before Chrome launches.
+
+```powershell
+$env:ROM = '<verified Melee Rev 2 NKit ISO>'
+$env:SAVE_STATE_PATH = '<verified Kirby-vs-Link __battle.sav>'
+$env:PERF_PROBE_HEADED = '1'
+npm run perf:gate
+```
+
+If Playwright is installed in the validator's existing isolated probe rather
+than this worktree, set `PLAYWRIGHT_MODULE` to its `playwright/index.mjs`.
+
+Every run writes `manifest.json`, `events.jsonl`, `samples.json`, `samples.csv`,
+`summary.json`, `console.log`, and `final.png`. Headless mechanics runs are
+marked non-qualifying; performance claims require headed Chrome.
+
+For a bounded A/B screen, pass
+[`melee-screening.example.json`](melee-screening.example.json) with
+`--comparison-config`. Screening is exactly two fresh-process A/B/B/A and
+B/A/A/B blocks and can never promote a default. Confirmation accepts five to
+ten blocks. One invalid run invalidates the complete four-run block; the task
+list, invalid artifacts, block effects, block-bootstrap interval, sign
+permutation result, and any `INCONCLUSIVE` outcome remain in the output.
+
+```powershell
+npm run perf:gate -- --comparison-config docs/perf-results/melee-screening.example.json
+```
+
+Comparison arms currently support explicit `cold` ephemeral profiles or
+`disabled` JIT cache (`nojitcache=1`). A true warm-cache protocol remains a
+separate experiment because silently treating the first run of a profile as
+warm would invalidate the block.
