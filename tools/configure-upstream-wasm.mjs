@@ -7,6 +7,7 @@ const root = process.cwd();
 const sourceDir = resolve(root, "vendor/dolphin");
 const buildDir = resolve(process.env.DOLPHIN_WASM_BUILD_DIR ?? resolve(root, "build/dolphin-wasm"));
 const bridgeSource = resolve(root, "core/upstream/dolphin_web_discio.cpp");
+const sharedSourceDir = dirname(bridgeSource);
 const coreSource = resolve(root, "core/upstream/dolphin_web_core.cpp");
 const outputDir = resolve(process.env.DOLPHIN_WASM_OUTPUT_DIR ?? resolve(root, "cores/dolphin"));
 const nagaDir = resolve(root, "tools/naga-spirv-wgsl");
@@ -113,6 +114,7 @@ const cmakeArgs = [
 
 if (existsSync(bridgeSource)) {
   cmakeArgs.push(`-DDOLPHIN_WASM_BRIDGE_SOURCE=${bridgeSource}`);
+  cmakeArgs.push(`-DDOLPHIN_WASM_SHARED_SOURCE_DIR=${sharedSourceDir}`);
   cmakeArgs.push(`-DDOLPHIN_WASM_OUTPUT_DIR=${outputDir}`);
 }
 
@@ -129,6 +131,7 @@ writeFileSync(resolve(buildDir, "wasm-dolphin-configure.json"), `${JSON.stringif
   buildDir,
   outputDir,
   bridgeSource,
+  sharedSourceDir,
   coreSource,
   nagaLibrary: resolvedNagaLibrary,
   nagaLibrarySha256: sha256File(resolvedNagaLibrary),

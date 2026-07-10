@@ -433,6 +433,7 @@ async function handleMessage(type, payload) {
         oglProxyMode: payload.oglProxyMode,
         oglTestClear: payload.oglTestClear,
         fastSoftwareRaster: payload.fastSoftwareRaster,
+        xfbFastPaths: payload.xfbFastPaths,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
@@ -652,6 +653,7 @@ async function loadCore({
   oglProxyMode = "proxy",
   oglTestClear = false,
   fastSoftwareRaster = 0,
+  xfbFastPaths = 0,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
   reportedCoreSelection = null,
@@ -836,6 +838,7 @@ async function loadCore({
     dolphinOglReadbackPresent: readbackOgl,
     dolphinOglTestClear: Boolean(oglTestClear),
     dolphinFastSoftwareRaster: Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)),
+    dolphinXfbFastPaths: (Number(xfbFastPaths) || 0) & 3,
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
@@ -908,6 +911,7 @@ async function loadCore({
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
   api.setFastSoftwareRaster?.(Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)));
+  api.setXfbFastPaths?.((Number(xfbFastPaths) || 0) & 3);
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -980,6 +984,10 @@ function bindApi(module) {
     setFastSoftwareRaster:
       typeof module._SetFastSoftwareRaster === "function"
         ? (mode) => ccall("SetFastSoftwareRaster", "number", ["number"], [mode | 0])
+        : null,
+    setXfbFastPaths:
+      typeof module._SetXfbFastPaths === "function"
+        ? (flags) => ccall("SetXfbFastPaths", "number", ["number"], [flags | 0])
         : null,
     setCachedInterpreterDisableMask:
       typeof module._SetCachedInterpreterDisableMask === "function"

@@ -8,6 +8,7 @@ import {
   isStrictOneWayWorkerRequest,
   planWorkerSuccessReply,
   requestedLegacyOneWayAck,
+  requestedXfbFastPaths,
   requestedUpstreamCoreBuild,
   sanitizeDiscFileName,
   sha256Hex,
@@ -81,6 +82,15 @@ test("legacy one-way acknowledgements and request/reply behavior remain availabl
   assert.equal(requestedLegacyOneWayAck(""), false);
   assert.equal(requestedLegacyOneWayAck("?legacyonewayack=1"), true);
   assert.equal(requestedLegacyOneWayAck("?legacyonewayack=0"), false);
+});
+
+test("XFB fast paths remain default-off and accept independent rollback controls", () => {
+  assert.equal(requestedXfbFastPaths(""), 0);
+  assert.equal(requestedXfbFastPaths("?xfbfast=0"), 0);
+  assert.equal(requestedXfbFastPaths("?xfbfast=rows"), 1);
+  assert.equal(requestedXfbFastPaths("?xfbfast=decode"), 2);
+  assert.equal(requestedXfbFastPaths("?xfbfast=both"), 3);
+  assert.equal(requestedXfbFastPaths("?xfbfast=unknown"), 0);
 });
 
 test("worker error replies are never suppressible", () => {

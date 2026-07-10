@@ -89,6 +89,7 @@ test("candidate preflight rollback records requested and active core before canv
   const adapter = new UpstreamWorkerAdapter({
     coreUrl: candidateUrl,
     expectedCoreSha256: candidateSha256,
+    xfbFastPaths: 3,
     transferCanvas() {
       order.push("canvas-transfer");
       return null;
@@ -117,4 +118,5 @@ test("candidate preflight rollback records requested and active core before canv
     fallbackReason: "Core WASM fetch returned 404",
     fallbackBeforeCanvasTransfer: true
   });
+  assert.equal(posted.message.payload.xfbFastPaths, 3);
 });

@@ -5,6 +5,7 @@ import { UpstreamWorkerAdapter, upstreamBundleAvailable } from "./upstream-worke
 import {
   DEFAULT_UPSTREAM_CORE_URL,
   requestedLegacyOneWayAck,
+  requestedXfbFastPaths,
   requestedUpstreamCoreBuild
 } from "./upstream-worker-protocol.js";
 import {
@@ -54,6 +55,7 @@ export class EmulatorHost {
     this.oglProxyMode = requestedOglProxyMode();
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
+    this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
@@ -205,7 +207,8 @@ export class EmulatorHost {
             emulationSpeed: this.emulationSpeed,
             presentationScale: this.presentationScale,
             oglTestClear: this.oglTestClear,
-            fastSoftwareRaster: this.fastSoftwareRaster
+            fastSoftwareRaster: this.fastSoftwareRaster,
+            xfbFastPaths: this.xfbFastPaths
           })
         : this.coreKind === "upstream"
         ? new UpstreamWorkerAdapter({
@@ -253,6 +256,7 @@ export class EmulatorHost {
             oglProxyMode: this.oglProxyMode,
             oglTestClear: this.oglTestClear,
             fastSoftwareRaster: this.fastSoftwareRaster,
+            xfbFastPaths: this.xfbFastPaths,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,

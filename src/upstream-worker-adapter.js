@@ -51,6 +51,7 @@ export class UpstreamWorkerAdapter {
     oglProxyMode = "worker",
     oglTestClear = false,
     fastSoftwareRaster = 0,
+    xfbFastPaths = 0,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
@@ -94,6 +95,7 @@ export class UpstreamWorkerAdapter {
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
@@ -235,6 +237,7 @@ export class UpstreamWorkerAdapter {
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,
+      xfbFastPaths: this.xfbFastPaths,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,

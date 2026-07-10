@@ -1007,12 +1007,19 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     .filter((entry) => entry.cwd === ".")
     .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))
     .join("\n");
-  const coreSource = readFileSync(resolve(root, "core/upstream/dolphin_web_core.cpp"), "utf8");
+  const contractSourceText = (manifest.contractSources ?? [])
+    .map((source) => readFileSync(resolve(root, source.path), "utf8"))
+    .join("\n");
   for (const name of sourceOnlyExports) {
     invariant(/^_[A-Za-z0-9_]+$/.test(name), `Invalid pending source-only export ${name}`);
     invariant(!actualExports.includes(name), `Pending source-only export is already in the core artifact: ${name}`);
-    invariant(activePatchText.includes(`'${name}'`), `Pending source-only export is absent from the patch set: ${name}`);
-    invariant(coreSource.includes(`${name.slice(1)}()`), `Pending source-only export is absent from the wrapper: ${name}`);
+    const symbol = name.slice(1);
+    const keepalive = new RegExp(`EMSCRIPTEN_KEEPALIVE[\\s\\S]{0,120}\\b${symbol}\\s*\\(`)
+      .test(contractSourceText);
+    invariant(activePatchText.includes(`'${name}'`) || keepalive,
+      `Pending source-only export is neither in the patch export list nor kept alive: ${name}`);
+    invariant(new RegExp(`\\b${symbol}\\s*\\(`).test(contractSourceText),
+      `Pending source-only export is absent from the ABI contract sources: ${name}`);
   }
   const actualMemory = inspectMemoryContract(root);
   invariant(

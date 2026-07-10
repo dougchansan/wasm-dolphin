@@ -18,6 +18,18 @@
   ],
   "contractSources": [
     {
+      "path": "core/upstream/dolphin_web_discio.cpp",
+      "hashMode": "lf-normalized",
+      "size": 37142,
+      "sha256": "0fec5f15d1323f52e8036ac00dd382eeada01b83e9461f99cf88a49e0208bef7"
+    },
+    {
+      "path": "core/upstream/dolphin_web_xfb_fastpaths.h",
+      "hashMode": "lf-normalized",
+      "size": 2948,
+      "sha256": "a0262feec1d2044dc576b6f67240a8a99b36a4ba27cf37013cc99d855f3c755e"
+    },
+    {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
       "size": 40001,
@@ -62,8 +74,8 @@
     {
       "path": "src/upstream-main-thread-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 19934,
-      "sha256": "485310c49211101aee28fc39df18573e0bcfaaeab274b4c3485ea2f80db42ce8"
+      "size": 20189,
+      "sha256": "786d9429acdef46d0135be3e60a819138fe0f58e608c2a301ec608f218784f8f"
     },
     {
       "path": "src/upstream-worker-adapter.js",
@@ -114,7 +126,8 @@
     "_GetLastLoadedCheckpointGeneration",
     "_GetLastLoadedCoreTicksHigh",
     "_GetLastLoadedCoreTicksLow",
-    "_GetLastLoadedPPCPC"
+    "_GetLastLoadedPPCPC",
+    "_SetXfbFastPaths"
   ],
   "moduleExports": [
     "_AudioBuffer",

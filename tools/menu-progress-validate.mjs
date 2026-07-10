@@ -164,6 +164,7 @@ if (videoMode === "ogl") {
 }
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
+if (process.env.XFBFAST) url.searchParams.set("xfbfast", process.env.XFBFAST);
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
 if (process.env.REDISPATCH) url.searchParams.set("redispatch", process.env.REDISPATCH);
 if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCKMERGE);

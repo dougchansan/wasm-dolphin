@@ -115,6 +115,7 @@ test("CPU-thread save checkpoint capture happens before renderer resync", async 
     "_GetLastLoadedCoreTicksHigh",
     "_GetLastLoadedCoreTicksLow",
     "_GetLastLoadedPPCPC",
+    "_SetXfbFastPaths",
   ]);
 });
 

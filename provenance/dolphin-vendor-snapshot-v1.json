@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "5fb8e028c84d838cd7adcf892e87ccf7df787610",
-    "changedPathCount": 87,
+    "resultTree": "a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42",
+    "changedPathCount": 88,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -430,6 +430,15 @@
         "sha256": "a6096ee5e293b0ec1d22a3692e7109736a086814b3cb84d3bad851e0ce86d7f8"
       },
       {
+        "path": "Source/Core/VideoBackends/Software/CMakeLists.txt",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "acf152da8b181f3c69ebc4f8916384250df5ad21",
+        "resultBlob": "bdfbf9e459b14c5699ded035ed6b05b623528a4f",
+        "size": 866,
+        "sha256": "4055db040cc3e8d94ccb554ccb9afc6bd21f4cb19414f78b57e5d1ae9de36b25"
+      },
+      {
         "path": "Source/Core/VideoBackends/Software/Rasterizer.cpp",
         "status": "M",
         "mode": "100644",
@@ -443,9 +452,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "7797b1da20abd355fdf64e88db3cd53216a702fe",
-        "resultBlob": "9f2fa0220bc2d4a633012adf906322aaaaa58744",
-        "size": 25538,
-        "sha256": "434981e1050e7e6996b03232aa7fa6fd6c77ec69ee32b51e34f9fb874617c2f0"
+        "resultBlob": "ed7349c841c84d9cbc0f7da03db7a64faef2fe3f",
+        "size": 26177,
+        "sha256": "b88017172b11810592f05a9f0b076f96f0dea09ea6c0717ab57b406265ac77d3"
       },
       {
         "path": "Source/Core/VideoBackends/Software/SWGfx.cpp",
@@ -825,5 +834,5 @@
       ]
     }
   ],
-  "contentSha256": "99fda99f5de67ee60576cafbac18fd1c42fed2c6dd522dc2b87d44b9fcf94a94"
+  "contentSha256": "1fb1d24047f517aa7b6edca9cac38592bb61f5dfc7c6f27206fee81cf6822902"
 }

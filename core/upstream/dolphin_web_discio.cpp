@@ -26,9 +26,12 @@
 #include "VideoCommon/TextureDecoder.h"
 #include "VideoCommon/Statistics.h"
 
+#include "dolphin_web_xfb_fastpaths.h"
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/atomic.h>
 #include <emscripten/em_asm.h>
+#include <emscripten/emscripten.h>
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -142,6 +145,9 @@ std::atomic<std::uint32_t> s_last_sw_xfb_total_us{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_width{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_height{0};
 std::atomic<std::uint32_t> s_last_sw_xfb_dst_height{0};
+std::atomic<std::uint32_t> s_xfb_fast_paths{0};
+std::atomic<std::uint64_t> s_xfb_encoded_rows_reused{0};
+std::atomic<std::uint64_t> s_xfb_identity_frames_decoded{0};
 std::atomic<std::uint32_t> s_ogl_swap_count{0};
 std::atomic<int> s_last_ogl_worker_owned{0};
 std::atomic<int> s_last_ogl_commit_result{0};
@@ -220,31 +226,25 @@ void DownsampleFramebuffer(std::uint32_t source_width, std::uint32_t source_heig
   }
 }
 
-std::uint8_t ClampColor(int value)
-{
-  if (value <= 0)
-    return 0;
-  if (value >= 255)
-    return 255;
-  return static_cast<std::uint8_t>(value);
-}
-
 std::uint32_t YuvToRgba(std::uint8_t y, std::uint8_t u, std::uint8_t v)
 {
-  const int c = static_cast<int>(y) - 16;
-  const int d = static_cast<int>(u) - 128;
-  const int e = static_cast<int>(v) - 128;
-  const std::uint8_t r = ClampColor((298 * c + 409 * e + 128) >> 8);
-  const std::uint8_t g = ClampColor((298 * c - 100 * d - 208 * e + 128) >> 8);
-  const std::uint8_t b = ClampColor((298 * c + 516 * d + 128) >> 8);
-  return 0xff000000u | (static_cast<std::uint32_t>(b) << 16) |
-         (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(r);
+  return DolphinWeb::XfbFastPaths::YuvToRgba(y, u, v);
 }
 
 void DecodeXfbToPresentationBuffer(const std::uint8_t* xfb, std::uint32_t source_width,
                                    std::uint32_t stride, std::uint32_t source_height,
                                    int target_width, int target_height)
 {
+  if (target_width == static_cast<int>(source_width) &&
+      target_height == static_cast<int>(source_height) &&
+      DolphinWeb::XfbFastPaths::DecodeIdentityYuyvToRgba(
+          s_xfb_fast_paths.load(std::memory_order_relaxed), s_framebuffer.data(), xfb,
+          source_width, stride, source_height))
+  {
+    s_xfb_identity_frames_decoded.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
   if (source_width < 2)
   {
     TexDecoder_DecodeXFB(reinterpret_cast<std::uint8_t*>(s_framebuffer.data()), xfb, source_width,
@@ -354,7 +354,10 @@ std::string XfbProfileStats()
       << " copy:" << FormatMicrosAsMs(s_last_sw_xfb_copy_us.load(std::memory_order_relaxed))
       << " sz:" << s_last_sw_xfb_width.load(std::memory_order_relaxed) << "x"
       << s_last_sw_xfb_height.load(std::memory_order_relaxed) << "->"
-      << s_last_sw_xfb_dst_height.load(std::memory_order_relaxed);
+      << s_last_sw_xfb_dst_height.load(std::memory_order_relaxed)
+      << " xfbfast:" << s_xfb_fast_paths.load(std::memory_order_relaxed)
+      << " rowreuse:" << s_xfb_encoded_rows_reused.load(std::memory_order_relaxed)
+      << " identitydecode:" << s_xfb_identity_frames_decoded.load(std::memory_order_relaxed);
   return out.str();
 }
 
@@ -520,6 +523,29 @@ void RenderMetadataFrame()
 
 extern "C"
 {
+int DolphinWeb_XfbFastPaths()
+{
+  return static_cast<int>(s_xfb_fast_paths.load(std::memory_order_relaxed));
+}
+
+void DolphinWeb_RecordXfbEncodedRowReuse()
+{
+  s_xfb_encoded_rows_reused.fetch_add(1, std::memory_order_relaxed);
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int SetXfbFastPaths(int flags)
+{
+  const std::uint32_t normalized = static_cast<std::uint32_t>(flags) &
+                                   DolphinWeb::XfbFastPaths::ALL;
+  s_xfb_fast_paths.store(normalized, std::memory_order_relaxed);
+  s_xfb_encoded_rows_reused.store(0, std::memory_order_relaxed);
+  s_xfb_identity_frames_decoded.store(0, std::memory_order_relaxed);
+  return static_cast<int>(normalized);
+}
+
 void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t publish_us,
                                          std::uint32_t total_us)
 {

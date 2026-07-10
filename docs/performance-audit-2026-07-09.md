@@ -401,6 +401,14 @@ analysis.
 | patched `CachedInterpreter.cpp` cache | 32-bit-only module identity can collide | Dual hash or 64-bit key, byte length/signature, collision counter | Inject primary collision and prove rejection; state/hash parity | `nojitcache=1` |
 | `src/audio.js::pump` | 15 ms main-thread timer and 120 ms lead trade robustness for latency; main-thread starvation remains possible | First make pump gap/mix latency/audio drift part of the result schema; consider AudioWorklet/SAB only after evidence | Headed audio underrun, drift, and input-to-audio latency tests | Current timer pump remains fallback |
 
+The two XFB candidates are wired default-off for measurement. Use
+`xfbfast=rows` (or `1`) for encoded-row reuse, `xfbfast=decode` (or `2`) for
+the even-width identity decoder, and `xfbfast=both` (or `3`) for both. Omit the
+parameter or use `xfbfast=0` for the exact pre-change paths. Video stats expose
+`xfbfast`, `rowreuse`, and `identitydecode` so a run can prove which code
+executed. No performance gain is claimed until repeated headed fixed-battle
+A/B runs qualify it.
+
 ## Validation status
 
 - `node --test tests/perf-artifacts.test.mjs`: 3/3 passed.

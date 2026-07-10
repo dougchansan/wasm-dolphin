@@ -27,7 +27,8 @@ export class UpstreamMainThreadAdapter {
     emulationSpeed = 1,
     presentationScale = 1,
     oglTestClear = false,
-    fastSoftwareRaster = 0
+    fastSoftwareRaster = 0,
+    xfbFastPaths = 0
   } = {}) {
     this.coreUrl = coreUrl;
     this.expectedCoreSha256 = expectedCoreSha256;
@@ -46,6 +47,7 @@ export class UpstreamMainThreadAdapter {
     this.presentationScale = presentationScale;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.module = null;
     this.api = null;
     this.loaded = false;
@@ -108,6 +110,7 @@ export class UpstreamMainThreadAdapter {
       dolphinOglWorkerWebGl: this.videoBackend === "OGL",
       dolphinOglTestClear: this.oglTestClear,
       dolphinFastSoftwareRaster: this.fastSoftwareRaster,
+      dolphinXfbFastPaths: this.xfbFastPaths,
       locateFile: (path) => new URL(path, coreUrl).href,
       print: (message) => this.onStatus(String(message)),
       printErr: (message) => this.onStatus(String(message)),
@@ -124,6 +127,7 @@ export class UpstreamMainThreadAdapter {
     this.api.setEmulationSpeed?.(Number(this.emulationSpeed));
     this.api.setPresentationScale?.(Number(this.presentationScale));
     this.api.setFastSoftwareRaster?.(this.fastSoftwareRaster);
+    this.api.setXfbFastPaths?.(this.xfbFastPaths);
     this.api.coreInit?.();
     this.loaded = true;
     this.refreshStats();
@@ -146,6 +150,7 @@ export class UpstreamMainThreadAdapter {
       setEmulationSpeed: optionalCwrap("SetEmulationSpeed", null, ["number"]),
       setPresentationScale: optionalCwrap("SetPresentationScale", null, ["number"]),
       setFastSoftwareRaster: optionalCwrap("SetFastSoftwareRaster", "number", ["number"]),
+      setXfbFastPaths: optionalCwrap("SetXfbFastPaths", "number", ["number"]),
       bootDisc: optionalCwrap("BootDisc", "number", ["string"]),
       setCorePaused: optionalCwrap("SetCorePaused", "number", ["number"]),
       resetCore: optionalCwrap("ResetCore", "number", []),

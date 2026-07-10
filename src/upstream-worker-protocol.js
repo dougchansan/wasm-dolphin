@@ -2,6 +2,11 @@ export const DEFAULT_UPSTREAM_CORE_URL = "./cores/dolphin/dolphin-core-upstream.
 export const DEFAULT_UPSTREAM_CORE_SHA256 = "03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f";
 export const DISCIO_UPSTREAM_CORE_URL = "./cores/dolphin/dolphin-upstream.js";
 export const WORKERFS_MOUNT_DIR = "/workerfs";
+export const XFB_FAST_PATH_FLAGS = Object.freeze({
+  rows: 1,
+  decode: 2,
+  both: 3
+});
 
 export const ONE_WAY_WORKER_REQUEST_TYPES = Object.freeze([
   "setAudioMuted",
@@ -15,6 +20,20 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 export function requestedLegacyOneWayAck(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("legacyonewayack") === "1";
+}
+
+export function requestedXfbFastPaths(search = globalThis.location?.search ?? "") {
+  const requested = (new URLSearchParams(search).get("xfbfast") || "").trim().toLowerCase();
+  if (requested === "rows" || requested === "row" || requested === "reuse" || requested === "1") {
+    return XFB_FAST_PATH_FLAGS.rows;
+  }
+  if (requested === "decode" || requested === "2") {
+    return XFB_FAST_PATH_FLAGS.decode;
+  }
+  if (requested === "both" || requested === "all" || requested === "3") {
+    return XFB_FAST_PATH_FLAGS.both;
+  }
+  return 0;
 }
 
 export function isOneWayWorkerRequestType(type) {

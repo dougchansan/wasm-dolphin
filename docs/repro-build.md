@@ -78,7 +78,7 @@ reports:
 verified result tree 894201c58d67cd65ce67892776f5ccf5c143663c
 ```
 
-The active lock contains seven root snapshot patches and two patches applied in
+The active lock contains eight root snapshot patches and two patches applied in
 the pinned SFML and xxHash submodules. It captures the complete forensic delta,
 including the hardware-WebGPU/Naga call site. The older top-level
 `0001`-`0009` files remain research history and are not applied by the locked
