@@ -1,0 +1,141 @@
+{
+  "schema": "wasm-dolphin.wgpu-replay-epoch-evidence.v1",
+  "generatedAt": "2026-07-10",
+  "status": "diagnostic-only",
+  "qualification": {
+    "eligible": false,
+    "reason": "Every hardware-WGPU run failed the known battle/XFB checkpoint, presentation FPS was zero, and visual FPS was zero. The runs classify replay correctness and transport only."
+  },
+  "repository": {
+    "branch": "fix/wgpu-first-efb-next",
+    "baselineCommit": "bbb37df5b6e2e9372125cfaa2f9b27cc05da504b",
+    "dirtyDuringRuns": true
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logicalCpuCount": 32,
+    "gpuVendor": "amd",
+    "gpuArchitecture": "rdna-4",
+    "chrome": "149.0.7827.201",
+    "platform": "Windows 10.0.26200 x64"
+  },
+  "fixture": {
+    "scene": "Melee Kirby vs Link fixed battle",
+    "isoSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+    "saveStateSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+    "coreWasmSha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+    "inputScript": "none",
+    "saveStateAtSeconds": 0
+  },
+  "commonRun": {
+    "headed": true,
+    "continueInvalidCheckpoint": true,
+    "flags": "core=upstream&video=wgpu&cpu=dual&speed=1&present=full&presenter=webgpu&pacing=tick&wasmjit=0&jittier=guarded&jitwarmup=700&oc=1&queue=2&fastsw=1&metrics=1&nojitcache=1",
+    "command": "node tools/perf-regression-gate.mjs",
+    "rawRoot": ".omx/wgpu-epoch-trace"
+  },
+  "findings": {
+    "saveLoadBoundary": {
+      "classification": "nondeterministic",
+      "emptyRunPendingRecords": 0,
+      "openPassRun": {
+        "pendingRecords": 924,
+        "firstOp": 12,
+        "beginPassCount": 1,
+        "endPassCount": 0,
+        "openPassDepth": 1,
+        "drawIndexedCount": 108,
+        "uploadBufferCount": 243,
+        "uploadBytes": 78244
+      }
+    },
+    "uploadArena": {
+      "arenaBytes": 33554432,
+      "backlogRecords": 117979,
+      "pendingUploadBytes": 63369752,
+      "uploadPointerWrapCount": 2,
+      "potentialArenaOverwrite": true,
+      "interpretation": "The pending replay range references more upload data than the cyclic arena can retain. This violates the source-lifetime invariant and can replay stale UBO, vertex, index, or texture payloads."
+    },
+    "creditWindowExperiment": {
+      "queryFlag": "wgpupump=1",
+      "windowRecords": 16384,
+      "observedBacklogHighWater": 13147,
+      "observedPendingUploadBytes": 6582068,
+      "potentialArenaOverwrite": false,
+      "interpretation": "The bounded record-credit experiment reduced pressure but did not restore EFB correctness. It remains default-off and is not the final upload-release protocol."
+    },
+    "presentationChain": {
+      "durationSeconds": 30,
+      "efb": {
+        "framebufferId": 14,
+        "clearCount": 3609,
+        "drawCount": 524151,
+        "presentBoundaryReadbackCount": 8,
+        "lastSamplePresentSequence": 1033,
+        "nonzeroColorReadbackCount": 0
+      },
+      "presentedSource": {
+        "textureId": 2559,
+        "firstNonzeroPresentSequence": 310,
+        "nonzeroColorBytes": 918651,
+        "sampledBytes": 1228800
+      },
+      "backbuffer": {
+        "sourceTextureId": 2559,
+        "firstColorNonzeroPresentSequence": 310,
+        "nonzeroColorBytes": 209289,
+        "sampledBytes": 307200
+      },
+      "gpuPresentCompletion": true,
+      "rendererErrors": 0,
+      "interpretation": "The selected source and backbuffer mutate while the tracked EFB remains zero. Submission/completion alone therefore does not establish a correct game frame."
+    },
+    "detachedPresentation": {
+      "queryFlag": "wgpudetached=1",
+      "durationSeconds": 8,
+      "gpuCompletedBitmapsSent": 404,
+      "mainBitmapsReceived": 404,
+      "mainBitmapsDrawn": 404,
+      "mainBitmapsDropped": 0,
+      "workerBitmapErrors": 0,
+      "mainDrawLastMs": 0.034999996423721313,
+      "mainDrawMaxMs": 3.2150000035762787,
+      "presentationFps": 0,
+      "visualFps": 0,
+      "visibleResult": "Wrong colored checker/demo-like output; not a valid Melee frame.",
+      "interpretation": "The optional bitmap transport reached and painted the main canvas. It classified the compositor boundary but did not fix renderer correctness."
+    }
+  },
+  "raw": {
+    "emptyLoadBoundary": {
+      "manifest": ".omx/wgpu-epoch-trace/diagnostic-1/software-stable/manifest.json",
+      "manifestSha256": "94b5f9532c56b4bd603ab1a3388b93860272568b22c9b7314b905c8c3ba34bc2",
+      "summarySha256": "73d56a679024e61e45d1d75656c35f384261862001515c983107ed87eae26551",
+      "screenshotSha256": "43edb4d520c5ff5753b1c91ed11f55afdf6d339b618757f2fe3245a88b840ba7"
+    },
+    "openLoadBoundaryAndArenaOverwrite": {
+      "manifest": ".omx/wgpu-epoch-trace/diagnostic-2/software-stable/manifest.json",
+      "manifestSha256": "e69a5e8f6985f8862f0d8fe1193aa9a6ea027736b966ac8f0df5760463d0a3d1",
+      "summarySha256": "36ec2b24d0d848227e3b065efa2885d6bc1bd9a1c0d1a2dd47203c1ab19f7942",
+      "screenshotSha256": "dad418058410b3c2b12d41d819496e56e03698a52148e182fd11632ebfb7a0dc"
+    },
+    "creditWindowAndPresentationChain": {
+      "manifest": ".omx/wgpu-epoch-trace/candidate-window-detached-1/software-stable/manifest.json",
+      "manifestSha256": "36be22b5fb6463a364f5daaa649c83c475752105a383ce6dce82a14aaffdab19",
+      "summarySha256": "915b139ea0127c30cf83b1ceac9a031fb0b318f38216bc76af1643ca28ddbd45",
+      "screenshotSha256": "8acaac6919f1f7be8af7eeb38b0959a4c79e617df4acfdc0cbfc0abd0e7b5eaf"
+    },
+    "detachedMainPaintTelemetry": {
+      "manifest": ".omx/wgpu-epoch-trace/candidate-detached-telemetry-1/software-stable/manifest.json",
+      "manifestSha256": "675f23cb18f5d4024372508954eec0aa875ed85ab07c3b32ba21f701cc5d7666",
+      "summarySha256": "deede28edf533347317e430b204a604c1638977a744bed0b1eea47454edcc1ec",
+      "screenshotSha256": "10af9dc052ee68c3063e9c8ddbabcc1fa243a2ac15469d9bb50c491c4c19329d"
+    }
+  },
+  "nextProtocolChange": {
+    "status": "not implemented in this evidence commit",
+    "design": "Use command-ring header word 3 as a monotonic upload_read cursor. The producer must reserve from a monotonic upload_write cursor with bounded backpressure; JS advances upload_read only after writeBuffer, writeTexture, or heap-copy consumption.",
+    "reason": "A record-count window mitigates pressure but cannot prove the byte lifetime of variably sized uploads."
+  }
+}

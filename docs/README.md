@@ -36,6 +36,9 @@
   resource, EFB-mutation, draw, and present diagnostics for `video=wgpu`.
 - [First-EFB WGPU evidence](perf-results/wgpu-first-efb-2026-07-10.json) —
   machine-readable draw state, nonzero observation, probe A/B, and raw hashes.
+- [WGPU replay epoch evidence](perf-results/wgpu-replay-epoch-2026-07-10.json) —
+  save-load boundary, upload-arena pressure, EFB/source/backbuffer chain, and
+  detached-presentation evidence.
 - [Core roadmap](core-roadmap.md) — longer-term core work.
 - [OGL performance plan](ogl-performance-plan.md) — diagnostic OGL research.
 - [Upstream WASM probe](upstream-wasm-probe.md) — upstream integration notes.

@@ -19,7 +19,7 @@ recommended path.
 
 ## What it classifies
 
-The `wasm-dolphin.wgpu-replay-classifier.v1` payload records bounded ordered
+The `wasm-dolphin.wgpu-replay-classifier.v2` payload records bounded ordered
 checkpoints:
 
 1. pass atomicity, including a pass forcibly ended at a drain boundary;
@@ -29,13 +29,27 @@ checkpoints:
    groups, vertex/index buffers, viewport, scissor, and draw arguments;
 5. the first EFB readback containing a nonzero byte, including its present
    sequence and readback ordinal;
-6. present command submission and the first queue-completion result.
+6. present command submission and the first queue-completion result;
+7. the save-load generation, ring indices, pending-pass state, bounded drain
+   samples, backlog high-water mark, upload bytes, and upload-arena wraps;
+8. separate EFB, presented-source/XFB, and backbuffer readbacks, including RGB
+   and alpha counts so opaque black is not mistaken for color output.
 
 Event storage and missing-resource ID samples are capped. Counters continue to
 increase after those caps, so the payload remains useful without producing
 shader dumps or an unbounded log. A `loadStateFile` request resets the payload
 to scope `load-state-file`, preventing boot activity from being mistaken for
-evidence about the loaded Kirby/Link scene.
+evidence about the loaded Kirby/Link scene. New payloads also carry a monotonic
+classifier generation. Header word 3 is exposed as `uploadReadIndex` telemetry
+but this JS diagnostic does not advance it; the producer/consumer upload-lifetime
+protocol must own that release point.
+
+EFB readbacks are encoded at `SUBMIT_PRESENT`, after the commands already
+recorded in that encoder and before its `submitEnc("present")`. They therefore
+sample the EFB state at that present boundary. They are not an invasive
+"immediately after the first draw" probe: a later clear in the same emulated
+frame can legitimately precede the sample. `drawCountAtLastReadback` and
+`lastPresentSequence` preserve that distinction.
 
 | Classifier code | Meaning |
 | --- | --- |
@@ -102,6 +116,60 @@ stable gameplay-performance gain.
 The classifier is the dynamic check for that condition. It does not establish
 that every black frame has the same cause: after pass atomicity is clean, use
 the missing-resource and EFB-mutation stages to identify the next failure.
+
+## Save-load and upload-lifetime finding
+
+Repeated headed Chrome runs against the fixed Kirby-versus-Link save produced
+different ring states at the load boundary. One boundary was empty. Another
+contained 924 pending records beginning with `BEGIN_PASS`: one begin, no end,
+108 indexed draws, and 78,244 bytes of upload records. Save loading therefore
+does not currently establish a deterministic replay epoch.
+
+The same run reached a 117,979-record backlog containing 63,369,752 bytes of
+upload references and two pointer wraps while the shared upload arena is only
+32 MiB. That violates the upload-lifetime capacity invariant: pending commands
+can refer to arena regions the producer has already reused. Stale vertex,
+index, uniform, or texture payloads are consequently a concrete explanation
+for valid-looking draws that leave the EFB wrong.
+
+`wgpupump=1` is a default-off experiment that enables frequent replay polling
+and advertises only a 16,384-record producer credit window. It reduced observed
+backlog high water to 13,147 records in a 30-second diagnostic and kept the
+bounded high-water upload set to 6,582,068 bytes. This is useful isolation, not
+the final upload-lifetime protocol and not a performance qualification. The
+correct producer fix needs a monotonic upload cursor plus consumer release only
+after `writeBuffer`, `writeTexture`, or a heap copy has consumed each payload.
+
+That 30-second run still recorded 524,151 EFB draws and eight present-boundary
+EFB samples with zero RGB through present 1033. At present 310, however, the
+selected source texture had 918,651 nonzero RGB bytes and the backbuffer had
+209,289 nonzero RGB bytes. Queue completion succeeded. The data proves that
+some downstream textures mutate; it does not prove that they contain the
+correct game frame.
+
+`wgpudetached=1` is another default-off diagnostic. It presents through a
+standalone worker `OffscreenCanvas`, waits for submitted GPU work, transfers a
+coalesced `ImageBitmap`, and paints it on the main canvas. A headed confirmation
+delivered and painted 404/404 bitmaps with zero drops (0.035 ms last draw,
+3.215 ms maximum), yet the visible result remained the wrong colored
+checker/demo-like output and both presentation and visual FPS metrics remained
+zero. This rules out bitmap delivery failure for that experiment; it does not
+make `video=wgpu` playable.
+
+The machine-readable evidence and raw-artifact hashes are in
+`perf-results/wgpu-replay-epoch-2026-07-10.json`. Every cited WGPU run failed
+the known battle/XFB checkpoint and is explicitly non-qualifying.
+
+## Experimental query flags
+
+| Flag | Purpose | Default |
+| --- | --- | --- |
+| `wgpuclassify=1` | Enable bounded v2 replay/load/presentation classification | Off |
+| `wgpudeepdiag=1` | Restore historical high-volume shader and draw probes | Off |
+| `wgpuatomic=0` | Roll back atomic-pass replay for controlled comparison | Atomic replay is on |
+| `wgpuloadfence=1` | Discard a pre-load incomplete pass through its first end marker | Off |
+| `wgpupump=1` | Enable frequent replay polling and the 16,384-record credit experiment | Off |
+| `wgpudetached=1` | Send GPU-completed worker-canvas bitmaps to the main canvas | Off |
 
 ## Validation discipline
 

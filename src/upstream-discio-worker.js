@@ -23,7 +23,8 @@ import {
 } from "./frame-reuse-telemetry.js";
 import {
   createWgpuReplayClassifier,
-  selectAtomicReplayLimit
+  selectAtomicReplayLimit,
+  summarizeWgpuReplayRange
 } from "./wgpu-replay-diagnostics.js";
 import {
   FRESH_FRAME_DELIVERY,
@@ -114,12 +115,21 @@ let wgpuReplayClassifier = null;
 let wgpuReplayClassifierGeneration = 0;
 let wgpuPresentCompletionProbeStarted = false;
 let wgpuClassifierEfbReadbackPending = false;
+let wgpuClassifierBackbufferReadbackPending = false;
+let wgpuClassifierXfbReadbackPending = false;
+let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
 let inputLatencyDiagnostics = false;
 let inputVisibleLatencyTracker = createInputVisibleLatencyTracker();
+let wgpuDetachedPresenter = false;
+let wgpuDetachedBitmapPending = false;
+let wgpuLoadEpochFence = false;
+let wgpuLoadFenceActive = false;
+let wgpuReplayPumpEnabled = false;
+let wgpuReplayPumpTimer = null;
 let frameProfileStats = "-";
 let profileWindow = createProfileWindow();
 let lastStructuredProfileWindow = emptyStageWindow();
@@ -197,6 +207,7 @@ let lastInputStateGeneration = 0;
 // the bitmap to main thread, which drawImages it onto the visible canvas.
 let detachedOglCanvas = null;
 let detachedOglFrameCount = 0;
+let detachedWgpuCanvas = null;
 // SAB pixel transport state (Day-5). When enabled, the worker copies
 // s_framebuffer bytes into oglPixelSabView per OGL swap and increments
 // oglMetaSabView[0] atomically. Main thread reads the counter on RAF and
@@ -476,6 +487,10 @@ async function handleMessage(type, payload) {
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
         wgpuReplayDiagnostics: payload.wgpuReplayDiagnostics,
+        wgpuDeepReplayDiagnostics: payload.wgpuDeepReplayDiagnostics,
+        wgpuDetachedPresenter: payload.wgpuDetachedPresenter,
+        wgpuLoadEpochFence: payload.wgpuLoadEpochFence,
+        wgpuReplayPump: payload.wgpuReplayPump,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         oglSabEnabled: oglPixelSabView !== null
       });
@@ -567,11 +582,27 @@ async function handleMessage(type, payload) {
           return { loaded: false, error: `FS.writeFile: ${e?.message || e}` };
         }
       }
+      const loadRingBoundary = (wgpuReplayClassifier || wgpuLoadEpochFence)
+        ? summarizeCurrentWgpuRing()
+        : null;
       if (wgpuReplayClassifier) {
         wgpuReplayClassifierGeneration += 1;
-        wgpuReplayClassifier = createWgpuReplayClassifier({ scope: "load-state-file" });
+        wgpuReplayClassifier = createWgpuReplayClassifier({
+          scope: "load-state-file",
+          generation: wgpuReplayClassifierGeneration
+        });
         wgpuPresentCompletionProbeStarted = false;
         wgpuClassifierEfbReadbackPending = false;
+        wgpuClassifierBackbufferReadbackPending = false;
+        wgpuClassifierXfbReadbackPending = false;
+        wgpuLastBackbufferSourceTextureId = 0;
+        wgpuReplayClassifier.recordLoadBoundary(loadRingBoundary);
+        wgpuLoadFenceActive = wgpuLoadEpochFence &&
+          loadRingBoundary.summary.openPassDepth > 0;
+        wgpuReplayClassifier.recordLoadFence({ armed: wgpuLoadFenceActive });
+      } else {
+        wgpuLoadFenceActive = wgpuLoadEpochFence &&
+          loadRingBoundary?.summary?.openPassDepth > 0;
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       const rc = api.loadStateFile(path) | 0;
@@ -704,6 +735,9 @@ async function loadCore({
   reportedCoreSelection = null,
   wgpuReplayDiagnostics = false,
   wgpuDeepReplayDiagnostics: requestedWgpuDeepReplayDiagnostics = false,
+  wgpuDetachedPresenter: requestedWgpuDetachedPresenter = false,
+  wgpuLoadEpochFence: requestedWgpuLoadEpochFence = false,
+  wgpuReplayPump: requestedWgpuReplayPump = false,
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   oglSabEnabled = false
 } = {}) {
@@ -716,14 +750,27 @@ async function loadCore({
     nextCoreUrl,
     expectedCoreSha256
   );
-  wgpuReplayClassifier = wgpuReplayDiagnostics
-    ? createWgpuReplayClassifier({ scope: "core-load" })
-    : null;
   wgpuReplayClassifierGeneration += 1;
+  wgpuReplayClassifier = wgpuReplayDiagnostics
+    ? createWgpuReplayClassifier({
+        scope: "core-load",
+        generation: wgpuReplayClassifierGeneration
+      })
+    : null;
   wgpuPresentCompletionProbeStarted = false;
   wgpuClassifierEfbReadbackPending = false;
+  wgpuClassifierBackbufferReadbackPending = false;
+  wgpuClassifierXfbReadbackPending = false;
+  wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
   wgpuDeepReplayDiagnostics = Boolean(requestedWgpuDeepReplayDiagnostics);
+  wgpuDetachedPresenter = Boolean(requestedWgpuDetachedPresenter);
+  wgpuDetachedBitmapPending = false;
+  wgpuLoadEpochFence = Boolean(requestedWgpuLoadEpochFence);
+  wgpuLoadFenceActive = false;
+  wgpuReplayPumpEnabled = Boolean(requestedWgpuReplayPump);
+  webGpuCausalStats.replayWindowRecords = wgpuReplayPumpEnabled
+    ? WGPU_REPLAY_WINDOW_RECORDS : 0;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
@@ -744,6 +791,10 @@ async function loadCore({
   // environment when transferControlToOffscreen-based paths fail.
   const detachedOgl =
     videoBackend === "OGL" && !readbackOgl && !canvas && typeof OffscreenCanvas === "function";
+  const detachedWgpu =
+    videoBackend === "WebGPU-Real" && wgpuDetachedPresenter && !canvas &&
+    typeof OffscreenCanvas === "function";
+  detachedWgpuCanvas = detachedWgpu ? new OffscreenCanvas(640, 480) : null;
   let moduleCanvas;
   if (videoBackend === "OGL") {
     if (readbackOgl && typeof OffscreenCanvas === "function") {
@@ -765,6 +816,8 @@ async function loadCore({
     postStatus(`Worker received canvas: ${canvas.constructor?.name || typeof canvas}`);
   } else if (detachedOgl) {
     postStatus("Worker DETACHED OGL: standalone OffscreenCanvas, frames posted via ImageBitmap");
+  } else if (detachedWgpu) {
+    postStatus("Worker DETACHED WGPU: standalone OffscreenCanvas, frames posted via ImageBitmap");
   } else {
     postStatus(`Worker received NO canvas (videoBackend=${videoBackend}, oglProxy=${normalizedOglProxyMode})`);
   }
@@ -800,11 +853,16 @@ async function loadCore({
     rendererDiagnostics.activePresenterBackend = renderBackend;
     workerOwnsCanvas = true;
     postStatus("Worker SAB OGL: standalone OffscreenCanvas, pixels via SharedArrayBuffer");
+  } else if (detachedWgpu) {
+    workerOwnsCanvas = true;
   }
 
   if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
     preferredPresenterBackend = normalizePresenterBackend(presenterBackend);
     await setupSoftwarePresenter(canvas, preferredPresenterBackend);
+  } else if (detachedWgpuCanvas) {
+    preferredPresenterBackend = "webgpu";
+    await setupSoftwarePresenter(detachedWgpuCanvas, preferredPresenterBackend);
   }
 
   // §28cf boot-phase timing instrumentation. Attributes the ~1s page-load
@@ -2974,7 +3032,13 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
   // visible canvas unpainted (the green). Idempotent re-configure
   // elsewhere is fine.
   try {
-    context.configure({ device, format, alphaMode: "opaque" });
+    context.configure({
+      device,
+      format,
+      alphaMode: "opaque",
+      usage: textureUsage.RENDER_ATTACHMENT |
+        (wgpuReplayClassifier ? textureUsage.COPY_SRC : 0)
+    });
   } catch (e) {
     recordRendererError("validation", `context.configure: ${e?.message || e}`);
     postStatus(`WebGPU context.configure failed: ${e?.message || e}`);
@@ -3175,7 +3239,8 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
       alphaMode: "opaque",
       device: gpu.device,
       format: gpu.format,
-      usage: textureUsage.RENDER_ATTACHMENT
+      usage: textureUsage.RENDER_ATTACHMENT |
+        (wgpuReplayClassifier ? textureUsage.COPY_SRC : 0)
     });
     gpu.canvasWidth = width;
     gpu.canvasHeight = height;
@@ -4091,6 +4156,7 @@ const WGPU_CMD_OP_END_PASS = 21;
 const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
+const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
 // Day-28/29 resource object table: producer-assigned id → real GPU
 // object built here on renderGpu.device. Phase A widens this to the
@@ -4130,6 +4196,7 @@ function handleWebGpuCmdRing(event) {
   webGpuCmdRing = {
     headerI32: new Int32Array(heap.buffer, data.headerPtr, 4),
     headerU32: new Uint32Array(heap.buffer, data.headerPtr, 4),
+    consumerRead: new Uint32Array(heap.buffer, data.headerPtr, 4)[1] >>> 0,
     slotsBase: data.slotsPtr,
     capacity: data.capacity >>> 0,
     // Phase A: per-frame upload arena base (absolute wasm-heap
@@ -4139,10 +4206,98 @@ function handleWebGpuCmdRing(event) {
     uploadBase: (data.uploadPtr >>> 0) || 0,
     uploadSize: (data.uploadSize >>> 0) || 0
   };
+  publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
   postStatus(
     `webgpu-cmd-ring: registered (cap=${data.capacity} upload=${
       (webGpuCmdRing.uploadSize / 1048576) | 0}MB) — GPU command bridge live`
   );
+  startWgpuReplayPump();
+}
+
+function currentWgpuReadIndex(ring) {
+  return ring?.consumerRead == null
+    ? Atomics.load(ring.headerI32, 1) >>> 0
+    : ring.consumerRead >>> 0;
+}
+
+function currentWgpuUploadReadIndex(ring) {
+  return ring?.headerI32 ? Atomics.load(ring.headerI32, 3) >>> 0 : 0;
+}
+
+function publishWgpuReadIndex(ring, readIndex) {
+  const normalized = readIndex >>> 0;
+  ring.consumerRead = normalized;
+  const reserve = wgpuReplayPumpEnabled
+    ? Math.max(0, ring.capacity - WGPU_REPLAY_WINDOW_RECORDS)
+    : 0;
+  Atomics.store(ring.headerI32, 1, (normalized - reserve) | 0);
+}
+
+function startWgpuReplayPump() {
+  if (!wgpuReplayPumpEnabled || wgpuReplayPumpTimer !== null) return;
+  const pump = () => {
+    wgpuReplayPumpTimer = null;
+    if (!wgpuReplayPumpEnabled || !webGpuCmdRing) return;
+    const write = Atomics.load(webGpuCmdRing.headerI32, 0) >>> 0;
+    const read = currentWgpuReadIndex(webGpuCmdRing);
+    if (write !== read) {
+      webGpuCausalStats.replayPumpDrainCount += 1;
+      drainWebGpuCmdRing();
+    } else {
+      webGpuCausalStats.replayPumpEmptyPollCount += 1;
+    }
+    wgpuReplayPumpTimer = setTimeout(pump, write === read ? 4 : 0);
+  };
+  wgpuReplayPumpTimer = setTimeout(pump, 0);
+}
+
+function summarizeCurrentWgpuRing({
+  readIndex: requestedReadIndex = null,
+  writeIndex: requestedWriteIndex = null,
+  maxRecords = 4096
+} = {}) {
+  const ring = webGpuCmdRing;
+  const heap = moduleInstance?.HEAPU8;
+  if (!ring || !heap) {
+    return { readIndex: 0, writeIndex: 0, uploadReadIndex: 0, summary: {} };
+  }
+  const writeIndex = requestedWriteIndex == null
+    ? Atomics.load(ring.headerI32, 0) >>> 0
+    : requestedWriteIndex >>> 0;
+  const readIndex = requestedReadIndex == null
+    ? currentWgpuReadIndex(ring)
+    : requestedReadIndex >>> 0;
+  const u32 = new Uint32Array(heap.buffer);
+  const summary = summarizeWgpuReplayRange({
+    read: readIndex,
+    write: writeIndex,
+    recordAt: (index) => {
+      const word = (ring.slotsBase + (index % ring.capacity) * 32) >>> 2;
+      const op = u32[word];
+      return {
+        op,
+        uploadPointer: op === WGPU_CMD_OP_UPLOAD_BUFFER
+          ? u32[word + 3]
+          : op === WGPU_CMD_OP_UPLOAD_TEXTURE
+            ? u32[word + 2]
+            : 0,
+        uploadBytes: op === WGPU_CMD_OP_UPLOAD_BUFFER
+          ? u32[word + 4]
+          : op === WGPU_CMD_OP_UPLOAD_TEXTURE
+            ? u32[word + 3] * u32[word + 5]
+            : 0
+      };
+    },
+    maxRecords,
+    uploadArenaBase: ring.uploadBase,
+    uploadArenaSize: ring.uploadSize
+  });
+  return {
+    readIndex,
+    writeIndex,
+    uploadReadIndex: currentWgpuUploadReadIndex(ring),
+    summary
+  };
 }
 
 // Drain + replay pending commands on renderGpu.device. Called every
@@ -4619,21 +4774,88 @@ const webGpuCausalStats = {
   drainMaxMs: 0,
   backlogLast: 0,
   backlogHighWater: 0,
+  replayPumpDrainCount: 0,
+  replayPumpEmptyPollCount: 0,
+  replayWindowRecords: 0,
+  uploadReadLast: 0,
+  detachedBitmapSentCount: 0,
+  detachedBitmapCoalescedCount: 0,
+  detachedBitmapErrorCount: 0,
   deferredBeginPassCount: 0,
   errorCount: 0
 };
+
+function scheduleDetachedWgpuBitmap(queue) {
+  if (!wgpuDetachedPresenter || !detachedWgpuCanvas ||
+      typeof detachedWgpuCanvas.transferToImageBitmap !== "function") {
+    return;
+  }
+  if (wgpuDetachedBitmapPending) {
+    webGpuCausalStats.detachedBitmapCoalescedCount += 1;
+    return;
+  }
+  wgpuDetachedBitmapPending = true;
+  queue.onSubmittedWorkDone().then(() => {
+    if (!wgpuDetachedPresenter || !detachedWgpuCanvas) return;
+    const bitmap = detachedWgpuCanvas.transferToImageBitmap();
+    self.postMessage({
+      type: "detachedWgpuFrame",
+      bitmap,
+      width: detachedWgpuCanvas.width,
+      height: detachedWgpuCanvas.height
+    }, [bitmap]);
+    webGpuCausalStats.detachedBitmapSentCount += 1;
+    if (webGpuCausalStats.detachedBitmapSentCount === 1) {
+      postStatus(
+        `wgpu-detached: first completed bitmap sent to main ` +
+        `(${detachedWgpuCanvas.width}x${detachedWgpuCanvas.height})`
+      );
+    }
+  }).catch((error) => {
+    webGpuCausalStats.detachedBitmapErrorCount += 1;
+    recordRendererError("detached-wgpu-frame", error?.message || error);
+  }).finally(() => {
+    wgpuDetachedBitmapPending = false;
+  });
+}
 
 function drainWebGpuCmdRing() {
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
   const drainStartedAt = causalMetricsEnabled ? performance.now() : 0;
   const write = Atomics.load(ring.headerI32, 0) >>> 0;
-  let read = Atomics.load(ring.headerI32, 1) >>> 0;
+  let read = currentWgpuReadIndex(ring);
   const initialRead = read;
+  const initialPresentCount = webGpuExecStats.present;
   const backlog = (write - read) >>> 0;
+  webGpuCausalStats.uploadReadLast = currentWgpuUploadReadIndex(ring);
   webGpuCausalStats.drainCount += 1;
   webGpuCausalStats.backlogLast = backlog;
   webGpuCausalStats.backlogHighWater = Math.max(webGpuCausalStats.backlogHighWater, backlog);
+  if (wgpuLoadFenceActive && write !== read) {
+    const fenceU32 = new Uint32Array(moduleInstance.HEAPU8.buffer);
+    let discardTo = read;
+    let completedAtRecordIndex = null;
+    while (discardTo !== write) {
+      const word = (ring.slotsBase + (discardTo % ring.capacity) * 32) >>> 2;
+      const op = fenceU32[word];
+      discardTo = (discardTo + 1) >>> 0;
+      if (op === WGPU_CMD_OP_END_PASS) {
+        completedAtRecordIndex = (discardTo - 1) >>> 0;
+        wgpuLoadFenceActive = false;
+        break;
+      }
+    }
+    const discardedRecords = (discardTo - read) >>> 0;
+    if (discardedRecords > 0) {
+      publishWgpuReadIndex(ring, discardTo);
+      wgpuReplayClassifier?.recordLoadFence({
+        discardedRecords,
+        completedAtRecordIndex
+      });
+      read = discardTo;
+    }
+  }
   // §27 post-load watchdog: log BEFORE the empty-ring early return so
   // we see whether `write` keeps advancing (producer alive) after
   // State::Load, or freezes (producer/video-pthread stalled).
@@ -4659,7 +4881,15 @@ function drainWebGpuCmdRing() {
   }
   if (write === read) {
     webGpuCausalStats.emptyDrainCount += 1;
-    finishWebGpuDrain(drainStartedAt, 0);
+    const processed = (read - initialRead) >>> 0;
+    wgpuReplayClassifier?.recordDrainEpoch({
+      readIndex: initialRead,
+      writeIndex: write,
+      replayLimit: read,
+      processed,
+      presentCount: 0
+    });
+    finishWebGpuDrain(drainStartedAt, processed);
     return;
   }
 
@@ -4674,6 +4904,13 @@ function drainWebGpuCmdRing() {
   const heap = moduleInstance.HEAPU8;
   const f32 = new Float32Array(heap.buffer);
   const u32 = new Uint32Array(heap.buffer);
+  const epochSummary = wgpuReplayClassifier?.needsBacklogSummary(backlog)
+    ? summarizeCurrentWgpuRing({
+        readIndex: read,
+        writeIndex: write,
+        maxRecords: ring.capacity
+      }).summary
+    : null;
   const replayLimit = wgpuAtomicPassReplay
     ? selectAtomicReplayLimit({
         read,
@@ -4697,6 +4934,9 @@ function drainWebGpuCmdRing() {
   let passDepthId = 0;
   let passLoadOp = "load";
   let passHasPipe = false;
+  let currentBackbufferSourceTextureId = 0;
+  let lastBackbufferSourceTextureId = wgpuLastBackbufferSourceTextureId;
+  let lastBackbufferTexture = null;
   // §28j: per-pass bind-group validity. The fixed pipeline layout
   // declares 3 groups (l0/l1/l2); WebGPU requires ALL declared groups
   // to hold a valid bind group at draw time. If replayCreateBindGroup
@@ -4893,6 +5133,10 @@ function drainWebGpuCmdRing() {
   };
   const endPass = (reason = "implicit", recordIndex = read) => {
     if (pass) {
+      if (passFbId === 0) {
+        lastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
+        wgpuLastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
+      }
       try { pass.end(); } catch (e) {}
       wgpuReplayClassifier?.recordPassEnd({ reason, recordIndex });
       pass = null;
@@ -5222,6 +5466,8 @@ function drainWebGpuCmdRing() {
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
             const cur = renderGpu.context.getCurrentTexture();
+            lastBackbufferTexture = cur;
+            currentBackbufferSourceTextureId = 0;
             colorView = cur.createView();
             passW = cur.width;
             passH = cur.height;
@@ -5375,6 +5621,9 @@ function drainWebGpuCmdRing() {
             drawState.dynamicOffsetCounts[bgSlot] = u32[recWord + 3];
           }
           if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
+          if (passFbId === 0 && bgSlot === 1 && self._wgBgTex) {
+            currentBackbufferSourceTextureId = self._wgBgTex[bgId] >>> 0;
+          }
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
               self._wgBgTex[bgId] != null &&
               self._wgCopyTargets && self._wgCopyTargets.has(passFbId)) {
@@ -6016,29 +6265,44 @@ function drainWebGpuCmdRing() {
             const _wcTick = Math.floor((_wcNow - self._wgCpyWcT0) / 6000);
             self._wgCpyWcTick = (self._wgCpyWcTick == null)
               ? -1 : self._wgCpyWcTick;
-            const _preOk = tick >= 0 && tick !== self._wgCpyTick
-              && tick < 9;
-            const _wcOk = _wcTick !== self._wgCpyWcTick && _wcTick < 20;
+            const _preOk = wgpuDeepReplayDiagnostics &&
+              tick >= 0 && tick !== self._wgCpyTick && tick < 9;
+            const _wcOk = wgpuDeepReplayDiagnostics &&
+              _wcTick !== self._wgCpyWcTick && _wcTick < 20;
             const _classifyOk = Boolean(
-              wgpuReplayClassifier?.needsPostDrawEfbReadback()
+              wgpuReplayClassifier?.needsPostDrawEfbReadback(P)
             ) && !wgpuClassifierEfbReadbackPending;
-            if ((self._wgCopyTargets || _classifyOk) && (_preOk || _wcOk || _classifyOk)) {
+            const _backbufferOk = Boolean(
+              wgpuReplayClassifier?.needsPresentationReadback("backbuffer", P)
+            ) && !wgpuClassifierBackbufferReadbackPending;
+            const _sourceOk = lastBackbufferSourceTextureId > 0 && Boolean(
+              wgpuReplayClassifier?.needsPresentationReadback("xfb", P)
+            ) && !wgpuClassifierXfbReadbackPending;
+            if (_preOk || _wcOk || _classifyOk || _backbufferOk || _sourceOk) {
             if (_preOk) self._wgCpyTick = tick;
             if (_wcOk) self._wgCpyWcTick = _wcTick;
             const pending = [];
-            const ids = _classifyOk && !_preOk && !_wcOk
-              ? new Set()
-              : new Set(self._wgCopyTargets || []);
-            if (self._wgEfbColorId) ids.add(self._wgEfbColorId);
-            if (self._wgXfbId) ids.add(self._wgXfbId);
+            const ids = (_preOk || _wcOk)
+              ? new Set(self._wgCopyTargets || [])
+              : new Set();
+            if ((_classifyOk || _preOk || _wcOk) && self._wgEfbColorId) {
+              ids.add(self._wgEfbColorId);
+            }
+            if (_sourceOk) ids.add(lastBackbufferSourceTextureId);
+            if ((_preOk || _wcOk) && self._wgXfbId) ids.add(self._wgXfbId);
             // §28: also read back the backdrop's sampled b1/b2 textures.
-            if (self._wgCpyExtra) for (const e of self._wgCpyExtra) ids.add(e);
+            if ((_preOk || _wcOk) && self._wgCpyExtra) {
+              for (const e of self._wgCpyExtra) ids.add(e);
+            }
             for (const cid of ids) {
               const ct = webGpuObjects.textures.get(cid);
               if (!ct || ct.format.startsWith("depth")) continue;
               try {
                 ensureEnc();
-                const w = ct.tex.width, h = ct.tex.height;
+                const w = cid === lastBackbufferSourceTextureId
+                  ? Math.min(ct.tex.width, 640) : ct.tex.width;
+                const h = cid === lastBackbufferSourceTextureId
+                  ? Math.min(ct.tex.height, 480) : ct.tex.height;
                 const bpr = Math.ceil(w * 4 / 256) * 256;
                 const rb = dev.createBuffer({ size: bpr * h,
                   usage: 0x1 | 0x8 });           // MAP_READ | COPY_DST
@@ -6046,8 +6310,11 @@ function drainWebGpuCmdRing() {
                   { texture: ct.tex },
                   { buffer: rb, bytesPerRow: bpr, rowsPerImage: h },
                   { width: w, height: h, depthOrArrayLayers: 1 });
-                pending.push({ rb, bpr, w, h, framebufferId: cid,
+                const kind = cid === self._wgEfbColorId ? "efb" :
+                  cid === lastBackbufferSourceTextureId ? "xfb" : "copy";
+                pending.push({ rb, bpr, w, h, framebufferId: cid, kind,
                   isEfb: cid === self._wgEfbColorId,
+                  sourceTextureId: cid,
                   presentSequence: P,
                   classifierGeneration: wgpuReplayClassifierGeneration,
                   efbDrawCountAtEncode: cid === self._wgEfbColorId
@@ -6062,29 +6329,92 @@ function drainWebGpuCmdRing() {
                   `${e?.message || e}`);
               }
             }
+            if (_backbufferOk && lastBackbufferTexture) {
+              try {
+                ensureEnc();
+                const w = lastBackbufferTexture.width;
+                const h = lastBackbufferTexture.height;
+                const bpr = Math.ceil(w * 4 / 256) * 256;
+                const rb = dev.createBuffer({ size: bpr * h,
+                  usage: 0x1 | 0x8 });
+                enc.copyTextureToBuffer(
+                  { texture: lastBackbufferTexture },
+                  { buffer: rb, bytesPerRow: bpr, rowsPerImage: h },
+                  { width: w, height: h, depthOrArrayLayers: 1 });
+                pending.push({
+                  rb, bpr, w, h, framebufferId: 0, kind: "backbuffer",
+                  isEfb: false,
+                  sourceTextureId: lastBackbufferSourceTextureId,
+                  presentSequence: P,
+                  classifierGeneration: wgpuReplayClassifierGeneration,
+                  efbDrawCountAtEncode: 0,
+                  tag: `p=${P} backbuffer(src=tex#${lastBackbufferSourceTextureId || 0}) ${w}x${h}`
+                });
+              } catch (e) {
+                console.log(`[webgpu-DIAG-cpy] backbuffer enc threw ${e?.message || e}`);
+              }
+            }
             if (pending.length) {
               if (_classifyOk && pending.some((entry) => entry.isEfb)) {
                 wgpuClassifierEfbReadbackPending = true;
+              }
+              if (pending.some((entry) => entry.kind === "backbuffer")) {
+                wgpuClassifierBackbufferReadbackPending = true;
+              }
+              if (pending.some((entry) => entry.kind === "xfb")) {
+                wgpuClassifierXfbReadbackPending = true;
               }
               submitEnc("present");
               for (const p of pending) {
                 p.rb.mapAsync(0x1).then(() => {
                   const a = new Uint8Array(p.rb.getMappedRange());
-                  const N = a.length;
-                  let nz = 0, mx = 0;
-                  for (let i = 0; i < N; i++) {
-                    if (a[i]) { nz++; if (a[i] > mx) mx = a[i]; }
+                  const N = p.w * p.h * 4;
+                  let nz = 0, nzColor = 0, nzAlpha = 0, mx = 0;
+                  for (let y = 0; y < p.h; y += 1) {
+                    const row = y * p.bpr;
+                    for (let x = 0; x < p.w; x += 1) {
+                      const pixel = row + x * 4;
+                      for (let channel = 0; channel < 4; channel += 1) {
+                        const value = a[pixel + channel];
+                        if (!value) continue;
+                        nz += 1;
+                        if (channel < 3) nzColor += 1;
+                        else nzAlpha += 1;
+                        if (value > mx) mx = value;
+                      }
+                    }
                   }
                   if (p.isEfb) {
                     if (p.classifierGeneration === wgpuReplayClassifierGeneration) {
                       wgpuReplayClassifier?.recordEfbReadback({
                         framebufferId: p.framebufferId,
                         nonzeroBytes: nz,
+                        nonzeroColorBytes: nzColor,
                         maxByte: mx,
                         drawCountAtEncode: p.efbDrawCountAtEncode,
                         presentSequence: p.presentSequence
                       });
                       wgpuClassifierEfbReadbackPending = false;
+                    }
+                  }
+                  if (p.classifierGeneration === wgpuReplayClassifierGeneration &&
+                      p.kind !== "copy") {
+                    wgpuReplayClassifier?.recordPresentationReadback({
+                      kind: p.kind,
+                      framebufferId: p.framebufferId,
+                      sourceTextureId: p.sourceTextureId,
+                      nonzeroBytes: nz,
+                      nonzeroColorBytes: nzColor,
+                      nonzeroAlphaBytes: nzAlpha,
+                      sampledBytes: N,
+                      maxByte: mx,
+                      presentSequence: p.presentSequence
+                    });
+                    if (p.kind === "backbuffer") {
+                      wgpuClassifierBackbufferReadbackPending = false;
+                    }
+                    if (p.kind === "xfb") {
+                      wgpuClassifierXfbReadbackPending = false;
                     }
                   }
                   const cy = p.h >> 1, cx = p.w >> 1;
@@ -6096,7 +6426,7 @@ function drainWebGpuCmdRing() {
                   const sx = Math.min(200, p.w - 1);
                   const o3 = sy * p.bpr + sx * 4;
                   console.log(`[webgpu-DIAG-cpy] ${p.tag} ` +
-                    `nz=${nz}/${N} max=${mx} ` +
+                    `nz=${nz}/${N} rgb=${nzColor} a=${nzAlpha} max=${mx} ` +
                     `px0=${a[0]},${a[1]},${a[2]},${a[3]} ` +
                     `ctr=${a[o]},${a[o+1]},${a[o+2]},${a[o+3]} ` +
                     `q=${a[o2]},${a[o2+1]},${a[o2+2]},${a[o2+3]} ` +
@@ -6106,6 +6436,14 @@ function drainWebGpuCmdRing() {
                   if (p.isEfb && p.classifierGeneration === wgpuReplayClassifierGeneration) {
                     wgpuClassifierEfbReadbackPending = false;
                   }
+                  if (p.kind === "backbuffer" &&
+                      p.classifierGeneration === wgpuReplayClassifierGeneration) {
+                    wgpuClassifierBackbufferReadbackPending = false;
+                  }
+                  if (p.kind === "xfb" &&
+                      p.classifierGeneration === wgpuReplayClassifierGeneration) {
+                    wgpuClassifierXfbReadbackPending = false;
+                  }
                   console.log(`[webgpu-DIAG-cpy] map ${p.tag} err ${e?.message || e}`);
                 });
               }
@@ -6113,6 +6451,7 @@ function drainWebGpuCmdRing() {
             }
           }
           submitEnc("present");
+          scheduleDetachedWgpuBitmap(q);
           webGpuExecStats.present++;
           if (webGpuExecStats.present - webGpuExecStats.lastLog >= 120) {
             webGpuExecStats.lastLog = webGpuExecStats.present;
@@ -6169,8 +6508,18 @@ function drainWebGpuCmdRing() {
   }
   endPass("drain-boundary", read);
   submitEnc("drain-boundary");
-  Atomics.store(ring.headerI32, 1, read | 0);
-  finishWebGpuDrain(drainStartedAt, (read - initialRead) >>> 0);
+  publishWgpuReadIndex(ring, read);
+  const processed = (read - initialRead) >>> 0;
+  wgpuReplayClassifier?.recordDrainEpoch({
+    readIndex: initialRead,
+    writeIndex: write,
+    replayLimit,
+    uploadReadIndex: currentWgpuUploadReadIndex(ring),
+    processed,
+    presentCount: webGpuExecStats.present - initialPresentCount,
+    summary: epochSummary
+  });
+  finishWebGpuDrain(drainStartedAt, processed);
   // Once the cmd-ring executor has presented a real frame, IT owns the
   // canvas (renderGpu.context). The legacy runPresentationLoop blit of
   // the CPU framebuffer (presentFrame → drawFrameBytesToWebGpu) must

@@ -11,6 +11,9 @@ import {
 import {
   requestedWgpuAtomicPassReplay,
   requestedWgpuDeepReplayDiagnostics,
+  requestedWgpuDetachedPresenter,
+  requestedWgpuLoadEpochFence,
+  requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -68,6 +71,9 @@ export class EmulatorHost {
     this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.wgpuReplayDiagnostics = requestedWgpuReplayDiagnostics(window.location.search);
     this.wgpuDeepReplayDiagnostics = requestedWgpuDeepReplayDiagnostics(window.location.search);
+    this.wgpuDetachedPresenter = requestedWgpuDetachedPresenter(window.location.search);
+    this.wgpuLoadEpochFence = requestedWgpuLoadEpochFence(window.location.search);
+    this.wgpuReplayPump = requestedWgpuReplayPump(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
@@ -87,15 +93,20 @@ export class EmulatorHost {
       typeof SharedArrayBuffer === "function";
     this.usesMainThreadOgl =
       this.coreKind === "upstream" && this.videoBackend === "OGL" && this.oglProxyMode === "main";
+    this.usesDetachedWgpu =
+      this.coreKind === "upstream" && this.videoBackend === "WebGPU-Real" &&
+      this.wgpuDetachedPresenter;
     this.usesAdapterCanvas =
       this.coreKind === "upstream" &&
       !this.usesMainThreadOgl &&
       !this.oglSabEnabled &&
+      !this.usesDetachedWgpu &&
       Boolean(canvas.transferControlToOffscreen);
     // canvasOwnedByAdapter gates the host's stats-poll cadence (250 ms). In
     // SAB mode the visible canvas stays on main, but the *frame production*
     // still happens in the worker, so we still want the poll active.
-    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl || this.oglSabEnabled;
+    this.canvasOwnedByAdapter = this.usesAdapterCanvas || this.usesMainThreadOgl ||
+      this.oglSabEnabled || this.usesDetachedWgpu;
     // SAB mode keeps the visible canvas on the main thread so we can paint
     // it directly via putImageData. The host owns a 2D context here.
     this.context =
@@ -236,11 +247,13 @@ export class EmulatorHost {
             // unconditionally, which broke software mode because the default
             // proxy mode is "worker" even when the video backend is software.)
             transferCanvas:
-              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") ||
+                this.oglSabEnabled || this.usesDetachedWgpu
                 ? null
                 : transferCanvasToOffscreen,
             visibleCanvas:
-              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") || this.oglSabEnabled
+              (this.videoBackend === "OGL" && this.oglProxyMode === "worker") ||
+                this.oglSabEnabled || this.usesDetachedWgpu
                 ? canvas
                 : null,
             oglPixelSab: this.oglPixelSab,
@@ -272,6 +285,9 @@ export class EmulatorHost {
             legacyOneWayAck: this.legacyOneWayAck,
             wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
             wgpuDeepReplayDiagnostics: this.wgpuDeepReplayDiagnostics,
+            wgpuDetachedPresenter: this.wgpuDetachedPresenter,
+            wgpuLoadEpochFence: this.wgpuLoadEpochFence,
+            wgpuReplayPump: this.wgpuReplayPump,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics

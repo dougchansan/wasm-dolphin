@@ -59,6 +59,9 @@ export class UpstreamWorkerAdapter {
     legacyOneWayAck = false,
     wgpuReplayDiagnostics = false,
     wgpuDeepReplayDiagnostics = false,
+    wgpuDetachedPresenter = false,
+    wgpuLoadEpochFence = false,
+    wgpuReplayPump = false,
     wgpuAtomicPassReplay = true,
     gpuCompletionDiagnostics = false,
     inputLatencyDiagnostics = false,
@@ -82,6 +85,10 @@ export class UpstreamWorkerAdapter {
     this.visibleCanvas = visibleCanvas;
     this.detachedOglContext = null;
     this.detachedOglFramesDrawn = 0;
+    this.detachedGpuFramesReceived = 0;
+    this.detachedGpuFramesDropped = 0;
+    this.detachedGpuDrawLastMs = 0;
+    this.detachedGpuDrawMaxMs = 0;
     this.videoBackend = videoBackend;
     this.cpuThread = cpuThread;
     this.cpuCore = cpuCore;
@@ -107,6 +114,9 @@ export class UpstreamWorkerAdapter {
     this.legacyOneWayAck = Boolean(legacyOneWayAck);
     this.wgpuReplayDiagnostics = Boolean(wgpuReplayDiagnostics);
     this.wgpuDeepReplayDiagnostics = Boolean(wgpuDeepReplayDiagnostics);
+    this.wgpuDetachedPresenter = Boolean(wgpuDetachedPresenter);
+    this.wgpuLoadEpochFence = Boolean(wgpuLoadEpochFence);
+    this.wgpuReplayPump = Boolean(wgpuReplayPump);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
@@ -255,6 +265,9 @@ export class UpstreamWorkerAdapter {
       coreSelection: this.coreSelectionTelemetry(window.location.href),
       wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
       wgpuDeepReplayDiagnostics: this.wgpuDeepReplayDiagnostics,
+      wgpuDetachedPresenter: this.wgpuDetachedPresenter,
+      wgpuLoadEpochFence: this.wgpuLoadEpochFence,
+      wgpuReplayPump: this.wgpuReplayPump,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
@@ -638,7 +651,9 @@ export class UpstreamWorkerAdapter {
 
   drawDetachedOglBitmap(bitmap, width, height) {
     if (!bitmap) return;
+    this.detachedGpuFramesReceived += 1;
     if (!this.visibleCanvas) {
+      this.detachedGpuFramesDropped += 1;
       try { bitmap.close(); } catch {}
       return;
     }
@@ -646,25 +661,40 @@ export class UpstreamWorkerAdapter {
       try {
         this.detachedOglContext = this.visibleCanvas.getContext("2d", { alpha: false });
       } catch (err) {
-        this.onStatus(`Detached OGL: cannot get 2D context on visible canvas: ${err.message}`);
+        this.onStatus(`Detached GPU presenter: cannot get 2D context: ${err.message}`);
+        this.detachedGpuFramesDropped += 1;
         try { bitmap.close(); } catch {}
         return;
       }
       if (!this.detachedOglContext) {
-        this.onStatus("Detached OGL: visible canvas has no 2D context (may already be transferred)");
+        this.onStatus("Detached GPU presenter: visible canvas has no 2D context");
+        this.detachedGpuFramesDropped += 1;
         try { bitmap.close(); } catch {}
         return;
       }
-      this.onStatus(`Detached OGL: 2D presenter live (${this.visibleCanvas.width}x${this.visibleCanvas.height})`);
+      this.onStatus(`Detached GPU presenter live (${this.visibleCanvas.width}x${this.visibleCanvas.height})`);
     }
-    this.detachedOglContext.drawImage(
-      bitmap,
-      0,
-      0,
-      this.visibleCanvas.width,
-      this.visibleCanvas.height
-    );
-    this.detachedOglFramesDrawn += 1;
+    const startedAt = this.collectMetrics ? performance.now() : 0;
+    try {
+      this.detachedOglContext.drawImage(
+        bitmap,
+        0,
+        0,
+        this.visibleCanvas.width,
+        this.visibleCanvas.height
+      );
+      this.detachedOglFramesDrawn += 1;
+      if (startedAt) {
+        this.detachedGpuDrawLastMs = performance.now() - startedAt;
+        this.detachedGpuDrawMaxMs = Math.max(
+          this.detachedGpuDrawMaxMs,
+          this.detachedGpuDrawLastMs
+        );
+      }
+    } catch (error) {
+      this.detachedGpuFramesDropped += 1;
+      this.onStatus(`Detached GPU presenter draw failed: ${error.message}`);
+    }
     try { bitmap.close(); } catch {}
   }
 
@@ -711,7 +741,8 @@ export class UpstreamWorkerAdapter {
       return;
     }
 
-    if (message?.type === "detachedOglFrame" && message.bitmap) {
+    if ((message?.type === "detachedOglFrame" ||
+         message?.type === "detachedWgpuFrame") && message.bitmap) {
       // Worker has rendered a frame to its standalone OffscreenCanvas and
       // handed us the result as an ImageBitmap. Draw onto the visible
       // canvas via 2D context. Lazily create the context on first frame.
@@ -880,7 +911,16 @@ export class UpstreamWorkerAdapter {
     }
     this.causalTelemetry = createCausalTelemetry(deepMerge(this.workerCausalTelemetry, {
       workerTraffic: cloneTrafficStats(this.trafficStats),
-      input: { ...this.inputTelemetry }
+      input: { ...this.inputTelemetry },
+      presentation: {
+        detachedBitmapReceivedCount: this.detachedGpuFramesReceived,
+        detachedBitmapDrawnCount: this.detachedOglFramesDrawn,
+        detachedBitmapDroppedCount: this.detachedGpuFramesDropped
+      },
+      host: {
+        detachedBitmapDrawLastMs: this.detachedGpuDrawLastMs,
+        detachedBitmapDrawMaxMs: this.detachedGpuDrawMaxMs
+      }
     }));
   }
 }

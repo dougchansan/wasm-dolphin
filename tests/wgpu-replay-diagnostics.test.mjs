@@ -6,8 +6,12 @@ import {
   createWgpuReplayClassifier,
   requestedWgpuAtomicPassReplay,
   requestedWgpuDeepReplayDiagnostics,
+  requestedWgpuDetachedPresenter,
+  requestedWgpuLoadEpochFence,
+  requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
-  selectAtomicReplayLimit
+  selectAtomicReplayLimit,
+  summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
 
 test("WGPU replay diagnostics are opt-in", () => {
@@ -108,6 +112,15 @@ test("legacy deep replay probes are default-off with an explicit rollback", () =
   assert.equal(requestedWgpuDeepReplayDiagnostics("?wgpudeepdiag=0"), false);
 });
 
+test("load fencing and the high-frequency replay pump are explicit experiments", () => {
+  assert.equal(requestedWgpuLoadEpochFence(""), false);
+  assert.equal(requestedWgpuLoadEpochFence("?wgpuloadfence=1"), true);
+  assert.equal(requestedWgpuReplayPump(""), false);
+  assert.equal(requestedWgpuReplayPump("?wgpupump=1"), true);
+  assert.equal(requestedWgpuDetachedPresenter(""), false);
+  assert.equal(requestedWgpuDetachedPresenter("?wgpudetached=1"), true);
+});
+
 test("first EFB draw evidence is immutable and remains bounded", () => {
   const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
   assert.equal(classifier.needsFirstEfbDrawState(), true);
@@ -144,7 +157,7 @@ test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => 
   let snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "WAITING_FOR_POST_DRAW_EFB_READBACK");
   assert.equal(snapshot.stages.efbMutation.postDrawReadbackCount, 0);
-  assert.equal(classifier.needsPostDrawEfbReadback(1), true);
+  assert.equal(classifier.needsPostDrawEfbReadback(1, 1), true);
 
   classifier.recordEfbReadback({
     framebufferId: 14,
@@ -209,6 +222,100 @@ test("atomic replay limit remains correct across the uint32 ring-index wrap", ()
   );
 });
 
+test("ring-range summaries expose a pending pass and upload pressure", () => {
+  const records = new Map([
+    [100, { op: 12 }],
+    [101, { op: 6, uploadBytes: 1536, uploadPointer: 0x1200 }],
+    [102, { op: 20 }]
+  ]);
+  const summary = summarizeWgpuReplayRange({
+    read: 100,
+    write: 103,
+    recordAt: (index) => records.get(index),
+    uploadArenaBase: 0x1000,
+    uploadArenaSize: 0x1000
+  });
+
+  assert.equal(summary.recordCount, 3);
+  assert.equal(summary.beginPassCount, 1);
+  assert.equal(summary.endPassCount, 0);
+  assert.equal(summary.openPassDepth, 1);
+  assert.equal(summary.uploadBufferCount, 1);
+  assert.equal(summary.uploadBytes, 1536);
+  assert.equal(summary.uploadPointerWrapCount, 0);
+  assert.equal(summary.uploadReferencesInArena, 1);
+  assert.equal(summary.potentialArenaOverwrite, false);
+  assert.equal(summary.firstOp, 12);
+  assert.equal(summary.lastOp, 20);
+});
+
+test("classifier correlates load epoch, EFB, XFB, and backbuffer mutation", () => {
+  const classifier = createWgpuReplayClassifier({
+    generation: 7,
+    now: incrementingClock()
+  });
+  classifier.recordLoadBoundary({
+    readIndex: 100,
+    writeIndex: 103,
+    uploadReadIndex: 4096,
+    summary: {
+      recordCount: 3,
+      beginPassCount: 1,
+      endPassCount: 0,
+      openPassDepth: 1
+    }
+  });
+  classifier.recordDrainEpoch({
+    readIndex: 100,
+    writeIndex: 110100,
+    replayLimit: 104,
+    processed: 4,
+    presentCount: 1,
+    summary: { uploadBytes: 64 * 1024 * 1024, potentialArenaOverwrite: true }
+  });
+  classifier.recordPresentationReadback({
+    kind: "efb",
+    framebufferId: 14,
+    nonzeroBytes: 4096,
+    nonzeroColorBytes: 3072,
+    nonzeroAlphaBytes: 1024,
+    sampledBytes: 8192,
+    maxByte: 255,
+    presentSequence: 2
+  });
+  classifier.recordPresentationReadback({
+    kind: "xfb",
+    framebufferId: 47,
+    nonzeroBytes: 2048,
+    sampledBytes: 8192,
+    maxByte: 239,
+    presentSequence: 2
+  });
+  classifier.recordPresentationReadback({
+    kind: "backbuffer",
+    framebufferId: 0,
+    sourceTextureId: 47,
+    nonzeroBytes: 1024,
+    sampledBytes: 4096,
+    maxByte: 239,
+    presentSequence: 2
+  });
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.generation, 7);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.pendingRecords, 3);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.uploadReadIndex, 4096);
+  assert.equal(snapshot.stages.ringEpoch.loadBoundary.openPassDepth, 1);
+  assert.equal(snapshot.stages.ringEpoch.backlogHighWater, 110000);
+  assert.equal(snapshot.stages.ringEpoch.highWaterSummary.potentialArenaOverwrite, true);
+  assert.equal(snapshot.stages.ringEpoch.drainSamples.length, 1);
+  assert.equal(snapshot.stages.presentationChain.efb.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.xfb.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.nonzeroReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.nonzeroColorReadbackCount, 1);
+  assert.equal(snapshot.stages.presentationChain.backbuffer.sourceTextureId, 47);
+});
+
 test("host-to-worker plumbing keeps the classifier query-gated and reportable", async () => {
   const [host, adapter, worker] = await Promise.all([
     readFile(new URL("../src/core-host.js", import.meta.url), "utf8"),
@@ -218,18 +325,34 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
 
   assert.match(host, /requestedWgpuReplayDiagnostics\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuDeepReplayDiagnostics\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuDetachedPresenter\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuLoadEpochFence\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuReplayPump\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
+  assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
+  assert.match(adapter, /wgpuLoadEpochFence: this\.wgpuLoadEpochFence/);
+  assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
-  assert.match(worker, /wgpuReplayDiagnostics\s+\? createWgpuReplayClassifier\(\{ scope: "core-load" \}\)/);
+  assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
+  assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
+  assert.match(worker, /wgpuDetachedPresenter: payload\.wgpuDetachedPresenter/);
+  assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
+  assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
+  assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
   assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
-  assert.match(worker, /createWgpuReplayClassifier\(\{ scope: "load-state-file" \}\)/);
+  assert.match(worker, /scope: "load-state-file",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /classifierGeneration === wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuReplayClassifier: wgpuReplayClassifier\?\.snapshot\(\) \?\? null/);
   assert.match(worker, /const replayLimit = wgpuAtomicPassReplay\s+\? selectAtomicReplayLimit/);
+  assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
+  assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);
+  assert.match(worker, /Atomics\.load\(ring\.headerI32, 3\)/);
+  assert.match(worker, /type: "detachedWgpuFrame"/);
+  assert.match(worker, /scheduleDetachedWgpuBitmap\(q\)/);
   assert.match(worker, /while \(read !== replayLimit\)/);
   assert.match(worker, /endPass\("drain-boundary", read\)/);
 });

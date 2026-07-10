@@ -1,5 +1,8 @@
 const DEFAULT_MAX_EVENTS = 32;
 const DEFAULT_MAX_MISSING_IDS_PER_KIND = 4;
+const DEFAULT_MAX_DRAIN_SAMPLES = 32;
+const DEFAULT_MAX_CHAIN_READBACKS = 8;
+const DEFAULT_READBACK_PRESENT_GAP = 120;
 
 export function requestedWgpuReplayDiagnostics(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuclassify") === "1";
@@ -7,6 +10,18 @@ export function requestedWgpuReplayDiagnostics(search = globalThis.location?.sea
 
 export function requestedWgpuDeepReplayDiagnostics(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpudeepdiag") === "1";
+}
+
+export function requestedWgpuLoadEpochFence(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuloadfence") === "1";
+}
+
+export function requestedWgpuDetachedPresenter(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpudetached") === "1";
+}
+
+export function requestedWgpuReplayPump(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpupump") === "1";
 }
 
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
@@ -45,9 +60,94 @@ export function selectAtomicReplayLimit({
   return passStart === null ? safeLimit : passStart;
 }
 
+export function summarizeWgpuReplayRange({
+  read,
+  write,
+  recordAt,
+  maxRecords = 4096,
+  beginOp = 12,
+  drawOp = 19,
+  drawIndexedOp = 20,
+  endOp = 21,
+  presentOp = 22,
+  uploadBufferOp = 6,
+  uploadTextureOp = 8,
+  uploadArenaBase = 0,
+  uploadArenaSize = 0
+}) {
+  const available = (write - read) >>> 0;
+  const inspected = Math.min(available, Math.max(0, maxRecords | 0));
+  const summary = {
+    recordCount: available,
+    inspectedRecordCount: inspected,
+    truncated: inspected < available,
+    firstOp: null,
+    lastOp: null,
+    beginPassCount: 0,
+    endPassCount: 0,
+    openPassDepth: 0,
+    drawCount: 0,
+    drawIndexedCount: 0,
+    presentCount: 0,
+    uploadBufferCount: 0,
+    uploadTextureCount: 0,
+    uploadBytes: 0,
+    uploadReferencesInArena: 0,
+    uploadPointerWrapCount: 0,
+    potentialArenaOverwrite: false
+  };
+  let passDepth = 0;
+  let previousUploadOffset = null;
+
+  for (let offset = 0; offset < inspected; offset += 1) {
+    const record = recordAt((read + offset) >>> 0) || {};
+    const op = Number(record.op) >>> 0;
+    if (offset === 0) summary.firstOp = op;
+    summary.lastOp = op;
+    if (op === beginOp) {
+      summary.beginPassCount += 1;
+      passDepth += 1;
+    } else if (op === endOp) {
+      summary.endPassCount += 1;
+      passDepth = Math.max(0, passDepth - 1);
+    } else if (op === drawOp) {
+      summary.drawCount += 1;
+    } else if (op === drawIndexedOp) {
+      summary.drawIndexedCount += 1;
+    } else if (op === presentOp) {
+      summary.presentCount += 1;
+    } else if (op === uploadBufferOp) {
+      summary.uploadBufferCount += 1;
+      summary.uploadBytes += Math.max(0, Number(record.uploadBytes) || 0);
+      observeUploadPointer(record);
+    } else if (op === uploadTextureOp) {
+      summary.uploadTextureCount += 1;
+      summary.uploadBytes += Math.max(0, Number(record.uploadBytes) || 0);
+      observeUploadPointer(record);
+    }
+  }
+  summary.openPassDepth = passDepth;
+  summary.potentialArenaOverwrite = uploadArenaSize > 0 &&
+    summary.uploadBytes > uploadArenaSize;
+  return summary;
+
+  function observeUploadPointer(record) {
+    const pointer = Number(record.uploadPointer) >>> 0;
+    const offset = (pointer - (uploadArenaBase >>> 0)) >>> 0;
+    if (!(uploadArenaSize > 0) || offset >= uploadArenaSize) return;
+    summary.uploadReferencesInArena += 1;
+    if (previousUploadOffset !== null && offset < previousUploadOffset) {
+      summary.uploadPointerWrapCount += 1;
+    }
+    previousUploadOffset = offset;
+  }
+}
+
 export function createWgpuReplayClassifier({
   maxEvents = DEFAULT_MAX_EVENTS,
+  maxDrainSamples = DEFAULT_MAX_DRAIN_SAMPLES,
   maxMissingIdsPerKind = DEFAULT_MAX_MISSING_IDS_PER_KIND,
+  generation = 0,
   scope = "session",
   now = () => performance.now()
 } = {}) {
@@ -80,7 +180,9 @@ export function createWgpuReplayClassifier({
     nonzeroReadbackCount: 0,
     drawCountAtLastReadback: 0,
     lastNonzeroBytes: 0,
-    lastMaxByte: 0
+    lastNonzeroColorBytes: 0,
+    lastMaxByte: 0,
+    lastPresentSequence: 0
   };
   const firstRealDraw = {
     status: "pending",
@@ -105,6 +207,7 @@ export function createWgpuReplayClassifier({
     status: "pending",
     framebufferId: 0,
     nonzeroBytes: 0,
+    nonzeroColorBytes: 0,
     maxByte: 0,
     presentSequence: 0,
     readbackOrdinal: 0,
@@ -116,6 +219,25 @@ export function createWgpuReplayClassifier({
     submittedCount: 0,
     completedCount: 0,
     errorCount: 0
+  };
+  const ringEpoch = {
+    loadBoundary: null,
+    loadFence: {
+      armed: false,
+      discardedRecords: 0,
+      completedAtRecordIndex: null
+    },
+    drainSamples: [],
+    drainSamplesDropped: 0,
+    backlogHighWater: 0,
+    highWaterSummary: null,
+    totalProcessed: 0,
+    presentCount: 0
+  };
+  const presentationChain = {
+    efb: createReadbackStage(),
+    xfb: createReadbackStage(),
+    backbuffer: createReadbackStage()
   };
 
   function recordEvent(type, detail = {}) {
@@ -211,6 +333,7 @@ export function createWgpuReplayClassifier({
   function recordEfbReadback({
     framebufferId = 0,
     nonzeroBytes = 0,
+    nonzeroColorBytes = nonzeroBytes,
     maxByte = 0,
     drawCountAtEncode = efbMutation.drawCount,
     presentSequence = 0
@@ -220,13 +343,16 @@ export function createWgpuReplayClassifier({
     efbMutation.drawCountAtLastReadback = drawCountAtEncode;
     if (drawCountAtEncode > 0) efbMutation.postDrawReadbackCount += 1;
     efbMutation.lastNonzeroBytes = nonzeroBytes;
+    efbMutation.lastNonzeroColorBytes = nonzeroColorBytes;
     efbMutation.lastMaxByte = maxByte;
-    if (nonzeroBytes > 0) {
+    efbMutation.lastPresentSequence = presentSequence >>> 0;
+    if (nonzeroColorBytes > 0) {
       efbMutation.nonzeroReadbackCount += 1;
       if (firstNonzeroEfb.status !== "pass") {
         firstNonzeroEfb.status = "pass";
         firstNonzeroEfb.framebufferId = framebufferId >>> 0;
         firstNonzeroEfb.nonzeroBytes = nonzeroBytes;
+        firstNonzeroEfb.nonzeroColorBytes = nonzeroColorBytes;
         firstNonzeroEfb.maxByte = maxByte;
         firstNonzeroEfb.presentSequence = presentSequence >>> 0;
         firstNonzeroEfb.readbackOrdinal = efbMutation.readbackCount;
@@ -234,6 +360,7 @@ export function createWgpuReplayClassifier({
         recordEvent("first-nonzero-efb", {
           framebufferId,
           nonzeroBytes,
+          nonzeroColorBytes,
           maxByte,
           presentSequence,
           readbackOrdinal: efbMutation.readbackCount,
@@ -247,8 +374,18 @@ export function createWgpuReplayClassifier({
     return efbMutation.drawCount;
   }
 
-  function needsPostDrawEfbReadback(minimumDrawCount = 64) {
-    return efbMutation.drawCount >= minimumDrawCount && efbMutation.postDrawReadbackCount === 0;
+  function needsPostDrawEfbReadback(
+    presentSequence = 0,
+    minimumDrawCount = 64,
+    minimumPresentGap = DEFAULT_READBACK_PRESENT_GAP
+  ) {
+    if (efbMutation.drawCount < minimumDrawCount ||
+        efbMutation.postDrawReadbackCount >= DEFAULT_MAX_CHAIN_READBACKS ||
+        efbMutation.nonzeroReadbackCount > 0) {
+      return false;
+    }
+    return efbMutation.postDrawReadbackCount === 0 ||
+      ((presentSequence - efbMutation.lastPresentSequence) >>> 0) >= minimumPresentGap;
   }
 
   function recordPresentCommand({ recordIndex = 0 } = {}) {
@@ -266,6 +403,136 @@ export function createWgpuReplayClassifier({
     if (completed) presentSubmission.completedCount += 1;
     if (error) presentSubmission.errorCount += 1;
     recordEvent("present-completion", { completed: Boolean(completed), error: error ? String(error) : undefined });
+  }
+
+  function recordLoadBoundary({
+    readIndex = 0,
+    writeIndex = 0,
+    uploadReadIndex = 0,
+    summary = {}
+  } = {}) {
+    ringEpoch.loadBoundary = {
+      readIndex: readIndex >>> 0,
+      writeIndex: writeIndex >>> 0,
+      uploadReadIndex: uploadReadIndex >>> 0,
+      pendingRecords: (writeIndex - readIndex) >>> 0,
+      inspectedRecordCount: Math.max(0, Number(summary.inspectedRecordCount) || 0),
+      truncated: Boolean(summary.truncated),
+      firstOp: summary.firstOp ?? null,
+      lastOp: summary.lastOp ?? null,
+      beginPassCount: Math.max(0, Number(summary.beginPassCount) || 0),
+      endPassCount: Math.max(0, Number(summary.endPassCount) || 0),
+      openPassDepth: Math.max(0, Number(summary.openPassDepth) || 0),
+      drawCount: Math.max(0, Number(summary.drawCount) || 0),
+      drawIndexedCount: Math.max(0, Number(summary.drawIndexedCount) || 0),
+      presentCount: Math.max(0, Number(summary.presentCount) || 0),
+      uploadBufferCount: Math.max(0, Number(summary.uploadBufferCount) || 0),
+      uploadTextureCount: Math.max(0, Number(summary.uploadTextureCount) || 0),
+      uploadBytes: Math.max(0, Number(summary.uploadBytes) || 0)
+    };
+    recordEvent("load-ring-boundary", ringEpoch.loadBoundary);
+  }
+
+  function recordDrainEpoch({
+    readIndex = 0,
+    writeIndex = 0,
+    replayLimit = writeIndex,
+    uploadReadIndex = 0,
+    processed = 0,
+    presentCount = 0,
+    summary = null
+  } = {}) {
+    const backlog = (writeIndex - readIndex) >>> 0;
+    const previousHighWater = ringEpoch.backlogHighWater;
+    const sample = {
+      readIndex: readIndex >>> 0,
+      writeIndex: writeIndex >>> 0,
+      replayLimit: replayLimit >>> 0,
+      uploadReadIndex: uploadReadIndex >>> 0,
+      backlog,
+      processed: Math.max(0, Number(processed) || 0),
+      presentCount: Math.max(0, Number(presentCount) || 0)
+    };
+    ringEpoch.backlogHighWater = Math.max(ringEpoch.backlogHighWater, backlog);
+    if (summary && backlog >= previousHighWater) {
+      ringEpoch.highWaterSummary = structuredClone(summary);
+    }
+    ringEpoch.totalProcessed += sample.processed;
+    ringEpoch.presentCount += sample.presentCount;
+    const previous = ringEpoch.drainSamples.at(-1);
+    if (previous && previous.readIndex === sample.readIndex &&
+        previous.writeIndex === sample.writeIndex &&
+        previous.replayLimit === sample.replayLimit) {
+      return;
+    }
+    if (ringEpoch.drainSamples.length < maxDrainSamples) ringEpoch.drainSamples.push(sample);
+    else ringEpoch.drainSamplesDropped += 1;
+  }
+
+  function recordLoadFence({ armed = false, discardedRecords = 0, completedAtRecordIndex = null } = {}) {
+    if (armed) ringEpoch.loadFence.armed = true;
+    ringEpoch.loadFence.discardedRecords += Math.max(0, Number(discardedRecords) || 0);
+    if (completedAtRecordIndex != null) {
+      ringEpoch.loadFence.completedAtRecordIndex = completedAtRecordIndex >>> 0;
+    }
+  }
+
+  function recordPresentationReadback({
+    kind,
+    framebufferId = 0,
+    sourceTextureId = 0,
+    nonzeroBytes = 0,
+    nonzeroColorBytes = nonzeroBytes,
+    nonzeroAlphaBytes = 0,
+    sampledBytes = 0,
+    maxByte = 0,
+    presentSequence = 0
+  } = {}) {
+    const stage = presentationChain[kind];
+    if (!stage) return;
+    stage.readbackCount += 1;
+    stage.framebufferId = framebufferId >>> 0;
+    stage.sourceTextureId = sourceTextureId >>> 0;
+    stage.lastNonzeroBytes = Math.max(0, Number(nonzeroBytes) || 0);
+    stage.lastNonzeroColorBytes = Math.max(0, Number(nonzeroColorBytes) || 0);
+    stage.lastNonzeroAlphaBytes = Math.max(0, Number(nonzeroAlphaBytes) || 0);
+    stage.lastSampledBytes = Math.max(0, Number(sampledBytes) || 0);
+    stage.lastMaxByte = Math.max(0, Number(maxByte) || 0);
+    stage.lastPresentSequence = presentSequence >>> 0;
+    if (nonzeroBytes > 0) {
+      stage.nonzeroReadbackCount += 1;
+      if (!stage.firstNonzero) {
+        stage.firstNonzero = {
+          nonzeroBytes: stage.lastNonzeroBytes,
+          nonzeroColorBytes: stage.lastNonzeroColorBytes,
+          nonzeroAlphaBytes: stage.lastNonzeroAlphaBytes,
+          sampledBytes: stage.lastSampledBytes,
+          maxByte: stage.lastMaxByte,
+          presentSequence: stage.lastPresentSequence,
+          framebufferId: stage.framebufferId,
+          sourceTextureId: stage.sourceTextureId
+        };
+      }
+    }
+    if (nonzeroColorBytes > 0) stage.nonzeroColorReadbackCount += 1;
+  }
+
+  function needsPresentationReadback(
+    kind,
+    presentSequence = 0,
+    minimumPresentGap = DEFAULT_READBACK_PRESENT_GAP
+  ) {
+    const stage = presentationChain[kind];
+    if (!stage || stage.nonzeroColorReadbackCount > 0 ||
+        stage.readbackCount >= DEFAULT_MAX_CHAIN_READBACKS) {
+      return false;
+    }
+    return stage.readbackCount === 0 ||
+      ((presentSequence - stage.lastPresentSequence) >>> 0) >= minimumPresentGap;
+  }
+
+  function needsBacklogSummary(backlog, minimumBacklog = 4096) {
+    return backlog >= minimumBacklog && backlog > ringEpoch.backlogHighWater;
   }
 
   function snapshot() {
@@ -289,8 +556,9 @@ export function createWgpuReplayClassifier({
     else if (firstRealDraw.status === "pass") classifier = { status: "running", code: "WAITING_FOR_EFB_READBACK" };
 
     return structuredClone({
-      schema: "wasm-dolphin.wgpu-replay-classifier.v1",
+      schema: "wasm-dolphin.wgpu-replay-classifier.v2",
       scope,
+      generation: generation >>> 0,
       classifier,
       stages: {
         passAtomicity,
@@ -300,7 +568,9 @@ export function createWgpuReplayClassifier({
         firstEfbDraw,
         firstIndexedEfbDraw,
         firstNonzeroEfb,
-        presentSubmission
+        presentSubmission,
+        ringEpoch,
+        presentationChain
       },
       events,
       eventsDropped
@@ -322,6 +592,29 @@ export function createWgpuReplayClassifier({
     recordPresentCommand,
     recordSubmission,
     recordPresentCompletion,
+    recordLoadBoundary,
+    recordDrainEpoch,
+    recordLoadFence,
+    recordPresentationReadback,
+    needsPresentationReadback,
+    needsBacklogSummary,
     snapshot
+  };
+}
+
+function createReadbackStage() {
+  return {
+    readbackCount: 0,
+    nonzeroReadbackCount: 0,
+    nonzeroColorReadbackCount: 0,
+    framebufferId: 0,
+    sourceTextureId: 0,
+    lastNonzeroBytes: 0,
+    lastNonzeroColorBytes: 0,
+    lastNonzeroAlphaBytes: 0,
+    lastSampledBytes: 0,
+    lastMaxByte: 0,
+    lastPresentSequence: 0,
+    firstNonzero: null
   };
 }
