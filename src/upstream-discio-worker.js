@@ -321,6 +321,22 @@ async function handleMessage(type, payload) {
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState":
       return { loaded: Boolean(api?.loadState(payload.slot | 0)), ...framePayload() };
+    case "validationSetCorePaused": {
+      // Harness-only checkpoint barrier. The app never sends this message;
+      // normal emulator pause/start behavior and defaults remain unchanged.
+      if (!api?.setCorePaused) {
+        return { paused: false, error: "SetCorePaused export unavailable" };
+      }
+      const paused = Boolean(payload.paused);
+      api.setCorePaused(paused ? 1 : 0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return {
+        paused: api?.getCoreStateName?.() === "Paused",
+        requestedPaused: paused,
+        coreStateName: api?.getCoreStateName?.() ?? "",
+        ...framePayload(),
+      };
+    }
     case "loadStateFile": {
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
@@ -784,6 +800,7 @@ function bindApi(module) {
         ? (path) => ccall("BootDisc", "number", ["string"], [path])
         : null,
     stopCore: optionalCwrap("StopCore", null, []),
+    setCorePaused: optionalCwrap("SetCorePaused", "number", ["number"]),
     pumpHostJobs: optionalCwrap("PumpHostJobs", null, []),
     getCoreState: optionalCwrap("GetCoreState", "number", []),
     getCoreStateName: optionalCwrap("GetCoreStateName", "string", []),

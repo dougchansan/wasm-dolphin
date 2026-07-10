@@ -11,6 +11,18 @@ export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   saveStateSha256: "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
 });
 
+export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
+  // Recorded from the paused, exact-state checkpoint. The harness pauses the
+  // core before State::LoadAs so these values are tied to save bytes rather
+  // than wall-clock delay after loading.
+  frame: null,
+  coreTicks: 15166162443,
+  ppcPc: -2144030364,
+  xfbHash: "4b2d0a3b",
+  width: 640,
+  height: 480,
+});
+
 export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "git.commit",
   "browser.version",
@@ -24,6 +36,25 @@ export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "fixture.isoVerified",
   "fixture.saveStateVerified",
   "fixture.saveStateLoaded",
+  "fixture.battleCheckpoint.verified",
+  "servedApplication.verified",
+]);
+
+export const REQUIRED_QUALIFICATION_PROVENANCE = Object.freeze([
+  "browser.headed",
+  "browser.version",
+  "browser.profileId",
+  "browser.webgpuAdapter.selected",
+  "benchmark.cacheState",
+  "hostCore.abiVersion",
+  "eventSchema.version",
+  "upstream.dolphinSha",
+  "toolchain.emscripten",
+  "toolchain.cmake",
+  "toolchain.ninja",
+  "toolchain.rust",
+  "toolchain.naga",
+  "servedApplication.verified",
 ]);
 
 function git(root, args) {
@@ -87,16 +118,95 @@ export function assertRunProvenance(manifest, required = REQUIRED_RUN_PROVENANCE
   if (manifest.benchmark.inputScriptMode !== "none") {
     throw new Error("Fixed-battle timing requires benchmark.inputScriptMode=none");
   }
-  if (manifest.benchmark.sceneLabel !== FIXED_MELEE_BATTLE_FIXTURE.sceneLabel) {
-    throw new Error(`Unexpected benchmark scene: ${manifest.benchmark.sceneLabel}`);
-  }
   if (!manifest.fixture.isoVerified || !manifest.fixture.saveStateVerified) {
     throw new Error("Fixed-battle fixture hashes were not verified");
   }
   if (!manifest.fixture.saveStateLoaded) {
     throw new Error("Fixed-battle save state was not loaded before timing");
   }
+  if (!manifest.fixture.battleCheckpoint?.verified) {
+    throw new Error("Deterministic post-load battle/XFB checkpoint was not verified");
+  }
+  if (!manifest.servedApplication?.verified) {
+    throw new Error("Served application/core identity was not verified");
+  }
   return manifest;
+}
+
+export function evaluateQualificationProvenance(manifest) {
+  const missing = missingRunProvenance(manifest, REQUIRED_QUALIFICATION_PROVENANCE);
+  if (manifest?.browser?.headed !== true) missing.push("browser.headed=true");
+  if (!Array.isArray(manifest?.patches?.hashes) || manifest.patches.hashes.length === 0) {
+    missing.push("patches.hashes[0]");
+  } else if (manifest.patches.hashes.some((hash) => !/^[0-9a-f]{64}$/i.test(String(hash)))) {
+    missing.push("patches.hashes(valid SHA-256)");
+  }
+  if (!manifest?.browser?.webgpuAdapter?.selected) {
+    missing.push("browser.webgpuAdapter.selected=true");
+  } else if (![
+    manifest.browser.webgpuAdapter.vendor,
+    manifest.browser.webgpuAdapter.device,
+    manifest.browser.webgpuAdapter.description,
+  ].some(Boolean)) {
+    missing.push("browser.webgpuAdapter.identity");
+  }
+  if (!manifest?.browser?.profileId) missing.push("browser.profileId");
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(String(manifest?.upstream?.dolphinSha || ""))) {
+    missing.push("upstream.dolphinSha(valid commit)");
+  }
+  const uniqueMissing = [...new Set(missing)];
+  return {
+    eligible: uniqueMissing.length === 0,
+    missing: uniqueMissing,
+  };
+}
+
+export function assertServedArtifactIdentity(expectedArtifacts, servedArtifacts) {
+  const names = Object.keys(expectedArtifacts || {});
+  if (!names.length) throw new Error("No local application artifacts were provided for identity verification");
+  const mismatches = [];
+  for (const name of names) {
+    const expected = expectedArtifacts[name];
+    const served = servedArtifacts?.[name];
+    if (!served) {
+      mismatches.push(`${name}: missing from served origin`);
+      continue;
+    }
+    if (expected.sha256 !== served.sha256 || expected.bytes !== served.bytes) {
+      mismatches.push(
+        `${name}: expected ${expected.sha256}/${expected.bytes}, got ${served.sha256}/${served.bytes}`
+      );
+    }
+  }
+  if (mismatches.length) throw new Error(`Served application identity mismatch: ${mismatches.join("; ")}`);
+  return { verified: true, artifacts: servedArtifacts };
+}
+
+export function parseBattleCheckpoint(framePayload) {
+  const helper = String(framePayload?.ppcWasmHelperStats || "");
+  const xfbHash = /\bvideo\s+xfb:\d+[^|]*\bhash:([0-9a-f]+)/i.exec(helper)?.[1]?.toLowerCase() || null;
+  return {
+    frame: Number(framePayload?.frame),
+    coreTicks: Number(framePayload?.coreTicks),
+    ppcPc: Number(framePayload?.ppcPc),
+    xfbHash,
+    width: Number(framePayload?.width),
+    height: Number(framePayload?.height),
+  };
+}
+
+export function assertBattleCheckpoint(checkpoint, expected = FIXED_MELEE_BATTLE_CHECKPOINT) {
+  const required = ["frame", "coreTicks", "ppcPc", "xfbHash", "width", "height"];
+  const missing = required.filter((field) => checkpoint?.[field] === null || checkpoint?.[field] === undefined || checkpoint?.[field] === "");
+  if (missing.length) throw new Error(`Battle/XFB checkpoint is incomplete: ${missing.join(", ")}`);
+  const mismatches = [];
+  for (const field of required) {
+    if (expected[field] != null && checkpoint[field] !== expected[field]) {
+      mismatches.push(`${field}: expected ${expected[field]}, got ${checkpoint[field]}`);
+    }
+  }
+  if (mismatches.length) throw new Error(`Battle/XFB checkpoint mismatch: ${mismatches.join("; ")}`);
+  return { ...checkpoint, verified: true };
 }
 
 export function validateComparisonConfig(value) {
@@ -117,6 +227,13 @@ export function validateComparisonConfig(value) {
   if (mode === "confirmation" && (blockCount < 5 || blockCount > 10)) {
     throw new Error("Confirmation requires 5 to 10 comparison blocks");
   }
+  const maxBlockCount = Number(value.maxBlockCount ?? (mode === "confirmation" ? 10 : blockCount));
+  if (!Number.isInteger(maxBlockCount) || maxBlockCount < blockCount || maxBlockCount > 10) {
+    throw new Error("maxBlockCount must be an integer from blockCount through 10");
+  }
+  if (mode === "screening" && maxBlockCount !== 2) {
+    throw new Error("Screening maxBlockCount is fixed at 2");
+  }
   if (!value.armA?.name || !value.armB?.name) {
     throw new Error("Comparison config requires named armA and armB objects");
   }
@@ -135,6 +252,7 @@ export function validateComparisonConfig(value) {
     schemaVersion: 1,
     mode,
     blockCount,
+    maxBlockCount,
     primaryMetric: value.primaryMetric,
     direction,
     minimumEffectPercent,
@@ -155,15 +273,18 @@ export function validateComparisonConfig(value) {
 export function buildComparisonTasklist(configValue) {
   const config = validateComparisonConfig(configValue);
   const blocks = [];
-  for (let blockIndex = 0; blockIndex < config.blockCount; blockIndex += 1) {
+  for (let blockIndex = 0; blockIndex < config.maxBlockCount; blockIndex += 1) {
     const order = blockIndex % 2 === 0 ? ["A", "B", "B", "A"] : ["B", "A", "A", "B"];
-    blocks.push(makeComparisonBlock(config, blockIndex + 1, order));
+    const block = makeComparisonBlock(config, blockIndex + 1, order);
+    if (blockIndex >= config.blockCount) block.status = "conditional";
+    blocks.push(block);
   }
   return {
     schemaVersion: 1,
     mode: config.mode,
-    requestedValidBlocks: config.blockCount,
-    maxInvalidBlocks: Math.floor(config.blockCount / 4),
+    initialValidBlocks: config.blockCount,
+    maximumValidBlocks: config.maxBlockCount,
+    maximumAttemptedBlocks: Math.ceil(config.maxBlockCount / 0.8),
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
@@ -245,19 +366,23 @@ export function summarizeComparison(configValue, runs) {
   const medianEffectPercent = effects.length ? median(effects) : null;
   const interval95 = effects.length ? bootstrapMedianInterval(effects) : null;
   const permutationPValue = effects.length ? signPermutationPValue(effects) : null;
-  const infrastructureLimit = Math.floor(config.blockCount / 4);
+  const invalidRate = blocks.length ? invalidBlocks.length / blocks.length : 0;
 
   let outcome = "INCOMPLETE";
-  if (invalidBlocks.length > infrastructureLimit) {
+  if (blocks.length >= config.blockCount && invalidRate > 0.2) {
     outcome = "INFRASTRUCTURE_INCONCLUSIVE";
   } else if (validBlocks.length >= config.blockCount) {
     const clearsEffect = medianEffectPercent >= config.minimumEffectPercent;
     const excludesZero = interval95.low > 0;
+    const exactPermutationPass = permutationPValue <= 0.05;
+    const resolvedReject = interval95.high < config.minimumEffectPercent;
     if (config.mode === "screening") {
       outcome = clearsEffect && medianEffectPercent > 0 ? "SCREENING_SIGNAL" : "SCREENING_REJECT";
-    } else if (clearsEffect && excludesZero) {
+    } else if (clearsEffect && excludesZero && exactPermutationPass) {
       outcome = "STATISTICAL_GATE_PASS";
-    } else if (config.blockCount < 10) {
+    } else if (resolvedReject && exactPermutationPass) {
+      outcome = "STATISTICAL_GATE_REJECT";
+    } else if (validBlocks.length < config.maxBlockCount) {
       outcome = "NEEDS_MORE_BLOCKS";
     } else {
       outcome = "INCONCLUSIVE";
@@ -270,16 +395,18 @@ export function summarizeComparison(configValue, runs) {
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
-    requestedValidBlocks: config.blockCount,
+    initialValidBlocks: config.blockCount,
+    maximumValidBlocks: config.maxBlockCount,
     attemptedBlocks: blocks.length,
     validBlockCount: validBlocks.length,
     invalidBlockCount: invalidBlocks.length,
-    maxInvalidBlocks: infrastructureLimit,
+    invalidBlockRate: invalidRate,
     medianEffectPercent,
     interval95,
     permutationPValue,
     outcome,
-    promotable: config.mode === "confirmation" && outcome === "STATISTICAL_GATE_PASS",
+    statisticalGatePassed: config.mode === "confirmation" && outcome === "STATISTICAL_GATE_PASS",
+    promotable: false,
     blocks,
   };
 }
@@ -296,6 +423,66 @@ export function summarizeNumeric(values) {
     p99: quantile(sorted, 0.99),
     max: sorted.at(-1),
   };
+}
+
+export function summarizeTimedMetricWindows(samples, steadyAfterSeconds) {
+  const timedSamples = samples || [];
+  const steadySamples = timedSamples.filter(
+    (sample) => Number(sample.elapsedSeconds) >= Number(steadyAfterSeconds)
+  );
+  const summarize = (windowSamples) => ({
+    gameSpeed: summarizeNumeric(windowSamples.map((sample) => numericValue(sample.gameSpeed))),
+    coreFps: summarizeNumeric(windowSamples.map((sample) => numericValue(sample.coreFps))),
+    presentationFps: summarizeNumeric(windowSamples.map((sample) => numericValue(sample.presentFps))),
+    visualFps: summarizeNumeric(windowSamples.map((sample) => numericValue(sample.visualFps))),
+  });
+  return {
+    fullTimedWindow: {
+      startsAtSeconds: 0,
+      sampleCount: timedSamples.length,
+      metrics: summarize(timedSamples),
+    },
+    steadyStateWindow: {
+      startsAfterSeconds: Number(steadyAfterSeconds),
+      sampleCount: steadySamples.length,
+      metrics: summarize(steadySamples),
+    },
+  };
+}
+
+export function classifyGateOutcome({
+  failureCount = 0,
+  qualificationEligible = false,
+  comparisonMode = null,
+  statisticalGatePassed = false,
+  targetPassed = false,
+}) {
+  if (failureCount > 0) {
+    return { verdict: "FAIL", exitCode: 1, qualificationPassed: false, promotable: false };
+  }
+  const experimentEligible = comparisonMode == null
+    ? true
+    : comparisonMode === "confirmation" && statisticalGatePassed;
+  const qualificationPassed = Boolean(qualificationEligible && targetPassed && experimentEligible);
+  if (!qualificationPassed) {
+    return { verdict: "NON_QUALIFYING", exitCode: 2, qualificationPassed: false, promotable: false };
+  }
+  return {
+    verdict: "PASS",
+    exitCode: 0,
+    qualificationPassed: true,
+    promotable: comparisonMode === "confirmation" && statisticalGatePassed,
+  };
+}
+
+export function evaluateRunValidity({ invalidReasons = [], failures = [], consoleErrors = [] }) {
+  const reasons = [
+    ...invalidReasons,
+    ...failures.map((failure) => `run failure: ${failure}`),
+    ...consoleErrors.map((error) => `console error: ${error}`),
+  ].filter(Boolean);
+  const uniqueReasons = [...new Set(reasons)];
+  return { valid: uniqueReasons.length === 0, invalidReasons: uniqueReasons };
 }
 
 export async function collectRunMetadata({
@@ -450,6 +637,11 @@ function normalizeArm(arm, label) {
     ),
     cacheState,
   };
+}
+
+function numericValue(value) {
+  const number = Number.parseFloat(String(value ?? "").replace("%", ""));
+  return Number.isFinite(number) ? number : NaN;
 }
 
 function makeComparisonBlock(config, blockNumber, order) {

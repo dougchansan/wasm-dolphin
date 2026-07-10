@@ -103,14 +103,23 @@ than this worktree, set `PLAYWRIGHT_MODULE` to its `playwright/index.mjs`.
 
 Every run writes `manifest.json`, `events.jsonl`, `samples.json`, `samples.csv`,
 `summary.json`, `console.log`, and `final.png`. Headless mechanics runs are
-marked non-qualifying; performance claims require headed Chrome.
+marked `NON_QUALIFYING` and exit nonzero; performance claims require headed
+Chrome plus complete build, patch, toolchain, browser-profile, adapter, cache,
+ABI, event-schema, and served-artifact provenance. Summary metrics name the
+complete timed window and post-warmup steady-state window separately.
+Build provenance is read from `cores/dolphin/build-info.json` when present;
+until the hermetic build provides it, qualification also accepts explicit
+`HOST_CORE_ABI_VERSION`, `UPSTREAM_DOLPHIN_SHA`, `PATCH_HASHES`, and pinned
+`EMSCRIPTEN_VERSION`, `CMAKE_VERSION`, `NINJA_VERSION`, `RUST_VERSION`, and
+`NAGA_VERSION` environment variables.
 
 For a bounded A/B screen, pass
 [`melee-screening.example.json`](melee-screening.example.json) with
 `--comparison-config`. Screening is exactly two fresh-process A/B/B/A and
-B/A/A/B blocks and can never promote a default. Confirmation accepts five to
-ten blocks. One invalid run invalidates the complete four-run block; the task
-list, invalid artifacts, block effects, block-bootstrap interval, sign
+B/A/A/B blocks and can never promote a default. Confirmation starts with five
+blocks, extends one block at a time up to ten, and stops once exact permutation
+evidence resolves. One invalid run invalidates the complete four-run block;
+the task list, invalid artifacts, block effects, block-bootstrap interval, sign
 permutation result, and any `INCONCLUSIVE` outcome remain in the output.
 
 ```powershell

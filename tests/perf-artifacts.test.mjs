@@ -7,13 +7,20 @@ import test from "node:test";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
+  assertBattleCheckpoint,
   assertRunProvenance,
+  assertServedArtifactIdentity,
   buildComparisonTasklist,
   buildReplacementBlock,
+  classifyGateOutcome,
+  evaluateQualificationProvenance,
+  evaluateRunValidity,
   parseProfileMetrics,
+  parseBattleCheckpoint,
   recordsToCsv,
   summarizeComparison,
   summarizeNumeric,
+  summarizeTimedMetricWindows,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
 
@@ -111,11 +118,112 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
   menuDriven.benchmark.inputScriptMode = "scripted";
   assert.throws(() => assertRunProvenance(menuDriven), /inputScriptMode=none/);
 
-  const wrongScene = validManifest();
-  wrongScene.benchmark.sceneLabel = "character select";
-  assert.throws(() => assertRunProvenance(wrongScene), /Unexpected benchmark scene/);
+  const labelOnly = validManifest();
+  labelOnly.fixture.battleCheckpoint.verified = false;
+  assert.throws(() => assertRunProvenance(labelOnly), /battle\/XFB checkpoint/);
 
   assert.equal(assertRunProvenance(validManifest()).fixture.saveStateLoaded, true);
+});
+
+test("served identity and observed battle checkpoint reject mismatches", () => {
+  const local = { app: { sha256: "a".repeat(64), bytes: 12 } };
+  assert.equal(assertServedArtifactIdentity(local, structuredClone(local)).verified, true);
+  assert.throws(
+    () => assertServedArtifactIdentity(local, { app: { sha256: "b".repeat(64), bytes: 12 } }),
+    /identity mismatch/
+  );
+
+  const checkpoint = parseBattleCheckpoint({
+    frame: 77,
+    coreTicks: 123456,
+    ppcPc: 0x80300000,
+    width: 640,
+    height: 480,
+    ppcWasmHelperStats: "video xfb:77 640x480 hash:deadbeef nz:2048 | jit:off",
+  });
+  assert.equal(
+    assertBattleCheckpoint(checkpoint, {
+      frame: 77,
+      coreTicks: 123456,
+      xfbHash: "deadbeef",
+      width: 640,
+      height: 480,
+    }).verified,
+    true
+  );
+  assert.throws(
+    () => assertBattleCheckpoint(checkpoint, { ...checkpoint, xfbHash: "bad0cafe" }),
+    /xfbHash/
+  );
+
+  const fixed = {
+    frame: 89,
+    coreTicks: 15166162443,
+    ppcPc: -2144030364,
+    xfbHash: "4b2d0a3b",
+    width: 640,
+    height: 480,
+  };
+  assert.equal(assertBattleCheckpoint(fixed).verified, true);
+  assert.equal(assertBattleCheckpoint({ ...fixed, frame: 95 }).verified, true);
+  assert.throws(() => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks + 1 }), /coreTicks/);
+});
+
+test("qualification requires headed build, profile, adapter, and toolchain provenance", () => {
+  const manifest = validManifest();
+  manifest.browser.headed = false;
+  manifest.browser.profileId = "ephemeral-run-1";
+  manifest.browser.webgpuAdapter = { selected: true, vendor: "test-vendor" };
+  manifest.benchmark.cacheState = "cold";
+  manifest.hostCore = { abiVersion: "1" };
+  manifest.eventSchema = { version: "1" };
+  manifest.upstream = { dolphinSha: "a".repeat(40) };
+  manifest.patches = { hashes: ["b".repeat(64)] };
+  manifest.toolchain = { emscripten: "x", cmake: "x", ninja: "x", rust: "x", naga: "x" };
+  assert.equal(evaluateQualificationProvenance(manifest).eligible, false);
+  assert.ok(evaluateQualificationProvenance(manifest).missing.includes("browser.headed=true"));
+  manifest.browser.headed = true;
+  assert.equal(evaluateQualificationProvenance(manifest).eligible, true);
+});
+
+test("headless, screening, and unresolved statistics cannot report qualification success", () => {
+  assert.deepEqual(classifyGateOutcome({
+    qualificationEligible: false,
+    targetPassed: true,
+  }), { verdict: "NON_QUALIFYING", exitCode: 2, qualificationPassed: false, promotable: false });
+  assert.equal(classifyGateOutcome({
+    qualificationEligible: true,
+    targetPassed: true,
+    comparisonMode: "screening",
+    statisticalGatePassed: true,
+  }).verdict, "NON_QUALIFYING");
+  assert.equal(classifyGateOutcome({
+    qualificationEligible: true,
+    targetPassed: true,
+    comparisonMode: "confirmation",
+    statisticalGatePassed: false,
+  }).exitCode, 2);
+  assert.deepEqual(classifyGateOutcome({
+    qualificationEligible: true,
+    targetPassed: true,
+    comparisonMode: "confirmation",
+    statisticalGatePassed: true,
+  }), { verdict: "PASS", exitCode: 0, qualificationPassed: true, promotable: true });
+});
+
+test("comparison run validity includes assertions and page/worker console errors", () => {
+  assert.deepEqual(evaluateRunValidity({}), { valid: true, invalidReasons: [] });
+  const result = evaluateRunValidity({
+    invalidReasons: ["save load failed"],
+    failures: ["compilefail=1"],
+    consoleErrors: ["[worker:core:error] device lost"],
+  });
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.invalidReasons, [
+    "save load failed",
+    "run failure: compilefail=1",
+    "console error: [worker:core:error] device lost",
+  ]);
 });
 
 test("comparison tasklist alternates complete four-run blocks and is bounded", () => {
@@ -126,7 +234,7 @@ test("comparison tasklist alternates complete four-run blocks and is bounded", (
     ["B", "A", "A", "B"],
   ]);
   assert.equal(tasklist.blocks.flatMap((block) => block.runs).length, 8);
-  assert.equal(tasklist.maxInvalidBlocks, 0);
+  assert.equal(tasklist.maximumAttemptedBlocks, 3);
   assert.throws(
     () => buildComparisonTasklist(comparisonConfig({ mode: "screening", blockCount: 3 })),
     /exactly 2/
@@ -135,6 +243,11 @@ test("comparison tasklist alternates complete four-run blocks and is bounded", (
     () => buildComparisonTasklist(comparisonConfig({ mode: "confirmation", blockCount: 11 })),
     /5 to 10/
   );
+
+  const confirmation = buildComparisonTasklist(comparisonConfig({ mode: "confirmation", blockCount: 5 }));
+  assert.equal(confirmation.blocks.length, 10);
+  assert.equal(confirmation.blocks.filter((block) => block.status === "pending").length, 5);
+  assert.equal(confirmation.blocks.filter((block) => block.status === "conditional").length, 5);
 });
 
 test("replacement blocks preserve the complete invalid block order", () => {
@@ -167,17 +280,30 @@ test("screening block effects are sign-normalized but never promotable", () => {
   assert.ok(lowerReport.medianEffectPercent > 0);
 });
 
-test("confirmation uses block effects for pass and ten-block INCONCLUSIVE outcomes", () => {
+test("confirmation extends beyond five blocks until exact permutation evidence resolves", () => {
   const passing = comparisonConfig({ mode: "confirmation", blockCount: 5 });
-  const passReport = summarizeComparison(
+  const fiveBlockReport = summarizeComparison(
     passing,
     makeRuns(passing, Array.from({ length: 5 }, (_, index) => ({
       a: [100 + index, 100 + index],
       b: [108 + index, 108 + index],
     })))
   );
+  assert.equal(fiveBlockReport.permutationPValue, 0.0625);
+  assert.equal(fiveBlockReport.outcome, "NEEDS_MORE_BLOCKS");
+  assert.equal(fiveBlockReport.promotable, false);
+
+  const passReport = summarizeComparison(
+    passing,
+    makeRuns(passing, Array.from({ length: 6 }, (_, index) => ({
+      a: [100 + index, 100 + index],
+      b: [108 + index, 108 + index],
+    })))
+  );
   assert.equal(passReport.outcome, "STATISTICAL_GATE_PASS");
-  assert.equal(passReport.promotable, true);
+  assert.equal(passReport.statisticalGatePassed, true);
+  assert.equal(passReport.promotable, false);
+  assert.ok(passReport.permutationPValue <= 0.05);
   assert.ok(passReport.interval95.low > 0);
 
   const unresolved = comparisonConfig({ mode: "confirmation", blockCount: 10 });
@@ -220,10 +346,21 @@ test("numeric summaries retain the full run distribution", () => {
   });
 });
 
+test("full timed metrics never silently discard the pre-steady-state window", () => {
+  const windows = summarizeTimedMetricWindows([
+    { elapsedSeconds: 0, gameSpeed: 50, coreFps: 30, presentFps: 20, visualFps: 10 },
+    { elapsedSeconds: 5, gameSpeed: 100, coreFps: 60, presentFps: 40, visualFps: 20 },
+  ], 5);
+  assert.equal(windows.fullTimedWindow.sampleCount, 2);
+  assert.equal(windows.fullTimedWindow.metrics.gameSpeed.mean, 75);
+  assert.equal(windows.steadyStateWindow.sampleCount, 1);
+  assert.equal(windows.steadyStateWindow.metrics.gameSpeed.mean, 100);
+});
+
 function validManifest() {
   return {
     git: { commit: "abc123" },
-    browser: { version: "143.0" },
+    browser: { version: "143.0", headed: false },
     benchmark: {
       url: "http://127.0.0.1:8082/?video=software",
       sceneLabel: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
@@ -235,7 +372,13 @@ function validManifest() {
       core: { sha256: "1".repeat(64) },
       saveState: { sha256: FIXED_MELEE_BATTLE_FIXTURE.saveStateSha256 },
     },
-    fixture: { isoVerified: true, saveStateVerified: true, saveStateLoaded: true },
+    fixture: {
+      isoVerified: true,
+      saveStateVerified: true,
+      saveStateLoaded: true,
+      battleCheckpoint: { verified: true },
+    },
+    servedApplication: { verified: true },
   };
 }
 
@@ -255,7 +398,7 @@ function comparisonConfig(overrides = {}) {
 
 function makeRuns(config, valuesByBlock) {
   const tasklist = buildComparisonTasklist(config);
-  return tasklist.blocks.flatMap((block, blockIndex) => {
+  return tasklist.blocks.slice(0, valuesByBlock.length).flatMap((block, blockIndex) => {
     const values = valuesByBlock[blockIndex];
     const next = { A: [...values.a], B: [...values.b] };
     return block.runs.map((task) => ({

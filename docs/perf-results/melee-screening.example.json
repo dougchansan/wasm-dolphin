@@ -1,8 +1,9 @@
 {
   "mode": "screening",
   "blockCount": 2,
+  "maxBlockCount": 2,
   "hypothesis": "Disabling detailed metrics improves fixed-battle game speed.",
-  "primaryMetric": "metrics.gameSpeed.mean",
+  "primaryMetric": "metrics.fullTimedWindow.gameSpeed.mean",
   "direction": "higher",
   "minimumEffectPercent": 3,
   "invalidationRules": [

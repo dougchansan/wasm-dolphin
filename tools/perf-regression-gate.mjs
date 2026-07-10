@@ -6,15 +6,21 @@ import { pathToFileURL } from "node:url";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
+  assertBattleCheckpoint,
   assertRunProvenance,
+  assertServedArtifactIdentity,
   buildComparisonTasklist,
   buildReplacementBlock,
   collectRunMetadata,
+  classifyGateOutcome,
   describeFile,
+  evaluateQualificationProvenance,
+  evaluateRunValidity,
+  parseBattleCheckpoint,
   parseProfileMetrics,
   recordsToCsv,
   summarizeComparison,
-  summarizeNumeric,
+  summarizeTimedMetricWindows,
   validateComparisonConfig,
   verifyFileFixture,
 } from "./perf-artifacts.mjs";
@@ -72,8 +78,11 @@ async function main() {
 
   try {
     await verifyServedFixture(new URL(saveStateUrl, baseUrl), saveFixture.sha256);
+    const servedApplication = await verifyServedApplication(baseUrl, coreArtifact);
+    const buildProvenance = await collectBuildProvenance();
     const context = {
       baseUrl,
+      buildProvenance,
       chromium,
       coreArtifact,
       corePath,
@@ -86,6 +95,7 @@ async function main() {
       saveFixture,
       saveStatePath,
       saveStateUrl,
+      servedApplication,
       settleSeconds,
       strict,
       targetMode,
@@ -97,8 +107,11 @@ async function main() {
     const comparison = comparisonConfig
       ? execution.comparison
       : compareToBaseline(execution.results, baseline, tolerance);
-    const targetFailures = execution.results.flatMap((result) =>
+    const runFailures = execution.results.flatMap((result) =>
       (result.failures || []).map((failure) => `${result.name}: ${failure}`)
+    );
+    const targetFailures = execution.results.flatMap((result) =>
+      (result.targetFailures || []).map((failure) => `${result.name}: ${failure}`)
     );
     const invalidFailures = execution.results.flatMap((result) =>
       (result.invalidReasons || []).map((reason) => `${result.name}: ${reason}`)
@@ -115,15 +128,33 @@ async function main() {
       comparisonFailures.push(...comparison.failures);
       comparisonWarnings.push(...comparison.warnings);
     }
-    const failures = [...new Set([...invalidFailures, ...targetFailures, ...comparisonFailures])];
+    const failures = [...new Set([...invalidFailures, ...runFailures, ...comparisonFailures])];
     const warnings = [
       ...execution.results.flatMap((result) => result.warnings || []),
       ...comparisonWarnings,
       ...(headed ? [] : ["Runs were headless and cannot qualify performance or audio/compositor claims"]),
     ];
+    const qualificationEligible = execution.results.length > 0 && execution.results.every(
+      (result) => result.qualification?.eligible === true
+    );
+    const gateOutcome = classifyGateOutcome({
+      failureCount: failures.length,
+      qualificationEligible,
+      comparisonMode: comparisonConfig?.mode || null,
+      statisticalGatePassed: Boolean(comparisonConfig && comparison.statisticalGatePassed),
+      targetPassed: targetFailures.length === 0,
+    });
+    if (comparisonConfig) {
+      comparison.qualificationEligible = qualificationEligible;
+      comparison.promotable = gateOutcome.promotable;
+      comparison.qualificationPassed = gateOutcome.qualificationPassed;
+      await writeFile(path.join(outDir, "comparison.json"), JSON.stringify(comparison, null, 2));
+    }
     const report = {
       schemaVersion: 2,
-      verdict: failures.length === 0 ? "PASS" : "FAIL",
+      verdict: gateOutcome.verdict,
+      qualificationPassed: gateOutcome.qualificationPassed,
+      qualificationEligible,
       generatedAt: new Date().toISOString(),
       scene: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       baseUrl,
@@ -142,6 +173,7 @@ async function main() {
         stagedSaveStateUrl: saveStateUrl,
         core: coreArtifact,
       },
+      servedApplication,
       tasklistPath: execution.tasklistPath || null,
       failures,
       warnings,
@@ -151,7 +183,7 @@ async function main() {
     await writeFile(path.join(outDir, "runs.csv"), runSummaryCsv(execution.results));
     await writeFile(path.join(outDir, "report.json"), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    if (failures.length) process.exitCode = 1;
+    process.exitCode = gateOutcome.exitCode;
   } finally {
     if (localServer) await new Promise((resolve) => localServer.close(resolve));
   }
@@ -173,11 +205,18 @@ async function runComparison(configValue, context) {
   let nextBlockIndex = 0;
   let replacementNumber = 0;
   let validBlockCount = 0;
-  let invalidBlockCount = 0;
   const baseScenario = selectedScenarios()[0];
 
   await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
-  while (validBlockCount < tasklist.requestedValidBlocks && nextBlockIndex < tasklist.blocks.length) {
+  while (
+    validBlockCount < tasklist.maximumValidBlocks &&
+    nextBlockIndex < tasklist.blocks.length &&
+    results.length / 4 < tasklist.maximumAttemptedBlocks
+  ) {
+    if (validBlockCount >= tasklist.initialValidBlocks) {
+      const current = summarizeComparison(config, results);
+      if (current.outcome !== "NEEDS_MORE_BLOCKS" && current.outcome !== "INCOMPLETE") break;
+    }
     const block = tasklist.blocks[nextBlockIndex++];
     block.status = "running";
     await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
@@ -188,6 +227,7 @@ async function runComparison(configValue, context) {
       const scenario = {
         ...baseScenario,
         name: task.runId,
+        required: false,
         params: { ...baseScenario.params, ...task.params },
         experiment: task,
       };
@@ -205,15 +245,15 @@ async function runComparison(configValue, context) {
     if (block.status === "complete") {
       validBlockCount += 1;
     } else {
-      invalidBlockCount += 1;
-      if (invalidBlockCount <= tasklist.maxInvalidBlocks) {
+      if (results.length / 4 < tasklist.maximumAttemptedBlocks) {
         replacementNumber += 1;
         const replacement = buildReplacementBlock(config, block, replacementNumber);
         tasklist.blocks.splice(nextBlockIndex, 0, replacement);
       }
     }
     await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
-    if (invalidBlockCount > tasklist.maxInvalidBlocks) break;
+    const current = summarizeComparison(config, results);
+    if (current.outcome === "INFRASTRUCTURE_INCONCLUSIVE") break;
   }
 
   const comparison = summarizeComparison(config, results);
@@ -229,6 +269,7 @@ async function runScenario(scenario, context) {
   const scenarioDir = path.join(context.outDir, scenario.name);
   await mkdir(scenarioDir, { recursive: true });
   const consoleLines = [];
+  const consoleErrors = [];
   const samples = [];
   const invalidReasons = [];
   let browser = null;
@@ -242,12 +283,25 @@ async function runScenario(scenario, context) {
   try {
     browser = await launchBrowser(context.chromium, context.headed);
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    page.on("console", (message) => consoleLines.push(`[${message.type()}] ${message.text()}`));
-    page.on("pageerror", (error) => consoleLines.push(`[pageerror] ${error.stack || error.message}`));
+    const recordConsole = (scope, message) => {
+      const line = `[${scope}${message.type()}] ${message.text()}`;
+      consoleLines.push(line);
+      if (message.type() === "error") consoleErrors.push(line);
+    };
+    page.on("console", (message) => recordConsole("", message));
+    page.on("pageerror", (error) => {
+      const line = `[pageerror] ${error.stack || error.message}`;
+      consoleLines.push(line);
+      consoleErrors.push(line);
+    });
     page.on("worker", (worker) => {
       const label = `worker:${worker.url()?.split("/").pop() || "?"}`;
-      worker.on("console", (message) => consoleLines.push(`[${label}:${message.type()}] ${message.text()}`));
-      worker.on("pageerror", (error) => consoleLines.push(`[${label}:pageerror] ${error.stack || error.message}`));
+      worker.on("console", (message) => recordConsole(`${label}:`, message));
+      worker.on("pageerror", (error) => {
+        const line = `[${label}:pageerror] ${error.stack || error.message}`;
+        consoleLines.push(line);
+        consoleErrors.push(line);
+      });
     });
     const browserVersion = browser.version();
     manifest = await collectRunMetadata({
@@ -281,12 +335,20 @@ async function runScenario(scenario, context) {
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
+    manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
+    manifest.hostCore = context.buildProvenance.hostCore;
+    manifest.eventSchema = { version: "1" };
+    manifest.upstream = context.buildProvenance.upstream;
+    manifest.patches = context.buildProvenance.patches;
+    manifest.toolchain = context.buildProvenance.toolchain;
+    manifest.servedApplication = context.servedApplication;
     manifest.experiment = scenario.experiment || null;
     manifest.fixture = {
       sceneLabel: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       isoVerified: true,
       saveStateVerified: true,
       saveStateLoaded: false,
+      battleCheckpoint: { verified: false },
       expectedIsoSha256: FIXED_MELEE_BATTLE_FIXTURE.isoSha256,
       expectedSaveStateSha256: FIXED_MELEE_BATTLE_FIXTURE.saveStateSha256,
     };
@@ -295,16 +357,21 @@ async function runScenario(scenario, context) {
     await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
     manifest.browser.userAgent = await page.evaluate(() => navigator.userAgent);
     manifest.browser.webgpuAdapter = await readWebGpuAdapter(page);
+    manifest.qualification = evaluateQualificationProvenance(manifest);
     await page.setInputFiles("#romInput", context.romPath);
     await page.click("#screen");
     await waitForMount(page, scenarioDir);
     const readiness = await waitForCoreReady(page);
+    const pauseResponse = await pauseForBattleCheckpoint(page);
     const attemptedAt = new Date().toISOString();
     const response = await page.evaluate((saveUrl) => window.__loadStateFile(saveUrl), context.saveStateUrl);
-    saveStateLoad = { attemptedAt, readiness, response, loaded: Boolean(response?.loaded) };
+    saveStateLoad = { attemptedAt, readiness, pauseResponse, response, loaded: Boolean(response?.loaded) };
     if (!saveStateLoad.loaded) {
       throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
     }
+    const battleCheckpoint = assertBattleCheckpoint(parseBattleCheckpoint(response));
+    manifest.fixture.battleCheckpoint = battleCheckpoint;
+    await resumeAfterBattleCheckpoint(page);
     saveStateLoad.postLoadProgress = await waitForPostLoadProgress(page);
     await page.waitForTimeout(context.settleSeconds * 1000);
     manifest.fixture.saveStateLoaded = true;
@@ -344,18 +411,24 @@ async function runScenario(scenario, context) {
     if (browser) await browser.close().catch(() => {});
   }
 
-  if (consoleLines.some((line) => /\[pageerror\]/i.test(line))) {
-    invalidReasons.push("browser console contains a page error");
-  }
   if (!samples.length) invalidReasons.push("no timed samples were collected");
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   if (!finalScreenshotCaptured && samples.length) invalidReasons.push("final screenshot was not captured");
 
-  const summary = summarizeScenario(scenario, url.href, samples, scenarioDir, consoleLines, invalidReasons);
+  const summary = summarizeScenario(
+    scenario,
+    url.href,
+    samples,
+    scenarioDir,
+    consoleLines,
+    consoleErrors,
+    invalidReasons
+  );
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
     manifest.fixture.saveStateLoaded = Boolean(saveStateLoad?.loaded);
     manifest.fixture.loadResult = saveStateLoad;
+    manifest.qualification = evaluateQualificationProvenance(manifest);
     try {
       assertRunProvenance(manifest);
     } catch (error) {
@@ -372,6 +445,7 @@ async function runScenario(scenario, context) {
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
     };
+    summary.qualification = manifest.qualification;
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
   }
   await Promise.all([
@@ -384,51 +458,59 @@ async function runScenario(scenario, context) {
   return summary;
 }
 
-function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, invalidReasons) {
-  const after = samples.filter((sample) => sample.elapsedSeconds >= scenario.assertAfterSeconds);
-  const window = after.length ? after : samples;
+function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, consoleErrors, invalidReasons) {
+  const timedWindow = samples;
+  const windows = summarizeTimedMetricWindows(samples, scenario.assertAfterSeconds);
+  const steadyStateWindow = windows.steadyStateWindow;
   const final = samples.at(-1) || {};
-  const helperText = window.map((sample) => sample.helper || "").join(" | ");
-  const distributions = {
-    gameSpeed: summarizeNumeric(window.map((sample) => parseNumber(sample.gameSpeed))),
-    coreFps: summarizeNumeric(window.map((sample) => parseNumber(sample.coreFps))),
-    presentationFps: summarizeNumeric(window.map((sample) => parseNumber(sample.presentFps))),
-    visualFps: summarizeNumeric(window.map((sample) => parseNumber(sample.visualFps))),
-  };
+  const helperText = timedWindow.map((sample) => sample.helper || "").join(" | ");
+  const fullTimedWindow = windows.fullTimedWindow.metrics;
+  const steadyState = steadyStateWindow.metrics;
   const metrics = {
-    ...distributions,
-    minPresentFps: distributions.presentationFps?.min || 0,
-    minCoreFps: distributions.coreFps?.min || 0,
-    minGameSpeed: distributions.gameSpeed?.min || 0,
-    maxGapMs: maxRegex(window.map((sample) => sample.gap || "").join(" "), /(\d+(?:\.\d+)?)\s+max/g),
-    maxXfbDtMs: Math.max(0, ...window.map((sample) => sample.coreXfbMaxIntervalMs || 0)),
+    fullTimedWindow,
+    steadyState,
+    // Compatibility aliases now explicitly point at the complete timed
+    // window. Consumers that exclude warmup must request steadyState.*.
+    gameSpeed: fullTimedWindow.gameSpeed,
+    coreFps: fullTimedWindow.coreFps,
+    presentationFps: fullTimedWindow.presentationFps,
+    visualFps: fullTimedWindow.visualFps,
+    minPresentFps: fullTimedWindow.presentationFps?.min || 0,
+    minCoreFps: fullTimedWindow.coreFps?.min || 0,
+    minGameSpeed: fullTimedWindow.gameSpeed?.min || 0,
+    maxGapMs: maxRegex(timedWindow.map((sample) => sample.gap || "").join(" "), /(\d+(?:\.\d+)?)\s+max/g),
+    maxXfbDtMs: Math.max(0, ...timedWindow.map((sample) => sample.coreXfbMaxIntervalMs || 0)),
     maxGlError: lastMatch(helperText, /glerr:(0x[0-9a-f]+)/gi) || "unknown",
     emitfail: maxRegex(helperText, /emitfail:(\d+)/g),
     compilefail: maxRegex(helperText, /compilefail:(\d+)/g),
     underrun: maxRegex(helperText, /underrun:(\d+)/g),
     drop: maxRegex(helperText, /drop:(\d+)/g),
-    visibleChangedCount: window.filter((sample) => sample.visibleChanged).length,
-    readableCanvasSamples: window.filter((sample) => sample.visibleHash && !sample.visibleError).length,
+    visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
+    readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
   const failures = [];
   const warnings = [];
-  const targetIssues = shouldFailScenarioTargets(scenario) ? failures : warnings;
+  const targetFailures = [];
+  const targetIssue = (message) => {
+    targetFailures.push(message);
+    (shouldFailScenarioTargets(scenario) ? failures : warnings).push(message);
+  };
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
   if (metrics.minPresentFps < scenario.thresholds.minPresentFps) {
-    targetIssues.push(`min present FPS ${metrics.minPresentFps} < ${scenario.thresholds.minPresentFps}`);
+    targetIssue(`min present FPS ${metrics.minPresentFps} < ${scenario.thresholds.minPresentFps}`);
   }
   if (metrics.minCoreFps < scenario.thresholds.minCoreFps) {
-    targetIssues.push(`min core FPS ${metrics.minCoreFps} < ${scenario.thresholds.minCoreFps}`);
+    targetIssue(`min core FPS ${metrics.minCoreFps} < ${scenario.thresholds.minCoreFps}`);
   }
   if (metrics.minGameSpeed < scenario.thresholds.minGameSpeed) {
-    targetIssues.push(`min game speed ${metrics.minGameSpeed}% < ${scenario.thresholds.minGameSpeed}%`);
+    targetIssue(`min game speed ${metrics.minGameSpeed}% < ${scenario.thresholds.minGameSpeed}%`);
   }
   if (metrics.maxGapMs > scenario.thresholds.maxGapMs) {
-    targetIssues.push(`max frame gap ${metrics.maxGapMs}ms > ${scenario.thresholds.maxGapMs}ms`);
+    targetIssue(`max frame gap ${metrics.maxGapMs}ms > ${scenario.thresholds.maxGapMs}ms`);
   }
   if (scenario.thresholds.requireVisibleChange && metrics.visibleChangedCount === 0) {
-    targetIssues.push(`no visible canvas hash changes after ${scenario.assertAfterSeconds}s`);
+    targetIssue("no visible canvas hash changes during the timed window");
   }
   if (scenario.thresholds.requireNoGlError && metrics.maxGlError !== "0x0") {
     invalidReasons.push(`GL error ${metrics.maxGlError}`);
@@ -437,14 +519,15 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, in
   if (consoleLines.some((line) => /\[probe-error\]/i.test(line)) && !invalidReasons.length) {
     invalidReasons.push("probe error was recorded");
   }
+  const runValidity = evaluateRunValidity({ invalidReasons, failures, consoleErrors });
   return {
     name: scenario.name,
     runId: scenario.experiment?.runId || scenario.name,
     blockId: scenario.experiment?.blockId || null,
     arm: scenario.experiment?.arm || null,
     armName: scenario.experiment?.armName || null,
-    valid: invalidReasons.length === 0,
-    invalidReasons: [...new Set(invalidReasons)],
+    valid: runValidity.valid,
+    invalidReasons: runValidity.invalidReasons,
     required: scenario.required,
     url,
     outDir: scenarioDir,
@@ -454,14 +537,17 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, in
     eventsPath: path.join(scenarioDir, "events.jsonl"),
     summaryPath: path.join(scenarioDir, "summary.json"),
     sampleCount: samples.length,
-    fullWindow: {
-      startsAfterSeconds: scenario.assertAfterSeconds,
-      sampleCount: window.length,
+    timedWindow: {
+      ...windows.fullTimedWindow,
+    },
+    steadyStateWindow: {
+      ...steadyStateWindow,
     },
     thresholds: scenario.thresholds,
     metrics,
     final,
     failures,
+    targetFailures,
     warnings,
   };
 }
@@ -569,6 +655,32 @@ async function waitForCoreReady(page) {
     await page.waitForTimeout(250);
   }
   throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
+}
+
+async function pauseForBattleCheckpoint(page) {
+  const response = await page.evaluate(async () => {
+    const host = window.__host;
+    if (!host?.adapter?.request) throw new Error("Validator cannot synchronously pause the active adapter");
+    return host.adapter.request("validationSetCorePaused", { paused: true });
+  });
+  if (!response?.paused || response?.coreStateName !== "Paused") {
+    throw new Error(`Core did not enter paused state before fixed save load: ${JSON.stringify(response)}`);
+  }
+  return response;
+}
+
+async function resumeAfterBattleCheckpoint(page) {
+  const response = await page.evaluate(async () => {
+    const host = window.__host;
+    if (!host?.adapter?.request) throw new Error("Validator cannot resume the active adapter");
+    const result = await host.adapter.request("validationSetCorePaused", { paused: false });
+    host.adapter.applyFrame?.(result);
+    host.adapter.onStatus?.("Save state loaded (Running)");
+    return result;
+  });
+  if (response?.coreStateName !== "Running") {
+    throw new Error(`Core did not resume after battle checkpoint: ${JSON.stringify(response)}`);
+  }
 }
 
 async function waitForPostLoadProgress(page) {
@@ -764,6 +876,86 @@ async function verifyServedFixture(url, expectedSha256) {
   }
 }
 
+async function verifyServedApplication(baseUrl, coreArtifact) {
+  const paths = {
+    index: "index.html",
+    app: "src/app.js",
+    worker: "src/upstream-discio-worker.js",
+    coreJs: "cores/dolphin/dolphin-core-upstream.js",
+    coreWasm: "cores/dolphin/dolphin-core-upstream.wasm",
+  };
+  const expectedArtifacts = {};
+  const servedArtifacts = {};
+  for (const [name, relativePath] of Object.entries(paths)) {
+    const localPath = path.join(root, ...relativePath.split("/"));
+    expectedArtifacts[name] = name === "coreWasm"
+      ? coreArtifact
+      : await describeFile(localPath, { hash: true });
+    const url = new URL(relativePath, baseUrl);
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Served application artifact missing: ${url.href} returned ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    servedArtifacts[name] = {
+      url: url.href,
+      bytes: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+  const identity = assertServedArtifactIdentity(expectedArtifacts, servedArtifacts);
+  const rootResponse = await fetch(baseUrl, { cache: "no-store" });
+  return {
+    ...identity,
+    baseUrl,
+    isolationHeaders: {
+      coop: rootResponse.headers.get("cross-origin-opener-policy"),
+      coep: rootResponse.headers.get("cross-origin-embedder-policy"),
+    },
+  };
+}
+
+async function collectBuildProvenance() {
+  const buildInfoPath = path.join(root, "cores", "dolphin", "build-info.json");
+  let buildInfo = {};
+  if (existsSync(buildInfoPath)) {
+    try {
+      buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8"));
+    } catch (error) {
+      throw new Error(`Invalid core build provenance ${buildInfoPath}: ${error.message}`);
+    }
+  }
+  const patchHashes = parseListEnv("PATCH_HASHES", readPath(buildInfo, "patches.hashes") || []);
+  return {
+    buildInfoPath: existsSync(buildInfoPath) ? buildInfoPath : null,
+    hostCore: {
+      abiVersion: process.env.HOST_CORE_ABI_VERSION || readPath(buildInfo, "hostCore.abiVersion") || null,
+    },
+    upstream: {
+      dolphinSha: process.env.UPSTREAM_DOLPHIN_SHA || readPath(buildInfo, "upstream.dolphinSha") || null,
+    },
+    patches: { hashes: patchHashes },
+    toolchain: {
+      node: process.version,
+      emscripten: process.env.EMSCRIPTEN_VERSION || readPath(buildInfo, "toolchain.emscripten") || null,
+      cmake: process.env.CMAKE_VERSION || readPath(buildInfo, "toolchain.cmake") || null,
+      ninja: process.env.NINJA_VERSION || readPath(buildInfo, "toolchain.ninja") || null,
+      rust: process.env.RUST_VERSION || readPath(buildInfo, "toolchain.rust") || null,
+      naga: process.env.NAGA_VERSION || readPath(buildInfo, "toolchain.naga") || null,
+    },
+  };
+}
+
+function parseListEnv(name, fallback) {
+  const value = process.env[name];
+  if (!value) return Array.isArray(fallback) ? fallback.map(String) : [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {
+    // Accept a comma-separated list for PowerShell convenience.
+  }
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
 async function saveScreenshot(page, scenarioDir, name) {
   try {
     await page.screenshot({ path: path.join(scenarioDir, name), timeout: 5000 });
@@ -851,11 +1043,16 @@ function runSummaryCsv(results) {
     arm: run.arm,
     armName: run.armName,
     valid: run.valid,
+    qualificationEligible: run.qualification?.eligible,
     invalidReasons: run.invalidReasons,
-    gameSpeedMean: run.metrics.gameSpeed?.mean,
-    coreFpsMean: run.metrics.coreFps?.mean,
-    presentationFpsMean: run.metrics.presentationFps?.mean,
-    visualFpsMean: run.metrics.visualFps?.mean,
+    fullGameSpeedMean: run.metrics.fullTimedWindow?.gameSpeed?.mean,
+    fullCoreFpsMean: run.metrics.fullTimedWindow?.coreFps?.mean,
+    fullPresentationFpsMean: run.metrics.fullTimedWindow?.presentationFps?.mean,
+    fullVisualFpsMean: run.metrics.fullTimedWindow?.visualFps?.mean,
+    steadyGameSpeedMean: run.metrics.steadyState?.gameSpeed?.mean,
+    steadyCoreFpsMean: run.metrics.steadyState?.coreFps?.mean,
+    steadyPresentationFpsMean: run.metrics.steadyState?.presentationFps?.mean,
+    steadyVisualFpsMean: run.metrics.steadyState?.visualFps?.mean,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,
@@ -917,11 +1114,6 @@ function requiredFixturePath(value, label, source) {
 
 function resolveOutDir(value) {
   return path.isAbsolute(value) ? value : path.join(root, ".omx", value);
-}
-
-function parseNumber(value) {
-  const parsed = Number.parseFloat(String(value ?? "").replace("%", ""));
-  return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 function maxRegex(text, regex) {
