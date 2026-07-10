@@ -15,17 +15,20 @@ export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
 export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
   // Recorded from the paused, exact-state checkpoint. The harness pauses the
   // core before State::LoadAs so these values are tied to save bytes rather
-  // than wall-clock delay after loading. Dolphin advances a small number of
-  // timing ticks while finishing load bookkeeping before the after-load
-  // callback runs. Keep that scheduler noise bounded to ~0.1 ms at 486 MHz;
-  // PC, XFB hash, dimensions, and fixture hashes remain exact.
+  // than wall-clock delay after loading. Restored in-slice bookkeeping can
+  // make the after-load observation lower by at most one CoreTiming
+  // MAX_SLICE_LENGTH (20,000 ticks, about 41 microseconds at 486 MHz). PC,
+  // XFB hash, dimensions, callback source, and fixture hashes remain exact.
   frame: null,
   coreTicks: 15166162443,
-  coreTicksTolerance: 50_000,
+  coreTicksDeltaMin: -20_000,
+  coreTicksDeltaMax: 0,
   ppcPc: -2144030364,
   xfbHash: "4b2d0a3b",
   width: 640,
   height: 480,
+  checkpointObservationSource: "cpu-thread-after-load",
+  minLoadedCheckpointGeneration: 1,
 });
 
 export const HOST_CORE_ABI_VERSION = 1;
@@ -521,29 +524,55 @@ export function assertBattleCheckpoint(checkpoint, expected = FIXED_MELEE_BATTLE
   const required = ["frame", "coreTicks", "ppcPc", "xfbHash", "width", "height"];
   const missing = required.filter((field) => checkpoint?.[field] === null || checkpoint?.[field] === undefined || checkpoint?.[field] === "");
   if (missing.length) throw new Error(`Battle/XFB checkpoint is incomplete: ${missing.join(", ")}`);
-  const coreTicksTolerance = Math.max(0, Number(expected.coreTicksTolerance) || 0);
+  const coreTicksDeltaMin = Number.isFinite(Number(expected.coreTicksDeltaMin))
+    ? Number(expected.coreTicksDeltaMin)
+    : 0;
+  const coreTicksDeltaMax = Number.isFinite(Number(expected.coreTicksDeltaMax))
+    ? Number(expected.coreTicksDeltaMax)
+    : 0;
   const coreTicksDelta = expected.coreTicks == null
     ? null
     : Number(checkpoint.coreTicks) - Number(expected.coreTicks);
   const mismatches = [];
   for (const field of required) {
     if (field === "coreTicks" && expected[field] != null) {
-      if (!Number.isFinite(coreTicksDelta) || Math.abs(coreTicksDelta) > coreTicksTolerance) {
+      if (
+        !Number.isFinite(coreTicksDelta) ||
+        coreTicksDelta < coreTicksDeltaMin ||
+        coreTicksDelta > coreTicksDeltaMax
+      ) {
         mismatches.push(
           `${field}: expected ${expected[field]}, got ${checkpoint[field]} ` +
-          `(delta ${coreTicksDelta}, tolerance ${coreTicksTolerance})`
+          `(delta ${coreTicksDelta}, accepted ${coreTicksDeltaMin}..${coreTicksDeltaMax})`
         );
       }
     } else if (expected[field] != null && checkpoint[field] !== expected[field]) {
       mismatches.push(`${field}: expected ${expected[field]}, got ${checkpoint[field]}`);
     }
   }
+  if (
+    expected.checkpointObservationSource != null &&
+    checkpoint.checkpointObservationSource !== expected.checkpointObservationSource
+  ) {
+    mismatches.push(
+      `checkpointObservationSource: expected ${expected.checkpointObservationSource}, ` +
+      `got ${checkpoint.checkpointObservationSource}`
+    );
+  }
+  const minLoadedCheckpointGeneration = Number(expected.minLoadedCheckpointGeneration) || 0;
+  if (Number(checkpoint.loadedCheckpointGeneration) < minLoadedCheckpointGeneration) {
+    mismatches.push(
+      `loadedCheckpointGeneration: expected >=${minLoadedCheckpointGeneration}, ` +
+      `got ${checkpoint.loadedCheckpointGeneration}`
+    );
+  }
   if (mismatches.length) throw new Error(`Battle/XFB checkpoint mismatch: ${mismatches.join("; ")}`);
   return {
     ...checkpoint,
     expectedCoreTicks: expected.coreTicks ?? null,
     coreTicksDelta,
-    coreTicksTolerance,
+    coreTicksDeltaMin,
+    coreTicksDeltaMax,
     verified: true,
   };
 }

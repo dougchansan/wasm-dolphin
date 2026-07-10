@@ -170,18 +170,34 @@ test("served identity and observed battle checkpoint reject mismatches", () => {
     xfbHash: "4b2d0a3b",
     width: 640,
     height: 480,
+    checkpointObservationSource: "cpu-thread-after-load",
+    loadedCheckpointGeneration: 1,
   };
   const exact = assertBattleCheckpoint(fixed);
   assert.equal(exact.verified, true);
   assert.equal(exact.coreTicksDelta, 0);
-  assert.equal(exact.coreTicksTolerance, 50_000);
+  assert.equal(exact.coreTicksDeltaMin, -20_000);
+  assert.equal(exact.coreTicksDeltaMax, 0);
   assert.equal(assertBattleCheckpoint({ ...fixed, frame: 95 }).verified, true);
   const nearby = assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks - 11_350 });
   assert.equal(nearby.verified, true);
   assert.equal(nearby.coreTicksDelta, -11_350);
+  assert.equal(
+    assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks - 20_000 }).verified,
+    true
+  );
   assert.throws(
-    () => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks + 50_001 }),
-    /coreTicks.*tolerance 50000/
+    () => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks - 20_001 }),
+    /coreTicks.*accepted -20000\.\.0/
+  );
+  assert.throws(() => assertBattleCheckpoint({ ...fixed, coreTicks: fixed.coreTicks + 1 }), /coreTicks/);
+  assert.throws(
+    () => assertBattleCheckpoint({ ...fixed, checkpointObservationSource: "legacy-worker-poll" }),
+    /checkpointObservationSource/
+  );
+  assert.throws(
+    () => assertBattleCheckpoint({ ...fixed, loadedCheckpointGeneration: 0 }),
+    /loadedCheckpointGeneration/
   );
   assert.throws(() => assertBattleCheckpoint({ ...fixed, ppcPc: fixed.ppcPc + 1 }), /ppcPc/);
 });
