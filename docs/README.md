@@ -18,6 +18,8 @@
   seven-part audit, bottleneck classification, decisions, and rollback paths.
 - [2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md) —
   aggregate rows, machine-readable decisions, and raw-artifact hashes.
+- [Melee JIT diagnostics](perf-results/melee-jit-diagnostics-2026-07-10.md) —
+  guarded emit failures and long-CoreTiming-slice classification.
 - [Independent core-build parity](perf-results/melee-core-build-parity-2026-07-10.json) —
   machine-readable source, toolchain, JS, WASM, code, and data equality.
 - [GPU completion and input propagation diagnostics](perf-results/melee-latency-diagnostics-2026-07-10.md) —
