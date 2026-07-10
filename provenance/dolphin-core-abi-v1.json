@@ -32,8 +32,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 262998,
-      "sha256": "0b5572584b988d29ce0c6bb609a55a7be3b54af74aa01a6cfae2fc8884c00c5f"
+      "size": 269957,
+      "sha256": "c90b48ccffcc19ece9533c731254378e02ce172bfdc5fa0698480a9fc85892ad"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -207,13 +207,15 @@
       "loadStateFile",
       "mixAudio",
       "mountFile",
+      "rendererDiagnostics",
       "reset",
       "runFrame",
       "saveState",
       "saveStateFile",
       "setAudioMuted",
       "setInputMask",
-      "setInputState"
+      "setInputState",
+      "validationSetCorePaused"
     ],
     "notificationFields": {
       "detachedOglFrame": [

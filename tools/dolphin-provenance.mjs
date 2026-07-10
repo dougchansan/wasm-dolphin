@@ -944,7 +944,7 @@ function inspectWorkerProtocol(root) {
     "Could not verify failed worker response envelope");
   invariant(/\{ type: "detachedOglFrame", bitmap: data\.bitmap, width: data\.width, height: data\.height \}/
     .test(worker), "Could not verify detached OGL notification fields");
-  invariant(/type: "status",\s*message: String\(message\)/s.test(worker),
+  invariant(/function postStatus\(message\)[\s\S]*?const text = String\(message\)[\s\S]*?self\.postMessage\(\{\s*type: "status",\s*message: text\s*\}\)/.test(worker),
     "Could not verify status notification fields");
   return {
     requestEnvelopeFields: ["id", "type", "payload"],
