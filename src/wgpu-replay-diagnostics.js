@@ -20,8 +20,14 @@ export function requestedWgpuDetachedPresenter(search = globalThis.location?.sea
   return new URLSearchParams(search).get("wgpudetached") === "1";
 }
 
-export function requestedWgpuReplayPump(search = globalThis.location?.search ?? "") {
-  return new URLSearchParams(search).get("wgpupump") === "1";
+export function requestedWgpuReplayPump(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpupump");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
 }
 
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
@@ -203,6 +209,18 @@ export function createWgpuReplayClassifier({
     pipelineId: 0,
     state: null
   };
+  const firstEfbPassReadback = {
+    status: "pending",
+    framebufferId: 0,
+    passEndRecordIndex: null,
+    drawCountAtEncode: 0,
+    readbackCount: 0,
+    nonzeroBytes: 0,
+    nonzeroColorBytes: 0,
+    sampledBytes: 0,
+    maxByte: 0,
+    error: null
+  };
   const firstNonzeroEfb = {
     status: "pending",
     framebufferId: 0,
@@ -328,6 +346,59 @@ export function createWgpuReplayClassifier({
   function needsFirstEfbDrawState(indexed = false) {
     return firstEfbDraw.status !== "pass" ||
       (indexed && firstIndexedEfbDraw.status !== "pass");
+  }
+
+  function needsFirstEfbPassReadback(framebufferId = firstEfbDraw.framebufferId) {
+    return firstEfbDraw.status === "pass" &&
+      firstEfbPassReadback.status === "pending" &&
+      (framebufferId >>> 0) === firstEfbDraw.framebufferId;
+  }
+
+  function beginFirstEfbPassReadback({
+    framebufferId = firstEfbDraw.framebufferId,
+    passEndRecordIndex = 0,
+    drawCountAtEncode = efbMutation.drawCount
+  } = {}) {
+    if (!needsFirstEfbPassReadback(framebufferId)) return false;
+    firstEfbPassReadback.status = "running";
+    firstEfbPassReadback.framebufferId = framebufferId >>> 0;
+    firstEfbPassReadback.passEndRecordIndex = passEndRecordIndex >>> 0;
+    firstEfbPassReadback.drawCountAtEncode = Math.max(0, Number(drawCountAtEncode) || 0);
+    recordEvent("first-efb-pass-readback-begin", {
+      framebufferId: firstEfbPassReadback.framebufferId,
+      passEndRecordIndex: firstEfbPassReadback.passEndRecordIndex,
+      drawCountAtEncode: firstEfbPassReadback.drawCountAtEncode
+    });
+    return true;
+  }
+
+  function recordFirstEfbPassReadback({
+    nonzeroBytes = 0,
+    nonzeroColorBytes = nonzeroBytes,
+    sampledBytes = 0,
+    maxByte = 0,
+    error = null
+  } = {}) {
+    if (firstEfbPassReadback.status !== "running") return false;
+    firstEfbPassReadback.readbackCount = 1;
+    firstEfbPassReadback.nonzeroBytes = Math.max(0, Number(nonzeroBytes) || 0);
+    firstEfbPassReadback.nonzeroColorBytes = Math.max(0, Number(nonzeroColorBytes) || 0);
+    firstEfbPassReadback.sampledBytes = Math.max(0, Number(sampledBytes) || 0);
+    firstEfbPassReadback.maxByte = Math.max(0, Number(maxByte) || 0);
+    firstEfbPassReadback.error = error == null ? null : String(error);
+    firstEfbPassReadback.status = error ? "error" :
+      firstEfbPassReadback.nonzeroColorBytes > 0 ? "pass" : "fail";
+    recordEvent("first-efb-pass-readback-complete", {
+      framebufferId: firstEfbPassReadback.framebufferId,
+      passEndRecordIndex: firstEfbPassReadback.passEndRecordIndex,
+      drawCountAtEncode: firstEfbPassReadback.drawCountAtEncode,
+      nonzeroBytes: firstEfbPassReadback.nonzeroBytes,
+      nonzeroColorBytes: firstEfbPassReadback.nonzeroColorBytes,
+      sampledBytes: firstEfbPassReadback.sampledBytes,
+      maxByte: firstEfbPassReadback.maxByte,
+      error: firstEfbPassReadback.error
+    });
+    return true;
   }
 
   function recordEfbReadback({
@@ -547,6 +618,26 @@ export function createWgpuReplayClassifier({
     let classifier = { status: "running", code: "WAITING_FOR_DRAW" };
     if (passAtomicity.splitAtDrainCount) classifier = { status: "fail", code: "PASS_SPLIT_AT_DRAIN" };
     else if (missingResources.total) classifier = { status: "fail", code: "MISSING_RESOURCES" };
+    else if (firstEfbPassReadback.status === "error") classifier = {
+      status: "fail",
+      code: "FIRST_EFB_PASS_READBACK_ERROR"
+    };
+    else if (firstEfbPassReadback.status === "pass") classifier = {
+      status: "pass",
+      code: "FIRST_EFB_PASS_MUTATED"
+    };
+    else if (firstEfbPassReadback.status === "fail" && efbMutation.nonzeroReadbackCount) classifier = {
+      status: "fail",
+      code: "FIRST_EFB_PASS_NO_MUTATION_LATER_PRESENT_MUTATION"
+    };
+    else if (firstEfbPassReadback.status === "fail") classifier = {
+      status: "fail",
+      code: "FIRST_EFB_PASS_NO_MUTATION"
+    };
+    else if (firstEfbPassReadback.status === "running") classifier = {
+      status: "running",
+      code: "WAITING_FOR_FIRST_EFB_PASS_READBACK"
+    };
     else if (efbMutation.nonzeroReadbackCount && presentSubmission.completedCount) classifier = { status: "pass", code: "PASS" };
     else if (efbMutation.postDrawReadbackCount) classifier = { status: "fail", code: "EFB_DRAW_NO_MUTATION" };
     else if (efbMutation.drawCount && efbMutation.readbackCount) classifier = {
@@ -567,6 +658,7 @@ export function createWgpuReplayClassifier({
         firstRealDraw,
         firstEfbDraw,
         firstIndexedEfbDraw,
+        firstEfbPassReadback,
         firstNonzeroEfb,
         presentSubmission,
         ringEpoch,
@@ -586,6 +678,9 @@ export function createWgpuReplayClassifier({
     recordEfbClear,
     recordRealDraw,
     needsFirstEfbDrawState,
+    needsFirstEfbPassReadback,
+    beginFirstEfbPassReadback,
+    recordFirstEfbPassReadback,
     recordEfbReadback,
     captureEfbDrawCount,
     needsPostDrawEfbReadback,

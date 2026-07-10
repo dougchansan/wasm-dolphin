@@ -24,6 +24,7 @@ import {
   parseProfileMetrics,
   parseBattleCheckpoint,
   recordsToCsv,
+  resolveCoreArtifactPath,
   summarizeComparison,
   summarizeJitMetrics,
   summarizeNumeric,
@@ -31,6 +32,22 @@ import {
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
+
+test("run metadata resolves the core selected by coreid", () => {
+  const hash = "a".repeat(64);
+  assert.equal(
+    resolveCoreArtifactPath("repo", `http://127.0.0.1/?coreid=sha256:${hash}`),
+    path.join("repo", "build", "core-candidates", hash, "dolphin-core-upstream.wasm")
+  );
+  assert.equal(
+    resolveCoreArtifactPath("repo", "http://127.0.0.1/?video=software"),
+    path.join("repo", "cores", "dolphin", "dolphin-core-upstream.wasm")
+  );
+  assert.throws(
+    () => resolveCoreArtifactPath("repo", "http://127.0.0.1/?coreid=not-a-hash"),
+    /SHA-256/
+  );
+});
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {
   const helper =

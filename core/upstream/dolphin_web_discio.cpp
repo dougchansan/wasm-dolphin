@@ -380,6 +380,7 @@ std::string RasterProfileStats()
       << profile.fifo_bytes_last << "/" << profile.fifo_bytes_max << "/"
       << profile.fifo_age_last_us << "/" << profile.fifo_age_max_us << "/"
       << profile.fifo_age_sample_count
+      << " fifouf:" << profile.fifo_distance_underflow_count
       << " xfbgen:" << profile.xfb_generation_count << "/" << profile.xfb_generation_last_us
       << "/" << profile.xfb_generation_total_us << "/" << profile.xfb_generation_max_us
       << " framegen:" << profile.frame_generation_count << "/"
@@ -597,6 +598,10 @@ void DolphinWeb_RecordVideoOutputProfile(std::uint32_t sync_us, std::uint32_t pu
   cas_max(s_max_video_sync_us, sync_us);
   cas_max(s_max_video_publish_us, publish_us);
   cas_max(s_max_video_total_us, total_us);
+  // VideoBackendBase::Video_OutputXFB reaches this bridge on the browser
+  // software path even when the native Presenter is headless and never calls
+  // SWGfx::ShowImage. Publish frame cadence at the reached XFB boundary.
+  DolphinWeb::RasterProfile::PublishGeneratedFrame();
 }
 
 void DolphinWeb_RecordSoftwareXfbEncodeProfile(std::uint32_t convert_us, std::uint32_t copy_us,

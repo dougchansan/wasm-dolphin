@@ -4,7 +4,7 @@ const finite = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number
 const nullable = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
 
 export function createCausalTelemetry(overrides = {}) {
-  return deepMerge(
+  const telemetry = deepMerge(
     {
       schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
       enabled: false,
@@ -59,9 +59,14 @@ export function createCausalTelemetry(overrides = {}) {
         fifoConsumeCount: 0,
         fifoBytesLast: 0,
         fifoBytesMax: 0,
+        fifoConsumerObservedBacklogAgeLastMs: null,
+        fifoConsumerObservedBacklogAgeMaxMs: null,
+        // Deprecated schema-v2 compatibility names. These are aliases for
+        // consumer-observed continuous-backlog age, not oldest-item latency.
         fifoOldestPendingAgeLastMs: null,
         fifoOldestPendingAgeMaxMs: null,
         fifoAgeSampleCount: 0,
+        fifoDistanceUnderflowCount: 0,
         xfbGenerationCount: 0,
         xfbGenerationLastMs: null,
         xfbGenerationTotalMs: null,
@@ -175,6 +180,16 @@ export function createCausalTelemetry(overrides = {}) {
     },
     overrides
   );
+  const raster = telemetry.softwareRaster;
+  if (raster.fifoConsumerObservedBacklogAgeLastMs == null)
+    raster.fifoConsumerObservedBacklogAgeLastMs = raster.fifoOldestPendingAgeLastMs;
+  if (raster.fifoConsumerObservedBacklogAgeMaxMs == null)
+    raster.fifoConsumerObservedBacklogAgeMaxMs = raster.fifoOldestPendingAgeMaxMs;
+  if (raster.fifoOldestPendingAgeLastMs == null)
+    raster.fifoOldestPendingAgeLastMs = raster.fifoConsumerObservedBacklogAgeLastMs;
+  if (raster.fifoOldestPendingAgeMaxMs == null)
+    raster.fifoOldestPendingAgeMaxMs = raster.fifoConsumerObservedBacklogAgeMaxMs;
+  return telemetry;
 }
 
 export function emptyStageWindow() {
@@ -222,6 +237,7 @@ export function parseCoreProfileTelemetry(text = "") {
   const tev = /\btev:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const texture = /\btex:(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const fifo = /\bfifo:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const fifoUnderflow = /\bfifouf:(\d+)/i.exec(source);
   const xfbGeneration = /\bxfbgen:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const frameGeneration = /\bframegen:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const micros = (match, index) => {
@@ -274,9 +290,12 @@ export function parseCoreProfileTelemetry(text = "") {
     fifoConsumeCount: finite(fifo?.[2]),
     fifoBytesLast: finite(fifo?.[3]),
     fifoBytesMax: finite(fifo?.[4]),
+    fifoConsumerObservedBacklogAgeLastMs: micros(fifo, 5),
+    fifoConsumerObservedBacklogAgeMaxMs: micros(fifo, 6),
     fifoOldestPendingAgeLastMs: micros(fifo, 5),
     fifoOldestPendingAgeMaxMs: micros(fifo, 6),
     fifoAgeSampleCount: finite(fifo?.[7]),
+    fifoDistanceUnderflowCount: finite(fifoUnderflow?.[1]),
     xfbGenerationCount: finite(xfbGeneration?.[1]),
     xfbGenerationLastMs: micros(xfbGeneration, 2),
     xfbGenerationTotalMs: micros(xfbGeneration, 3),
@@ -347,8 +366,13 @@ export function flattenCausalTelemetry(value) {
     causalTextureSampledTotalMs: telemetry.softwareRaster.textureSampledTotalMs,
     causalFifoBytesLast: telemetry.softwareRaster.fifoBytesLast,
     causalFifoBytesMax: telemetry.softwareRaster.fifoBytesMax,
+    causalFifoConsumerObservedBacklogAgeLastMs:
+      telemetry.softwareRaster.fifoConsumerObservedBacklogAgeLastMs,
+    causalFifoConsumerObservedBacklogAgeMaxMs:
+      telemetry.softwareRaster.fifoConsumerObservedBacklogAgeMaxMs,
     causalFifoOldestPendingAgeLastMs: telemetry.softwareRaster.fifoOldestPendingAgeLastMs,
     causalFifoOldestPendingAgeMaxMs: telemetry.softwareRaster.fifoOldestPendingAgeMaxMs,
+    causalFifoDistanceUnderflowCount: telemetry.softwareRaster.fifoDistanceUnderflowCount,
     causalXfbGenerationCount: telemetry.softwareRaster.xfbGenerationCount,
     causalXfbGenerationLastMs: telemetry.softwareRaster.xfbGenerationLastMs,
     causalFrameGenerationCount: telemetry.softwareRaster.frameGenerationCount,

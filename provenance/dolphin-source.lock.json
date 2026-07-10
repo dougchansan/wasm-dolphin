@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "7ff3d22c40ad2249d9dc8a8949c5847a1c4736518757ca0fc22e92bbb915cdfd",
+  "patchSeriesSha256": "05fc890838da65a459ad04a57ddc91259540e00d0571475d325ec32557d9dde0",
   "patches": [
     {
       "order": 1,
@@ -96,8 +96,8 @@
       "cwd": ".",
       "path": "patches/dolphin-wasm/snapshot/0009-software-raster-phase-profile.patch",
       "hashMode": "lf-normalized",
-      "size": 7380,
-      "sha256": "96c4a5ee0cb55f0dcd6464110b7614a8d82c79cd8596711485b2522266ff55aa"
+      "size": 7037,
+      "sha256": "6aee286ef0a83cd8de2eb3b7370ebba43022bef12b50537d58a953dd5ec80c91"
     },
     {
       "order": 10,
@@ -109,6 +109,14 @@
     },
     {
       "order": 11,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0011-webgpu-upload-watermark.patch",
+      "hashMode": "lf-normalized",
+      "size": 11430,
+      "sha256": "e95385943e083d610f23a2e207d372fde87cee8dc71653386175bb01b73e6a91"
+    },
+    {
+      "order": 12,
       "cwd": "Externals/SFML/SFML",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "hashMode": "lf-normalized",
@@ -116,7 +124,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 12,
+      "order": 13,
       "cwd": "Externals/xxhash/xxHash",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",

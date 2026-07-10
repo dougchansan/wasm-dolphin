@@ -70,6 +70,43 @@ test("duplicate transports do not replace the same pending generation", () => {
   assert.equal(snapshot.pendingGeneration, 2);
 });
 
+test("a late hardware baseline cannot masquerade as input-caused motion", () => {
+  let now = 100;
+  const tracker = createInputVisibleLatencyTracker({ enabled: true, now: () => now });
+  tracker.recordApplied({
+    generation: 3,
+    inputMask: 1,
+    sentAtEpochMs: 90,
+    baselinePollCount: 4,
+    baselineVisualHash: 0x1111,
+    source: "sab"
+  });
+
+  assert.equal(tracker.updatePendingVisualBaseline(0x2222), true);
+  now = 110;
+  tracker.recordObservation({ pollCount: 5, inputMask: 1, visualHash: 0x2222, coreFrame: 10 });
+  assert.equal(tracker.snapshot().visibleCount, 0);
+  now = 120;
+  tracker.recordObservation({ pollCount: 6, inputMask: 1, visualHash: 0x3333, coreFrame: 11 });
+  assert.equal(tracker.snapshot().visibleCount, 1);
+});
+
+test("worker gates WGPU readback latency sampling behind the diagnostic flag", async () => {
+  const source = await readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /const _inputBackbufferOk = inputLatencyDiagnostics[\s\S]*?inputVisibleLatencyTracker\.hasPending\(\)/,
+  );
+  assert.match(source, /inputVisibleLatencyTracker\.updatePendingVisualBaseline\(hash\)/);
+  assert.match(source, /visualSampleSource = "wgpu-readback"/);
+  assert.match(source, /recordVisualFrameHash\(hash\)/);
+  assert.equal(
+    (source.match(/\(wgpuReplayClassifier \|\| inputLatencyDiagnostics\) \? textureUsage\.COPY_SRC : 0/g) || []).length,
+    2,
+    "both initial and resize context.configure calls must permit diagnostic readback",
+  );
+});
+
 test("disabled input tracker records no diagnostic samples", () => {
   const tracker = createInputVisibleLatencyTracker({ enabled: false });
   tracker.recordApplied({ generation: 1, inputMask: 1, sentAtEpochMs: Date.now() });

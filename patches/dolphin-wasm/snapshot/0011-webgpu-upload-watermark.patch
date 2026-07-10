@@ -1,0 +1,260 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 2bf5aa0..789c492 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -9,6 +9,7 @@
+ #include <new>
+ 
+ #include <emscripten/emscripten.h>
++#include <emscripten/threading.h>
+ 
+ namespace WebGPU
+ {
+@@ -36,6 +37,7 @@ static constexpr u32 kRingCapacity = 262144;
+ // before the bump pointer wraps back over a region it might still be
+ // reading. Mirrors the Day-20 XFB-ring idea (no per-frame malloc).
+ static constexpr u32 kUploadArenaBytes = 32u * 1024u * 1024u;
++static constexpr u32 kProtocolUploadWatermark = 1u << 0;
+ 
+ void WebGPUCommandStream::EnsureRing()
+ {
+@@ -52,7 +54,8 @@ void WebGPUCommandStream::EnsureRing()
+   m_header->write.store(0, std::memory_order_relaxed);
+   m_header->read.store(0, std::memory_order_relaxed);
+   m_header->capacity = kRingCapacity;
+-  m_header->reserved = 0;
++  m_header->upload_read.store(0, std::memory_order_relaxed);
++  m_header->protocol_flags.store(0, std::memory_order_relaxed);
+   m_slots = reinterpret_cast<CmdRecord*>(static_cast<u8*>(block) + sizeof(CmdRingHeader));
+   m_capacity = kRingCapacity;
+ 
+@@ -61,7 +64,7 @@ void WebGPUCommandStream::EnsureRing()
+   // reads straight from the shared heap (zero-copy).
+   m_upload_base = static_cast<u8*>(std::malloc(kUploadArenaBytes));
+   m_upload_size = m_upload_base ? kUploadArenaBytes : 0;
+-  m_upload_head = 0;
++  m_upload_write = 0;
+ 
+   // Hand the ring + upload arena to the discio worker. The wasm heap
+   // is a SharedArrayBuffer (USE_PTHREADS), so passing pointers is
+@@ -72,7 +75,8 @@ void WebGPUCommandStream::EnsureRing()
+         if (typeof self !== 'undefined' && self.postMessage)
+           self.postMessage({ type : 'webgpu-cmd-ring', headerPtr : $0,
+                               slotsPtr : $1, capacity : $2, uploadPtr : $3,
+-                              uploadSize : $4 });
++                              uploadSize : $4, protocolVersion : 2,
++                              headerWords : 5 });
+       },
+       reinterpret_cast<intptr_t>(m_header), reinterpret_cast<intptr_t>(m_slots),
+       static_cast<int>(m_capacity), reinterpret_cast<intptr_t>(m_upload_base),
+@@ -213,12 +217,112 @@ u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+     return 0;
+   if (align < 4)
+     align = 4;
+-  u32 head = (m_upload_head + (align - 1)) & ~(align - 1);
+-  if (head + len > m_upload_size)
+-    head = 0;  // wrap (recycle — sized so the consumer is long past)
+-  std::memcpy(m_upload_base + head, data, len);
+-  m_upload_head = head + static_cast<u32>(len);
+-  return static_cast<u32>(reinterpret_cast<uintptr_t>(m_upload_base + head));
++
++  // Convert the monotonic write position to a contiguous physical span.
++  // Padding at the end is part of the reserved byte range so the consumer
++  // watermark accounts for every wrap.
++  const u32 offset = m_upload_write % m_upload_size;
++  u32 aligned_offset = (offset + (align - 1)) & ~(align - 1);
++  u32 padding = aligned_offset - offset;
++  if (aligned_offset + len > m_upload_size)
++  {
++    padding += m_upload_size - aligned_offset;
++    aligned_offset = 0;
++  }
++  const u32 begin = m_upload_write + padding;
++  const u32 end = begin + static_cast<u32>(len);
++
++  // The current worker acknowledges the expanded protocol immediately after
++  // receiving the ring. Before the first arena wrap, wait briefly for that
++  // handshake instead of taking the legacy overwrite-prone wrap path. An old
++  // worker never sets the bit, so bounded fallback preserves compatibility.
++  if (end > m_upload_size && m_upload_handshake_timeouts == 0 &&
++      (m_header->protocol_flags.load(std::memory_order_acquire) &
++       kProtocolUploadWatermark) == 0)
++  {
++    constexpr u32 kMaxHandshakeWaits = 250u;
++    u32 waits = 0;
++    while ((m_header->protocol_flags.load(std::memory_order_acquire) &
++            kProtocolUploadWatermark) == 0 &&
++           waits < kMaxHandshakeWaits)
++    {
++      const u32 observed = m_header->protocol_flags.load(std::memory_order_acquire);
++      emscripten_futex_wait(
++          reinterpret_cast<volatile void*>(&m_header->protocol_flags), observed, 4.0);
++      ++waits;
++    }
++    if ((m_header->protocol_flags.load(std::memory_order_acquire) &
++         kProtocolUploadWatermark) == 0)
++    {
++      ++m_upload_handshake_timeouts;
++      if (m_upload_handshake_timeouts == 1)
++      {
++        EM_ASM(
++            {
++              if (typeof console !== 'undefined')
++                console.warn('[webgpu-ring] upload watermark handshake timed out; legacy wrap active');
++            });
++      }
++    }
++  }
++
++  // A recycled byte is safe only after the JS consumer synchronously copies
++  // its payload into queue.writeBuffer/writeTexture. Bounded backpressure
++  // preserves data if the consumer is merely behind, but avoids hanging the
++  // video thread forever if that worker has stopped.
++  // An older worker never acknowledges the expanded protocol word. Retain
++  // the historical wrap policy in that compatibility case; a current worker
++  // sets the flag before publishing any upload watermark.
++  if ((m_header->protocol_flags.load(std::memory_order_acquire) &
++       kProtocolUploadWatermark) != 0)
++  {
++    u32 waits = 0;
++    constexpr u32 kMaxUploadWaits = 250u;
++    while (end - m_header->upload_read.load(std::memory_order_acquire) > m_upload_size)
++    {
++      const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
++      emscripten_futex_wait(
++          reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
++      if (++waits >= kMaxUploadWaits)
++      {
++        ++m_upload_wait_timeouts;
++        if (m_upload_wait_timeouts == 1 || (m_upload_wait_timeouts % 100) == 0)
++        {
++          EM_ASM(
++              {
++                if (typeof console !== 'undefined')
++                  console.warn('[webgpu-ring] upload watermark wait timed out (' + $0 + ')');
++              },
++              static_cast<int>(m_upload_wait_timeouts));
++        }
++        return 0;
++      }
++    }
++  }
++
++  std::memcpy(m_upload_base + aligned_offset, data, len);
++  m_last_upload_write_before = m_upload_write;
++  m_last_upload_write_after = end;
++  m_last_upload_ptr =
++      static_cast<u32>(reinterpret_cast<uintptr_t>(m_upload_base + aligned_offset));
++  m_last_upload_len = static_cast<u32>(len);
++  m_upload_write = end;
++  return m_last_upload_ptr;
++}
++
++void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
++{
++  // UploadAlloc is immediately followed by its upload-record Push on the
++  // single producer thread. If that Push is dropped at a full command ring,
++  // reclaim the payload (including alignment/wrap padding) so an unreferenced
++  // tail allocation cannot permanently fill the byte arena.
++  if (src_heap_ptr == m_last_upload_ptr && len == m_last_upload_len &&
++      m_upload_write == m_last_upload_write_after)
++  {
++    m_upload_write = m_last_upload_write_before;
++    m_last_upload_ptr = 0;
++    m_last_upload_len = 0;
++  }
+ }
+ 
+ u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
+@@ -246,7 +350,8 @@ void WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_
+   rec.arg.u[1] = dst_offset;
+   rec.arg.u[2] = src_heap_ptr;
+   rec.arg.u[3] = len;
+-  Push(rec);
++  if (!Push(rec))
++    RollbackLastUpload(src_heap_ptr, len);
+ }
+ 
+ u32 WebGPUCommandStream::PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 usage_flags,
+@@ -282,7 +387,8 @@ void WebGPUCommandStream::PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_
+   rec.arg.u[4] = h;
+   rec.arg.u[5] = mip_level;
+   rec.arg.u[6] = layer;
+-  Push(rec);
++  if (!Push(rec))
++    RollbackLastUpload(src_heap_ptr, bytes_per_row * h);
+ }
+ 
+ u32 WebGPUCommandStream::PushCreatePipelineCfg(const void* blob, size_t len)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index cd44606..925f74b 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -152,14 +152,22 @@ struct CmdRingHeader
+   std::atomic<u32> write;  // next slot the producer will fill
+   std::atomic<u32> read;   // next slot the consumer will drain
+   u32 capacity;            // number of CmdRecord slots
+-  u32 reserved;
++  // Monotonic byte position immediately after the last upload payload
++  // copied by the JS consumer. The producer must not recycle any arena
++  // byte at or after this position until the consumer advances it.
++  std::atomic<u32> upload_read;
++  // Capability bits are written by the JS consumer. Keeping this separate
++  // makes the expanded header backward-compatible with older workers: they
++  // use the explicitly messaged slots pointer and leave this word at zero.
++  std::atomic<u32> protocol_flags;
+ };
+-// The JS consumer maps write@i32[0], read@i32[1], capacity@i32[2]
+-// over this header — it MUST stay 16 bytes (4×u32; std::atomic<u32>
++// The JS consumer maps write@i32[0], read@i32[1], capacity@i32[2],
++// upload_read@i32[3], protocol_flags@i32[4]
++// over this header — it MUST stay 20 bytes (5×u32; std::atomic<u32>
+ // is 4 bytes / 4-aligned on wasm32). Guardrail flagged by the Day-27
+ // transport audit.
+-static_assert(sizeof(CmdRingHeader) == 16,
+-              "CmdRingHeader must stay 16 bytes (JS bridge assumes fixed layout)");
++static_assert(sizeof(CmdRingHeader) == 20,
++              "CmdRingHeader must stay 20 bytes (JS bridge assumes fixed layout)");
+ 
+ class WebGPUCommandStream
+ {
+@@ -194,11 +202,11 @@ public:
+   void PushDrawTest(u32 pipeline_id, u32 vertex_count);
+ 
+   // ---- Phase A producer API --------------------------------------
+-  // Bump-allocate `len` bytes into the per-frame upload arena, copy
++  // Ring-allocate `len` bytes into the upload arena, copy
+   // `data` in, and return the ABSOLUTE wasm-heap offset of the copy
+   // (what the consumer reads from for UploadBuffer/UploadTexture), or
+-  // 0 on failure. Offsets recycle (the arena wraps) — sized so the
+-  // consumer (1-2 frames behind) never reads a recycled region.
++  // 0 on failure. Offsets recycle only after the JS consumer publishes
++  // upload_read, so queued records never observe overwritten bytes.
+   u32 UploadAlloc(const void* data, size_t len, u32 align = 4);
+ 
+   u32 PushCreateBuffer(u32 size, u32 usage_flags);
+@@ -246,6 +254,8 @@ public:
+   u32 AllocId() { return m_next_id++; }
+ 
+ private:
++  void RollbackLastUpload(u32 src_heap_ptr, u32 len);
++
+   CmdRingHeader* m_header = nullptr;
+   CmdRecord* m_slots = nullptr;
+   u32 m_capacity = 0;
+@@ -253,7 +263,14 @@ private:
+   // Per-frame upload arena (DESIGN §payload). Bump-allocated, wraps.
+   u8* m_upload_base = nullptr;
+   u32 m_upload_size = 0;
+-  u32 m_upload_head = 0;
++  // Monotonic byte position; modulo m_upload_size is the physical offset.
++  u32 m_upload_write = 0;
++  u32 m_upload_wait_timeouts = 0;
++  u32 m_upload_handshake_timeouts = 0;
++  u32 m_last_upload_write_before = 0;
++  u32 m_last_upload_write_after = 0;
++  u32 m_last_upload_ptr = 0;
++  u32 m_last_upload_len = 0;
+ 
+   // Producer-assigned resource ids. One space is fine — opcode
+   // implies class on the consumer. Starts at 1 (0 = none/sentinel).

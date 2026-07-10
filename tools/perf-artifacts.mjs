@@ -1050,6 +1050,26 @@ export async function collectRunMetadata({
   };
 }
 
+export function resolveCoreArtifactPath(root, urlValue) {
+  const requested = new URL(urlValue, "http://127.0.0.1/")
+    .searchParams.get("coreid")
+    ?.toLowerCase()
+    .replace(/^sha256:/, "") ?? "";
+  if (!requested) {
+    return path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm");
+  }
+  if (!/^[0-9a-f]{64}$/.test(requested)) {
+    throw new Error("coreid must be a SHA-256 content hash");
+  }
+  return path.join(
+    root,
+    "build",
+    "core-candidates",
+    requested,
+    "dolphin-core-upstream.wasm"
+  );
+}
+
 export function parseProfileMetrics(helper = "", frameProfile = "") {
   const core = /\bcoreprof\s+xfb_dt:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+decode:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+vo_sync:([\d.]+)\/max([\d.]+)\s+vo_pub:([\d.]+)\/max([\d.]+)\s+vo_total:([\d.]+)\/max([\d.]+)\s+swxfb:([\d.]+)\s+conv:([\d.]+)\s+copy:([\d.]+)/.exec(helper);
   const frame = /\bloop:([\d.]+)\s+pump:([\d.]+)\s+run:([\d.]+)\s+api:([\d.]+)\s+cap:([\d.]+)\s+copy:([\d.]+)\s+present:([\d.]+)\s+draw:([\d.]+)\s+hash:([\d.]+)\s+paced:([\d.]+)\s+copy:([\d.]+)MB\/s\s+cap:(\d+)\s+shown:(\d+)/.exec(frameProfile);

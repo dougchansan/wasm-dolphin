@@ -19,6 +19,7 @@ import {
   collectRunMetadata,
   parseProfileMetrics,
   recordsToCsv,
+  resolveCoreArtifactPath,
 } from "./perf-artifacts.mjs";
 
 const root = process.cwd();
@@ -175,12 +176,24 @@ if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.F
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPUCOMPLETE);
 if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
+for (const [environmentName, queryName] of [
+  ["WGPUCLASSIFY", "wgpuclassify"],
+  ["WGPUPUMP", "wgpupump"],
+  ["WGPUDETACHED", "wgpudetached"],
+  ["WGPULOADFENCE", "wgpuloadfence"],
+  ["WGPUDEEPDIAG", "wgpudeepdiag"],
+  ["WGPUATOMIC", "wgpuatomic"],
+]) {
+  if (process.env[environmentName] != null) {
+    url.searchParams.set(queryName, process.env[environmentName]);
+  }
+}
 // §28cx in-page main-thread profiler passthrough (?mainprof=1). Headless can
 // only validate the tooling emits — real-Chrome contention is the authoritative
 // signal — but it confirms activation and dumps the audio-pump cadence +
 // LoAF script-attribution snapshot at end of run (mainprofile.json).
 if (process.env.MAINPROF) url.searchParams.set("mainprof", process.env.MAINPROF);
-url.searchParams.set("metrics", "1");
+url.searchParams.set("metrics", process.env.METRICS ?? "1");
 url.searchParams.set("probe", `menu-progress-${Date.now()}`);
 
 const consoleLines = [];
@@ -251,7 +264,7 @@ const runMetadata = await collectRunMetadata({
   showDebugPanel,
   romPath,
   hashRom: process.env.HASH_ROM !== "0",
-  corePath: path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm"),
+  corePath: resolveCoreArtifactPath(root, url.href),
   saveStateUrl,
   saveStatePath,
   saveStateAt,
@@ -735,6 +748,28 @@ try {
       console.warn(`[menu-progress] CDP trace stop failed: ${err.message}`);
     }
   }
+  let rendererDiagnostics = null;
+  try {
+    rendererDiagnostics = await page.evaluate(async () => {
+      const request = window.__host?.adapter?.request;
+      if (typeof request !== "function") return null;
+      return Promise.race([
+        Promise.resolve(request.call(window.__host.adapter, "rendererDiagnostics", {})),
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error("rendererDiagnostics timed out after 5000 ms")),
+          5000
+        )),
+      ]);
+    });
+  } catch (error) {
+    rendererDiagnostics = { captureError: String(error?.message || error) };
+  }
+  if (rendererDiagnostics) {
+    await writeFile(
+      path.join(outDir, "renderer-diagnostics.json"),
+      JSON.stringify(rendererDiagnostics, null, 2)
+    );
+  }
   await writeFile(path.join(outDir, "console.log"), consoleLines.join("\n")).catch(() => {});
   await writeFile(path.join(outDir, "samples.json"), JSON.stringify(samples, null, 2));
   await writeFile(path.join(outDir, "samples.csv"), recordsToCsv(samples));
@@ -780,8 +815,10 @@ try {
     summaryFile: "summary.json",
     samplesJsonFile: "samples.json",
     samplesCsvFile: "samples.csv",
+    rendererDiagnosticsFile: rendererDiagnostics ? "renderer-diagnostics.json" : null,
     saveStateLoad: saveStateLoadResult,
   };
+  summary.rendererDiagnostics = rendererDiagnostics;
   summary.provenance = {
     metadataFile: "run-metadata.json",
     commit: runMetadata.git.commit,

@@ -38,6 +38,7 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.softwareRaster.rasterTraversalCount, 0);
   assert.equal(value.softwareRaster.tevPixelCount, 0);
   assert.equal(value.softwareRaster.textureSampleCount, 0);
+  assert.equal(value.softwareRaster.fifoConsumerObservedBacklogAgeLastMs, null);
   assert.equal(value.softwareRaster.fifoOldestPendingAgeLastMs, null);
   assert.equal(value.softwareRaster.sampledStaleFrameRatio, 0);
   assert.equal(value.audio.underrunCount, 0);
@@ -54,7 +55,7 @@ test("core profile text is promoted without changing the compatibility string", 
     "vo_sync:0.2/max0.6 vo_pub:0.3/max0.7 vo_total:0.5/max1.1 " +
     "swxfb:0.9 conv:0.8 copy:0.1 " +
     "swphase:1 rast:120/4/840/4096 tev:1024/8192/2/410 tex:4096/2/260 " +
-    "fifo:128/127/64/512/900/2400/127 xfbgen:77/900/69300/1800 " +
+    "fifo:128/127/64/512/900/2400/127 fifouf:0 xfbgen:77/900/69300/1800 " +
     "framegen:77/16600/1278200/41000/76";
   assert.deepEqual(parseCoreProfileTelemetry(source), {
     sourceXfbCount: 77,
@@ -97,9 +98,12 @@ test("core profile text is promoted without changing the compatibility string", 
     fifoConsumeCount: 127,
     fifoBytesLast: 64,
     fifoBytesMax: 512,
+    fifoConsumerObservedBacklogAgeLastMs: 0.9,
+    fifoConsumerObservedBacklogAgeMaxMs: 2.4,
     fifoOldestPendingAgeLastMs: 0.9,
     fifoOldestPendingAgeMaxMs: 2.4,
     fifoAgeSampleCount: 127,
+    fifoDistanceUnderflowCount: 0,
     xfbGenerationCount: 77,
     xfbGenerationLastMs: 0.9,
     xfbGenerationTotalMs: 69.3,
@@ -185,6 +189,7 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalTevPixelCount, 1024);
   assert.equal(flat.causalTextureSampleCount, 4096);
   assert.equal(flat.causalFifoOldestPendingAgeMaxMs, 2.4);
+  assert.equal(flat.causalFifoConsumerObservedBacklogAgeMaxMs, 2.4);
   assert.equal(flat.causalSampledStaleFrameRatio, 0.6);
   assert.equal(flat.causalSampledStaleFrameRunMax, 3);
   assert.equal(flat.causalStaleRepaintCount, 2);

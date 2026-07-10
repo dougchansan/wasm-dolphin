@@ -73,7 +73,14 @@ export class EmulatorHost {
     this.wgpuDeepReplayDiagnostics = requestedWgpuDeepReplayDiagnostics(window.location.search);
     this.wgpuDetachedPresenter = requestedWgpuDetachedPresenter(window.location.search);
     this.wgpuLoadEpochFence = requestedWgpuLoadEpochFence(window.location.search);
-    this.wgpuReplayPump = requestedWgpuReplayPump(window.location.search);
+    // Replaying continuously keeps the producer within a bounded 16K-record
+    // window.  Repeated fixed-battle A/B runs showed substantially lower
+    // replay age and higher presentation cadence for the real WGPU backend.
+    // `wgpupump=0` remains the explicit rollback; other backends stay off.
+    this.wgpuReplayPump = requestedWgpuReplayPump(
+      window.location.search,
+      this.videoBackend === "WebGPU-Real"
+    );
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);

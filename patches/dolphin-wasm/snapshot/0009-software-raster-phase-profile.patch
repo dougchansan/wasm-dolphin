@@ -35,31 +35,6 @@ index ced6b9a242..32d864b0aa 100644
    // The zslope should be updated now, even if the triangle is rejected by the scissor test, as
    // zfreeze depends on it
    UpdateZSlope(v0, v1, v2, scissor.x_off, scissor.y_off);
-diff --git a/Source/Core/VideoBackends/Software/SWGfx.cpp b/Source/Core/VideoBackends/Software/SWGfx.cpp
-index 386bd66530..784ee652f8 100644
---- a/Source/Core/VideoBackends/Software/SWGfx.cpp
-+++ b/Source/Core/VideoBackends/Software/SWGfx.cpp
-@@ -16,6 +16,10 @@
- #include "VideoCommon/NativeVertexFormat.h"
- #include "VideoCommon/Present.h"
- 
-+#ifdef __EMSCRIPTEN__
-+#include "dolphin_web_raster_profile.h"
-+#endif
-+
- namespace SW
- {
- SWGfx::SWGfx(std::unique_ptr<SWOGLWindow> window) : m_window(std::move(window))
-@@ -113,6 +117,9 @@ std::unique_ptr<AbstractPipeline> SWGfx::CreatePipeline(const AbstractPipelineCo
- void SWGfx::ShowImage(const AbstractTexture* source_texture,
-                       const MathUtil::Rectangle<int>& source_rc)
- {
-+#ifdef __EMSCRIPTEN__
-+  DolphinWeb::RasterProfile::PublishGeneratedFrame();
-+#endif
-   if (!IsHeadless())
-     m_window->ShowImage(source_texture, source_rc);
- }
 diff --git a/Source/Core/VideoBackends/Software/Tev.cpp b/Source/Core/VideoBackends/Software/Tev.cpp
 index 7b254cb490..7cff2667bf 100644
 --- a/Source/Core/VideoBackends/Software/Tev.cpp
@@ -167,7 +142,7 @@ index 2d3f0c3a9d..dc982f46b9 100644
  #endif
  
  namespace Fifo
-@@ -420,7 +421,12 @@ void FifoManager::RunGpuLoop()
+@@ -420,7 +421,16 @@ void FifoManager::RunGpuLoop()
  #endif
  
              fifo.CPReadPointer.store(readPtr, std::memory_order_relaxed);
@@ -175,13 +150,17 @@ index 2d3f0c3a9d..dc982f46b9 100644
 +            const u32 previous_distance = fifo.CPReadWriteDistance.fetch_sub(
 +                GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
 +#ifdef __EMSCRIPTEN__
++            if (previous_distance < GPFifo::GATHER_PIPE_SIZE)
++              DolphinWeb::RasterProfile::RecordFifoDistanceUnderflow();
++            const u32 remaining_distance = previous_distance >= GPFifo::GATHER_PIPE_SIZE ?
++                                               previous_distance - GPFifo::GATHER_PIPE_SIZE : 0;
 +            DolphinWeb::RasterProfile::RecordFifoConsume(
-+                previous_distance - GPFifo::GATHER_PIPE_SIZE);
++                remaining_distance);
 +#endif
              if ((write_ptr - m_video_buffer_read_ptr) == 0)
              {
                fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
-@@ -560,7 +566,11 @@ int FifoManager::RunGpuOnCpu(int ticks)
+@@ -560,7 +570,15 @@ int FifoManager::RunGpuOnCpu(int ticks)
        fifo.CPReadPointer.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
      }
  
@@ -189,7 +168,11 @@ index 2d3f0c3a9d..dc982f46b9 100644
 +    const u32 previous_distance = fifo.CPReadWriteDistance.fetch_sub(
 +        GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
 +#ifdef __EMSCRIPTEN__
-+    DolphinWeb::RasterProfile::RecordFifoConsume(previous_distance - GPFifo::GATHER_PIPE_SIZE);
++    if (previous_distance < GPFifo::GATHER_PIPE_SIZE)
++      DolphinWeb::RasterProfile::RecordFifoDistanceUnderflow();
++    const u32 remaining_distance = previous_distance >= GPFifo::GATHER_PIPE_SIZE ?
++                                       previous_distance - GPFifo::GATHER_PIPE_SIZE : 0;
++    DolphinWeb::RasterProfile::RecordFifoConsume(remaining_distance);
 +#endif
    }
  

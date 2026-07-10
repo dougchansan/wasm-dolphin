@@ -65,6 +65,14 @@ test("tick retains its duplicate repaint loop independently of fresh-frame routi
     /if \(presentationPacingMode === "tick"\) \{\s*startTickRepaintLoop\(\);\s*\}/s,
   );
   assert.match(worker, /tickRepaintCount \+= 1/);
+  assert.match(
+    worker,
+    /_tickRepaintTimer = setInterval\(\(\) => \{[\s\S]*?if \(cmdRingOwnsCanvas\) return;/,
+  );
+  assert.match(
+    worker,
+    /data\.type !== "webgpu-show-image"[\s\S]*?if \(cmdRingOwnsCanvas\) return;/,
+  );
 });
 
 test("worker causal telemetry distinguishes route counts and queue depth/age distributions", async () => {
@@ -97,4 +105,16 @@ test("worker causal telemetry distinguishes route counts and queue depth/age dis
   ]) {
     assert.match(worker, new RegExp(`\\b${field}\\b`), `${field} must be emitted`);
   }
+});
+
+test("hardware WGPU presents publish cadence only after a successful submission", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    worker,
+    /const submittedPresent = presentAlreadySubmitted \|\| submitEnc\("present"\);[\s\S]*?if \(!submittedPresent\) break;[\s\S]*?cmdRingOwnsCanvas = true;[\s\S]*?recordPresentedFrame\(api\?\.getFrame\?\.\(\) \?\? 0\);/,
+  );
 });

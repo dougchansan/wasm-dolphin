@@ -8,12 +8,16 @@ test("software raster profiling is metrics-gated and explicitly sampled", async 
     "utf8"
   );
   assert.match(header, /inline void SetEnabled\(bool enabled\)/);
+  assert.match(header, /s_profile_state/);
+  assert.match(header, /EnsureLocalEpoch/);
   assert.match(header, /phase == Phase::RasterTraversal \? 63 : 4095/);
-  assert.match(header, /if \(!Enabled\(\)\)\s+return;/);
+  assert.match(header, /duration_cast<std::chrono::nanoseconds>/);
   assert.match(header, /timed_samples/);
   assert.match(header, /sampled_total_us/);
   assert.match(header, /RecordFifoBurst/);
   assert.match(header, /RecordFifoConsume/);
+  assert.match(header, /fifo_consume_count & 1023/);
+  assert.match(header, /RecordFifoDistanceUnderflow/);
   assert.match(header, /PublishGeneratedFrame/);
 });
 
@@ -33,7 +37,7 @@ test("the locked Dolphin patch reaches each measured phase without changing rend
     "Phase::TextureSample",
     "RecordFifoBurst",
     "RecordFifoConsume",
-    "PublishGeneratedFrame",
+    "RecordFifoDistanceUnderflow",
   ]) {
     assert.match(patch, new RegExp(marker.replaceAll("::", "::")));
   }
@@ -47,6 +51,10 @@ test("the bridge exposes the profiler as pending until a parity rebuild", async 
   ]);
   assert.match(bridge, /EMSCRIPTEN_KEEPALIVE\s*\n#endif\s*\nint SetSoftwareRasterProfileEnabled/);
   assert.match(bridge, /RasterProfileStats\(\)/);
+  assert.match(
+    bridge,
+    /void DolphinWeb_RecordVideoOutputProfile[\s\S]*?RasterProfile::PublishGeneratedFrame\(\)/,
+  );
   assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_SetSoftwareRasterProfileEnabled"]);
   assert.ok(!manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
 });

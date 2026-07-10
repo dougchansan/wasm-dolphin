@@ -130,6 +130,14 @@ export function createInputVisibleLatencyTracker({
     return true;
   }
 
+  function updatePendingVisualBaseline(visualHash) {
+    if (!active || !pending) return false;
+    const normalizedHash = Number(visualHash) >>> 0;
+    if (!normalizedHash) return false;
+    pending.baselineVisualHash = normalizedHash;
+    return true;
+  }
+
   function snapshot() {
     return {
       schema: "wasm-dolphin.input-visible-latency.v1",
@@ -156,6 +164,7 @@ export function createInputVisibleLatencyTracker({
     hasPending: () => Boolean(active && pending),
     recordApplied,
     recordObservation,
+    updatePendingVisualBaseline,
     snapshot
   };
 }

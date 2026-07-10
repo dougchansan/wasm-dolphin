@@ -35,6 +35,11 @@ import {
   createInputVisibleLatencyTracker,
   parsePadPollStats
 } from "./input-latency-telemetry.js";
+import {
+  enableWgpuUploadWatermark,
+  nextWgpuUploadRead,
+  publishWgpuUploadRead
+} from "./wgpu-upload-watermark.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -117,6 +122,8 @@ let wgpuPresentCompletionProbeStarted = false;
 let wgpuClassifierEfbReadbackPending = false;
 let wgpuClassifierBackbufferReadbackPending = false;
 let wgpuClassifierXfbReadbackPending = false;
+let wgpuInputBackbufferReadbackPending = false;
+let wgpuInputVisualBaselineReady = false;
 let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuDeepReplayDiagnostics = false;
@@ -583,8 +590,10 @@ async function handleMessage(type, payload) {
         }
       }
       const loadRingBoundary = (wgpuReplayClassifier || wgpuLoadEpochFence)
-        ? summarizeCurrentWgpuRing()
+        ? summarizeCurrentWgpuRing({ maxRecords: webGpuCmdRing?.capacity ?? 4096 })
         : null;
+      const hasHeldReplay = webGpuCmdRing?.heldReplayStart != null ||
+        (webGpuCmdRing?.stagedUploads?.size ?? 0) > 0;
       if (wgpuReplayClassifier) {
         wgpuReplayClassifierGeneration += 1;
         wgpuReplayClassifier = createWgpuReplayClassifier({
@@ -595,14 +604,16 @@ async function handleMessage(type, payload) {
         wgpuClassifierEfbReadbackPending = false;
         wgpuClassifierBackbufferReadbackPending = false;
         wgpuClassifierXfbReadbackPending = false;
+        wgpuInputBackbufferReadbackPending = false;
+        wgpuInputVisualBaselineReady = false;
         wgpuLastBackbufferSourceTextureId = 0;
         wgpuReplayClassifier.recordLoadBoundary(loadRingBoundary);
         wgpuLoadFenceActive = wgpuLoadEpochFence &&
-          loadRingBoundary.summary.openPassDepth > 0;
+          (loadRingBoundary.summary.openPassDepth > 0 || hasHeldReplay);
         wgpuReplayClassifier.recordLoadFence({ armed: wgpuLoadFenceActive });
       } else {
         wgpuLoadFenceActive = wgpuLoadEpochFence &&
-          loadRingBoundary?.summary?.openPassDepth > 0;
+          (loadRingBoundary?.summary?.openPassDepth > 0 || hasHeldReplay);
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       const rc = api.loadStateFile(path) | 0;
@@ -761,6 +772,8 @@ async function loadCore({
   wgpuClassifierEfbReadbackPending = false;
   wgpuClassifierBackbufferReadbackPending = false;
   wgpuClassifierXfbReadbackPending = false;
+  wgpuInputBackbufferReadbackPending = false;
+  wgpuInputVisualBaselineReady = false;
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
   wgpuDeepReplayDiagnostics = Boolean(requestedWgpuDeepReplayDiagnostics);
@@ -1014,7 +1027,9 @@ async function loadCore({
   api.setPresentationScale?.(Number(presentationScale));
   api.setFastSoftwareRaster?.(Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)));
   api.setXfbFastPaths?.((Number(xfbFastPaths) || 0) & 3);
-  api.setSoftwareRasterProfileEnabled?.(collectMetrics ? 1 : 0);
+  api.setSoftwareRasterProfileEnabled?.(
+    collectMetrics && videoBackend === "Software Renderer" ? 1 : 0
+  );
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -1749,6 +1764,10 @@ function startTickRepaintLoop() {
   const SKIP_IF_RECENT_MS = 14; // don't double-paint within one frame of a real paint
   _tickRepaintTimer = setInterval(() => {
     if (!presentationLoopActive) return;
+    // Hardware WGPU presents through the command-ring context. Once it has
+    // submitted a real present, repainting the cached CPU frame here would
+    // immediately cover that backbuffer with the stale checker/green frame.
+    if (cmdRingOwnsCanvas) return;
     if (!_lastFrameCopyValid || _lastFrameLength <= 0) return;
     const now = performance.now();
     if (lastPresentedAt > 0 && (now - lastPresentedAt) < SKIP_IF_RECENT_MS) return;
@@ -3037,7 +3056,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       format,
       alphaMode: "opaque",
       usage: textureUsage.RENDER_ATTACHMENT |
-        (wgpuReplayClassifier ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputLatencyDiagnostics) ? textureUsage.COPY_SRC : 0)
     });
   } catch (e) {
     recordRendererError("validation", `context.configure: ${e?.message || e}`);
@@ -3240,7 +3259,7 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
       device: gpu.device,
       format: gpu.format,
       usage: textureUsage.RENDER_ATTACHMENT |
-        (wgpuReplayClassifier ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputLatencyDiagnostics) ? textureUsage.COPY_SRC : 0)
     });
     gpu.canvasWidth = width;
     gpu.canvasHeight = height;
@@ -4121,7 +4140,7 @@ async function startLazyJitCacheFill() {
 //
 // Header layout (CmdRingHeader, 16 bytes @ headerPtr):
 //   [0] u32 write (atomic)  [1] u32 read (atomic)
-//   [2] u32 capacity        [3] u32 reserved
+//   [2] u32 capacity        [3] u32 upload_read (atomic byte watermark)
 // Slot layout (CmdRecord, 32 bytes @ slotsPtr + i*32):
 //   [0] u32 op   [1..7] 7 words (f32/u32 per opcode)
 const WGPU_CMD_OP_NOP = 0;
@@ -4157,6 +4176,7 @@ const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
+const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
 // Day-28/29 resource object table: producer-assigned id → real GPU
 // object built here on renderGpu.device. Phase A widens this to the
@@ -4193,10 +4213,13 @@ function handleWebGpuCmdRing(event) {
     postStatus("webgpu-cmd-ring: wasm heap is not shared; bridge disabled");
     return;
   }
+  const uploadWatermarkProtocol = Number(data.protocolVersion) >= 2 &&
+    Number(data.headerWords) >= 5;
+  const headerWords = uploadWatermarkProtocol ? 5 : 4;
   webGpuCmdRing = {
-    headerI32: new Int32Array(heap.buffer, data.headerPtr, 4),
-    headerU32: new Uint32Array(heap.buffer, data.headerPtr, 4),
-    consumerRead: new Uint32Array(heap.buffer, data.headerPtr, 4)[1] >>> 0,
+    headerI32: new Int32Array(heap.buffer, data.headerPtr, headerWords),
+    headerU32: new Uint32Array(heap.buffer, data.headerPtr, headerWords),
+    consumerRead: new Uint32Array(heap.buffer, data.headerPtr, headerWords)[1] >>> 0,
     slotsBase: data.slotsPtr,
     capacity: data.capacity >>> 0,
     // Phase A: per-frame upload arena base (absolute wasm-heap
@@ -4204,8 +4227,15 @@ function handleWebGpuCmdRing(event) {
     // heap offsets into this region; the consumer reads them straight
     // from moduleInstance.HEAPU8 (zero-copy).
     uploadBase: (data.uploadPtr >>> 0) || 0,
-    uploadSize: (data.uploadSize >>> 0) || 0
+    uploadSize: (data.uploadSize >>> 0) || 0,
+    uploadWatermarkEnabled: false,
+    stagedUploads: new Map(),
+    stagedUploadBytes: 0,
+    heldReplayStart: null,
+    stagedPassStart: null,
+    stagedScanCursor: null
   };
+  if (uploadWatermarkProtocol) enableWgpuUploadWatermark(webGpuCmdRing);
   publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
   postStatus(
     `webgpu-cmd-ring: registered (cap=${data.capacity} upload=${
@@ -4222,6 +4252,110 @@ function currentWgpuReadIndex(ring) {
 
 function currentWgpuUploadReadIndex(ring) {
   return ring?.headerI32 ? Atomics.load(ring.headerI32, 3) >>> 0 : 0;
+}
+
+function releaseWgpuUploadPayload(ring, uploadPointer, uploadBytes) {
+  if (!ring?.uploadWatermarkEnabled) return null;
+  const nextRead = publishWgpuUploadRead(ring, uploadPointer, uploadBytes);
+  if (nextRead === null) {
+    webGpuCausalStats.errorCount += 1;
+    recordRendererError(
+      "upload-watermark",
+      `invalid upload span ptr=${uploadPointer >>> 0} bytes=${uploadBytes >>> 0}`
+    );
+    return;
+  }
+  webGpuCausalStats.uploadReadLast = nextRead;
+  webGpuCausalStats.uploadReleaseCount += 1;
+  return nextRead;
+}
+
+function copyWgpuUploadPayload(heap, pointer, bytes, padToFour = false) {
+  const length = padToFour ? (bytes + 3) & ~3 : bytes;
+  if (length === bytes) return heap.slice(pointer, pointer + bytes);
+  const copy = new Uint8Array(length);
+  copy.set(heap.subarray(pointer, pointer + bytes));
+  return copy;
+}
+
+function stageHeldWgpuUploads(ring, startIndex, writeIndex, u32, heap) {
+  if (!ring?.uploadWatermarkEnabled || startIndex === writeIndex) return;
+  const startedAt = performance.now();
+  const normalizedStart = startIndex >>> 0;
+  if (ring.stagedPassStart !== normalizedStart) {
+    // A held pass is consumed before another can become the suffix. Refuse
+    // to skip over retained bytes if that invariant is ever violated.
+    if (ring.stagedUploads.size > 0) {
+      webGpuCausalStats.errorCount += 1;
+      recordRendererError("upload-stage-order", "held pass changed with staged uploads pending");
+      return;
+    }
+    ring.stagedPassStart = normalizedStart;
+    ring.stagedScanCursor = normalizedStart;
+  }
+  let index = ring.stagedScanCursor ?? normalizedStart;
+  let scannedRecords = 0;
+  while (index !== writeIndex) {
+    scannedRecords += 1;
+    const word = (ring.slotsBase + (index % ring.capacity) * 32) >>> 2;
+    const op = u32[word];
+    let pointer = 0;
+    let bytes = 0;
+    let kind = "";
+    if (op === WGPU_CMD_OP_UPLOAD_BUFFER) {
+      pointer = u32[word + 3];
+      bytes = u32[word + 4];
+      kind = "buffer";
+    } else if (op === WGPU_CMD_OP_UPLOAD_TEXTURE) {
+      pointer = u32[word + 2];
+      bytes = Math.imul(u32[word + 3], u32[word + 5]) >>> 0;
+      kind = "texture";
+    }
+    if (kind) {
+      const stagedByteLimit = Math.min(
+        WGPU_MAX_STAGED_UPLOAD_BYTES,
+        ring.uploadSize || WGPU_MAX_STAGED_UPLOAD_BYTES
+      );
+      const paddedBytes = kind === "buffer" ? (bytes + 3) & ~3 : bytes;
+      if (ring.stagedUploadBytes + paddedBytes > stagedByteLimit) {
+        webGpuCausalStats.heldUploadStageLimitCount += 1;
+        break;
+      }
+      const currentRead = currentWgpuUploadReadIndex(ring);
+      const expectedRead = nextWgpuUploadRead({
+        currentRead,
+        uploadPointer: pointer,
+        uploadBytes: bytes,
+        uploadArenaBase: ring.uploadBase,
+        uploadArenaSize: ring.uploadSize
+      });
+      if (expectedRead === null) {
+        releaseWgpuUploadPayload(ring, pointer, bytes);
+        break;
+      }
+      const data = copyWgpuUploadPayload(heap, pointer, bytes, kind === "buffer");
+      const publishedRead = releaseWgpuUploadPayload(ring, pointer, bytes);
+      if (publishedRead !== expectedRead) break;
+      ring.stagedUploads.set(index, { kind, data });
+      ring.stagedUploadBytes += data.byteLength;
+      webGpuCausalStats.heldUploadStagedCount += 1;
+      webGpuCausalStats.heldUploadStagedBytes += bytes;
+      webGpuCausalStats.heldUploadStagedHighWaterBytes = Math.max(
+        webGpuCausalStats.heldUploadStagedHighWaterBytes,
+        ring.stagedUploadBytes
+      );
+    }
+    index = (index + 1) >>> 0;
+    ring.stagedScanCursor = index;
+  }
+  const elapsed = performance.now() - startedAt;
+  webGpuCausalStats.heldUploadScanCount += 1;
+  webGpuCausalStats.heldUploadScannedRecords += scannedRecords;
+  webGpuCausalStats.heldUploadScanTotalMs += elapsed;
+  webGpuCausalStats.heldUploadScanMaxMs = Math.max(
+    webGpuCausalStats.heldUploadScanMaxMs,
+    elapsed
+  );
 }
 
 function publishWgpuReadIndex(ring, readIndex) {
@@ -4778,6 +4912,15 @@ const webGpuCausalStats = {
   replayPumpEmptyPollCount: 0,
   replayWindowRecords: 0,
   uploadReadLast: 0,
+  uploadReleaseCount: 0,
+  heldUploadStagedCount: 0,
+  heldUploadStagedBytes: 0,
+  heldUploadStagedHighWaterBytes: 0,
+  heldUploadStageLimitCount: 0,
+  heldUploadScanCount: 0,
+  heldUploadScannedRecords: 0,
+  heldUploadScanTotalMs: 0,
+  heldUploadScanMaxMs: 0,
   detachedBitmapSentCount: 0,
   detachedBitmapCoalescedCount: 0,
   detachedBitmapErrorCount: 0,
@@ -4839,10 +4982,26 @@ function drainWebGpuCmdRing() {
     while (discardTo !== write) {
       const word = (ring.slotsBase + (discardTo % ring.capacity) * 32) >>> 2;
       const op = fenceU32[word];
+      const staged = ring.stagedUploads?.get(discardTo);
+      if (staged) {
+        ring.stagedUploads.delete(discardTo);
+        ring.stagedUploadBytes = Math.max(0, ring.stagedUploadBytes - staged.data.byteLength);
+      } else if (op === WGPU_CMD_OP_UPLOAD_BUFFER) {
+        releaseWgpuUploadPayload(ring, fenceU32[word + 3], fenceU32[word + 4]);
+      } else if (op === WGPU_CMD_OP_UPLOAD_TEXTURE) {
+        releaseWgpuUploadPayload(
+          ring,
+          fenceU32[word + 2],
+          Math.imul(fenceU32[word + 3], fenceU32[word + 5]) >>> 0
+        );
+      }
       discardTo = (discardTo + 1) >>> 0;
       if (op === WGPU_CMD_OP_END_PASS) {
         completedAtRecordIndex = (discardTo - 1) >>> 0;
         wgpuLoadFenceActive = false;
+        ring.heldReplayStart = null;
+        ring.stagedPassStart = null;
+        ring.stagedScanCursor = null;
         break;
       }
     }
@@ -4921,6 +5080,7 @@ function drainWebGpuCmdRing() {
       })
     : write;
   if (replayLimit !== write) {
+    ring.heldReplayStart ??= replayLimit;
     wgpuReplayClassifier?.recordAtomicHold({ recordIndex: replayLimit, writeIndex: write });
   }
   const dev = renderGpu.device;
@@ -5133,6 +5293,7 @@ function drainWebGpuCmdRing() {
   };
   const endPass = (reason = "implicit", recordIndex = read) => {
     if (pass) {
+      const endedFramebufferId = passFbId;
       if (passFbId === 0) {
         lastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
         wgpuLastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
@@ -5141,6 +5302,80 @@ function drainWebGpuCmdRing() {
       wgpuReplayClassifier?.recordPassEnd({ reason, recordIndex });
       pass = null;
       flushPassDiag();
+
+      // Present-time EFB sampling can be invalidated by a later clear.  When
+      // the classifier is enabled, submit exactly one readback immediately
+      // after the first completed EFB pass that contained a draw.  Keeping
+      // the copy in this encoder proves whether that pass itself mutated its
+      // target without changing normal (classifier-off) replay behavior.
+      if (wgpuReplayClassifier?.beginFirstEfbPassReadback({
+        framebufferId: endedFramebufferId,
+        passEndRecordIndex: recordIndex,
+        drawCountAtEncode: wgpuReplayClassifier.captureEfbDrawCount()
+      })) {
+        const classifierGeneration = wgpuReplayClassifierGeneration;
+        const color = webGpuObjects.textures.get(endedFramebufferId);
+        let readback = null;
+        try {
+          if (!color || color.format.startsWith("depth")) {
+            throw new Error(`EFB texture ${endedFramebufferId} unavailable for readback`);
+          }
+          const width = color.tex.width;
+          const height = color.tex.height;
+          const bytesPerRow = Math.ceil(width * 4 / 256) * 256;
+          readback = dev.createBuffer({
+            size: bytesPerRow * height,
+            usage: 0x1 | 0x8 // MAP_READ | COPY_DST
+          });
+          ensureEnc().copyTextureToBuffer(
+            { texture: color.tex },
+            { buffer: readback, bytesPerRow, rowsPerImage: height },
+            { width, height, depthOrArrayLayers: 1 }
+          );
+          if (!submitEnc("first-efb-pass-readback")) {
+            throw new Error("first EFB pass readback submission failed");
+          }
+          readback.mapAsync(0x1).then(() => {
+            const bytes = new Uint8Array(readback.getMappedRange());
+            let nonzeroBytes = 0;
+            let nonzeroColorBytes = 0;
+            let maxByte = 0;
+            for (let y = 0; y < height; y += 1) {
+              const row = y * bytesPerRow;
+              for (let x = 0; x < width; x += 1) {
+                const pixel = row + x * 4;
+                for (let channel = 0; channel < 4; channel += 1) {
+                  const value = bytes[pixel + channel];
+                  if (!value) continue;
+                  nonzeroBytes += 1;
+                  if (channel < 3) nonzeroColorBytes += 1;
+                  if (value > maxByte) maxByte = value;
+                }
+              }
+            }
+            if (classifierGeneration === wgpuReplayClassifierGeneration) {
+              wgpuReplayClassifier?.recordFirstEfbPassReadback({
+                nonzeroBytes,
+                nonzeroColorBytes,
+                sampledBytes: width * height * 4,
+                maxByte
+              });
+            }
+            readback.unmap();
+            readback.destroy();
+          }).catch((error) => {
+            if (classifierGeneration === wgpuReplayClassifierGeneration) {
+              wgpuReplayClassifier?.recordFirstEfbPassReadback({ error });
+            }
+            readback?.destroy();
+          });
+        } catch (error) {
+          if (classifierGeneration === wgpuReplayClassifierGeneration) {
+            wgpuReplayClassifier?.recordFirstEfbPassReadback({ error });
+          }
+          readback?.destroy();
+        }
+      }
     }
   };
   const heapCopy = (off, len) => heap.slice(off, off + len);
@@ -5205,15 +5440,27 @@ function drainWebGpuCmdRing() {
         }
         case WGPU_CMD_OP_UPLOAD_BUFFER: {
           const bufferId = u32[recWord + 1];
-          const buf = webGpuObjects.buffers.get(bufferId);
-          if (!buf) {
-            wgpuReplayClassifier?.recordMissingResource({ kind: "upload-buffer", id: bufferId });
+          const srcP = u32[recWord + 3];
+          const uploadBytes = u32[recWord + 4];
+          const stagedUpload = ring.stagedUploads?.get(read) ?? null;
+          if (stagedUpload) {
+            ring.stagedUploads.delete(read);
+            ring.stagedUploadBytes = Math.max(
+              0,
+              ring.stagedUploadBytes - stagedUpload.data.byteLength
+            );
           }
-          if (buf) {
-            // writeBuffer requires offset & size multiples of 4
-            // (producer already aligns; round len defensively).
-            const len = (u32[recWord + 4] + 3) & ~3;
-            const srcP = u32[recWord + 3];
+          const buf = webGpuObjects.buffers.get(bufferId);
+          const len = (uploadBytes + 3) & ~3;
+          const uploadSource = stagedUpload?.data ??
+            new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len);
+          try {
+            if (!buf) {
+              wgpuReplayClassifier?.recordMissingResource({ kind: "upload-buffer", id: bufferId });
+            }
+            if (buf) {
+              // writeBuffer requires offset & size multiples of 4
+              // (producer already aligns; round len defensively).
             // DIAG one-shot per buffer id: dump what we actually write.
             // The VS UBO is the big one; floats @byte32=posnormalmatrix,
             // @byte128=projection. Zeros here ⇒ upload path broken;
@@ -5224,8 +5471,9 @@ function drainWebGpuCmdRing() {
             // First few + periodic so steady-state UBO uploads are
             // visible (one-shot only caught the pre-SetConstants zero).
             if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
-              const ff = new Float32Array(moduleInstance.HEAPU8.buffer,
-                                          srcP, Math.min(len, 160) >>> 2);
+              const ff = new Float32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset,
+                                          Math.min(len, 160) >>> 2);
               console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
                 `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
                 `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
@@ -5243,16 +5491,16 @@ function drainWebGpuCmdRing() {
             if (wgpuDeepReplayDiagnostics && len >= 1500 && len <= 1700) {
               self._wgFogN = (self._wgFogN || 0) + 1;
               if (self._wgFogN <= 6 || (self._wgFogN % 1500) === 0) {
-                const ib = new Int32Array(moduleInstance.HEAPU8.buffer,
-                                          srcP + 432, 8);   // fogcolor+fogi
-                const fb = new Float32Array(moduleInstance.HEAPU8.buffer,
-                                            srcP + 464, 4);  // fogf
+                const ib = new Int32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset + 432, 8);   // fogcolor+fogi
+                const fb = new Float32Array(uploadSource.buffer,
+                                            uploadSource.byteOffset + 464, 4);  // fogf
                 // §28e: TEV color registers — I_COLORS @0 (int4[4]),
                 // I_KCOLORS @64 (int4[4]), I_ALPHA @128 (int4). If the
                 // untextured backdrop TEV reads these and they're 0,
                 // that's why it's black (vs a fog problem).
-                const cb = new Int32Array(moduleInstance.HEAPU8.buffer,
-                                          srcP, 36);  // colors+kcolors+alpha
+                const cb = new Int32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset, 36);  // colors+kcolors+alpha
                 console.log(`[s28-fog] id=${bid} len=${len} ` +
                   `fogcolor=${ib[0]},${ib[1]},${ib[2]},${ib[3]} ` +
                   `fogi=${ib[4]},${ib[5]},${ib[6]},${ib[7]} ` +
@@ -5262,8 +5510,8 @@ function drainWebGpuCmdRing() {
                 // normalises texcoords by f32(I_TEXDIMS[map].xy*128).
                 // If these are 0 ⇒ div-by-0 ⇒ NaN uv ⇒ sample 0 ⇒
                 // black despite a valid texture+konst.
-                const td = new Int32Array(moduleInstance.HEAPU8.buffer,
-                                          srcP + 144, 16);  // texdims[0..3]
+                const td = new Int32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset + 144, 16);  // texdims[0..3]
                 console.log(`[s28-creg] id=${bid} ` +
                   `c0=${cb[0]},${cb[1]},${cb[2]},${cb[3]} ` +
                   `c1=${cb[4]},${cb[5]},${cb[6]},${cb[7]} ` +
@@ -5282,8 +5530,7 @@ function drainWebGpuCmdRing() {
               // I_TEXDIMS (member_3 @byte144) for the effective-UV calc.
               if (!self._wgPsSnap || self._wgPsSnap.byteLength < len)
                 self._wgPsSnap = new Uint8Array(len);
-              self._wgPsSnap.set(
-                new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              self._wgPsSnap.set(uploadSource.subarray(0, len));
               self._wgPsSnapLen = len;
             }
             // [s28be] snapshot the VS UBO (VertexShaderConstants ~4112B;
@@ -5294,8 +5541,7 @@ function drainWebGpuCmdRing() {
             if (wgpuDeepReplayDiagnostics && len >= 4000 && len <= 4200) {
               if (!self._wgVsSnap || self._wgVsSnap.byteLength < len)
                 self._wgVsSnap = new Uint8Array(len);
-              self._wgVsSnap.set(
-                new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              self._wgVsSnap.set(uploadSource.subarray(0, len));
               self._wgVsSnapLen = len;
             }
             // [webgpu-DIAG-utilubo] EFB-copy VS reads src_offset(.xy)
@@ -5319,10 +5565,12 @@ function drainWebGpuCmdRing() {
             if (bid === self._wgUtilBuf &&
                 ((self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8
                  || _utWcOk)) {
-              const uf = new Float32Array(moduleInstance.HEAPU8.buffer,
-                                          srcP, Math.min(len, 64) >>> 2);
-              const ui = new Uint32Array(moduleInstance.HEAPU8.buffer,
-                                         srcP, Math.min(len, 64) >>> 2);
+              const uf = new Float32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset,
+                                          Math.min(len, 64) >>> 2);
+              const ui = new Uint32Array(uploadSource.buffer,
+                                         uploadSource.byteOffset,
+                                         Math.min(len, 64) >>> 2);
               console.log(`[webgpu-DIAG-utilubo] id=${bid} len=${len} ` +
                 `src_offset=${uf[0]?.toFixed(4)},${uf[1]?.toFixed(4)} ` +
                 `src_size=${uf[2]?.toFixed(4)},${uf[3]?.toFixed(4)} ` +
@@ -5337,13 +5585,19 @@ function drainWebGpuCmdRing() {
               if (!self._wgVbSnap) self._wgVbSnap = new Map();
               const dstOff = u32[recWord + 2] & ~3;
               const snap = new Uint8Array(len);
-              snap.set(new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len));
+              snap.set(uploadSource.subarray(0, len));
               self._wgVbSnap.set(dstOff, snap);
               if (self._wgVbSnap.size > 64)
                 self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
             }
-            q.writeBuffer(buf, u32[recWord + 2] & ~3,
-                          heapCopy(srcP, len));
+              q.writeBuffer(buf, u32[recWord + 2] & ~3,
+                            stagedUpload?.data ??
+                              copyWgpuUploadPayload(heap, srcP, uploadBytes, true));
+            }
+          } finally {
+            // heapCopy/q.writeBuffer have synchronously detached this upload
+            // from shared wasm memory, so the producer may now recycle it.
+            if (!stagedUpload) releaseWgpuUploadPayload(ring, srcP, uploadBytes);
           }
           break;
         }
@@ -5364,14 +5618,28 @@ function drainWebGpuCmdRing() {
         }
         case WGPU_CMD_OP_UPLOAD_TEXTURE: {
           const textureId = u32[recWord + 1];
-          const t = webGpuObjects.textures.get(textureId);
-          if (!t) {
-            wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
+          const src = u32[recWord + 2];
+          const bpr = u32[recWord + 3];
+          const h = u32[recWord + 5];
+          const uploadBytes = Math.imul(bpr, h) >>> 0;
+          const stagedUpload = ring.stagedUploads?.get(read) ?? null;
+          if (stagedUpload) {
+            ring.stagedUploads.delete(read);
+            ring.stagedUploadBytes = Math.max(
+              0,
+              ring.stagedUploadBytes - stagedUpload.data.byteLength
+            );
           }
-          const uz = u32[recWord + 7];
-          if (t && !t.format.startsWith("depth") && uz < t.layers) {
-            const src = u32[recWord + 2], bpr = u32[recWord + 3];
-            const w = u32[recWord + 4], h = u32[recWord + 5];
+          const t = webGpuObjects.textures.get(textureId);
+          const uploadSource = stagedUpload?.data ??
+            new Uint8Array(moduleInstance.HEAPU8.buffer, src, uploadBytes);
+          try {
+            if (!t) {
+              wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
+            }
+            const uz = u32[recWord + 7];
+            if (t && !t.format.startsWith("depth") && uz < t.layers) {
+              const w = u32[recWord + 4];
             // DIAG one-shot per tex id: confirm uploaded pixels aren't
             // all-zero (→ black sampling). Dumps first 4 RGBA texels.
             self._wgUtN = self._wgUtN || {};
@@ -5379,22 +5647,24 @@ function drainWebGpuCmdRing() {
             if (!self._wgUtN[tid] &&
                 (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
               self._wgUtN[tid] = true;
-              const px = new Uint8Array(moduleInstance.HEAPU8.buffer, src,
-                                        Math.min(bpr * h, 16));
+              const px = uploadSource.subarray(0, Math.min(uploadBytes, 16));
               let nz = 0;
-              const chk = new Uint8Array(moduleInstance.HEAPU8.buffer, src,
-                                         Math.min(bpr * h, 4096));
+              const chk = uploadSource.subarray(0, Math.min(uploadBytes, 4096));
               for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
               console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
                 `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
-            q.writeTexture(
-              { texture: t.tex, mipLevel: u32[recWord + 6],
-                origin: { x: 0, y: 0, z: uz } },
-              heapCopy(src, bpr * h),
-              { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
-              { width: w, height: h, depthOrArrayLayers: 1 });
+              q.writeTexture(
+                { texture: t.tex, mipLevel: u32[recWord + 6],
+                  origin: { x: 0, y: 0, z: uz } },
+                stagedUpload?.data ?? heapCopy(src, uploadBytes),
+                { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
+                { width: w, height: h, depthOrArrayLayers: 1 });
+            }
+          } finally {
+            // queue.writeTexture consumes the local heapCopy synchronously.
+            if (!stagedUpload) releaseWgpuUploadPayload(ring, src, uploadBytes);
           }
           break;
         }
@@ -6203,6 +6473,7 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
           endPass("submit-present", read);
+          let presentAlreadySubmitted = false;
           if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
             const efb = webGpuObjects.textures.get(self._wgEfbColorId);
             const bs = efb ? ensureBlitState() : null;
@@ -6275,10 +6546,19 @@ function drainWebGpuCmdRing() {
             const _backbufferOk = Boolean(
               wgpuReplayClassifier?.needsPresentationReadback("backbuffer", P)
             ) && !wgpuClassifierBackbufferReadbackPending;
+            // Input-to-visible diagnostics need the actual hardware output,
+            // not the stale CPU XFB hash left behind after WGPU takes canvas
+            // ownership.  Establish one baseline, then sample only while an
+            // input generation is pending.  This is opt-in because a mapped
+            // GPU readback is intentionally too expensive for normal play.
+            const _inputBackbufferOk = inputLatencyDiagnostics &&
+              lastBackbufferTexture && !wgpuInputBackbufferReadbackPending &&
+              (!wgpuInputVisualBaselineReady || inputVisibleLatencyTracker.hasPending());
             const _sourceOk = lastBackbufferSourceTextureId > 0 && Boolean(
               wgpuReplayClassifier?.needsPresentationReadback("xfb", P)
             ) && !wgpuClassifierXfbReadbackPending;
-            if (_preOk || _wcOk || _classifyOk || _backbufferOk || _sourceOk) {
+            if (_preOk || _wcOk || _classifyOk || _backbufferOk ||
+                _sourceOk || _inputBackbufferOk) {
             if (_preOk) self._wgCpyTick = tick;
             if (_wcOk) self._wgCpyWcTick = _wcTick;
             const pending = [];
@@ -6329,7 +6609,7 @@ function drainWebGpuCmdRing() {
                   `${e?.message || e}`);
               }
             }
-            if (_backbufferOk && lastBackbufferTexture) {
+            if ((_backbufferOk || _inputBackbufferOk) && lastBackbufferTexture) {
               try {
                 ensureEnc();
                 const w = lastBackbufferTexture.width;
@@ -6345,6 +6625,7 @@ function drainWebGpuCmdRing() {
                   rb, bpr, w, h, framebufferId: 0, kind: "backbuffer",
                   isEfb: false,
                   sourceTextureId: lastBackbufferSourceTextureId,
+                  inputVisualSample: _inputBackbufferOk,
                   presentSequence: P,
                   classifierGeneration: wgpuReplayClassifierGeneration,
                   efbDrawCountAtEncode: 0,
@@ -6361,10 +6642,13 @@ function drainWebGpuCmdRing() {
               if (pending.some((entry) => entry.kind === "backbuffer")) {
                 wgpuClassifierBackbufferReadbackPending = true;
               }
+              if (pending.some((entry) => entry.inputVisualSample)) {
+                wgpuInputBackbufferReadbackPending = true;
+              }
               if (pending.some((entry) => entry.kind === "xfb")) {
                 wgpuClassifierXfbReadbackPending = true;
               }
-              submitEnc("present");
+              presentAlreadySubmitted = submitEnc("present");
               for (const p of pending) {
                 p.rb.mapAsync(0x1).then(() => {
                   const a = new Uint8Array(p.rb.getMappedRange());
@@ -6417,6 +6701,16 @@ function drainWebGpuCmdRing() {
                       wgpuClassifierXfbReadbackPending = false;
                     }
                   }
+                  if (p.inputVisualSample) {
+                    const hash = hashFrameBytes(a);
+                    visualSampleSource = "wgpu-readback";
+                    if (!wgpuInputVisualBaselineReady) {
+                      wgpuInputVisualBaselineReady = true;
+                      inputVisibleLatencyTracker.updatePendingVisualBaseline(hash);
+                    }
+                    recordVisualFrameHash(hash);
+                    wgpuInputBackbufferReadbackPending = false;
+                  }
                   const cy = p.h >> 1, cx = p.w >> 1;
                   const o = cy * p.bpr + cx * 4;
                   const o2 = (p.h >> 2) * p.bpr + (p.w >> 2) * 4;
@@ -6444,13 +6738,26 @@ function drainWebGpuCmdRing() {
                       p.classifierGeneration === wgpuReplayClassifierGeneration) {
                     wgpuClassifierXfbReadbackPending = false;
                   }
+                  if (p.inputVisualSample) {
+                    wgpuInputBackbufferReadbackPending = false;
+                  }
                   console.log(`[webgpu-DIAG-cpy] map ${p.tag} err ${e?.message || e}`);
                 });
               }
             }
             }
           }
-          submitEnc("present");
+          const submittedPresent = presentAlreadySubmitted || submitEnc("present");
+          if (!submittedPresent) break;
+          // Count hardware presents at the same boundary used by the
+          // software presenters: a successful queue submission.  The old
+          // path incremented only a private WGPU counter, which made the
+          // public presentation FPS read as zero even while the browser was
+          // visibly presenting.  Claim canvas ownership immediately too, so
+          // the legacy repaint loop cannot race this submitted frame before
+          // the current command-ring drain returns.
+          cmdRingOwnsCanvas = true;
+          recordPresentedFrame(api?.getFrame?.() ?? 0);
           scheduleDetachedWgpuBitmap(q);
           webGpuExecStats.present++;
           if (webGpuExecStats.present - webGpuExecStats.lastLog >= 120) {
@@ -6508,6 +6815,19 @@ function drainWebGpuCmdRing() {
   }
   endPass("drain-boundary", read);
   submitEnc("drain-boundary");
+  if (!deferBeginPass && read === replayLimit && replayLimit !== write) {
+    // Preserve pass atomicity without deadlocking the bounded upload arena.
+    // Stage the held suffix only AFTER every replayable-prefix upload has
+    // synchronously copied and advanced its watermark. Upload allocations
+    // and watermark releases must stay in producer order; acknowledging the
+    // suffix first can let the producer overwrite an earlier prefix payload.
+    stageHeldWgpuUploads(ring, replayLimit, write, u32, heap);
+  }
+  if (read === write) {
+    ring.heldReplayStart = null;
+    ring.stagedPassStart = null;
+    ring.stagedScanCursor = null;
+  }
   publishWgpuReadIndex(ring, read);
   const processed = (read - initialRead) >>> 0;
   wgpuReplayClassifier?.recordDrainEpoch({
@@ -7165,6 +7485,7 @@ let webGpuShowImageCount = 0;
 function handleWebGpuShowImage(event) {
   const data = event.data;
   if (!data || data.type !== "webgpu-show-image" || !data.ptr || !data.len) return;
+  if (cmdRingOwnsCanvas) return;
   webGpuShowImageCount += 1;
   if (webGpuShowImageCount === 1) {
     postStatus(
