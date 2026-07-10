@@ -1,5 +1,10 @@
 # Melee software-hybrid validation
 
+> **Historical baseline:** this sheet records the earlier 2026-07-09 run. Use
+> the [2026-07-10 evidence package](melee-performance-evidence-2026-07-10.md)
+> and [audit](../performance-audit-2026-07-10.md) for the current pinned core,
+> direct-save protocol, repeated comparisons, and strict-run verdict.
+
 This page is a repeatable results sheet and a place for the current claimed
 baseline. It intentionally contains no invented benchmark values. The claim to
 validate is: on a suitable modern desktop Chrome setup, the recommended

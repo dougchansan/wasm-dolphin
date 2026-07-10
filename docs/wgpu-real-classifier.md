@@ -9,8 +9,8 @@ normal renderer diagnostics:
 ?core=upstream&video=wgpu&presenter=webgpu&wgpuclassify=1&metrics=1
 ```
 
-The perf harness stores the result at
-`rendererDiagnostics.wgpuReplayClassifier` in its raw JSON. Without the query
+The perf harness stores the result at `renderer.wgpuReplayClassifier` in the
+run's raw `manifest.json`. Without the query
 flag that field is `null`; the classifier does not run.
 
 Atomic pass replay is enabled by default. `wgpuatomic=0` restores the legacy
@@ -54,11 +54,6 @@ at that snapshot boundary. A snapshot can therefore split a valid producer
 pass, discard the consumer's pass-local state, and replay later state or draw
 records with no pass open.
 
-A clean headed Chrome run at commit `4980693` directly observed this invariant
-failure: 29 passes ended at a drain boundary and 425 subsequent state records
-were replayed outside a pass. The raw manifest is stored locally at
-`.omx/wgpu-real/classifier-4980693-clean/software-stable/manifest.json`.
-
 The consumer now scans the visible ring prefix and stops before an incomplete
 `BEGIN_PASS`. It advances the shared read index only after the matching
 `END_PASS` is visible, while still consuming safe resource records before the
@@ -66,15 +61,21 @@ pass. The ring is large enough for the observed command batches; retain
 `wgpuatomic=0` while validating unusual scenes in case a future pass approaches
 the ring capacity.
 
-This is a replay-correctness fix, not a claim that `video=wgpu` is playable. In
-one headed same-code A/B, legacy replay recorded 372 split passes and 63,014
-state records outside a pass; atomic replay recorded zero of either. Atomic
-replay also produced a nonzero pre-save EFB sample. After the Kirby/Link save
-was loaded and resumed, however, more than 110,000 classified EFB draws still
-ended in an all-zero EFB sample and the canvas remained the diagnostic grid at
-zero presentation/visual FPS. The single A/B showed no material throughput
-change and is not a performance qualification. The next failure boundary is
-therefore battle draw-to-EFB mutation, before XFB presentation.
+This is a replay-correctness fix, not a claim that `video=wgpu` is playable.
+The current evidence package contains synthetic boundary tests plus headed
+atomic-replay diagnostics; it does not package the older legacy-replay research
+runs and does not rely on their counters.
+
+A separate transport defect made `nojitcache=1` skip the pthread command-ring and
+show-image listeners together with the optional JIT cache. That coupling is now
+removed: renderer transport always installs, while cache broadcast, compile,
+and lazy-fill work remains disabled. A post-fix headed run with `nojitcache=1`
+registered the ring, replayed 8,323 atomic passes with no splits or outside-pass
+records, submitted 394,160 real EFB draws, and completed present submission.
+All nine bounded post-draw EFB readbacks were still zero, so the classifier
+reported `EFB_DRAW_NO_MUTATION`; presentation and visual FPS remained zero.
+The next failure boundary is battle draw-to-EFB mutation, before XFB
+presentation. These diagnostics are not a performance qualification.
 
 The classifier is the dynamic check for that condition. It does not establish
 that every black frame has the same cause: after pass atomicity is clean, use

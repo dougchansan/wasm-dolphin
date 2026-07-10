@@ -75,12 +75,14 @@ assume-unchanged and skip-worktree), recomputes every result blob and tree, and
 reports:
 
 ```text
-verified result tree 894201c58d67cd65ce67892776f5ccf5c143663c
+verified result tree a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42
 ```
 
 The active lock contains eight root snapshot patches and two patches applied in
 the pinned SFML and xxHash submodules. It captures the complete forensic delta,
-including the hardware-WebGPU/Naga call site. The older top-level
+including the hardware-WebGPU/Naga call site. The ordered patch-set SHA-256 is
+`ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722`.
+The older top-level
 `0001`-`0009` files remain research history and are not applied by the locked
 build. See [the bridge guide](webgpu-naga-bridge.md).
 
@@ -91,8 +93,8 @@ baked core:
 
 | Artifact | Canonical size | SHA-256 |
 | --- | ---: | --- |
-| `dolphin-core-upstream.js` | 260,703 bytes | `2465f3c0d43864eb7ce0aa2f8bde33ee082e8a835b88b7d4813199f0cdfde3c8` |
-| `dolphin-core-upstream.wasm` | 12,800,707 bytes | `03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f` |
+| `dolphin-core-upstream.js` | 261,224 bytes | `00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658` |
+| `dolphin-core-upstream.wasm` | 12,807,931 bytes | `3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a` |
 
 The JS digest is calculated after CRLF-to-LF normalization, and
 `.gitattributes` requires LF for core JS files. This prevents checkout line
@@ -104,6 +106,14 @@ glue, WASM import, C++ dynamic-JIT wrapper, and active patch series.
 Build success alone does not establish gameplay parity. Compare two independent
 build records with `npm run compare:core-builds -- <left> <right>`, then run the
 fixed Kirby-versus-Link save smoke on the candidate and on the default baseline.
+
+Two independent builds of this core matched byte-for-byte. The independent
+records include an identical 10,315,220-byte code section (SHA-256
+`b2b717681c4ba68a66df095765b7904fce21802b32fb7dea8587886e79e54a52`)
+and 2,452,406-byte data section (SHA-256
+`b47165d9f983a39b108a1f75a1607bbbbcda0ebf25c6170cb3f15a6a55f40c02`).
+The build and gameplay evidence are summarized in the
+[2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
 
 ## Known local assumptions
 
@@ -127,9 +137,9 @@ build record, not `vendor/dolphin/`.
 - [x] Record the Rust toolchain, Naga version, and Cargo lock.
 - [x] Record the existing `.wasm` byte size and SHA-256 hash.
 - [x] Record the Chrome version used for the current headed diagnostics.
-- [ ] Rebuild twice in separate clean directories and establish parity.
-- [ ] Run `npm test` and `npm run check` from the recorded checkout.
-- [ ] Store measured gameplay evidence separately from build success.
+- [x] Rebuild twice in separate clean directories and establish parity.
+- [x] Run `npm test` and `npm run check` from the recorded checkout.
+- [x] Store measured gameplay evidence separately from build success.
 
 Useful artifact commands:
 

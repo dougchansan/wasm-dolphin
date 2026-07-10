@@ -14,6 +14,12 @@
   machine-specific validation template and claimed baseline.
 - [Performance audit (2026-07-09)](performance-audit-2026-07-09.md) —
   provenance-complete fixed-battle measurements and ranked optimization work.
+- [Performance audit (2026-07-10)](performance-audit-2026-07-10.md) — final
+  seven-part audit, bottleneck classification, decisions, and rollback paths.
+- [2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md) —
+  aggregate rows, machine-readable decisions, and raw-artifact hashes.
+- [Independent core-build parity](perf-results/melee-core-build-parity-2026-07-10.json) —
+  machine-readable source, toolchain, JS, WASM, code, and data equality.
 - [Fixed-battle result CSV](perf-results/melee-kirby-link-fixed-battle-2026-07-09.csv) —
   aggregate rows for the audit's headed Chrome runs.
 - [Worker transport A/B](worker-transport.md) — one-way reply suppression,

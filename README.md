@@ -17,8 +17,8 @@ real-time play possible inside the browser sandbox.
 
 **Project references:** [current status](docs/current-status.md) ·
 [rendering modes](docs/rendering-modes.md) · [JIT flags](docs/jit-flags.md) ·
-[reproducible build](docs/repro-build.md) ·
-[Melee validation results](docs/perf-results/melee-software-hybrid.md)
+[reproducible build](docs/repro-build.md) · [latest audit](docs/performance-audit-2026-07-10.md) ·
+[validation evidence](docs/perf-results/melee-performance-evidence-2026-07-10.md)
 
 ---
 
@@ -27,10 +27,10 @@ real-time play possible inside the browser sandbox.
 | Area | State |
 |------|-------|
 | Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
-| PPC→WASM JIT with GPR register cache | ✅ Default-on; historical throughput result needs a reproducible rerun |
+| PPC→WASM JIT with GPR register cache | ⚠️ Default-on; current emit failures and benefit need classification |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
-| Audio | ✅ Worker-fed presentation, tuned buffering |
-| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — current classifier did not reach a real game frame |
+| Audio | ✅ Worker-fed/tuned audio buffering |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Experimental / parked — draws submit, but the EFB remains zero |
 | Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
 
 The default configuration is the recommended, locally validated
@@ -70,7 +70,7 @@ pins every knob for reproducibility:
 
 - `video=software` + `presenter=webgpu` — software rasterizer, presented to the
   canvas through a WebGPU blit (the "software hybrid").
-- `wasmjit=1` — the PowerPC→WASM JIT (with register cache) is active.
+- `wasmjit=1` — request guarded PPC→WASM JIT; verify each run's metrics.
 - `pacing=tick` — repaint the canvas on a steady tick for smoother scrolling
   (default for software paths).
 - `fastsw=1` — balanced/crisp fast software mode (see [Raster quality](#raster-quality-fastsw)).
@@ -105,8 +105,8 @@ registers are held in WASM locals for the life of a block (loaded in the
 prologue, flushed at block end and around calls) instead of round-tripping to
 the emulated register file on every access.
 
-- Historical local A/B reported **+38% raw throughput**; rerun it on a pinned,
-  reproducible core before treating that number as a release benchmark.
+- A historical local A/B reported **+38% raw throughput**, but the current
+  fixed-scene audit found emit failures and did not reproduce that claim.
 - Escape hatch: `?regalloc=0` disables it.
 - `?smearcompile=1` (default-on) spreads JIT compilation to reduce mid-match
   compile bursts.
@@ -156,16 +156,15 @@ raise unique-frame cadence, but are not guaranteed to raise game speed:
 between neighbors. Mode 1 shades one sample per 2×2 cell; modes 2 and 3 shade
 one per 4×4 cell. None is literal full quality; `fastsw=1` remains the crisp
 default. Results are scene-dependent—see the
-[measured performance audit](docs/performance-audit-2026-07-09.md).
+[measured performance audit](docs/performance-audit-2026-07-10.md).
 
 ### Rendering: WebGPU hardware backend (experimental, parked)
 
 `?video=wgpu` selects the true WebGPU hardware renderer command path, intended
-to bypass the software-raster unique-frame ceiling. It has rendered on some
-builds and GPUs,
-but can render black or only a diagnostic pattern instead of game frames, so it
-is **not** the default. Shader, batch, upload-lifetime, and first-draw failures
-still need the staged classifier described in the performance audit.
+to bypass the software-raster unique-frame ceiling. The current classifier
+reaches real draws and present completion, but post-draw EFB readbacks remain
+zero, so it can show a diagnostic pattern instead of game frames and is **not**
+the default. The next boundary is draw-to-EFB correctness, not presentation.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.
@@ -234,17 +233,18 @@ npm run check     # syntax-check all JS entry points
 npm run perf:gate # perf regression gate
 ```
 
-Real-browser gameplay validation uses a headed-Chrome harness that boots the
-ISO, optionally loads a save-state, and samples the OSD counters (game speed,
-core fps, unique/visual fps) to `samples.json` plus screenshots:
+Real-browser qualification uses headed Chrome and directly loads the exact
+Kirby-versus-Link save. It verifies ROM/save/checkpoint identities, sends no
+menu or gameplay input, and writes raw JSON/CSV/events plus screenshots:
 
 ```powershell
-$env:HEADED="1"; $env:VIDEO="software"; $env:FASTSW="1"
-node tools/menu-progress-validate.mjs --out-dir .omx/menu-progress/run1
+$env:ROM='<verified Melee Rev 2 ISO>'; $env:SAVE_STATE_PATH='<verified Kirby-vs-Link save>'
+$env:PERF_PROBE_HEADED='1'; npm run perf:gate
 ```
 
-Throughput A/B drivers live in `tools/ab-*.ps1`. Headless Chrome has no WebGPU,
-so rendering paths must be validated headed.
+Use a comparison config for repeated A/B blocks. Older menu and `ab-*.ps1`
+drivers are research aids, not qualifying evidence. Headless runs are always
+non-qualifying for renderer claims.
 
 ---
 
@@ -265,9 +265,9 @@ patches/dolphin-wasm/    Build gates + browser-platform patches + session notes
 tools/
   serve.mjs              Dev server (COOP/COEP)
   build-upstream-target.mjs   Emscripten build driver
-  menu-progress-validate.mjs  Headed-Chrome validation harness
+  perf-regression-gate.mjs    Direct-save headed-Chrome qualification harness
   naga-spirv-wgsl/       Rust SPIR-V→WGSL transpiler (WebGPU path)
-  ab-*.ps1               Throughput A/B drivers
+  ab-*.ps1               Historical/non-qualifying research drivers
 docs/                    Roadmaps and investigation trail
 tests/                   Node unit tests
 ```
@@ -288,15 +288,15 @@ Standard browser gamepads are also polled.
 
 ## Known limitations
 
-- **Crisp *and* smooth is not achievable on the software path.** Full-quality
+- **Crisp *and* smooth is not yet achieved on the software path.** The balanced
   raster (`fastsw=1`) is capped at the rasterizer's unique-frame rate during
   heavy motion; the fast modes buy smoothness by reducing image quality. The
-  only way to get both is the WebGPU hardware renderer (parked) or a
-  SIMD-vectorized software rasterizer.
+  main routes to both are fixing hardware WGPU or optimizing, vectorizing, or
+  parallelizing the measured hot software-raster phases.
 - **WebGPU hardware renderer is GPU-dependent** — verify on the target GPU
   before relying on it; it can render black on some Windows GPUs.
-- In-browser structural limits (no fastmem trap, no WASM SIMD, baseline-tier
-  codegen) bound how close the JIT can get to native speed.
+- In-browser structural limits (no fastmem trap and no SIMD emission in the
+  dynamic PPC JIT) bound how close the JIT can get to native speed.
 
 ---
 

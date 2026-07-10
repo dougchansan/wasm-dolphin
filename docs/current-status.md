@@ -23,9 +23,11 @@ scenes. `fastsw=1` is the balanced/crisp default; literal full-resolution
 software rasterization is `fastsw=0`.
 
 The true WebGPU hardware renderer is selected with `video=wgpu`. It is
-experimental and parked, and it may render black or stop at a diagnostic
-pattern instead of a game frame. Wii and broader GameCube compatibility are
-not the current focus.
+experimental and parked. On the current validation machine, command transport
+reaches real draws and present completion, but post-draw EFB readbacks remain
+zero (`EFB_DRAW_NO_MUTATION`), so the canvas stops at a diagnostic pattern
+instead of game content. Wii and broader GameCube compatibility are not the
+current focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |
@@ -37,5 +39,5 @@ not the current focus.
 | General compatibility | Unverified | Low |
 
 Record machine-specific evidence in
-[the Melee software-hybrid results sheet](perf-results/melee-software-hybrid.md)
+[the latest Melee evidence package](perf-results/melee-performance-evidence-2026-07-10.md)
 rather than treating these status statements as universal benchmark results.
