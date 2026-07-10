@@ -209,13 +209,19 @@ const WASM_JIT_DEGRADED_COOLDOWN_FRAMES = 300;
 
 function createRendererDiagnostics() {
   return {
-    requestedBackend: null,
-    activeBackend: "none",
+    requestedVideoBackend: null,
+    configuredVideoBackend: null,
+    activeVideoBackend: "none",
+    videoBackendEvidence: "not-configured",
+    requestedPresenterBackend: null,
+    activePresenterBackend: "none",
     fallback: null,
     adapter: null,
     device: null,
     errors: [],
     emscriptenPrintErr: [],
+    statusHistory: [],
+    fatalStatusHistory: [],
   };
 }
 
@@ -233,9 +239,11 @@ function recordRendererError(kind, message) {
 function rendererDiagnosticsPayload() {
   return {
     ...rendererDiagnostics,
-    activeBackend: renderBackend,
+    activePresenterBackend: renderBackend,
     errors: rendererDiagnostics.errors.map((entry) => ({ ...entry })),
     emscriptenPrintErr: [...rendererDiagnostics.emscriptenPrintErr],
+    statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
+    fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
   };
 }
 
@@ -264,6 +272,11 @@ self.addEventListener("message", async (event) => {
     const result = await handleMessage(type, payload);
     postResult(id, result);
   } catch (error) {
+    const errorName = error?.name || error?.constructor?.name || "Error";
+    if (errorName === "LinkError" || errorName === "WebAssembly.LinkError") {
+      recordRendererError("wasm-link-error", `${errorName}: ${error?.message || error}`);
+    }
+    postStatus(`${errorName}: ${error instanceof Error ? error.message : String(error)}`);
     self.postMessage({
       id,
       ok: false,
@@ -524,7 +537,8 @@ async function loadCore({
     return moduleInstance;
   }
   rendererDiagnostics = createRendererDiagnostics();
-  rendererDiagnostics.requestedBackend = normalizePresenterBackend(presenterBackend);
+  rendererDiagnostics.requestedVideoBackend = videoBackend;
+  rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
 
   const normalizedOglProxyMode = normalizeOglProxyMode(oglProxyMode);
@@ -571,12 +585,12 @@ async function loadCore({
   if (canvas && videoBackend === "OGL" && !readbackOgl) {
     renderCanvas = canvas;
     renderBackend = "ogl";
-    rendererDiagnostics.activeBackend = renderBackend;
+    rendererDiagnostics.activePresenterBackend = renderBackend;
     postStatus("Worker OGL path: canvas attached, awaiting WebGL2 context creation");
   } else if (detachedOgl) {
     renderCanvas = moduleCanvas;
     renderBackend = "ogl";
-    rendererDiagnostics.activeBackend = renderBackend;
+    rendererDiagnostics.activePresenterBackend = renderBackend;
     // Detached mode still "owns" a canvas (the standalone OffscreenCanvas);
     // it's just not the user's visible one. Without this, the presentation
     // loop never starts (it gates on workerOwnsCanvas) and presentFrame is
@@ -596,7 +610,7 @@ async function loadCore({
     // 1000s of swaps but the visible canvas only updates once.
     renderCanvas = moduleCanvas;
     renderBackend = "ogl";
-    rendererDiagnostics.activeBackend = renderBackend;
+    rendererDiagnostics.activePresenterBackend = renderBackend;
     workerOwnsCanvas = true;
     postStatus("Worker SAB OGL: standalone OffscreenCanvas, pixels via SharedArrayBuffer");
   }
@@ -693,6 +707,9 @@ async function loadCore({
       if (rendererDiagnostics.emscriptenPrintErr.length > 64) {
         rendererDiagnostics.emscriptenPrintErr.shift();
       }
+      if (/webgpu[^\n]*validation/i.test(text)) {
+        recordRendererError("validation", `Emscripten printErr: ${text}`);
+      }
       postStatus(text);
     },
     onAbort: (reason) => {
@@ -727,7 +744,13 @@ async function loadCore({
   // table problem from Day 6. Phase B adds cache lookup in the EM_JS;
   // Phase C adds IndexedDB persistence.
   if (!noJitCache) installDolphinJitCacheChannel(moduleInstance);
-  api.setVideoBackend?.(videoBackend);
+  if (api.setVideoBackend) {
+    api.setVideoBackend(videoBackend);
+    rendererDiagnostics.configuredVideoBackend = videoBackend;
+    rendererDiagnostics.videoBackendEvidence = "SetVideoBackend invoked; waiting for accepted Dolphin boot";
+  } else {
+    rendererDiagnostics.videoBackendEvidence = "SetVideoBackend export unavailable";
+  }
   api.setCpuThread?.(Boolean(cpuThread));
   api.setCpuCore?.(cpuCore);
   ppcWasmJitRequested = Boolean(ppcWasmJit);
@@ -982,6 +1005,10 @@ async function mountFile(file) {
     coreBoot.attempted = true;
     const _t_boot = performance.now();
     coreBoot.accepted = Boolean(api.bootDisc(path));
+    if (coreBoot.accepted) {
+      rendererDiagnostics.activeVideoBackend = rendererDiagnostics.configuredVideoBackend || "unknown";
+      rendererDiagnostics.videoBackendEvidence = "SetVideoBackend invoked and BootDisc accepted";
+    }
     console.log(`[boot-phase] api.bootDisc() took ${(performance.now() - _t_boot).toFixed(1)}ms`);
     const _t_pump = performance.now();
     api.pumpHostJobs?.();
@@ -2321,8 +2348,7 @@ function formatProfileWindow(elapsedMs) {
 }
 
 async function setupSoftwarePresenter(canvas, presenterBackend) {
-  rendererDiagnostics = createRendererDiagnostics();
-  rendererDiagnostics.requestedBackend = presenterBackend;
+  rendererDiagnostics.requestedPresenterBackend = presenterBackend;
   renderCanvas = canvas;
   renderContext = null;
   renderGpu = null;
@@ -2336,7 +2362,7 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
     try {
       renderGpu = await createWebGpuPresenter(renderCanvas);
       renderBackend = "webgpu";
-      rendererDiagnostics.activeBackend = renderBackend;
+      rendererDiagnostics.activePresenterBackend = renderBackend;
       postStatus("WebGPU presenter active");
       return;
     } catch (error) {
@@ -2353,7 +2379,7 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
       renderCanvas.getContext("webgl", softwareBlitContextAttributes());
     if (renderGl) {
       renderBackend = "webgl";
-      rendererDiagnostics.activeBackend = renderBackend;
+      rendererDiagnostics.activePresenterBackend = renderBackend;
       renderGlState = createSoftwareBlitter(renderGl);
       return;
     }
@@ -2361,7 +2387,7 @@ async function setupSoftwarePresenter(canvas, presenterBackend) {
 
   renderContext = renderCanvas.getContext("2d", { alpha: false });
   renderBackend = renderContext ? "2d" : "none";
-  rendererDiagnostics.activeBackend = renderBackend;
+  rendererDiagnostics.activePresenterBackend = renderBackend;
   if (!renderContext) {
     throw new Error("Upstream software renderer could not create a worker canvas context");
   }
@@ -2588,6 +2614,7 @@ self.__dolphinWebGpuClear = function (r, g, b) {
     pass.end();
     gpu.device.queue.submit([encoder.finish()]);
   } catch (e) {
+    recordRendererError("real-clear-error", e?.message || e);
     postStatus(`WebGPU real-clear error: ${e?.message || e}`);
   }
 };
@@ -2908,10 +2935,29 @@ function postResult(id, result) {
 }
 
 function postStatus(message) {
+  const text = String(message);
+  const entry = {
+    atMs: Number(performance.now().toFixed(3)),
+    message: text.slice(0, 1000),
+  };
+  rendererDiagnostics.statusHistory.push(entry);
+  if (rendererDiagnostics.statusHistory.length > 128) rendererDiagnostics.statusHistory.shift();
+  if (isFatalStatusMessage(text)) {
+    rendererDiagnostics.fatalStatusHistory.push(entry);
+    if (rendererDiagnostics.fatalStatusHistory.length > 128) {
+      rendererDiagnostics.fatalStatusHistory.shift();
+    }
+  }
   self.postMessage({
     type: "status",
-    message: String(message)
+    message: text
   });
+}
+
+function isFatalStatusMessage(message) {
+  return /(?:webgpu[^\n]*(?:validation|device[ -]lost|uncaptured|real-clear error|show-image draw error|unavailable|fail|missing|threw|error)|emscripten abort|aborted\(|webassembly\.(?:linkerror|runtimeerror)|worker rpc[^\n]*timed out)/i.test(
+    String(message || "")
+  );
 }
 
 // Day-7 persistent JIT cache. The master cache lives here on the discio
@@ -6000,6 +6046,7 @@ function handleWebGpuShowImage(event) {
     const frameView = new Uint8Array(heap.buffer, data.ptr, data.len);
     drawFrameBytesToWebGpu(data.width, data.height, frameView);
   } catch (e) {
+    recordRendererError("show-image-draw-error", e?.message || e);
     if (!self._webGpuShowImageErrLogged) {
       self._webGpuShowImageErrLogged = true;
       postStatus(`webgpu-show-image draw error: ${e?.message || e}`);

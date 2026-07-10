@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,6 +23,7 @@ import {
   summarizeComparison,
   summarizeNumeric,
   summarizeTimedMetricWindows,
+  validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
 
@@ -192,71 +193,131 @@ test("served closure extraction includes core-host and detects a changed depende
   );
 });
 
-test("known WebGPU validation, device, WASM, and fallback evidence is fatal", () => {
+test("all retained WebGPU, WASM LinkError, and fallback evidence is fatal", () => {
   const evidence = findFatalRuntimeEvidence({
-    consoleLines: ["[webgpu-exec] VALIDATION: bind group layout mismatch"],
-    statuses: ["status failed: WebAssembly RuntimeError"],
+    consoleLines: [
+      "[webgpu-exec] VALIDATION: bind group layout mismatch",
+      "WebAssembly.LinkError: import object field is not callable",
+    ],
+    statuses: [
+      "WebGPU real-clear error: command encoder invalid",
+      "webgpu-show-image draw error: texture destroyed",
+      "status failed: WebAssembly RuntimeError",
+    ],
     renderer: {
-      requestedBackend: "webgpu",
-      activeBackend: "webgl",
+      requestedPresenterBackend: "webgpu",
+      activePresenterBackend: "webgl",
       errors: [{ kind: "device-lost", message: "destroyed" }],
-      emscriptenPrintErr: ["Aborted(out of bounds memory access)"],
+      emscriptenPrintErr: [
+        "Aborted(out of bounds memory access)",
+        "WebGPU validation error: bind group incompatible",
+      ],
+      statusHistory: [{ message: "worker RPC rendererDiagnostics timed out after 10000 ms" }],
+      fatalStatusHistory: [{ message: "WebGPU uncaptured validation error: stale status" }],
     },
   });
   assert.ok(evidence.some((line) => line.includes("VALIDATION")));
+  assert.ok(evidence.some((line) => line.includes("WebAssembly.LinkError")));
+  assert.ok(evidence.some((line) => line.includes("real-clear error")));
+  assert.ok(evidence.some((line) => line.includes("show-image draw error")));
   assert.ok(evidence.some((line) => line.includes("device-lost")));
   assert.ok(evidence.some((line) => line.includes("renderer fallback")));
   assert.ok(evidence.some((line) => line.includes("emscripten-printErr")));
+  assert.ok(evidence.some((line) => line.includes("timed out")));
+  assert.ok(evidence.some((line) => line.includes("stale status")));
 });
 
-test("qualification requires headed build, profile, adapter, and toolchain provenance", () => {
+test("worker diagnostics structurally retain fatal catches and RPCs are bounded", async () => {
+  const [workerSource, gateSource] = await Promise.all([
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/perf-regression-gate.mjs", import.meta.url), "utf8"),
+  ]);
+  for (const token of [
+    "requestedVideoBackend",
+    "activeVideoBackend",
+    "requestedPresenterBackend",
+    "activePresenterBackend",
+    "fatalStatusHistory",
+    'recordRendererError("real-clear-error"',
+    'recordRendererError("show-image-draw-error"',
+    'recordRendererError("wasm-link-error"',
+  ]) assert.match(workerSource, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(gateSource, /Worker RPC \$\{type\} timed out after \$\{timeoutMs\} ms/);
+  assert.match(gateSource, /requestWorkerRpc\(page, "rendererDiagnostics"\)/);
+  assert.match(gateSource, /loadStateFileWithTimeout\(page/);
+});
+
+test("locked build provenance rejects valid-looking source, toolchain, and JS mutations", () => {
+  const provenance = validLockedBuildProvenance();
+  assert.deepEqual(validateLockedBuildProvenance(provenance), { verified: true, failures: [] });
+
+  const sourceMutation = structuredClone(provenance);
+  sourceMutation.locked.buildInfo.source.upstreamCommit = "9".repeat(40);
+  assert.equal(validateLockedBuildProvenance(sourceMutation).verified, false);
+
+  const toolchainMutation = structuredClone(provenance);
+  toolchainMutation.locked.buildInfo.toolchain.ninjaVersion = "1.13.0";
+  assert.equal(validateLockedBuildProvenance(toolchainMutation).verified, false);
+
+  const jsMutation = structuredClone(provenance);
+  jsMutation.actualArtifacts.js.sha256 = "0".repeat(64);
+  const jsResult = validateLockedBuildProvenance(jsMutation);
+  assert.equal(jsResult.verified, false);
+  assert.ok(jsResult.failures.some((failure) => failure.includes("js.sha256")));
+});
+
+test("qualification requires clean git, exact video/presenter identity, and locked evidence", () => {
   const manifest = validManifest();
   manifest.browser.headed = false;
   manifest.browser.profileId = "ephemeral-run-1";
   manifest.browser.executablePath = "C:/Chrome/chrome.exe";
   manifest.browser.actualChannel = "chrome";
   manifest.renderer = {
-    requestedBackend: "webgpu",
-    activeBackend: "webgpu",
+    expectedVideoBackend: "Software Renderer",
+    requestedVideoBackend: "Software Renderer",
+    activeVideoBackend: "Software Renderer",
+    expectedRequestedPresenterBackend: "webgpu",
+    expectedActivePresenterBackend: "webgpu",
+    requestedPresenterBackend: "webgpu",
+    activePresenterBackend: "webgpu",
     adapter: { selected: true, vendor: "test-vendor" },
     device: { created: true },
   };
   manifest.benchmark.cacheState = "cold";
-  manifest.hostCore = { abiVersion: "1" };
-  manifest.eventSchema = { version: "1" };
-  manifest.buildProvenance = {
-    source: "build-info.json",
-    manifestSha256: "c".repeat(64),
-    artifactVerified: true,
-    abiVerified: true,
-    eventSchemaVerified: true,
-  };
-  manifest.upstream = { dolphinSha: "a".repeat(40) };
-  manifest.patches = { hashes: ["b".repeat(64)] };
-  manifest.toolchain = Object.fromEntries(
-    ["emscripten", "cmake", "ninja", "rust", "naga"].map((tool) => [
-      tool,
-      { version: "1.0.0", digest: "d".repeat(64) },
-    ])
-  );
+  manifest.hostCore = { abiVersion: 1 };
+  manifest.eventSchema = { version: 1 };
+  manifest.buildProvenance = validLockedBuildProvenance();
+  manifest.upstream = { dolphinSha: manifest.buildProvenance.locked.sourceLock.upstream.commit };
+  manifest.patches = { hashes: manifest.buildProvenance.locked.sourceLock.patches.map((patch) => patch.sha256) };
+  manifest.toolchain = manifest.buildProvenance.locked.toolchainLock;
   assert.equal(evaluateQualificationProvenance(manifest).eligible, false);
   assert.ok(evaluateQualificationProvenance(manifest).missing.includes("browser.headed=true"));
   manifest.browser.headed = true;
   assert.equal(evaluateQualificationProvenance(manifest).eligible, true);
 
-  manifest.hostCore.abiVersion = "garbage";
-  manifest.eventSchema.version = "garbage";
-  manifest.browser.executablePath = "";
-  manifest.browser.actualChannel = "";
-  manifest.buildProvenance.artifactVerified = false;
-  manifest.toolchain.emscripten = "garbage";
-  const garbage = evaluateQualificationProvenance(manifest);
-  assert.equal(garbage.eligible, false);
-  assert.ok(garbage.missing.includes("hostCore.abiVersion=1"));
-  assert.ok(garbage.missing.includes("eventSchema.version=1"));
-  assert.ok(garbage.missing.includes("browser.executablePath"));
-  assert.ok(garbage.missing.includes("buildProvenance.artifactVerified=true"));
-  assert.ok(garbage.missing.includes("toolchain.emscripten.version(structured)"));
+  const dirty = structuredClone(manifest);
+  dirty.git.dirty = true;
+  assert.ok(evaluateQualificationProvenance(dirty).missing.includes("git.dirty=false"));
+
+  const videoMismatch = structuredClone(manifest);
+  videoMismatch.renderer.activeVideoBackend = "WebGPU-Real";
+  assert.ok(
+    evaluateQualificationProvenance(videoMismatch).missing.includes(
+      "renderer.activeVideoBackend=Software Renderer"
+    )
+  );
+
+  const forgedEnvironment = structuredClone(manifest);
+  forgedEnvironment.buildProvenance.untrustedEnvironmentOverrides = {
+    UPSTREAM_DOLPHIN_SHA: "9".repeat(40),
+    HOST_CORE_ABI_VERSION: "999",
+  };
+  assert.equal(evaluateQualificationProvenance(forgedEnvironment).eligible, true);
+
+  const forgedManifest = structuredClone(manifest);
+  forgedManifest.buildProvenance.locked.buildInfo.source.patchSeriesSha256 = "8".repeat(64);
+  forgedManifest.buildProvenance.verification.verified = true;
+  assert.equal(evaluateQualificationProvenance(forgedManifest).eligible, false);
 });
 
 test("headless, screening, and unresolved statistics cannot report qualification success", () => {
@@ -430,9 +491,186 @@ test("full timed metrics never silently discard the pre-steady-state window", ()
   assert.equal(windows.steadyStateWindow.metrics.gameSpeed.mean, 100);
 });
 
+function validLockedBuildProvenance() {
+  const hashes = {
+    toolchainLock: "a".repeat(64),
+    vendorSnapshot: "b".repeat(64),
+    cargoLock: "c".repeat(64),
+    buildInfo: "d".repeat(64),
+    sourceLock: "e".repeat(64),
+    abiManifest: "f".repeat(64),
+    patchSeries: "9".repeat(64),
+    patch: "8".repeat(64),
+    js: "7".repeat(64),
+    wasm: "6".repeat(64),
+    cmakeCache: "5".repeat(64),
+    section: "4".repeat(64),
+  };
+  const upstreamCommit = "1".repeat(40);
+  const toolchainLock = {
+    schemaVersion: 1,
+    platform: "win32-x64",
+    node: { version: "24.12.0", sha256: hashes.patch },
+    emscripten: {
+      version: "5.0.7",
+      compilerCommit: "2".repeat(40),
+      emsdkCommit: "3".repeat(40),
+      emccSha256: hashes.patch,
+      emcmakeSha256: hashes.patch,
+      clangxxSha256: hashes.patch,
+    },
+    cmake: { version: "4.3.2", sha256: hashes.patch },
+    ninja: { version: "1.13.0.git.kitware.jobserver-pipe-1", sha256: hashes.patch },
+    rust: {
+      target: "wasm32-unknown-emscripten",
+      rustcVersion: "1.97.0-nightly",
+      rustcCommit: "4".repeat(40),
+      rustcSha256: hashes.patch,
+      cargoVersion: "1.97.0-nightly",
+      cargoCommit: "5".repeat(40),
+      cargoSha256: hashes.patch,
+      rustupSha256: hashes.patch,
+    },
+    naga: { crateVersion: "0.1.0", dependencyVersion: "26.0.0", cargoLockSha256: hashes.cargoLock },
+  };
+  const sourceLock = {
+    schemaVersion: 1,
+    upstream: { commit: upstreamCommit },
+    patchSeriesSha256: hashes.patchSeries,
+    patches: [{ order: 1, path: "patches/one.patch", hashMode: "lf-normalized", sha256: hashes.patch }],
+  };
+  const abiManifest = {
+    schemaVersion: 1,
+    abiVersion: 1,
+    coreId: `sha256:${hashes.wasm}`,
+    upstreamCommit,
+    artifacts: [
+      {
+        path: "cores/dolphin/dolphin-core-upstream.js",
+        hashMode: "lf-normalized",
+        size: 123,
+        sha256: hashes.js,
+      },
+      {
+        path: "cores/dolphin/dolphin-core-upstream.wasm",
+        size: 456,
+        sha256: hashes.wasm,
+      },
+    ],
+    contractSources: [
+      {
+        path: "src/upstream-worker-protocol.js",
+        hashMode: "lf-normalized",
+        size: 42,
+        sha256: hashes.section,
+      },
+    ],
+  };
+  const vendorSnapshot = {
+    schemaVersion: 1,
+    root: { baseCommit: upstreamCommit, resultTree: "5".repeat(40) },
+  };
+  const buildInfo = {
+    schemaVersion: 1,
+    createdAt: "2026-07-09T00:00:00.000Z",
+    coreId: `sha256:${hashes.wasm}`,
+    repository: { commit: "6".repeat(40), status: "" },
+    source: {
+      upstreamCommit,
+      patchSeriesSha256: hashes.patchSeries,
+      sourceLockSha256: hashes.sourceLock,
+      vendorSnapshotSha256: hashes.vendorSnapshot,
+      vendorResultTree: vendorSnapshot.root.resultTree,
+    },
+    toolchain: {
+      lockSha256: hashes.toolchainLock,
+      emscriptenVersion: toolchainLock.emscripten.version,
+      emscriptenCompilerCommit: toolchainLock.emscripten.compilerCommit,
+      emsdkCommit: toolchainLock.emscripten.emsdkCommit,
+      cmakeVersion: toolchainLock.cmake.version,
+      ninjaVersion: toolchainLock.ninja.version,
+      rustcVersion: toolchainLock.rust.rustcVersion,
+      rustcCommit: toolchainLock.rust.rustcCommit,
+      cargoVersion: toolchainLock.rust.cargoVersion,
+      nagaDependencyVersion: toolchainLock.naga.dependencyVersion,
+      cargoLockSha256: toolchainLock.naga.cargoLockSha256,
+    },
+    configure: {
+      wasmMemoryPages: 24576,
+      wasmCompileFlags: "-O3 -pthread -msimd128 -flto",
+      cmakeArgs: ["-DCMAKE_BUILD_TYPE=Release"],
+      cmakeCacheSha256: hashes.cmakeCache,
+    },
+    artifacts: {
+      js: {
+        path: "C:/build/dolphin-core-upstream.js",
+        hashMode: "lf-normalized",
+        size: 123,
+        sha256: hashes.js,
+      },
+      wasm: {
+        path: "C:/build/dolphin-core-upstream.wasm",
+        hashMode: "raw",
+        size: 456,
+        sha256: hashes.wasm,
+      },
+      wasmSections: [{ id: 1, size: 32, sha256: hashes.section }],
+    },
+  };
+  const evidenceFiles = {
+    buildInfo: evidence("cores/dolphin/dolphin-core-upstream.build.json", hashes.buildInfo, false),
+    sourceLock: evidence("provenance/dolphin-source.lock.json", hashes.sourceLock),
+    abiManifest: evidence("provenance/dolphin-core-abi-v1.json", hashes.abiManifest),
+    toolchainLock: evidence("provenance/wasm-toolchain.lock.json", hashes.toolchainLock),
+    vendorSnapshot: evidence("provenance/dolphin-vendor-snapshot-v1.json", hashes.vendorSnapshot),
+    nagaCargoLock: {
+      ...evidence("tools/naga-spirv-wgsl/Cargo.lock", hashes.cargoLock),
+      normalizedSha256: hashes.cargoLock,
+    },
+  };
+  const provenance = {
+    source: "cores/dolphin/dolphin-core-upstream.build.json",
+    locked: { buildInfo, sourceLock, abiManifest, toolchainLock, vendorSnapshot },
+    actualArtifacts: {
+      js: { path: "cores/dolphin/dolphin-core-upstream.js", hashMode: "lf-normalized", size: 123, rawSize: 123, sha256: hashes.js },
+      wasm: { path: "cores/dolphin/dolphin-core-upstream.wasm", hashMode: "raw", size: 456, rawSize: 456, sha256: hashes.wasm },
+    },
+    actualContractSources: {
+      "src/upstream-worker-protocol.js": {
+        path: "src/upstream-worker-protocol.js",
+        hashMode: "lf-normalized",
+        size: 42,
+        sha256: hashes.section,
+      },
+    },
+    evidenceFiles,
+    evidenceBundle: Object.entries(evidenceFiles).map(([key, entry]) => ({
+      key,
+      path: `build-provenance/${key}.json`,
+      bytes: entry.bytes,
+      sha256: entry.sha256,
+    })),
+    untrustedEnvironmentOverrides: {},
+  };
+  provenance.verification = validateLockedBuildProvenance(provenance);
+  return provenance;
+}
+
+function evidence(pathname, sha256, committed = true) {
+  return {
+    path: pathname,
+    exists: true,
+    bytes: 100,
+    sha256,
+    normalizedSha256: sha256,
+    trackedAtHead: committed,
+    matchesHead: committed,
+  };
+}
+
 function validManifest() {
   return {
-    git: { commit: "abc123" },
+    git: { commit: "abc123", dirty: false },
     browser: { version: "143.0", headed: false },
     benchmark: {
       url: "http://127.0.0.1:8082/?video=software",

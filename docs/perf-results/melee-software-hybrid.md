@@ -107,21 +107,28 @@ marked `NON_QUALIFYING` and exit nonzero; performance claims require headed
 Chrome plus complete build, patch, toolchain, browser-profile, adapter, cache,
 ABI, event-schema, and served-artifact provenance. Summary metrics name the
 complete timed window and post-warmup steady-state window separately.
-Qualification requires a hashed `cores/dolphin/build-info.json` from the
-hermetic build. Explicit `HOST_CORE_ABI_VERSION`, `UPSTREAM_DOLPHIN_SHA`,
-`PATCH_HASHES`, and pinned
-`EMSCRIPTEN_VERSION`, `CMAKE_VERSION`, `NINJA_VERSION`, `RUST_VERSION`, and
-`NAGA_VERSION` environment variables. Each tool also needs its matching
-`*_DIGEST` SHA-256 can supply structured fields during transition, but do not
-replace the build manifest. Loose strings and unsupported ABI/event versions
-are non-qualifying.
+Qualification requires the hermetic build's
+`cores/dolphin/dolphin-core-upstream.build.json`. The gate compares that
+manifest field-for-field with the committed Dolphin source, core ABI, vendor
+snapshot, and WASM toolchain locks, then verifies both generated core artifacts
+against the ABI and build manifests. The Naga Cargo lock is checked too. A
+dirty benchmark checkout, dirty build manifest, missing lock, changed core JS
+or WASM, unsupported schema, or lock/worktree mismatch is non-qualifying.
+Legacy provenance environment variables are recorded as untrusted context and
+cannot satisfy or override these checks. Each run packages byte-identical
+copies of the build manifest and locks under `build-provenance/`.
 
 Before Chrome launches, the gate discovers and hashes the complete local
 ES-module dependency closure rooted at the page, app, worker, and generated
 core module, then verifies every dependency from the served origin. The run
 manifest records the actual launched browser executable/channel and asks the
-worker-owned presenter for its real backend, adapter, device, fallback, device
-loss, uncaptured-error, error-scope, and Emscripten `printErr` evidence.
+worker for the requested and accepted Dolphin video backend separately from
+the requested and active presenter backend. It also records adapter, device,
+fallback, device loss, uncaptured-error, error-scope, retained status history,
+and Emscripten `printErr` evidence. Worker RPCs have bounded timeouts; WebGPU
+validation, real-clear/show-image failures, WASM link/runtime errors, and
+presenter fallbacks invalidate the run instead of disappearing behind the
+latest status.
 
 For a bounded A/B screen, pass
 [`melee-screening.example.json`](melee-screening.example.json) with

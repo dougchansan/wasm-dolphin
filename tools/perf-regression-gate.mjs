@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -6,7 +7,6 @@ import { pathToFileURL } from "node:url";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
-  HOST_CORE_ABI_VERSION,
   PERF_EVENT_SCHEMA_VERSION,
   assertBattleCheckpoint,
   assertRunProvenance,
@@ -26,6 +26,7 @@ import {
   summarizeComparison,
   summarizeTimedMetricWindows,
   validateComparisonConfig,
+  validateLockedBuildProvenance,
   verifyFileFixture,
 } from "./perf-artifacts.mjs";
 
@@ -347,7 +348,12 @@ async function runScenario(scenario, context) {
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
     manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
-    manifest.buildProvenance = context.buildProvenance.buildProvenance;
+    manifest.buildProvenance = structuredClone(context.buildProvenance.buildProvenance);
+    manifest.buildProvenance.evidenceBundle = await packageBuildProvenance(
+      scenarioDir,
+      context.buildProvenance.rawEvidenceFiles
+    );
+    manifest.buildProvenance.verification = validateLockedBuildProvenance(manifest.buildProvenance);
     manifest.hostCore = context.buildProvenance.hostCore;
     manifest.eventSchema = { version: PERF_EVENT_SCHEMA_VERSION };
     manifest.upstream = context.buildProvenance.upstream;
@@ -376,7 +382,7 @@ async function runScenario(scenario, context) {
     const readiness = await waitForCoreReady(page);
     const pauseResponse = await pauseForBattleCheckpoint(page);
     const attemptedAt = new Date().toISOString();
-    const response = await page.evaluate((saveUrl) => window.__loadStateFile(saveUrl), context.saveStateUrl);
+    const response = await loadStateFileWithTimeout(page, context.saveStateUrl);
     saveStateLoad = { attemptedAt, readiness, pauseResponse, response, loaded: Boolean(response?.loaded) };
     if (!saveStateLoad.loaded) {
       throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
@@ -385,7 +391,7 @@ async function runScenario(scenario, context) {
     manifest.fixture.battleCheckpoint = battleCheckpoint;
     await resumeAfterBattleCheckpoint(page);
     saveStateLoad.postLoadProgress = await waitForPostLoadProgress(page);
-    renderer = await readRendererDiagnostics(page);
+    renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
     await page.waitForTimeout(context.settleSeconds * 1000);
     manifest.fixture.saveStateLoaded = true;
@@ -415,7 +421,7 @@ async function runScenario(scenario, context) {
     }
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
     await page.waitForTimeout(100);
-    renderer = await readRendererDiagnostics(page);
+    renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
   } catch (error) {
     invalidReasons.push(error.message || String(error));
@@ -681,11 +687,7 @@ async function waitForCoreReady(page) {
 }
 
 async function pauseForBattleCheckpoint(page) {
-  const response = await page.evaluate(async () => {
-    const host = window.__host;
-    if (!host?.adapter?.request) throw new Error("Validator cannot synchronously pause the active adapter");
-    return host.adapter.request("validationSetCorePaused", { paused: true });
-  });
+  const response = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
   if (!response?.paused || response?.coreStateName !== "Paused") {
     throw new Error(`Core did not enter paused state before fixed save load: ${JSON.stringify(response)}`);
   }
@@ -693,26 +695,107 @@ async function pauseForBattleCheckpoint(page) {
 }
 
 async function resumeAfterBattleCheckpoint(page) {
-  const response = await page.evaluate(async () => {
+  const response = await page.evaluate(async ({ timeoutMs }) => {
     const host = window.__host;
     if (!host?.adapter?.request) throw new Error("Validator cannot resume the active adapter");
-    const result = await host.adapter.request("validationSetCorePaused", { paused: false });
+    const result = await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Worker RPC validationSetCorePaused timed out after ${timeoutMs} ms`)),
+        timeoutMs
+      );
+      Promise.resolve(host.adapter.request("validationSetCorePaused", { paused: false })).then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); }
+      );
+    });
     host.adapter.applyFrame?.(result);
     host.adapter.onStatus?.("Save state loaded (Running)");
     return result;
-  });
+  }, { timeoutMs: workerRpcTimeoutMs() });
   if (response?.coreStateName !== "Running") {
     throw new Error(`Core did not resume after battle checkpoint: ${JSON.stringify(response)}`);
   }
 }
 
 async function readRendererDiagnostics(page) {
-  const diagnostics = await page.evaluate(async () => {
+  const diagnostics = await requestWorkerRpc(page, "rendererDiagnostics");
+  return diagnostics || {
+    requestedVideoBackend: null,
+    activeVideoBackend: "unknown",
+    requestedPresenterBackend: null,
+    activePresenterBackend: "unknown",
+    errors: [],
+    statusHistory: [],
+  };
+}
+
+async function requestWorkerRpc(page, type, payload = {}) {
+  return page.evaluate(async ({ type, payload, timeoutMs }) => {
     const adapter = window.__host?.adapter;
-    if (!adapter?.request) throw new Error("Active adapter does not expose renderer diagnostics");
-    return adapter.request("rendererDiagnostics");
-  });
-  return diagnostics || { requestedBackend: null, activeBackend: "unknown", errors: [] };
+    if (!adapter?.request) throw new Error(`Active adapter does not expose worker RPC ${type}`);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Worker RPC ${type} timed out after ${timeoutMs} ms`)),
+        timeoutMs
+      );
+      Promise.resolve(adapter.request(type, payload)).then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); }
+      );
+    });
+  }, { type, payload, timeoutMs: workerRpcTimeoutMs() });
+}
+
+async function loadStateFileWithTimeout(page, saveUrl) {
+  return page.evaluate(async ({ saveUrl, timeoutMs }) => {
+    if (typeof window.__loadStateFile !== "function") {
+      throw new Error("Fixed-state loader is unavailable");
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Worker RPC loadStateFile timed out after ${timeoutMs} ms`)),
+        timeoutMs
+      );
+      Promise.resolve(window.__loadStateFile(saveUrl)).then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); }
+      );
+    });
+  }, { saveUrl, timeoutMs: Math.max(workerRpcTimeoutMs(), 30000) });
+}
+
+function workerRpcTimeoutMs() {
+  return Math.max(1000, numberEnv("PERF_WORKER_RPC_TIMEOUT_MS", 10000));
+}
+
+function withExpectedRendererIdentity(diagnostics, params = {}) {
+  const expectedVideoBackend = expectedDolphinVideoBackend(params.video);
+  const expectedRequestedPresenterBackend = normalizePresenterIdentity(params.presenter);
+  const expectedActivePresenterBackend = expectedVideoBackend === "OGL"
+    ? "ogl"
+    : expectedRequestedPresenterBackend;
+  return {
+    ...diagnostics,
+    expectedVideoBackend,
+    expectedRequestedPresenterBackend,
+    expectedActivePresenterBackend,
+  };
+}
+
+function expectedDolphinVideoBackend(value) {
+  const normalized = String(value || "software").toLowerCase();
+  if (normalized === "ogl") return "OGL";
+  if (normalized === "null") return "Null";
+  if (normalized === "webgpu") return "WebGPU";
+  if (["wgpu", "webgpu-real", "webgpu2"].includes(normalized)) return "WebGPU-Real";
+  return "Software Renderer";
+}
+
+function normalizePresenterIdentity(value) {
+  const normalized = String(value || "webgl").toLowerCase();
+  if (["webgpu", "wgpu"].includes(normalized)) return "webgpu";
+  if (["2d", "canvas"].includes(normalized)) return "2d";
+  return "webgl";
 }
 
 async function waitForPostLoadProgress(page) {
@@ -1043,71 +1126,197 @@ function normalizeServedPath(value) {
 }
 
 async function collectBuildProvenance(coreArtifact) {
-  const buildInfoPath = path.join(root, "cores", "dolphin", "build-info.json");
-  let buildInfo = {};
-  if (existsSync(buildInfoPath)) {
+  const buildInfoRelative = [
+    "cores/dolphin/dolphin-core-upstream.build.json",
+    "cores/dolphin/build-info.json",
+  ].find((candidate) => existsSync(path.join(root, ...candidate.split("/")))) ||
+    "cores/dolphin/dolphin-core-upstream.build.json";
+  const evidenceSpecs = {
+    buildInfo: { relativePath: buildInfoRelative, committed: false },
+    sourceLock: { relativePath: "provenance/dolphin-source.lock.json", committed: true },
+    abiManifest: { relativePath: "provenance/dolphin-core-abi-v1.json", committed: true },
+    toolchainLock: { relativePath: "provenance/wasm-toolchain.lock.json", committed: true },
+    vendorSnapshot: { relativePath: "provenance/dolphin-vendor-snapshot-v1.json", committed: true },
+    nagaCargoLock: { relativePath: "tools/naga-spirv-wgsl/Cargo.lock", committed: true, json: false },
+  };
+  const loadedEntries = await Promise.all(
+    Object.entries(evidenceSpecs).map(async ([key, spec]) => [key, await loadBuildEvidence(spec)])
+  );
+  const loaded = Object.fromEntries(loadedEntries);
+  const jsPath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.js");
+  const actualArtifacts = {
+    js: await describeBuildArtifact(jsPath, "lf-normalized"),
+    wasm: {
+      path: "cores/dolphin/dolphin-core-upstream.wasm",
+      size: coreArtifact.bytes,
+      rawSize: coreArtifact.bytes,
+      sha256: coreArtifact.sha256,
+      hashMode: "raw",
+    },
+  };
+  const evidenceFiles = Object.fromEntries(
+    Object.entries(loaded).map(([key, entry]) => [key, entry.metadata])
+  );
+  const locked = {
+    buildInfo: loaded.buildInfo.value,
+    sourceLock: loaded.sourceLock.value,
+    abiManifest: loaded.abiManifest.value,
+    toolchainLock: loaded.toolchainLock.value,
+    vendorSnapshot: loaded.vendorSnapshot.value,
+  };
+  const actualContractSources = Object.fromEntries(
+    await Promise.all((locked.abiManifest?.contractSources || []).map(async (entry) => {
+      const relativePath = normalizeEvidencePath(entry?.path);
+      return [
+        relativePath,
+        await describeBuildArtifact(
+          path.join(root, ...relativePath.split("/")),
+          entry?.hashMode || "raw"
+        ),
+      ];
+    }))
+  );
+  const untrustedEnvironmentOverrides = Object.fromEntries(
+    [
+      "DOLPHIN_BUILD_INFO_PATH",
+      "HOST_CORE_ABI_VERSION",
+      "UPSTREAM_DOLPHIN_SHA",
+      "PATCH_HASHES",
+      "EMSCRIPTEN_VERSION",
+      "EMSCRIPTEN_DIGEST",
+      "CMAKE_VERSION",
+      "CMAKE_DIGEST",
+      "NINJA_VERSION",
+      "NINJA_DIGEST",
+      "RUST_VERSION",
+      "RUST_DIGEST",
+      "NAGA_VERSION",
+      "NAGA_DIGEST",
+    ].filter((name) => process.env[name] != null).map((name) => [name, String(process.env[name]).slice(0, 500)])
+  );
+  const buildProvenance = {
+    source: buildInfoRelative,
+    locked,
+    actualArtifacts,
+    actualContractSources,
+    evidenceFiles,
+    untrustedEnvironmentOverrides,
+    verification: null,
+  };
+  buildProvenance.verification = validateLockedBuildProvenance(buildProvenance);
+  return {
+    buildProvenance,
+    rawEvidenceFiles: Object.entries(loaded)
+      .filter(([, entry]) => entry.raw != null)
+      .map(([key, entry]) => ({ key, relativePath: entry.metadata.path, raw: entry.raw })),
+    hostCore: { abiVersion: locked.abiManifest?.abiVersion ?? null },
+    upstream: { dolphinSha: locked.sourceLock?.upstream?.commit ?? null },
+    patches: { hashes: (locked.sourceLock?.patches || []).map((patch) => patch.sha256) },
+    toolchain: locked.toolchainLock || null,
+  };
+}
+
+async function loadBuildEvidence({ relativePath, committed, json = true }) {
+  const absolutePath = path.join(root, ...relativePath.split("/"));
+  if (!existsSync(absolutePath)) {
+    return {
+      raw: null,
+      value: null,
+      metadata: {
+        path: relativePath,
+        exists: false,
+        bytes: null,
+        sha256: null,
+        normalizedSha256: null,
+        trackedAtHead: false,
+        matchesHead: false,
+        committedRequired: committed,
+      },
+    };
+  }
+  const raw = await readFile(absolutePath, "utf8");
+  let value = null;
+  if (json) {
     try {
-      buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8"));
+      value = JSON.parse(raw);
     } catch (error) {
-      throw new Error(`Invalid core build provenance ${buildInfoPath}: ${error.message}`);
+      throw new Error(`Invalid build evidence ${relativePath}: ${error.message}`);
     }
   }
-  const buildInfoArtifact = existsSync(buildInfoPath)
-    ? await describeFile(buildInfoPath, { hash: true })
+  const rawBuffer = Buffer.from(raw);
+  const normalizedBuffer = Buffer.from(raw.replace(/\r\n/g, "\n"));
+  const head = spawnSync("git", ["show", `HEAD:${relativePath}`], {
+    cwd: root,
+    encoding: "buffer",
+    windowsHide: true,
+  });
+  const headNormalized = head.status === 0
+    ? Buffer.from(head.stdout.toString("utf8").replace(/\r\n/g, "\n"))
     : null;
-  const patchHashes = parseListEnv("PATCH_HASHES", readPath(buildInfo, "patches.hashes") || []);
-  const declaredCoreSha =
-    readPath(buildInfo, "artifacts.core.sha256") ||
-    readPath(buildInfo, "artifacts.wasm.sha256") ||
-    null;
-  const declaredAbi = readPath(buildInfo, "hostCore.abiVersion") || null;
-  const declaredEventSchema = readPath(buildInfo, "eventSchema.version") || null;
-  const toolchainEntry = (tool, versionEnv, digestEnv) => {
-    const entry = readPath(buildInfo, `toolchain.${tool}`);
-    return {
-      version: process.env[versionEnv] || (typeof entry === "object" ? entry?.version : null) || null,
-      digest: process.env[digestEnv] || (typeof entry === "object" ? entry?.digest : null) || null,
-    };
-  };
+  const normalizedSha256 = sha256Buffer(normalizedBuffer);
   return {
-    buildProvenance: {
-      source: buildInfoArtifact ? "build-info.json" : null,
-      path: buildInfoArtifact ? buildInfoPath : null,
-      manifestSha256: buildInfoArtifact?.sha256 || null,
-      manifestBytes: buildInfoArtifact?.bytes || null,
-      declaredCoreSha256: declaredCoreSha,
-      artifactVerified: Boolean(declaredCoreSha && declaredCoreSha === coreArtifact.sha256),
-      abiVerified: declaredAbi === HOST_CORE_ABI_VERSION,
-      eventSchemaVerified: declaredEventSchema === PERF_EVENT_SCHEMA_VERSION,
-    },
-    hostCore: {
-      abiVersion: process.env.HOST_CORE_ABI_VERSION || readPath(buildInfo, "hostCore.abiVersion") || null,
-    },
-    upstream: {
-      dolphinSha: process.env.UPSTREAM_DOLPHIN_SHA || readPath(buildInfo, "upstream.dolphinSha") || null,
-    },
-    patches: { hashes: patchHashes },
-    toolchain: {
-      node: { version: process.version, executablePath: process.execPath },
-      emscripten: toolchainEntry("emscripten", "EMSCRIPTEN_VERSION", "EMSCRIPTEN_DIGEST"),
-      cmake: toolchainEntry("cmake", "CMAKE_VERSION", "CMAKE_DIGEST"),
-      ninja: toolchainEntry("ninja", "NINJA_VERSION", "NINJA_DIGEST"),
-      rust: toolchainEntry("rust", "RUST_VERSION", "RUST_DIGEST"),
-      naga: toolchainEntry("naga", "NAGA_VERSION", "NAGA_DIGEST"),
+    raw,
+    value,
+    metadata: {
+      path: relativePath,
+      exists: true,
+      bytes: rawBuffer.byteLength,
+      sha256: sha256Buffer(rawBuffer),
+      normalizedSha256,
+      trackedAtHead: head.status === 0,
+      matchesHead: Boolean(headNormalized && sha256Buffer(headNormalized) === normalizedSha256),
+      committedRequired: committed,
     },
   };
 }
 
-function parseListEnv(name, fallback) {
-  const value = process.env[name];
-  if (!value) return Array.isArray(fallback) ? fallback.map(String) : [];
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed)) return parsed.map(String);
-  } catch {
-    // Accept a comma-separated list for PowerShell convenience.
+function normalizeEvidencePath(value) {
+  const normalized = path.posix.normalize(String(value || "").replaceAll("\\", "/"));
+  if (!normalized || normalized === "." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+    throw new Error(`Invalid build evidence path: ${value}`);
   }
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return normalized;
+}
+
+async function describeBuildArtifact(filePath, hashMode) {
+  const relativePath = path.relative(root, filePath).replaceAll("\\", "/");
+  if (!existsSync(filePath)) {
+    return { path: relativePath, size: null, rawSize: null, sha256: null, hashMode };
+  }
+  const bytes = await readFile(filePath);
+  const hashBytes = hashMode === "lf-normalized"
+    ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"))
+    : bytes;
+  return {
+    path: relativePath,
+    size: hashBytes.byteLength,
+    rawSize: bytes.byteLength,
+    sha256: sha256Buffer(hashBytes),
+    hashMode,
+  };
+}
+
+async function packageBuildProvenance(scenarioDir, rawEvidenceFiles) {
+  const destinationDir = path.join(scenarioDir, "build-provenance");
+  await mkdir(destinationDir, { recursive: true });
+  const packaged = [];
+  for (const entry of rawEvidenceFiles || []) {
+    const name = `${entry.key}-${path.basename(entry.relativePath)}`;
+    const destination = path.join(destinationDir, name);
+    await writeFile(destination, entry.raw);
+    packaged.push({
+      key: entry.key,
+      sourcePath: entry.relativePath,
+      path: `build-provenance/${name}`,
+      bytes: Buffer.byteLength(entry.raw),
+      sha256: sha256Buffer(Buffer.from(entry.raw)),
+    });
+  }
+  return packaged;
+}
+
+function sha256Buffer(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 async function saveScreenshot(page, scenarioDir, name) {
@@ -1267,7 +1476,11 @@ function requiredFixturePath(value, label, source) {
 }
 
 function resolveOutDir(value) {
-  return path.isAbsolute(value) ? value : path.join(root, ".omx", value);
+  if (path.isAbsolute(value)) return value;
+  const normalized = String(value).replaceAll("\\", "/").replace(/^\.\//, "");
+  return normalized === ".omx" || normalized.startsWith(".omx/")
+    ? path.join(root, ...normalized.split("/"))
+    : path.join(root, ".omx", value);
 }
 
 function maxRegex(text, regex) {

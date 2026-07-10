@@ -23,8 +23,8 @@ export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
   height: 480,
 });
 
-export const HOST_CORE_ABI_VERSION = "1";
-export const PERF_EVENT_SCHEMA_VERSION = "1";
+export const HOST_CORE_ABI_VERSION = 1;
+export const PERF_EVENT_SCHEMA_VERSION = 1;
 
 export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "git.commit",
@@ -44,19 +44,21 @@ export const REQUIRED_RUN_PROVENANCE = Object.freeze([
 ]);
 
 export const REQUIRED_QUALIFICATION_PROVENANCE = Object.freeze([
+  "git.dirty",
   "browser.headed",
   "browser.version",
   "browser.executablePath",
   "browser.actualChannel",
   "browser.profileId",
   "benchmark.cacheState",
-  "renderer.requestedBackend",
-  "renderer.activeBackend",
-  "renderer.adapter.selected",
-  "renderer.device.created",
-  "buildProvenance.artifactVerified",
-  "buildProvenance.abiVerified",
-  "buildProvenance.eventSchemaVerified",
+  "renderer.expectedVideoBackend",
+  "renderer.requestedVideoBackend",
+  "renderer.activeVideoBackend",
+  "renderer.expectedRequestedPresenterBackend",
+  "renderer.expectedActivePresenterBackend",
+  "renderer.requestedPresenterBackend",
+  "renderer.activePresenterBackend",
+  "buildProvenance.verification.verified",
   "servedApplication.verified",
   "servedApplication.manifestSha256",
 ]);
@@ -139,24 +141,37 @@ export function assertRunProvenance(manifest, required = REQUIRED_RUN_PROVENANCE
 
 export function evaluateQualificationProvenance(manifest) {
   const missing = missingRunProvenance(manifest, REQUIRED_QUALIFICATION_PROVENANCE);
+  if (manifest?.git?.dirty !== false) missing.push("git.dirty=false");
   if (manifest?.browser?.headed !== true) missing.push("browser.headed=true");
   if (!Array.isArray(manifest?.patches?.hashes) || manifest.patches.hashes.length === 0) {
     missing.push("patches.hashes[0]");
   } else if (manifest.patches.hashes.some((hash) => !/^[0-9a-f]{64}$/i.test(String(hash)))) {
     missing.push("patches.hashes(valid SHA-256)");
   }
-  if (!manifest?.renderer?.adapter?.selected) {
-    missing.push("renderer.adapter.selected=true");
-  } else if (![
-    manifest.renderer.adapter.vendor,
-    manifest.renderer.adapter.device,
-    manifest.renderer.adapter.description,
-  ].some(Boolean)) {
-    missing.push("renderer.adapter.identity");
+  const renderer = manifest?.renderer || {};
+  if (renderer.requestedVideoBackend !== renderer.expectedVideoBackend) {
+    missing.push(`renderer.requestedVideoBackend=${renderer.expectedVideoBackend || "expected"}`);
   }
-  if (!manifest?.renderer?.device?.created) missing.push("renderer.device.created=true");
-  if (manifest?.renderer?.requestedBackend === "webgpu" && manifest?.renderer?.activeBackend !== "webgpu") {
-    missing.push("renderer.activeBackend=webgpu");
+  if (renderer.activeVideoBackend !== renderer.expectedVideoBackend) {
+    missing.push(`renderer.activeVideoBackend=${renderer.expectedVideoBackend || "expected"}`);
+  }
+  if (renderer.requestedPresenterBackend !== renderer.expectedRequestedPresenterBackend) {
+    missing.push(
+      `renderer.requestedPresenterBackend=${renderer.expectedRequestedPresenterBackend || "expected"}`
+    );
+  }
+  if (renderer.activePresenterBackend !== renderer.expectedActivePresenterBackend) {
+    missing.push(
+      `renderer.activePresenterBackend=${renderer.expectedActivePresenterBackend || "expected"}`
+    );
+  }
+  if (renderer.expectedActivePresenterBackend === "webgpu") {
+    if (!renderer.adapter?.selected) {
+      missing.push("renderer.adapter.selected=true");
+    } else if (![renderer.adapter.vendor, renderer.adapter.device, renderer.adapter.description].some(Boolean)) {
+      missing.push("renderer.adapter.identity");
+    }
+    if (!renderer.device?.created) missing.push("renderer.device.created=true");
   }
   if (!manifest?.browser?.profileId) missing.push("browser.profileId");
   if (!/^[0-9a-f]{64}$/i.test(String(manifest?.servedApplication?.manifestSha256 || ""))) {
@@ -168,32 +183,27 @@ export function evaluateQualificationProvenance(manifest) {
   if (manifest?.eventSchema?.version !== PERF_EVENT_SCHEMA_VERSION) {
     missing.push(`eventSchema.version=${PERF_EVENT_SCHEMA_VERSION}`);
   }
-  if (!/^[0-9a-f]{64}$/i.test(String(manifest?.buildProvenance?.manifestSha256 || ""))) {
-    missing.push("buildProvenance.manifestSha256(valid SHA-256)");
+  const lockedVerification = validateLockedBuildProvenance(manifest?.buildProvenance || {});
+  if (manifest?.buildProvenance?.verification?.verified !== true) {
+    missing.push("buildProvenance.verification.verified=true");
   }
-  if (manifest?.buildProvenance?.source !== "build-info.json") {
-    missing.push("buildProvenance.source=build-info.json");
-  }
-  if (manifest?.buildProvenance?.artifactVerified !== true) {
-    missing.push("buildProvenance.artifactVerified=true");
-  }
-  if (manifest?.buildProvenance?.abiVerified !== true) {
-    missing.push("buildProvenance.abiVerified=true");
-  }
-  if (manifest?.buildProvenance?.eventSchemaVerified !== true) {
-    missing.push("buildProvenance.eventSchemaVerified=true");
-  }
-  for (const tool of ["emscripten", "cmake", "ninja", "rust", "naga"]) {
-    const entry = manifest?.toolchain?.[tool];
-    if (!entry || typeof entry !== "object" || !validToolVersion(entry.version)) {
-      missing.push(`toolchain.${tool}.version(structured)`);
-    }
-    if (!/^[0-9a-f]{64}$/i.test(String(entry?.digest || ""))) {
-      missing.push(`toolchain.${tool}.digest(valid SHA-256)`);
-    }
+  if (!lockedVerification.verified) {
+    missing.push(...lockedVerification.failures.map((failure) => `buildProvenance.${failure}`));
   }
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(String(manifest?.upstream?.dolphinSha || ""))) {
     missing.push("upstream.dolphinSha(valid commit)");
+  }
+  if (manifest?.upstream?.dolphinSha !== manifest?.buildProvenance?.locked?.sourceLock?.upstream?.commit) {
+    missing.push("upstream.dolphinSha=locked source commit");
+  }
+  const lockedPatchHashes = (manifest?.buildProvenance?.locked?.sourceLock?.patches || []).map(
+    (patch) => patch?.sha256
+  );
+  if (JSON.stringify(manifest?.patches?.hashes || []) !== JSON.stringify(lockedPatchHashes)) {
+    missing.push("patches.hashes=locked patch order");
+  }
+  if (JSON.stringify(manifest?.toolchain ?? null) !== JSON.stringify(manifest?.buildProvenance?.locked?.toolchainLock ?? null)) {
+    missing.push("toolchain=locked toolchain manifest");
   }
   const uniqueMissing = [...new Set(missing)];
   return {
@@ -202,10 +212,186 @@ export function evaluateQualificationProvenance(manifest) {
   };
 }
 
-function validToolVersion(value) {
-  return /^(?:\d+\.\d+(?:\.\d+)?(?:[-+][0-9a-z.-]+)?|[0-9a-f]{40}|[0-9a-f]{64})$/i.test(
-    String(value || "").trim()
+export function validateLockedBuildProvenance(provenance = {}) {
+  const buildInfo = provenance.locked?.buildInfo;
+  const sourceLock = provenance.locked?.sourceLock;
+  const abiManifest = provenance.locked?.abiManifest;
+  const toolchainLock = provenance.locked?.toolchainLock;
+  const vendorSnapshot = provenance.locked?.vendorSnapshot;
+  const actual = provenance.actualArtifacts || {};
+  const actualContractSources = provenance.actualContractSources || {};
+  const evidence = provenance.evidenceFiles || {};
+  const failures = [];
+  const require = (condition, label) => {
+    if (!condition) failures.push(label);
+  };
+  const sha = (value) => /^[0-9a-f]{64}$/i.test(String(value || ""));
+  const commit = (value) => /^[0-9a-f]{40}$/i.test(String(value || ""));
+  const exact = (left, right, label) => require(left !== undefined && left === right, label);
+  const evidenceFile = (key, { committed = false } = {}) => {
+    const entry = evidence[key];
+    require(entry?.exists === true, `evidenceFiles.${key}.exists=true`);
+    require(sha(entry?.sha256), `evidenceFiles.${key}.sha256`);
+    if (committed) {
+      require(entry?.trackedAtHead === true, `evidenceFiles.${key}.trackedAtHead=true`);
+      require(entry?.matchesHead === true, `evidenceFiles.${key}.matchesHead=true`);
+    }
+  };
+
+  require(buildInfo?.schemaVersion === 1, "locked.buildInfo.schemaVersion=1");
+  require(sourceLock?.schemaVersion === 1, "locked.sourceLock.schemaVersion=1");
+  require(abiManifest?.schemaVersion === 1, "locked.abiManifest.schemaVersion=1");
+  require(toolchainLock?.schemaVersion === 1, "locked.toolchainLock.schemaVersion=1");
+  require(vendorSnapshot?.schemaVersion === 1, "locked.vendorSnapshot.schemaVersion=1");
+  evidenceFile("buildInfo");
+  evidenceFile("sourceLock", { committed: true });
+  evidenceFile("abiManifest", { committed: true });
+  evidenceFile("toolchainLock", { committed: true });
+  evidenceFile("vendorSnapshot", { committed: true });
+  evidenceFile("nagaCargoLock", { committed: true });
+  const bundledEvidence = new Map(
+    (Array.isArray(provenance.evidenceBundle) ? provenance.evidenceBundle : []).map((entry) => [entry?.key, entry])
   );
+  for (const key of ["buildInfo", "sourceLock", "abiManifest", "toolchainLock", "vendorSnapshot", "nagaCargoLock"]) {
+    const bundled = bundledEvidence.get(key);
+    require(Boolean(bundled?.path), `evidenceBundle.${key}.path`);
+    exact(bundled?.sha256, evidence[key]?.sha256, `evidenceBundle.${key}.sha256`);
+    exact(bundled?.bytes, evidence[key]?.bytes, `evidenceBundle.${key}.bytes`);
+  }
+
+  require(commit(sourceLock?.upstream?.commit), "locked.sourceLock.upstream.commit");
+  exact(vendorSnapshot?.root?.baseCommit, sourceLock?.upstream?.commit, "locked.vendorSnapshot.root.baseCommit");
+  require(commit(vendorSnapshot?.root?.resultTree), "locked.vendorSnapshot.root.resultTree");
+  require(sha(sourceLock?.patchSeriesSha256), "locked.sourceLock.patchSeriesSha256");
+  require(Array.isArray(sourceLock?.patches) && sourceLock.patches.length > 0, "locked.sourceLock.patches");
+  for (const [index, patch] of (sourceLock?.patches || []).entries()) {
+    require(patch?.order === index + 1, `locked.sourceLock.patches[${index}].order`);
+    require(sha(patch?.sha256), `locked.sourceLock.patches[${index}].sha256`);
+    require(patch?.hashMode === "lf-normalized", `locked.sourceLock.patches[${index}].hashMode`);
+  }
+
+  require(abiManifest?.abiVersion === HOST_CORE_ABI_VERSION, `locked.abiManifest.abiVersion=${HOST_CORE_ABI_VERSION}`);
+  exact(abiManifest?.upstreamCommit, sourceLock?.upstream?.commit, "locked.abiManifest.upstreamCommit");
+  require(sha(String(abiManifest?.coreId || "").replace(/^sha256:/, "")), "locked.abiManifest.coreId");
+  require(Array.isArray(abiManifest?.artifacts), "locked.abiManifest.artifacts");
+  require(
+    Array.isArray(abiManifest?.contractSources) && abiManifest.contractSources.length > 0,
+    "locked.abiManifest.contractSources"
+  );
+  for (const [index, declared] of (abiManifest?.contractSources || []).entries()) {
+    const observed = actualContractSources[declared?.path];
+    require(Boolean(observed), `actualContractSources.${declared?.path || index}`);
+    exact(observed?.path, declared?.path, `abi.contractSources[${index}].path`);
+    exact(observed?.hashMode, declared?.hashMode || "raw", `abi.contractSources[${index}].hashMode`);
+    exact(observed?.sha256, declared?.sha256, `abi.contractSources[${index}].sha256`);
+    exact(observed?.size, declared?.size, `abi.contractSources[${index}].size`);
+  }
+
+  require(commit(buildInfo?.repository?.commit), "locked.buildInfo.repository.commit");
+  require(buildInfo?.repository?.status === "", "locked.buildInfo.repository.status=clean");
+  require(!Number.isNaN(Date.parse(buildInfo?.createdAt || "")), "locked.buildInfo.createdAt");
+  exact(buildInfo?.source?.upstreamCommit, sourceLock?.upstream?.commit, "locked.buildInfo.source.upstreamCommit");
+  exact(buildInfo?.source?.patchSeriesSha256, sourceLock?.patchSeriesSha256, "locked.buildInfo.source.patchSeriesSha256");
+  exact(buildInfo?.source?.sourceLockSha256, evidence.sourceLock?.sha256, "locked.buildInfo.source.sourceLockSha256");
+  exact(buildInfo?.source?.vendorSnapshotSha256, evidence.vendorSnapshot?.sha256, "locked.buildInfo.source.vendorSnapshotSha256");
+  exact(buildInfo?.source?.vendorResultTree, vendorSnapshot?.root?.resultTree, "locked.buildInfo.source.vendorResultTree");
+  exact(buildInfo?.toolchain?.lockSha256, evidence.toolchainLock?.sha256, "locked.buildInfo.toolchain.lockSha256");
+
+  for (const [label, value] of [
+    ["platform", toolchainLock?.platform],
+    ["node.version", toolchainLock?.node?.version],
+    ["emscripten.version", toolchainLock?.emscripten?.version],
+    ["cmake.version", toolchainLock?.cmake?.version],
+    ["ninja.version", toolchainLock?.ninja?.version],
+    ["rust.rustcVersion", toolchainLock?.rust?.rustcVersion],
+    ["rust.cargoVersion", toolchainLock?.rust?.cargoVersion],
+    ["naga.crateVersion", toolchainLock?.naga?.crateVersion],
+    ["naga.dependencyVersion", toolchainLock?.naga?.dependencyVersion],
+  ]) require(typeof value === "string" && value.length > 0, `locked.toolchainLock.${label}`);
+  for (const [label, value] of [
+    ["emscripten.compilerCommit", toolchainLock?.emscripten?.compilerCommit],
+    ["emscripten.emsdkCommit", toolchainLock?.emscripten?.emsdkCommit],
+    ["rust.rustcCommit", toolchainLock?.rust?.rustcCommit],
+    ["rust.cargoCommit", toolchainLock?.rust?.cargoCommit],
+  ]) require(commit(value), `locked.toolchainLock.${label}`);
+
+  const toolchainComparisons = [
+    ["emscriptenVersion", toolchainLock?.emscripten?.version],
+    ["emscriptenCompilerCommit", toolchainLock?.emscripten?.compilerCommit],
+    ["emsdkCommit", toolchainLock?.emscripten?.emsdkCommit],
+    ["cmakeVersion", toolchainLock?.cmake?.version],
+    ["ninjaVersion", toolchainLock?.ninja?.version],
+    ["rustcVersion", toolchainLock?.rust?.rustcVersion],
+    ["rustcCommit", toolchainLock?.rust?.rustcCommit],
+    ["cargoVersion", toolchainLock?.rust?.cargoVersion],
+    ["nagaDependencyVersion", toolchainLock?.naga?.dependencyVersion],
+    ["cargoLockSha256", toolchainLock?.naga?.cargoLockSha256],
+  ];
+  for (const [field, expected] of toolchainComparisons) {
+    exact(buildInfo?.toolchain?.[field], expected, `locked.buildInfo.toolchain.${field}`);
+  }
+  exact(toolchainLock?.naga?.cargoLockSha256, evidence.nagaCargoLock?.normalizedSha256, "locked.toolchainLock.naga.cargoLockSha256");
+  require(toolchainLock?.rust?.target === "wasm32-unknown-emscripten", "locked.toolchainLock.rust.target");
+  for (const [label, value] of [
+    ["node.sha256", toolchainLock?.node?.sha256],
+    ["emscripten.emccSha256", toolchainLock?.emscripten?.emccSha256],
+    ["emscripten.emcmakeSha256", toolchainLock?.emscripten?.emcmakeSha256],
+    ["emscripten.clangxxSha256", toolchainLock?.emscripten?.clangxxSha256],
+    ["cmake.sha256", toolchainLock?.cmake?.sha256],
+    ["ninja.sha256", toolchainLock?.ninja?.sha256],
+    ["rust.rustcSha256", toolchainLock?.rust?.rustcSha256],
+    ["rust.cargoSha256", toolchainLock?.rust?.cargoSha256],
+    ["rust.rustupSha256", toolchainLock?.rust?.rustupSha256],
+    ["naga.cargoLockSha256", toolchainLock?.naga?.cargoLockSha256],
+  ]) require(sha(value), `locked.toolchainLock.${label}`);
+
+  require(Number.isInteger(buildInfo?.configure?.wasmMemoryPages) && buildInfo.configure.wasmMemoryPages > 0, "locked.buildInfo.configure.wasmMemoryPages");
+  require(typeof buildInfo?.configure?.wasmCompileFlags === "string" && buildInfo.configure.wasmCompileFlags.length > 0, "locked.buildInfo.configure.wasmCompileFlags");
+  require(Array.isArray(buildInfo?.configure?.cmakeArgs) && buildInfo.configure.cmakeArgs.length > 0, "locked.buildInfo.configure.cmakeArgs");
+  require(sha(buildInfo?.configure?.cmakeCacheSha256), "locked.buildInfo.configure.cmakeCacheSha256");
+
+  const artifactBySuffix = (artifacts, suffix) =>
+    (Array.isArray(artifacts) ? artifacts : Object.values(artifacts || {})).find((entry) =>
+      String(entry?.path || "").replaceAll("\\", "/").endsWith(suffix)
+    );
+  const jsAbi = artifactBySuffix(abiManifest?.artifacts, "cores/dolphin/dolphin-core-upstream.js");
+  const wasmAbi = artifactBySuffix(abiManifest?.artifacts, "cores/dolphin/dolphin-core-upstream.wasm");
+  const jsBuild = buildInfo?.artifacts?.js;
+  const wasmBuild = buildInfo?.artifacts?.wasm;
+  require(
+    String(jsBuild?.path || "").replaceAll("\\", "/").endsWith("/dolphin-core-upstream.js"),
+    "locked.buildInfo.artifacts.js.path"
+  );
+  require(
+    String(wasmBuild?.path || "").replaceAll("\\", "/").endsWith("/dolphin-core-upstream.wasm"),
+    "locked.buildInfo.artifacts.wasm.path"
+  );
+  require(actual.js?.path === "cores/dolphin/dolphin-core-upstream.js", "actualArtifacts.js.path");
+  require(actual.wasm?.path === "cores/dolphin/dolphin-core-upstream.wasm", "actualArtifacts.wasm.path");
+  require(jsAbi?.hashMode === "lf-normalized", "locked.abiManifest.artifacts.js.hashMode");
+  require(jsBuild?.hashMode === "lf-normalized", "locked.buildInfo.artifacts.js.hashMode");
+  require(wasmBuild?.hashMode === "raw", "locked.buildInfo.artifacts.wasm.hashMode");
+  require(actual.js?.hashMode === "lf-normalized", "actualArtifacts.js.hashMode");
+  require(actual.wasm?.hashMode === "raw", "actualArtifacts.wasm.hashMode");
+  for (const [label, declared, observed] of [
+    ["abi.js", jsAbi, actual.js],
+    ["abi.wasm", wasmAbi, actual.wasm],
+    ["buildInfo.js", jsBuild, { ...actual.js, size: actual.js?.rawSize }],
+    ["buildInfo.wasm", wasmBuild, { ...actual.wasm, size: actual.wasm?.rawSize }],
+  ]) {
+    exact(declared?.sha256, observed?.sha256, `${label}.sha256`);
+    exact(declared?.size, observed?.size, `${label}.size`);
+  }
+  exact(buildInfo?.coreId, `sha256:${actual.wasm?.sha256}`, "locked.buildInfo.coreId");
+  exact(abiManifest?.coreId, `sha256:${actual.wasm?.sha256}`, "locked.abiManifest.coreId.actual");
+  require(Array.isArray(buildInfo?.artifacts?.wasmSections) && buildInfo.artifacts.wasmSections.length > 0, "locked.buildInfo.artifacts.wasmSections");
+  for (const [index, section] of (buildInfo?.artifacts?.wasmSections || []).entries()) {
+    require(Number.isInteger(section?.id) && section.id >= 0, `locked.buildInfo.artifacts.wasmSections[${index}].id`);
+    require(Number.isInteger(section?.size) && section.size >= 0, `locked.buildInfo.artifacts.wasmSections[${index}].size`);
+    require(sha(section?.sha256), `locked.buildInfo.artifacts.wasmSections[${index}].sha256`);
+  }
+
+  return { verified: failures.length === 0, failures: [...new Set(failures)] };
 }
 
 export function assertServedArtifactIdentity(expectedArtifacts, servedArtifacts) {
@@ -252,20 +438,41 @@ export function extractLocalModuleSpecifiers(source, relativePath) {
 
 export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], renderer = {} }) {
   const evidence = [];
-  const fatalPattern = /(?:\[webgpu[^\]]*\][^\n]*(?:validation|device lost|uncaptured|\bfail(?:ed)?\b|\bmissing\b|threw|\berror\b)|emscripten abort|\baborted\(|(?:webassembly\.)?runtimeerror|wasm[^\n]*(?:out of bounds|unreachable|abort|failed|error)|worker[^\n]*(?:uncaught|pageerror)|status[^\n]*(?:failed|fatal))/i;
-  for (const line of [...consoleLines, ...statuses]) {
+  const fatalPattern = /(?:webgpu[^\n]*(?:validation|device[ -]lost|uncaptured|real-clear error|show-image draw error|unavailable|\bfail(?:ed)?\b|\bmissing\b|threw|\berror\b)|emscripten abort|\baborted\(|webassembly\.(?:linkerror|runtimeerror)|(?:^|[^a-z])wasm[^\n]*(?:out of bounds|unreachable|abort|failed|error)|worker[^\n]*(?:uncaught|pageerror|rpc[^\n]*timed out)|status[^\n]*(?:failed|fatal))/i;
+  const retainedStatuses = (renderer.statusHistory || []).map((entry) =>
+    typeof entry === "string" ? entry : entry?.message
+  );
+  const retainedFatalStatuses = (renderer.fatalStatusHistory || []).map((entry) =>
+    typeof entry === "string" ? entry : entry?.message
+  );
+  for (const line of [...consoleLines, ...statuses, ...retainedStatuses, ...retainedFatalStatuses]) {
     if (fatalPattern.test(String(line))) evidence.push(String(line));
   }
   for (const entry of renderer.errors || []) {
-    if (["validation", "uncaptured-error", "device-lost", "submit-error", "error-scope-failure", "emscripten-abort"].includes(entry.kind)) {
+    if ([
+      "validation",
+      "uncaptured-error",
+      "device-lost",
+      "submit-error",
+      "error-scope-failure",
+      "real-clear-error",
+      "show-image-draw-error",
+      "wasm-link-error",
+      "emscripten-abort",
+    ].includes(entry.kind)) {
       evidence.push(`[renderer:${entry.kind}] ${entry.message}`);
     }
   }
   for (const line of renderer.emscriptenPrintErr || []) {
     if (fatalPattern.test(String(line))) evidence.push(`[emscripten-printErr] ${line}`);
   }
-  if (renderer.requestedBackend === "webgpu" && renderer.activeBackend !== "webgpu") {
-    evidence.push(`renderer fallback: requested webgpu, active ${renderer.activeBackend || "unknown"}`);
+  if (
+    renderer.requestedPresenterBackend === "webgpu" &&
+    renderer.activePresenterBackend !== "webgpu"
+  ) {
+    evidence.push(
+      `renderer fallback: requested presenter webgpu, active ${renderer.activePresenterBackend || "unknown"}`
+    );
   }
   return [...new Set(evidence)];
 }
