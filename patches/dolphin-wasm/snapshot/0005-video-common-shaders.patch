@@ -1,0 +1,1240 @@
+From 8411356e53a5943d0af459c490da69e58964f691 Mon Sep 17 00:00:00 2001
+From: wasm-dolphin patch snapshot <snapshot@local.invalid>
+Date: Thu, 9 Jul 2026 14:42:32 -1000
+Subject: [PATCH 5/6] Browser video common and shader snapshot
+
+
+diff --git a/Source/Core/VideoCommon/AbstractGfx.cpp b/Source/Core/VideoCommon/AbstractGfx.cpp
+index 851dc48..cbf5fb1 100644
+--- a/Source/Core/VideoCommon/AbstractGfx.cpp
++++ b/Source/Core/VideoCommon/AbstractGfx.cpp
+@@ -81,7 +81,12 @@ void AbstractGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool co
+                         static_cast<float>((color >> 0) & 0xFF) / 255.0f,
+                         static_cast<float>((color >> 24) & 0xFF) / 255.0f},
+                        static_cast<float>(z & 0xFFFFFF) / 16777216.0f};
+-  if (!g_backend_info.bSupportsReversedDepthRange)
++  // §28at: WebGPU/Vulkan keeps the non-inverted [0,1] clear-depth
++  // convention (the EFB clear utility draw must agree with the
++  // flag-independent VS geometry depth + the de-inverted EFB
++  // peek/poke). NO-OP at flag=true. OGL/D3D/SW untouched.
++  if (!g_backend_info.bSupportsReversedDepthRange &&
++      g_backend_info.api_type != APIType::Vulkan)
+     uniforms.clear_depth = 1.0f - uniforms.clear_depth;
+   g_vertex_manager->UploadUtilityUniforms(&uniforms, sizeof(uniforms));
+ 
+diff --git a/Source/Core/VideoCommon/AsyncShaderCompiler.cpp b/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
+index 83eaa2e..60b861b 100644
+--- a/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
++++ b/Source/Core/VideoCommon/AsyncShaderCompiler.cpp
+@@ -129,6 +129,11 @@ bool AsyncShaderCompiler::StartWorkerThreads(u32 num_worker_threads)
+   if (num_worker_threads == 0)
+     return true;
+ 
++#ifdef __EMSCRIPTEN__
++  // WebGL does not expose shared GL contexts, so shader work must compile synchronously.
++  return true;
++#endif
++
+   for (u32 i = 0; i < num_worker_threads; i++)
+   {
+     void* thread_param = nullptr;
+diff --git a/Source/Core/VideoCommon/CommandProcessor.cpp b/Source/Core/VideoCommon/CommandProcessor.cpp
+index 1dbf466..bfd2f03 100644
+--- a/Source/Core/VideoCommon/CommandProcessor.cpp
++++ b/Source/Core/VideoCommon/CommandProcessor.cpp
+@@ -20,6 +20,11 @@
+ #include "Core/System.h"
+ #include "VideoCommon/Fifo.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#include <pthread.h>
++#endif
++
+ namespace CommandProcessor
+ {
+ static bool IsOnThread(const Core::System& system)
+@@ -338,6 +343,27 @@ void CommandProcessorManager::RegisterMMIO(MMIO::Mapping* mmio, u32 base)
+ 
+ void CommandProcessorManager::GatherPipeBursted()
+ {
++#ifdef __EMSCRIPTEN__
++  // §27 diag: is the CPU bursting GP data post-load, and is the FIFO
++  // linked (else CPReadWriteDistance never grows → GPU idle → black)?
++  {
++    static std::atomic<u32> s_hb{0};
++    const u32 n = ++s_hb;
++    if ((n & 0x1FFFF) == 0)
++      EM_ASM({ console.log('[s27-GPB] tid=' + ($0 >>> 0) + ' rwd=' + $1 +
++                            ' rd=' + ($2 >>> 0) + ' wr=' + ($3 >>> 0) +
++                            ' safe=' + ($4 >>> 0) + ' base=' + ($5 >>> 0) +
++                            ' end=' + ($6 >>> 0)); },
++             static_cast<u32>(pthread_self()),
++             m_fifo.CPReadWriteDistance.load(std::memory_order_relaxed),
++             m_fifo.CPReadPointer.load(std::memory_order_relaxed),
++             m_fifo.CPWritePointer.load(std::memory_order_relaxed),
++             m_fifo.SafeCPReadPointer.load(std::memory_order_relaxed),
++             m_fifo.CPBase.load(std::memory_order_relaxed),
++             m_fifo.CPEnd.load(std::memory_order_relaxed));
++  }
++#endif
++
+   SetCPStatusFromCPU();
+ 
+   auto& processor_interface = m_system.GetProcessorInterface();
+diff --git a/Source/Core/VideoCommon/DriverDetails.cpp b/Source/Core/VideoCommon/DriverDetails.cpp
+index b657d77..2fb809c 100644
+--- a/Source/Core/VideoCommon/DriverDetails.cpp
++++ b/Source/Core/VideoCommon/DriverDetails.cpp
+@@ -33,6 +33,8 @@ constexpr u32 m_os = OS_ALL | OS_WINDOWS;
+ constexpr u32 m_os = OS_ALL | OS_ANDROID;
+ #elif __APPLE__
+ constexpr u32 m_os = OS_ALL | OS_OSX;
++#elif defined(__EMSCRIPTEN__)
++constexpr u32 m_os = OS_ALL;
+ #elif __linux__
+ constexpr u32 m_os = OS_ALL | OS_LINUX;
+ #elif __FreeBSD__
+diff --git a/Source/Core/VideoCommon/EFBInterface.cpp b/Source/Core/VideoCommon/EFBInterface.cpp
+index c38774d..dfada57 100644
+--- a/Source/Core/VideoCommon/EFBInterface.cpp
++++ b/Source/Core/VideoCommon/EFBInterface.cpp
+@@ -95,8 +95,16 @@ u32 HardwareEFBInterface::PeekDepthInternal(u16 x, u16 y)
+     return g_framebuffer_manager->PeekEFBDepth(x, y);
+   });
+ 
+-  // Depth buffer is inverted for improved precision near far plane
+-  if (!g_backend_info.bSupportsReversedDepthRange)
++  // Depth buffer is inverted for improved precision near far plane.
++  // §28at: the WebGPU/Vulkan path keeps ONE non-inverted [0,1] depth
++  // convention. The VS depth output is NOT keyed on the depth-range
++  // flag (VertexShaderGen has no such branch, UseVertexDepthRange()==
++  // false), so flipping the flag must not invert the C++ readback
++  // either — under flag=false that split the convention and HUNG the
++  // core on this PushBlockingEvent peek (frozen ~frame 781, §28as).
++  // NO-OP at flag=true (branch not taken). OGL/D3D/SW untouched.
++  if (!g_backend_info.bSupportsReversedDepthRange &&
++      g_backend_info.api_type != APIType::Vulkan)
+     depth = 1.0f - depth;
+ 
+   // Convert to 24bit depth
+@@ -150,7 +158,11 @@ void HardwareEFBInterface::PokeDepth(u16 x, u16 y, u32 poke_data)
+ 
+   // Convert to floating-point depth.
+   float depth = float(poke_data & 0xFFFFFF) / 16777216.0f;
+-  if (!g_backend_info.bSupportsReversedDepthRange)
++  // §28at: keep the WebGPU/Vulkan non-inverted depth convention
++  // (matches the de-inverted PeekDepth above + the flag-independent
++  // VS). NO-OP at flag=true. OGL/D3D/SW untouched.
++  if (!g_backend_info.bSupportsReversedDepthRange &&
++      g_backend_info.api_type != APIType::Vulkan)
+     depth = 1.0f - depth;
+ 
+   AsyncRequests::GetInstance()->PushEvent([x, y, depth] {
+diff --git a/Source/Core/VideoCommon/Fifo.cpp b/Source/Core/VideoCommon/Fifo.cpp
+index f183c93..2d3f0c3 100644
+--- a/Source/Core/VideoCommon/Fifo.cpp
++++ b/Source/Core/VideoCommon/Fifo.cpp
+@@ -32,8 +32,23 @@
+ #include "VideoCommon/VertexManagerBase.h"
+ #include "VideoCommon/VideoBackendBase.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#include <pthread.h>
++#endif
++
+ namespace Fifo
+ {
++#ifdef __EMSCRIPTEN__
++// §27d definitive shared-memory test: the after-load callback (CPU
++// pthread) stores a sentinel here; the GPU-thread gate reads it. If
++// the GPU thread never observes the CPU thread's store to this single
++// global atomic, the two dual-core pthreads are NOT sharing memory
++// (architecture defect); if it does, the CP-FIFO desync is logical
++// (pointer/state) and fixable in Dolphin terms.
++std::atomic<u32> g_s27_sentinel{0};
++#endif
++
+ static constexpr int GPU_TIME_SLOT_SIZE = 1000;
+ 
+ FifoManager::FifoManager(Core::System& system) : m_system{system}
+@@ -290,6 +305,28 @@ void FifoManager::RunGpuLoop()
+         // Run events from the CPU thread.
+         AsyncRequests::GetInstance()->PullEvents();
+ 
++#ifdef __EMSCRIPTEN__
++        // §27 diag: is the GPU mainloop body running post-load, and
++        // what FIFO/run state does it see? Rate-limited heartbeat.
++        {
++          static std::atomic<u32> s_hb{0};
++          const u32 n = ++s_hb;
++          if ((n & 0x3FFFFF) == 0)
++          {
++            auto& cp = m_system.GetCommandProcessor();
++            auto& f = cp.GetFifo();
++            EM_ASM({ console.log('[s27-gpuloop] n=' + $0 + ' emu=' + $1 +
++                                  ' gpren=' + $2 + ' rwd=' + $3 +
++                                  ' cp=' + ($4 >>> 0) + ' rwdAddr=' + ($5 >>> 0)); },
++                   n, m_emu_running_state.IsSet() ? 1 : 0,
++                   f.bFF_GPReadEnable.load(std::memory_order_relaxed) ? 1 : 0,
++                   f.CPReadWriteDistance.load(std::memory_order_relaxed),
++                   reinterpret_cast<u32>(&cp),
++                   reinterpret_cast<u32>(&f.CPReadWriteDistance));
++          }
++        }
++#endif
++
+         // Do nothing while paused
+         if (!m_emu_running_state.IsSet())
+           return;
+@@ -313,6 +350,31 @@ void FifoManager::RunGpuLoop()
+           auto& fifo = command_processor.GetFifo();
+           command_processor.SetCPStatusFromGPU();
+ 
++#ifdef __EMSCRIPTEN__
++          // §27 diag: which of the 4 drain gates blocks the GPU loop
++          // post-load (CPU is filling the FIFO but GPU never drains)?
++          {
++            static std::atomic<u32> s_hb{0};
++            const u32 n = ++s_hb;
++            if ((n & 0x1FFFFF) == 0)
++            {
++              auto& f2 = m_system.GetCommandProcessor().GetFifo();
++              EM_ASM({ console.log('[s27-gate] tid=' + ($0 >>> 0) +
++                                    ' rwd=' + $1 + ' rwd2=' + $2 +
++                                    ' rd=' + ($3 >>> 0) + ' wr=' + ($4 >>> 0) +
++                                    ' safe=' + ($5 >>> 0) +
++                                    ' sent=' + ($6 >>> 0)); },
++                     static_cast<u32>(pthread_self()),
++                     fifo.CPReadWriteDistance.load(std::memory_order_relaxed),
++                     f2.CPReadWriteDistance.load(std::memory_order_seq_cst),
++                     fifo.CPReadPointer.load(std::memory_order_relaxed),
++                     fifo.CPWritePointer.load(std::memory_order_relaxed),
++                     fifo.SafeCPReadPointer.load(std::memory_order_relaxed),
++                     g_s27_sentinel.load(std::memory_order_seq_cst));
++            }
++          }
++#endif
++
+           // check if we are able to run this buffer
+           while (!command_processor.IsInterruptWaiting() &&
+                  fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) &&
+@@ -343,6 +405,20 @@ void FifoManager::RunGpuLoop()
+             m_video_buffer_read_ptr = OpcodeDecoder::RunFifo(
+                 DataReader(m_video_buffer_read_ptr, write_ptr), &cyclesExecuted);
+ 
++#ifdef __EMSCRIPTEN__
++            // §27d: does the GPU thread actually DECODE FIFO chunks
++            // post-load? If this increments but the WebGPU ring stays
++            // frozen ⇒ the producer (WebGPUGfx) stops recording
++            // post-load (backend re-init needed). If it never
++            // increments ⇒ the GPU genuinely never drains (FIFO sync).
++            {
++              static std::atomic<u32> s_dec{0};
++              const u32 d = ++s_dec;
++              if ((d & 0x3FFF) == 0)
++                EM_ASM({ console.log('[s27-decode] chunks=' + $0); }, d);
++            }
++#endif
++
+             fifo.CPReadPointer.store(readPtr, std::memory_order_relaxed);
+             fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_seq_cst);
+             if ((write_ptr - m_video_buffer_read_ptr) == 0)
+@@ -412,6 +488,17 @@ bool AtBreakpoint(Core::System& system)
+ 
+ void FifoManager::RunGpu()
+ {
++#ifdef __EMSCRIPTEN__
++  // §27 diag: is the CPU still issuing GP bursts post-load (i.e. is
++  // Wakeup being driven)? Rate-limited heartbeat.
++  {
++    static std::atomic<u32> s_hb{0};
++    const u32 n = ++s_hb;
++    if ((n & 0x3FFFF) == 0)
++      EM_ASM({ console.log('[s27-RunGpu] n=' + $0); }, n);
++  }
++#endif
++
+   const bool is_dual_core = m_system.IsDualCoreMode();
+ 
+   // wake up GPU thread
+diff --git a/Source/Core/VideoCommon/FramebufferManager.cpp b/Source/Core/VideoCommon/FramebufferManager.cpp
+index 6277598..c798b90 100644
+--- a/Source/Core/VideoCommon/FramebufferManager.cpp
++++ b/Source/Core/VideoCommon/FramebufferManager.cpp
+@@ -290,8 +290,14 @@ bool FramebufferManager::CreateEFBFramebuffer(int efb_scale)
+   }
+ 
+   // Clear the renderable textures out.
+-  g_gfx->SetAndClearFramebuffer(m_efb_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
+-                                g_backend_info.bSupportsReversedDepthRange ? 1.0f : 0.0f);
++  // §28at: WebGPU/Vulkan keeps the non-inverted far=1.0 EFB depth
++  // clear regardless of the depth-range flag (NO-OP at flag=true).
++  g_gfx->SetAndClearFramebuffer(
++      m_efb_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
++      (g_backend_info.bSupportsReversedDepthRange ||
++       g_backend_info.api_type == APIType::Vulkan)
++          ? 1.0f
++          : 0.0f);
+ 
+   // Pixel Shader uses EFB scale as a constant, dirty that in case it changed
+   Core::System::GetInstance().GetPixelShaderManager().Dirty();
+@@ -1148,8 +1154,14 @@ void FramebufferManager::DoLoadState(PointerWrap& p)
+       color_tex->texture->GetLayers() != m_efb_color_texture->GetLayers())
+   {
+     WARN_LOG_FMT(VIDEO, "Failed to deserialize EFB contents. Clearing instead.");
+-    g_gfx->SetAndClearFramebuffer(m_efb_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
+-                                  g_backend_info.bSupportsReversedDepthRange ? 1.0f : 0.0f);
++    // §28at: WebGPU/Vulkan keeps non-inverted far=1.0 EFB depth clear
++    // regardless of the depth-range flag (NO-OP at flag=true).
++    g_gfx->SetAndClearFramebuffer(
++        m_efb_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
++        (g_backend_info.bSupportsReversedDepthRange ||
++         g_backend_info.api_type == APIType::Vulkan)
++            ? 1.0f
++            : 0.0f);
+     return;
+   }
+ 
+diff --git a/Source/Core/VideoCommon/FramebufferShaderGen.cpp b/Source/Core/VideoCommon/FramebufferShaderGen.cpp
+index 248146e..48e6b14 100644
+--- a/Source/Core/VideoCommon/FramebufferShaderGen.cpp
++++ b/Source/Core/VideoCommon/FramebufferShaderGen.cpp
+@@ -33,10 +33,28 @@ void EmitSamplerDeclarations(ShaderCode& code, u32 start = 0, u32 end = 1,
+ {
+   switch (GetAPIType())
+   {
++  case APIType::Vulkan:
++  {
++    // Day-30 (wasm-dolphin): SEPARATE texture + sampler for the WebGPU
++    // path (Naga/WGSL can't take combined samplers — see
++    // PixelShaderGen). An object-macro re-exposes the combined name
++    // `samp{i}` so EVERY use site — the EmitSampleTexture/
++    // EmitTextureLoad helpers AND the several shaders that write
++    // `texture(samp0,…)` / `texelFetch(samp0,…)` directly — keeps
++    // working unchanged. texture binding i, sampler binding i+8.
++    const char* tex_type = multisampled ? "texture2DMSArray" : "texture2DArray";
++    const char* comb_type = multisampled ? "sampler2DMSArray" : "sampler2DArray";
++    for (u32 i = start; i < end; i++)
++    {
++      code.Write("SAMPLER_BINDING({}) uniform {} fbtex{};\n", i, tex_type, i);
++      code.Write("SAMPLER_BINDING({}) uniform sampler fbsmp{};\n", i + 8, i);
++      code.Write("#define samp{} {}(fbtex{}, fbsmp{})\n", i, comb_type, i, i);
++    }
++  }
++  break;
+   case APIType::D3D:
+   case APIType::Metal:
+   case APIType::OpenGL:
+-  case APIType::Vulkan:
+   {
+     const char* array_type = multisampled ? "sampler2DMSArray" : "sampler2DArray";
+ 
+@@ -55,6 +73,9 @@ void EmitSampleTexture(ShaderCode& code, u32 n, std::string_view coords)
+ {
+   switch (GetAPIType())
+   {
++  // Day-30: Vulkan's `samp{n}` is an object-macro expanding to the
++  // combined-from-separate constructor (EmitSamplerDeclarations), so
++  // the generic form is correct for every API now.
+   case APIType::D3D:
+   case APIType::Metal:
+   case APIType::OpenGL:
+@@ -73,6 +94,9 @@ void EmitTextureLoad(ShaderCode& code, u32 n, std::string_view coords)
+ {
+   switch (GetAPIType())
+   {
++  // Day-30: `samp{n}` is the Vulkan object-macro (combined ctor); a
++  // texelFetch on a constructed combined sampler is valid GLSL, so
++  // the generic form covers every API.
+   case APIType::D3D:
+   case APIType::Metal:
+   case APIType::OpenGL:
+diff --git a/Source/Core/VideoCommon/PixelShaderGen.cpp b/Source/Core/VideoCommon/PixelShaderGen.cpp
+index 5ce120e..4ab0e25 100644
+--- a/Source/Core/VideoCommon/PixelShaderGen.cpp
++++ b/Source/Core/VideoCommon/PixelShaderGen.cpp
+@@ -341,7 +341,59 @@ void WritePixelShaderCommonHeader(ShaderCode& out, APIType api_type,
+             "int3 iround(float3 x) {{ return int3(round(x)); }}\n"
+             "int4 iround(float4 x) {{ return int4(round(x)); }}\n\n");
+ 
+-  out.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp[8];\n");
++  // Day-30 (wasm-dolphin): WGSL/WebGPU has no combined image-samplers,
++  // and Naga's SPIR-V frontend can't split a combined `sampler2DArray`
++  // global (every Dolphin pixel shader tripped Naga's "invalid id" on
++  // the OpLoad of the combined sampler). For the Vulkan dialect (what
++  // the WebGPU backend selects; the desktop Vulkan backend isn't built
++  // in the wasm target so this is WebGPU-only in practice) emit
++  // SEPARATE `texture2DArray` + `sampler` and combine them at the use
++  // site via the `SAMP_AT` macro. glslang then produces separate
++  // OpTypeImage/OpTypeSampler globals + OpSampledImage-at-use — the
++  // exact shape WGSL and Naga accept — while every readTexture/
++  // sampleTexture helper keeps its `in sampler2DArray` parameter
++  // unchanged (the combined object is constructed locally). Other
++  // APIs (OGL/GLSL-ES, no separate-sampler support) keep the combined
++  // form, behaviour-identical to before.
++  // GLSL forbids passing a sampler constructed from a separate
++  // texture+sampler as a function argument ("sampler constructor must
++  // appear at point of use"). Dolphin's TEV helpers
++  // (readTexture/sampleTexture) take a sampler param and are passed
++  // SAMP_AT(texmap) through 3 call levels. So thread the texture +
++  // sampler SEPARATELY via macros: SAMP_PARAM (param list),
++  // SAMP_FWD (forward to a nested helper), SAMP_USE (the combined
++  // expression, only ever placed directly inside a texture()/
++  // texelFetch()/textureSize() builtin — the one legal point of use).
++  // Helper-local names dtex/dsmp avoid clashing with the texture
++  // globals.
++  //
++  // Day-30: Naga's spv frontend also rejects indexing a global
++  // texture *array* ("invalid global var Access"). In every code
++  // path that reaches SAMP_AT the texmap is a compile-time constant
++  // (specialized PixelShaderGen emits `sampleTextureWrapper({}u,…)`;
++  // the ubershader uses a `switch` over constant cases since this
++  // backend reports no dynamic sampler indexing). So declare 8
++  // SEPARATE textures `tex_0u`..`tex_7u` (no array) and let SAMP_AT
++  // token-paste-select the right one — WGSL/Naga-friendly, and the
++  // constants make the paste well-defined.
++  if (api_type == APIType::Vulkan)
++  {
++    for (u32 i = 0; i < 8; i++)
++      out.Write("SAMPLER_BINDING({}) uniform texture2DArray tex_{}u;\n", i, i);
++    out.Write("SAMPLER_BINDING(8) uniform sampler samp_ss;\n");
++    out.Write("#define SAMP_PARAM texture2DArray dtex, sampler dsmp\n");
++    out.Write("#define SAMP_USE sampler2DArray(dtex, dsmp)\n");
++    out.Write("#define SAMP_FWD dtex, dsmp\n");
++    out.Write("#define SAMP_AT(i) tex_##i, samp_ss\n");
++  }
++  else
++  {
++    out.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp[8];\n");
++    out.Write("#define SAMP_PARAM in sampler2DArray dtex\n");
++    out.Write("#define SAMP_USE dtex\n");
++    out.Write("#define SAMP_FWD dtex\n");
++    out.Write("#define SAMP_AT(i) samp[i]\n");
++  }
+   out.Write("\n");
+ 
+   out.Write("UBO_BINDING(std140, 1) uniform PSBlock {{\n");
+@@ -383,13 +435,51 @@ void WritePixelShaderCommonHeader(ShaderCode& out, APIType api_type,
+             "\tuint  logic_op_mode;\n"
+             "\tuint  time_ms;\n"
+             "}};\n\n");
+-  out.Write("#define bpmem_combiners(i) (bpmem_pack1[(i)].xy)\n"
+-            "#define bpmem_tevind(i) (bpmem_pack1[(i)].z)\n"
+-            "#define bpmem_iref(i) (bpmem_pack1[(i)].w)\n"
+-            "#define bpmem_tevorder(i) (bpmem_pack2[(i)].x)\n"
+-            "#define bpmem_tevksel(i) (bpmem_pack2[(i)].y)\n"
+-            "#define samp_texmode0(i) (bpmem_pack2[(i)].z)\n"
+-            "#define samp_texmode1(i) (bpmem_pack2[(i)].w)\n\n");
++  // §28cx: Naga's SPIR-V frontend rejects a RUNTIME OpAccessChain into a
++  // uniform-block array global ("invalid global var Access"). The uber TEV
++  // loop indexes bpmem_pack1/bpmem_pack2 (by `stage`) and konstLookup (by a
++  // runtime bitfield) — that dynamic-index shape is exactly the 27 pixel-shader
++  // Naga failures (the specialized path bakes constant indices, so it
++  // translates fine). Route the dynamically-indexed reads through
++  // switch-over-constant-index fetchers so every emitted access carries a
++  // LITERAL index — the WGSL/Naga-friendly shape, same principle as the Day-30
++  // separate-texture fix. Vulkan-only; other backends keep direct indexing.
++  // Specialized shaders pass constant indices, which glslang const-folds
++  // through the switch (no cost / no behavior change there).
++  if (api_type == APIType::Vulkan)
++  {
++    out.Write("uint4 dolphin_fetch_pack1(uint i) {{ switch (i) {{\n");
++    for (u32 k = 0; k < 16; k++)
++      out.Write("  case {}u: return bpmem_pack1[{}];\n", k, k);
++    out.Write("  default: return bpmem_pack1[0]; }} }}\n");
++    out.Write("uint4 dolphin_fetch_pack2(uint i) {{ switch (i) {{\n");
++    for (u32 k = 0; k < 8; k++)
++      out.Write("  case {}u: return bpmem_pack2[{}];\n", k, k);
++    out.Write("  default: return bpmem_pack2[0]; }} }}\n");
++    out.Write("int4 dolphin_fetch_konst(uint i) {{ switch (i) {{\n");
++    for (u32 k = 0; k < 32; k++)
++      out.Write("  case {}u: return konstLookup[{}];\n", k, k);
++    out.Write("  default: return konstLookup[0]; }} }}\n");
++    out.Write("#define bpmem_combiners(i) (dolphin_fetch_pack1(i).xy)\n"
++              "#define bpmem_tevind(i) (dolphin_fetch_pack1(i).z)\n"
++              "#define bpmem_iref(i) (dolphin_fetch_pack1(i).w)\n"
++              "#define bpmem_tevorder(i) (dolphin_fetch_pack2(i).x)\n"
++              "#define bpmem_tevksel(i) (dolphin_fetch_pack2(i).y)\n"
++              "#define samp_texmode0(i) (dolphin_fetch_pack2(i).z)\n"
++              "#define samp_texmode1(i) (dolphin_fetch_pack2(i).w)\n"
++              "#define KONST_AT(i) (dolphin_fetch_konst(i))\n\n");
++  }
++  else
++  {
++    out.Write("#define bpmem_combiners(i) (bpmem_pack1[(i)].xy)\n"
++              "#define bpmem_tevind(i) (bpmem_pack1[(i)].z)\n"
++              "#define bpmem_iref(i) (bpmem_pack1[(i)].w)\n"
++              "#define bpmem_tevorder(i) (bpmem_pack2[(i)].x)\n"
++              "#define bpmem_tevksel(i) (bpmem_pack2[(i)].y)\n"
++              "#define samp_texmode0(i) (bpmem_pack2[(i)].z)\n"
++              "#define samp_texmode1(i) (bpmem_pack2[(i)].w)\n"
++              "#define KONST_AT(i) (konstLookup[i])\n\n");
++  }
+ 
+   if (host_config.per_pixel_lighting)
+   {
+@@ -471,18 +561,18 @@ void UpdateBoundingBox(float2 rawpos) {{
+   if (host_config.manual_texture_sampling)
+   {
+     out.Write(R"(
+-int4 readTexture(in sampler2DArray tex, uint u, uint v, int layer, int lod) {{
+-  return iround(texelFetch(tex, int3(u, v, layer), lod) * 255.0);
++int4 readTexture(SAMP_PARAM, uint u, uint v, int layer, int lod) {{
++  return iround(texelFetch(SAMP_USE,int3(u, v, layer), lod) * 255.0);
+ }}
+ 
+-int4 readTextureLinear(in sampler2DArray tex, uint2 uv1, uint2 uv2, int layer, int lod, int2 frac_uv) {{)");
++int4 readTextureLinear(SAMP_PARAM, uint2 uv1, uint2 uv2, int layer, int lod, int2 frac_uv) {{)");
+ 
+     out.Write(R"(
+   int4 result =
+-    readTexture(tex, uv1.x, uv1.y, layer, lod) * (128 - frac_uv.x) * (128 - frac_uv.y) +
+-    readTexture(tex, uv2.x, uv1.y, layer, lod) * (      frac_uv.x) * (128 - frac_uv.y) +
+-    readTexture(tex, uv1.x, uv2.y, layer, lod) * (128 - frac_uv.x) * (      frac_uv.y) +
+-    readTexture(tex, uv2.x, uv2.y, layer, lod) * (      frac_uv.x) * (      frac_uv.y);
++    readTexture(SAMP_FWD,uv1.x, uv1.y, layer, lod) * (128 - frac_uv.x) * (128 - frac_uv.y) +
++    readTexture(SAMP_FWD,uv2.x, uv1.y, layer, lod) * (      frac_uv.x) * (128 - frac_uv.y) +
++    readTexture(SAMP_FWD,uv1.x, uv2.y, layer, lod) * (128 - frac_uv.x) * (      frac_uv.y) +
++    readTexture(SAMP_FWD,uv2.x, uv2.y, layer, lod) * (      frac_uv.x) * (      frac_uv.y);
+   return result >> 14;
+ }}
+ )");
+@@ -508,6 +598,7 @@ int SafeModulo(int dividend, int divisor) {{
+ uint WrapCoord(int coord, uint wrap, int size) {{
+   switch (wrap) {{
+     case {:s}:
++      return uint(clamp(coord, 0, size - 1)); // §WrapFix
+     default: // confirmed that clamp is used for invalid (3) via hardware test
+       return uint(clamp(coord, 0, size - 1));
+     case {:s}:
+@@ -528,6 +619,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+ uint WrapCoord(int coord, uint wrap, int size) {{
+   switch (wrap) {{
+     case {:s}:
++      return uint(clamp(coord, 0, size - 1));
+     default: // confirmed that clamp is used for invalid (3) via hardware test
+       return uint(clamp(coord, 0, size - 1));
+     case {:s}:
+@@ -544,7 +636,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+     }
+   }
+ 
+-  out.Write("\nint4 sampleTexture(uint texmap, in sampler2DArray tex, int2 uv, int layer) {{\n");
++  out.Write("\nint4 sampleTexture(uint texmap, SAMP_PARAM, int2 uv, int layer) {{\n");
+ 
+   if (!host_config.manual_texture_sampling)
+   {
+@@ -555,12 +647,12 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+     {
+       out.Write("  uint texmode0 = samp_texmode0(texmap);\n"
+                 "  float lod_bias = float({}) / 256.0f;\n"
+-                "  return iround(255.0 * texture(tex, coords, lod_bias));\n",
++                "  return iround(255.0 * texture(SAMP_USE,coords, lod_bias));\n",
+                 BitfieldExtract<&SamplerState::TM0::lod_bias>("texmode0"));
+     }
+     else
+     {
+-      out.Write("  return iround(255.0 * texture(tex, coords));\n");
++      out.Write("  return iround(255.0 * texture(SAMP_USE,coords));\n");
+     }
+ 
+     out.Write("}}\n");
+@@ -603,7 +695,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+ )");
+ 
+       out.Write(R"(
+-  int3 size = textureSize(tex, 0);
++  int3 size = textureSize(SAMP_USE,0);
+   int size_s = size.x;
+   int size_t = size.y;
+   int num_layers = size.z;
+@@ -687,7 +779,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+         WrapCoord(((uv.y >> base_lod) + 64) >> 7, wrap_t, size_t >> base_lod));
+     int2 frac_uv = int2(((uv.x >> base_lod) - 64) & 0x7f, ((uv.y >> base_lod) - 64) & 0x7f);
+ 
+-    int4 result = readTextureLinear(tex, texuv1, texuv2, layer, base_lod, frac_uv);
++    int4 result = readTextureLinear(SAMP_FWD,texuv1, texuv2, layer, base_lod, frac_uv);
+ 
+     if (frac_lod != 0 && mipmap_linear) {{
+       texuv1 = uint2(
+@@ -699,7 +791,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+       frac_uv = int2(((uv.x >> (base_lod + 1)) - 64) & 0x7f, ((uv.y >> (base_lod + 1)) - 64) & 0x7f);
+ 
+       result *= 16 - frac_lod;
+-      result += readTextureLinear(tex, texuv1, texuv2, layer, base_lod + 1, frac_uv) * frac_lod;
++      result += readTextureLinear(SAMP_FWD,texuv1, texuv2, layer, base_lod + 1, frac_uv) * frac_lod;
+       result >>= 4;
+     }}
+ 
+@@ -709,7 +801,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+         WrapCoord(uv.x >> (7 + base_lod), wrap_s, size_s >> base_lod),
+         WrapCoord(uv.y >> (7 + base_lod), wrap_t, size_t >> base_lod));
+ 
+-    int4 result = readTexture(tex, texuv.x, texuv.y, layer, base_lod);
++    int4 result = readTexture(SAMP_FWD,texuv.x, texuv.y, layer, base_lod);
+ 
+     if (frac_lod != 0 && mipmap_linear) {{
+       texuv = uint2(
+@@ -717,7 +809,7 @@ uint WrapCoord(int coord, uint wrap, int size) {{
+           WrapCoord(uv.y >> (7 + base_lod + 1), wrap_t, size_t >> (base_lod + 1)));
+ 
+       result *= 16 - frac_lod;
+-      result += readTexture(tex, texuv.x, texuv.y, layer, base_lod + 1) * frac_lod;
++      result += readTexture(SAMP_FWD,texuv.x, texuv.y, layer, base_lod + 1) * frac_lod;
+       result >>= 4;
+     }}
+     return result;
+@@ -767,7 +859,7 @@ ShaderCode GeneratePixelShaderCode(APIType api_type, const ShaderHostConfig& hos
+   WritePixelShaderCommonHeader(out, api_type, host_config, uid_data->bounding_box);
+ 
+   out.Write("\n#define sampleTextureWrapper(texmap, uv, layer) "
+-            "sampleTexture(texmap, samp[texmap], uv, layer)\n");
++            "sampleTexture(texmap, SAMP_AT(texmap), uv, layer)\n");
+ 
+   if (uid_data->ztest == EmulatedZ::ForcedEarly)
+   {
+@@ -1045,7 +1137,16 @@ ShaderCode GeneratePixelShaderCode(APIType api_type, const ShaderHostConfig& hos
+   }
+   else
+   {
+-    if (!host_config.backend_reversed_depth_range)
++    // §28as: WebGPU/Vulkan emits native [0,1] clip-control window
++    // depth (rawpos.z = projected depth, NOT GL-inverted) — true
++    // whether or not the depth RANGE is reversed (reversal is a
++    // viewport/compare concern, independent of the fog zCoord
++    // formula). Decouple from bSupportsReversedDepthRange for
++    // api_type Vulkan so flag=false (the single non-reverse
++    // convention that kills the mixed-pass flicker, §28aq/ar)
++    // keeps fog correct instead of saturating to the black fog
++    // colour (the §28b regression). OGL/D3D/SW untouched.
++    if (!host_config.backend_reversed_depth_range && api_type != APIType::Vulkan)
+       out.Write("\tint zCoord = int((1.0 - rawpos.z) * 16777216.0);\n");
+     else
+       out.Write("\tint zCoord = int(rawpos.z * 16777216.0);\n");
+@@ -1062,7 +1163,7 @@ ShaderCode GeneratePixelShaderCode(APIType api_type, const ShaderHostConfig& hos
+                            uid_data->ztest == EmulatedZ::EarlyWithZComplocHack;
+   if (uid_data->per_pixel_depth && early_ztest)
+   {
+-    if (!host_config.backend_reversed_depth_range)
++    if (!host_config.backend_reversed_depth_range && api_type != APIType::Vulkan)  // §28as
+       out.Write("\tdepth = 1.0 - float(zCoord) / 16777216.0;\n");
+     else
+       out.Write("\tdepth = float(zCoord) / 16777216.0;\n");
+@@ -1084,7 +1185,7 @@ ShaderCode GeneratePixelShaderCode(APIType api_type, const ShaderHostConfig& hos
+ 
+   if (uid_data->per_pixel_depth && uid_data->ztest == EmulatedZ::Late)
+   {
+-    if (!host_config.backend_reversed_depth_range)
++    if (!host_config.backend_reversed_depth_range && api_type != APIType::Vulkan)  // §28as
+       out.Write("\tdepth = 1.0 - float(zCoord) / 16777216.0;\n");
+     else
+       out.Write("\tdepth = float(zCoord) / 16777216.0;\n");
+@@ -1640,7 +1741,12 @@ static void WriteAlphaTest(ShaderCode& out, const pixel_shader_uid_data* uid_dat
+   }
+   if (per_pixel_depth)
+   {
+-    out.Write("\t\tdepth = {};\n", !g_backend_info.bSupportsReversedDepthRange ? "0.0" : "1.0");
++    // §28as: Vulkan/WebGPU non-reverse [0,1] convention → a
++    // discarded fragment writes the FAR plane (1.0) so it can't
++    // occlude, independent of bSupportsReversedDepthRange.
++    out.Write("\t\tdepth = {};\n",
++              (!g_backend_info.bSupportsReversedDepthRange &&
++               api_type != APIType::Vulkan) ? "0.0" : "1.0");
+   }
+ 
+   // ZCOMPLOC HACK:
+diff --git a/Source/Core/VideoCommon/PostProcessing.cpp b/Source/Core/VideoCommon/PostProcessing.cpp
+index 92f7c1f..21f4c4b 100644
+--- a/Source/Core/VideoCommon/PostProcessing.cpp
++++ b/Source/Core/VideoCommon/PostProcessing.cpp
+@@ -685,8 +685,25 @@ std::string PostProcessing::GetHeader(bool user_post_process) const
+ {
+   std::ostringstream ss;
+   ss << GetUniformBufferHeader(user_post_process);
+-  ss << "SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n";
+-  ss << "SAMPLER_BINDING(1) uniform sampler2DArray samp1;\n";
++  // Day-30 (wasm-dolphin): WGSL/Naga can't take combined samplers
++  // (see PixelShaderGen). Vulkan dialect (= the WebGPU backend; no
++  // desktop Vulkan in the wasm target) gets SEPARATE texture+sampler
++  // with an object-macro so every texture()/textureOffset()/
++  // texelFetch(samp0,…) call site stays unchanged. OGL keeps combined.
++  if (g_backend_info.api_type == APIType::Vulkan)
++  {
++    ss << "SAMPLER_BINDING(0) uniform texture2DArray samp0_t;\n";
++    ss << "SAMPLER_BINDING(8) uniform sampler samp0_s;\n";
++    ss << "#define samp0 sampler2DArray(samp0_t, samp0_s)\n";
++    ss << "SAMPLER_BINDING(1) uniform texture2DArray samp1_t;\n";
++    ss << "SAMPLER_BINDING(9) uniform sampler samp1_s;\n";
++    ss << "#define samp1 sampler2DArray(samp1_t, samp1_s)\n";
++  }
++  else
++  {
++    ss << "SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n";
++    ss << "SAMPLER_BINDING(1) uniform sampler2DArray samp1;\n";
++  }
+ 
+   if (g_backend_info.bSupportsGeometryShaders)
+   {
+diff --git a/Source/Core/VideoCommon/Present.cpp b/Source/Core/VideoCommon/Present.cpp
+index 0691323..462c1f6 100644
+--- a/Source/Core/VideoCommon/Present.cpp
++++ b/Source/Core/VideoCommon/Present.cpp
+@@ -904,7 +904,17 @@ void Presenter::Present(PresentInfo* present_info)
+     {
+       const auto present_time = GetUpdatedPresentationTime(present_info->intended_present_time);
+ 
++#ifndef __EMSCRIPTEN__
++      // In single-threaded WASM (the browser build) AsyncRequests passthrough
++      // mode is true, so this Present runs synchronously on the CPU thread.
++      // SleepUntil would block the core for ~60ms when wall-clock drifted
++      // multiple VI fields behind game time. Browser pacing is provided by
++      // emscripten_webgl_commit_frame's implicit 60Hz cap, so this VI sleep
++      // is redundant in the browser. (A bounded variant capped at 20ms was
++      // tried and degraded performance further by re-introducing partial
++      // stalls on every frame.)
+       Core::System::GetInstance().GetCoreTiming().SleepUntil(present_time);
++#endif
+ 
+       // Perhaps in the future a more accurate time can be acquired from the various backends.
+       present_info->actual_present_time = Clock::now();
+diff --git a/Source/Core/VideoCommon/ShaderGenCommon.cpp b/Source/Core/VideoCommon/ShaderGenCommon.cpp
+index e848beb..cf9793e 100644
+--- a/Source/Core/VideoCommon/ShaderGenCommon.cpp
++++ b/Source/Core/VideoCommon/ShaderGenCommon.cpp
+@@ -108,6 +108,16 @@ void WriteIsNanHeader(ShaderCode& out, APIType api_type)
+               "}}\n\n");
+     // If isfinite is needed, (floatBitsToInt(f) & 0x7F800000) != 0x7F800000 can be used
+   }
++  else if (api_type == APIType::Vulkan)
++  {
++    // Day-30 (wasm-dolphin): Naga's WGSL backend can't lower the
++    // SPIR-V IsNan relational op ("Unsupported relational function:
++    // IsNan"), which blocked every real Dolphin vertex shader. Use
++    // the portable identity instead — only NaN compares unequal to
++    // itself — which Naga/WGSL handle. (Vulkan dialect = the WebGPU
++    // backend; desktop Vulkan isn't built in the wasm target.)
++    out.Write("#define dolphin_isnan(f) ((f) != (f))\n");
++  }
+   else
+   {
+     out.Write("#define dolphin_isnan(f) isnan(f)\n");
+diff --git a/Source/Core/VideoCommon/TextureConversionShader.cpp b/Source/Core/VideoCommon/TextureConversionShader.cpp
+index f18f63e..63b9cac 100644
+--- a/Source/Core/VideoCommon/TextureConversionShader.cpp
++++ b/Source/Core/VideoCommon/TextureConversionShader.cpp
+@@ -72,8 +72,21 @@ static void WriteHeader(ShaderCode& code, APIType api_type)
+   {
+     code.Write("VARYING_LOCATION(0) in float3 v_tex0;\n");
+   }
+-  code.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n"
+-             "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n");
++  // Day-30 (wasm-dolphin): separate texture+sampler for Vulkan (WebGPU
++  // backend; Naga/WGSL has no combined samplers — see PixelShaderGen).
++  // Object-macro keeps texture(samp0,…) sites unchanged; OGL combined.
++  if (api_type == APIType::Vulkan)
++  {
++    code.Write("SAMPLER_BINDING(0) uniform texture2DArray samp0_t;\n"
++               "SAMPLER_BINDING(8) uniform sampler samp0_s;\n"
++               "#define samp0 sampler2DArray(samp0_t, samp0_s)\n"
++               "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n");
++  }
++  else
++  {
++    code.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n"
++               "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n");
++  }
+ 
+   // Alpha channel in the copy is set to 1 the EFB format does not have an alpha channel.
+   code.Write("float4 RGBA8ToRGB8(float4 src)\n"
+@@ -124,7 +137,11 @@ static void WriteSampleFunction(ShaderCode& code, const EFBCopyParams& params, A
+ 
+   if (params.depth)
+   {
+-    if (!g_backend_info.bSupportsReversedDepthRange)
++    // §28at: WebGPU/Vulkan EFB-copy depth stays non-inverted to match
++    // the flag-independent VS + de-inverted peek/clear. NO-OP at
++    // flag=true. OGL/D3D/SW untouched.
++    if (!g_backend_info.bSupportsReversedDepthRange &&
++        g_backend_info.api_type != APIType::Vulkan)
+       code.Write("  tex_sample.x = 1.0 - tex_sample.x;\n");
+ 
+     code.Write("  uint depth = uint(tex_sample.x * 16777216.0);\n"
+@@ -1184,7 +1201,19 @@ float4 DecodePixel(int val)
+     ss << "SSBO_BINDING(0) readonly buffer Palette { uint16_t palette[]; };\n";
+   else
+     ss << "TEXEL_BUFFER_BINDING(0) uniform usamplerBuffer samp0;\n";
+-  ss << "SAMPLER_BINDING(1) uniform sampler2DArray samp1;\n";
++  // Day-30 (wasm-dolphin): separate texture+sampler for Vulkan
++  // (WebGPU; Naga/WGSL has no combined samplers). samp0 here is a
++  // usamplerBuffer (texel buffer) — left as-is, a separate concern.
++  if (api_type == APIType::Vulkan)
++  {
++    ss << "SAMPLER_BINDING(1) uniform texture2DArray samp1_t;\n";
++    ss << "SAMPLER_BINDING(9) uniform sampler samp1_s;\n";
++    ss << "#define samp1 sampler2DArray(samp1_t, samp1_s)\n";
++  }
++  else
++  {
++    ss << "SAMPLER_BINDING(1) uniform sampler2DArray samp1;\n";
++  }
+   ss << "UBO_BINDING(std140, 1) uniform PSBlock {\n";
+ 
+   ss << "  float multiplier;\n";
+diff --git a/Source/Core/VideoCommon/TextureConverterShaderGen.cpp b/Source/Core/VideoCommon/TextureConverterShaderGen.cpp
+index a8827fd..083f414 100644
+--- a/Source/Core/VideoCommon/TextureConverterShaderGen.cpp
++++ b/Source/Core/VideoCommon/TextureConverterShaderGen.cpp
+@@ -102,14 +102,31 @@ ShaderCode GeneratePixelShader(APIType api_type, const UidData* uid_data)
+   ShaderCode out;
+   WriteHeader(api_type, out);
+ 
+-  out.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n");
++  // Day-30 (wasm-dolphin): separate texture+sampler for Vulkan (the
++  // WebGPU backend; Naga/WGSL has no combined samplers — see
++  // PixelShaderGen). Object-macro keeps the texture(samp0,…) site
++  // unchanged. OGL keeps combined.
++  if (api_type == APIType::Vulkan)
++  {
++    out.Write("SAMPLER_BINDING(0) uniform texture2DArray samp0_t;\n"
++              "SAMPLER_BINDING(8) uniform sampler samp0_s;\n"
++              "#define samp0 sampler2DArray(samp0_t, samp0_s)\n");
++  }
++  else
++  {
++    out.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n");
++  }
+   out.Write("uint4 SampleEFB(float3 uv, float y_offset) {{\n"
+             "  float4 tex_sample = texture(samp0, float3(uv.x, clamp(uv.y + (y_offset * "
+             "pixel_height), clamp_tb.x, clamp_tb.y), {}));\n",
+             mono_depth ? "0.0" : "uv.z");
+   if (uid_data->is_depth_copy)
+   {
+-    if (!g_backend_info.bSupportsReversedDepthRange)
++    // §28at: WebGPU/Vulkan EFB-copy depth stays non-inverted to match
++    // the flag-independent VS + de-inverted peek/clear. NO-OP at
++    // flag=true. OGL/D3D/SW untouched.
++    if (!g_backend_info.bSupportsReversedDepthRange &&
++        g_backend_info.api_type != APIType::Vulkan)
+       out.Write("  tex_sample.x = 1.0 - tex_sample.x;\n");
+ 
+     out.Write("  uint depth = uint(tex_sample.x * 16777216.0);\n"
+diff --git a/Source/Core/VideoCommon/UberShaderCommon.cpp b/Source/Core/VideoCommon/UberShaderCommon.cpp
+index f605081..e897d6d 100644
+--- a/Source/Core/VideoCommon/UberShaderCommon.cpp
++++ b/Source/Core/VideoCommon/UberShaderCommon.cpp
+@@ -23,7 +23,14 @@ void WriteLightingFunction(ShaderCode& out)
+             "  float dist, dist2, attn;\n"
+             "\n"
+             "  switch (attnfunc) {{\n");
++  // §28cx-v2: split case None + Dir so each has its own body+break; Naga's WGSL
++  // backend rejects fall-through (case None had no body, flowing into Dir).
+   out.Write("  case {:s}:\n", AttenuationFunc::None);
++  out.Write("    ldir = normalize(" I_LIGHTS "[index].pos.xyz - pos.xyz);\n"
++            "    attn = 1.0;\n"
++            "    if (length(ldir) == 0.0)\n"
++            "      ldir = normal;\n"
++            "    break;\n\n");
+   out.Write("  case {:s}:\n", AttenuationFunc::Dir);
+   out.Write("    ldir = normalize(" I_LIGHTS "[index].pos.xyz - pos.xyz);\n"
+             "    attn = 1.0;\n"
+@@ -154,7 +161,10 @@ void WriteVertexLighting(ShaderCode& out, APIType api_type, std::string_view wor
+             "  case 0u: {} = lit_color; break;\n",
+             out_color_0_var);
+   out.Write("  case 1u: {} = lit_color; break;\n", out_color_1_var);
+-  out.Write("  }}\n"
++  // §28cx: add explicit default so the switch has no fall-through; Naga's
++  // WGSL backend rejects switches with implicit default paths on some versions.
++  out.Write("  default: break;\n"
++            "  }}\n"
+             "}}\n"
+             "\n");
+ }
+diff --git a/Source/Core/VideoCommon/UberShaderPixel.cpp b/Source/Core/VideoCommon/UberShaderPixel.cpp
+index 3370f87..4ca3cd3 100644
+--- a/Source/Core/VideoCommon/UberShaderPixel.cpp
++++ b/Source/Core/VideoCommon/UberShaderPixel.cpp
+@@ -4,6 +4,8 @@
+ #include "VideoCommon/UberShaderPixel.h"
+ 
+ #include "Common/Assert.h"
++#include <cstdio>
++#include <atomic>
+ 
+ #include "VideoCommon/BPMemory.h"
+ #include "VideoCommon/DriverDetails.h"
+@@ -305,7 +307,7 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+     // Doesn't look like DirectX supports this. Oh well the code path is here just in case it
+     // supports this in the future.
+     out.Write("int4 sampleTextureWrapper(uint texmap, int2 uv, int layer) {{\n");
+-    out.Write("  return sampleTexture(texmap, samp[texmap], uv, layer);\n");
++    out.Write("  return sampleTexture(texmap, SAMP_AT(texmap), uv, layer);\n");
+     out.Write("}}\n\n");
+   }
+   else
+@@ -318,9 +320,13 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+               "  switch(sampler_num) {{\n");
+     for (int i = 0; i < 8; i++)
+     {
+-      out.Write("  case {0}u: return sampleTexture({0}u, samp[{0}u], uv, layer);\n", i);
++      out.Write("  case {0}u: return sampleTexture({0}u, SAMP_AT({0}u), uv, layer);\n", i);
+     }
+-    out.Write("  }}\n"
++    // §28cx: add explicit default so the switch has a complete return path on
++    // every branch. Without it, glslang may generate a merge block with OpUndef
++    // that some Naga versions flag as a fall-through.
++    out.Write("  default: return sampleTexture(0u, SAMP_AT(0u), uv, layer);\n"
++              "  }}\n"
+               "}}\n\n");
+   }
+ 
+@@ -434,16 +440,18 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+       "    return (color_A.r > color_B.r);\n"
+       "  case 1u: // TevCompareMode::R8, TevComparison::EQ\n"
+       "    return (color_A.r == color_B.r);\n"
+-      "  case 2u: // TevCompareMode::GR16, TevComparison::GT\n"
++      "  case 2u: {{ // TevCompareMode::GR16, TevComparison::GT\n"
+       "    int A_16 = (color_A.r | (color_A.g << 8));\n"
+       "    int B_16 = (color_B.r | (color_B.g << 8));\n"
+       "    return A_16 > B_16;\n"
++      "  }}\n"
+       "  case 3u: // TevCompareMode::GR16, TevComparison::EQ\n"
+       "    return (color_A.r == color_B.r && color_A.g == color_B.g);\n"
+-      "  case 4u: // TevCompareMode::BGR24, TevComparison::GT\n"
++      "  case 4u: {{ // TevCompareMode::BGR24, TevComparison::GT\n"
+       "    int A_24 = (color_A.r | (color_A.g << 8) | (color_A.b << 16));\n"
+       "    int B_24 = (color_B.r | (color_B.g << 8) | (color_B.b << 16));\n"
+       "    return A_24 > B_24;\n"
++      "  }}\n"
+       "  case 5u: // TevCompareMode::BGR24, TevComparison::EQ\n"
+       "    return (color_A.r == color_B.r && color_A.g == color_B.g && color_A.b == color_B.b);\n"
+       "  default:\n"
+@@ -722,6 +730,7 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+               "          indcoord.z = (indcoord.z >> 5) + ((bias & 4u) != 0u ? 1 : 0);\n"
+               "          s.AlphaBump = s.AlphaBump << 3;\n"
+               "          break;\n"
++              "        default: break;\n"
+               "        }}\n"
+               "\n"
+               "        // Matrix multiply\n"
+@@ -742,6 +751,7 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+               "          case 2u: // T matrix, S17.7 format\n"
+               "            indtevtrans = (fixedPoint_uv * indcoord.yy) >> 8;\n"
+               "            break;\n"
++              "          default: break;\n"
+               "          }}\n"
+               "\n"
+               "          if (shift >= 0)\n"
+@@ -941,7 +951,11 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+ 
+   if (host_config.fast_depth_calc)
+   {
+-    if (!host_config.backend_reversed_depth_range)
++    // §28at: mirror the §28as PixelShaderGen fog/depth decouple in
++    // the ubershader fast-depth path — WebGPU/Vulkan emits native
++    // [0,1] clip-control window depth, independent of the depth-range
++    // flag. NO-OP at flag=true (else branch). OGL/D3D/SW untouched.
++    if (!host_config.backend_reversed_depth_range && api_type != APIType::Vulkan)
+       out.Write("  int zCoord = int((1.0 - rawpos.z) * 16777216.0);\n");
+     else
+       out.Write("  int zCoord = int(rawpos.z * 16777216.0);\n");
+@@ -997,7 +1011,10 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+     out.Write("  // If early depth is enabled, write to zbuffer before depth textures\n"
+               "  // If early depth isn't enabled, we write to the zbuffer here\n"
+               "  int zbuffer_zCoord = bpmem_late_ztest ? zCoord : early_zCoord;\n");
+-    if (!host_config.backend_reversed_depth_range)
++    // §28at: WebGPU/Vulkan per-pixel depth stays non-inverted
++    // (matches the flag-independent VS + de-inverted peek/clear).
++    // NO-OP at flag=true. OGL/D3D/SW untouched.
++    if (!host_config.backend_reversed_depth_range && api_type != APIType::Vulkan)
+       out.Write("  depth = 1.0 - float(zbuffer_zCoord) / 16777216.0;\n");
+     else
+       out.Write("  depth = float(zbuffer_zCoord) / 16777216.0;\n");
+@@ -1028,14 +1045,22 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+             "bugs with handling booleans.\n"
+             "    switch ({}) {{\n",
+             BitfieldExtract<&AlphaTest::logic>("bpmem_alphaTest"));
++  // §28cx: each case keeps a SINGLE trailing break with the discard in the
++  // else branch (NOT `if (c) break; else discard; break;`). A `break` inside
++  // the `if` plus a trailing `break` makes glslang emit a cross-case OpBranch
++  // that Naga's WGSL backend rejects as "fall-through switch case block" — the
++  // wall that blocked ALL uber pixel shaders (alpha test is always emitted).
++  // Empty true-branch preserves the original no-negation Intel/Qualcomm
++  // workaround (still `if (cond) … else discard`, no `!`).
+   out.Write("    case 0u: // AND\n"
+-            "      if (comp0 && comp1) break; else discard_fragment; break;\n"
++            "      if (comp0 && comp1) {{}} else {{ discard_fragment; }} break;\n"
+             "    case 1u: // OR\n"
+-            "      if (comp0 || comp1) break; else discard_fragment; break;\n"
++            "      if (comp0 || comp1) {{}} else {{ discard_fragment; }} break;\n"
+             "    case 2u: // XOR\n"
+-            "      if (comp0 != comp1) break; else discard_fragment; break;\n"
++            "      if (comp0 != comp1) {{}} else {{ discard_fragment; }} break;\n"
+             "    case 3u: // XNOR\n"
+-            "      if (comp0 == comp1) break; else discard_fragment; break;\n"
++            "      if (comp0 == comp1) {{}} else {{ discard_fragment; }} break;\n"
++            "    default: break;\n"
+             "    }}\n"
+             "  }}\n"
+             "\n");
+@@ -1114,7 +1139,8 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+             "        fog = exp2(-8.0 * fog * fog);\n"
+             "        break;\n",
+             FogType::BackwardsExpSq);
+-  out.Write("      }}\n"
++  out.Write("      default: break;\n"
++            "      }}\n"
+             "    }}\n"
+             "\n"
+             "    int ifog = iround(fog * 256.0);\n"
+@@ -1151,6 +1177,7 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+     {
+       out.Write("      case {}u: TevResult = {}; break;\n", i, logic_op_mode[i]);
+     }
++    out.Write("      default: break;\n");
+ 
+     out.Write("    }}\n"
+               "    TevResult &= 0xff;\n"
+@@ -1167,7 +1194,15 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+     out.Write("      case {}: // Copy Inverted\n", static_cast<u32>(LogicOp::CopyInverted));
+     out.Write("        TevResult ^= 0xff;\n"
+               "        break;\n");
++    // §28cx: emit each case with its OWN body + break. Naga's WGSL backend
++    // rejects GLSL fall-through (two case labels sharing a body compile to a
++    // cross-case OpBranch in SPIR-V) -> "wgsl-backend: fall-through switch case
++    // block" -> the uber pixel shader fails to translate -> bridge_id=0 -> EFB
++    // geometry draws silently dropped -> black. Duplicating the body is
++    // behavior-identical (both Set and Invert already produced the same value).
+     out.Write("      case {}: // Set\n", static_cast<u32>(LogicOp::Set));
++    out.Write("        TevResult = int4(255, 255, 255, 255);\n"
++              "        break;\n");
+     out.Write("      case {}: // Invert\n", static_cast<u32>(LogicOp::Invert));
+     out.Write("        TevResult = int4(255, 255, 255, 255);\n"
+               "        break;\n");
+@@ -1324,15 +1359,26 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
+             "  // indexed uniform lookup\n"
+             "  uint tevksel = bpmem_tevksel(ss.stage>>1);\n"
+             "  if ((ss.stage & 1u) == 0u)\n"
+-            "    return int4(konstLookup[{}].rgb, konstLookup[{}].a);\n",
++            "    return int4(KONST_AT({}).rgb, KONST_AT({}).a);\n",
+             BitfieldExtract<&TevKSel::kcsel_even>("tevksel"),
+             BitfieldExtract<&TevKSel::kasel_even>("tevksel"));
+   out.Write("  else\n"
+-            "    return int4(konstLookup[{}].rgb, konstLookup[{}].a);\n",
++            "    return int4(KONST_AT({}).rgb, KONST_AT({}).a);\n",
+             BitfieldExtract<&TevKSel::kcsel_odd>("tevksel"),
+             BitfieldExtract<&TevKSel::kasel_odd>("tevksel"));
+   out.Write("}}\n");
+ 
++  // §UBERDUMP-v2: one-shot dump of the first uber pixel shader GLSL for fall-through diagnosis
++  {
++    static std::atomic<bool> s_dumped{false};
++    if (!s_dumped.exchange(true))
++    {
++      fprintf(stderr, "[webgpu-uber-ps-dump-start]\n%s\n[webgpu-uber-ps-dump-end]\n",
++              out.GetBuffer().c_str());
++      fflush(stderr);
++    }
++  }
++
+   return out;
+ }
+ 
+diff --git a/Source/Core/VideoCommon/UberShaderVertex.cpp b/Source/Core/VideoCommon/UberShaderVertex.cpp
+index 6f79564..b306080 100644
+--- a/Source/Core/VideoCommon/UberShaderVertex.cpp
++++ b/Source/Core/VideoCommon/UberShaderVertex.cpp
+@@ -149,7 +149,12 @@ float3 load_input_float3_rawtex(uint vtx_offset, uint attr_offset) {{
+   else
+   {
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float4 rawpos;\n", ShaderAttrib::Position);
++#ifdef __EMSCRIPTEN__
++    // See VertexShaderGen.cpp: WebGL2 path feeds posmtx as float, not uint.
++    out.Write("ATTRIBUTE_LOCATION({:s}) in float4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#else
+     out.Write("ATTRIBUTE_LOCATION({:s}) in uint4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#endif
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawnormal;\n", ShaderAttrib::Normal);
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawtangent;\n", ShaderAttrib::Tangent);
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawbinormal;\n", ShaderAttrib::Binormal);
+diff --git a/Source/Core/VideoCommon/VertexShaderGen.cpp b/Source/Core/VideoCommon/VertexShaderGen.cpp
+index 837c30c..8c37785 100644
+--- a/Source/Core/VideoCommon/VertexShaderGen.cpp
++++ b/Source/Core/VideoCommon/VertexShaderGen.cpp
+@@ -398,7 +398,27 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
+   {
+     out.Write("ATTRIBUTE_LOCATION({:s}) in float4 rawpos;\n", ShaderAttrib::Position);
+     if ((uid_data->components & VB_HAS_POSMTXIDX) != 0)
++#ifdef __EMSCRIPTEN__
++      // Coordinated with OGLNativeVertexFormat: on WebGL2 we feed the
++      // per-vertex matrix index as a float attribute (0..255) rather than
++      // an integer attribute, because glVertexAttribIPointer silently
++      // fails on some ANGLE configs leaving the integer attribute zero.
++      // That workaround is an OGL/WebGL2/ANGLE bug only — WebGPU
++      // (api_type==Vulkan here) has no such bug and its vertex format is
++      // uint8x4 → uint4, matching desktop Vulkan. Gate the float
++      // workaround off the Vulkan dialect so the WebGPU backend's vertex
++      // base type matches the shader (Day-33 A2 probe: "Attribute base
++      // type Uint8x4 vs shader Float at location 1"). `int(posmtx.r)` in
++      // the transform body is type-agnostic, so the body is unchanged.
++      if (api_type == APIType::Vulkan)
++        out.Write("ATTRIBUTE_LOCATION({:s}) in uint4 posmtx;\n",
++                  ShaderAttrib::PositionMatrix);
++      else
++        out.Write("ATTRIBUTE_LOCATION({:s}) in float4 posmtx;\n",
++                  ShaderAttrib::PositionMatrix);
++#else
+       out.Write("ATTRIBUTE_LOCATION({:s}) in uint4 posmtx;\n", ShaderAttrib::PositionMatrix);
++#endif
+     if ((uid_data->components & VB_HAS_NORMAL) != 0)
+       out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawnormal;\n", ShaderAttrib::Normal);
+     if ((uid_data->components & VB_HAS_TANGENT) != 0)
+diff --git a/Source/Core/VideoCommon/VideoBackendBase.cpp b/Source/Core/VideoCommon/VideoBackendBase.cpp
+index 7eeefb7..749052e 100644
+--- a/Source/Core/VideoCommon/VideoBackendBase.cpp
++++ b/Source/Core/VideoCommon/VideoBackendBase.cpp
+@@ -4,6 +4,7 @@
+ #include "VideoCommon/VideoBackendBase.h"
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <cstring>
+ #include <memory>
+ #include <string>
+@@ -22,6 +23,7 @@
+ #include "Core/CoreTiming.h"
+ #include "Core/DolphinAnalytics.h"
+ #include "Core/HW/SystemTimers.h"
++#include "Core/HW/Memmap.h"
+ #include "Core/HW/VideoInterface.h"
+ #include "Core/System.h"
+ 
+@@ -38,6 +40,9 @@
+ #ifdef HAS_VULKAN
+ #include "VideoBackends/Vulkan/VideoBackend.h"
+ #endif
++#ifdef HAS_WEBGPU
++#include "VideoBackends/WebGPU/VideoBackend.h"
++#endif
+ #ifdef __APPLE__
+ #include "VideoBackends/Metal/VideoBackend.h"
+ #endif
+@@ -71,6 +76,12 @@
+ 
+ VideoBackendBase* g_video_backend = nullptr;
+ 
++#ifdef __EMSCRIPTEN__
++extern "C" void DolphinWeb_OnXfb(const u8* xfb, u32 width, u32 stride, u32 height);
++extern "C" void DolphinWeb_RecordVideoOutputProfile(u32 sync_us, u32 publish_us, u32 total_us);
++extern "C" int DolphinWeb_UseWorkerOwnedWebGL();
++#endif
++
+ #ifdef _WIN32
+ #include <windows.h>
+ 
+@@ -99,17 +110,64 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
+     return;
+ 
+   auto& system = Core::System::GetInstance();
++#ifdef __EMSCRIPTEN__
++  const auto output_profile_start = std::chrono::steady_clock::now();
++  u32 output_sync_us = 0;
++  u32 output_publish_us = 0;
++  const auto elapsed_us = [](std::chrono::steady_clock::time_point start,
++                             std::chrono::steady_clock::time_point end) {
++    return static_cast<u32>(
++        std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
++  };
++  const auto publish_xfb_to_web = [&] {
++    if (DolphinWeb_UseWorkerOwnedWebGL() != 0)
++      return;
++
++    if (fb_width != 0 && fb_height != 0 && fb_stride >= fb_width * 2)
++    {
++      const size_t xfb_size = static_cast<size_t>(fb_stride) * (fb_height - 1) +
++                              static_cast<size_t>(fb_width) * 2;
++      if (const u8* xfb = system.GetMemory().GetPointerForRange(xfb_addr, xfb_size))
++        DolphinWeb_OnXfb(xfb, fb_width, fb_stride, fb_height);
++    }
++  };
++#endif
+   auto& core_timing = system.GetCoreTiming();
+ 
+   if (!g_ActiveConfig.bImmediateXFB)
+   {
++    const auto sync_start = std::chrono::steady_clock::now();
+     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Swap);
++    const auto sync_done = std::chrono::steady_clock::now();
++    output_sync_us = elapsed_us(sync_start, sync_done);
++
++#ifdef __EMSCRIPTEN__
++    const auto publish_start = std::chrono::steady_clock::now();
++    publish_xfb_to_web();
++    const auto publish_done = std::chrono::steady_clock::now();
++    output_publish_us = elapsed_us(publish_start, publish_done);
++#endif
+ 
+     const TimePoint presentation_time = core_timing.GetTargetHostTime(ticks);
+     AsyncRequests::GetInstance()->PushEvent([=] {
+       g_presenter->ViSwap(xfb_addr, fb_width, fb_stride, fb_height, ticks, presentation_time);
+     });
+   }
++#ifdef __EMSCRIPTEN__
++  else
++  {
++    const auto publish_start = std::chrono::steady_clock::now();
++    publish_xfb_to_web();
++    const auto publish_done = std::chrono::steady_clock::now();
++    output_publish_us = elapsed_us(publish_start, publish_done);
++  }
++#endif
++
++#ifdef __EMSCRIPTEN__
++  DolphinWeb_RecordVideoOutputProfile(
++      output_sync_us, output_publish_us,
++      elapsed_us(output_profile_start, std::chrono::steady_clock::now()));
++#endif
+ 
+   // Inform the Presenter of the next estimated swap time.
+ 
+@@ -225,6 +283,12 @@ const std::vector<std::unique_ptr<VideoBackendBase>>& VideoBackendBase::GetAvail
+ #endif
+ #ifdef HAS_OPENGL
+     backends.push_back(std::make_unique<SW::VideoSoftware>());
++#endif
++#ifdef HAS_WEBGPU
++    // Day-14 (wasm-dolphin): scaffold-only WebGPU backend. Registered
++    // here so URL ?video=webgpu selects it via ActivateBackend, even
++    // though the backend itself renders nothing yet.
++    backends.push_back(std::make_unique<WebGPU::VideoBackend>());
+ #endif
+     backends.push_back(std::make_unique<Null::VideoBackend>());
+ 
+diff --git a/Source/Core/VideoCommon/VideoConfig.cpp b/Source/Core/VideoCommon/VideoConfig.cpp
+index d2cacd7..c2e06f6 100644
+--- a/Source/Core/VideoCommon/VideoConfig.cpp
++++ b/Source/Core/VideoCommon/VideoConfig.cpp
+@@ -179,6 +179,22 @@ void VideoConfig::Refresh()
+   bImmediateXFB = Config::Get(Config::GFX_HACK_IMMEDIATE_XFB);
+   bVISkip = Config::Get(Config::GFX_HACK_VI_SKIP);
+   bSkipPresentingDuplicateXFBs = bVISkip || Config::Get(Config::GFX_HACK_SKIP_DUPLICATE_XFBS);
++#ifdef __EMSCRIPTEN__
++  // The duplicate-XFB detector keys on XFB texture id (hashed memory). On the
++  // browser OGL path the EFB->XFB copy completes asynchronously enough that
++  // consecutive VI vsyncs observe the same XFB hash, which causes Present()
++  // to be skipped for ~95% of vsyncs and pins visible FPS to ~3. Force every
++  // VI vsync to present, but only when OGL is the active backend - the
++  // software backend keeps its skip semantics so it doesn't waste CPU on
++  // redundant Present() work.
++  if (Config::Get(Config::MAIN_GFX_BACKEND) == "OGL")
++    bSkipPresentingDuplicateXFBs = false;
++  // ImmediateXFB was tried here but it disables the ViSwap path that drives
++  // OGL swaps at 60Hz. Without ViSwap, presents only fire on EFB->XFB copies,
++  // which Melee doesn't issue every frame, collapsing visualFps to ~1Hz. The
++  // real cure was the SleepUntil skip in Present.cpp; with that in place,
++  // ViSwap no longer blocks the CPU thread.
++#endif
+   bCopyEFBScaled = Config::Get(Config::GFX_HACK_COPY_EFB_SCALED);
+   bEFBEmulateFormatChanges = Config::Get(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES);
+   bVertexRounding = Config::Get(Config::GFX_HACK_VERTEX_ROUNDING);

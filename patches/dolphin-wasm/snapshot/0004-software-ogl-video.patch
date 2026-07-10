@@ -1,0 +1,598 @@
+From 97e4d237aaf79d8203ea269181040a22d396ede9 Mon Sep 17 00:00:00 2001
+From: wasm-dolphin patch snapshot <snapshot@local.invalid>
+Date: Thu, 9 Jul 2026 14:42:32 -1000
+Subject: [PATCH 4/6] Browser software and OGL video snapshot
+
+
+diff --git a/Source/Core/VideoBackends/OGL/OGLConfig.cpp b/Source/Core/VideoBackends/OGL/OGLConfig.cpp
+index ce1b7a5..64ec994 100644
+--- a/Source/Core/VideoBackends/OGL/OGLConfig.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLConfig.cpp
+@@ -537,6 +537,14 @@ bool PopulateConfig(GLContext* m_main_gl_context)
+     glEnable(GL_PROGRAM_POINT_SIZE);
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  // WebGL does not provide the desktop/GLES base-vertex draw entrypoints Dolphin's OGL
++  // backend normally uses. Some browser stacks still expose related extension strings, which
++  // sends the wasm build down glDrawElementsBaseVertex and produces GL_INVALID_OPERATION frames.
++  // Force Dolphin's existing zero-based index upload fallback in browsers.
++  g_ogl_config.bSupportsGLBaseVertex = false;
++#endif
++
+   // Supported by all GS-supporting ES and 4.3+
+   g_backend_info.bSupportsGLLayerInFS =
+       g_backend_info.bSupportsGeometryShaders && g_ogl_config.eSupportedGLSLVersion >= Glsl430;
+diff --git a/Source/Core/VideoBackends/OGL/OGLGfx.cpp b/Source/Core/VideoBackends/OGL/OGLGfx.cpp
+index ff5402b..cc13ddf 100644
+--- a/Source/Core/VideoBackends/OGL/OGLGfx.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLGfx.cpp
+@@ -268,6 +268,20 @@ void OGLGfx::SetViewport(float x, float y, float width, float height, float near
+     glViewport(iceilf(x), iceilf(y), iceilf(width), iceilf(height));
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  // WebGL2 requires the depth-range arguments to be in [0, 1] AND near <= far;
++  // values outside that envelope trigger GL_INVALID_OPERATION (0x502) on
++  // Chromium. Dolphin's VideoCommon passes (1, 0) on the reverse-Z path which
++  // desktop GL silently accepts but WebGL2 rejects. Force forward-Z; the
++  // GameCube/Wii depth precision range is small enough that reverse-Z gives no
++  // meaningful benefit.
++  if (!(near_depth >= 0.0f && near_depth <= 1.0f))
++    near_depth = 0.0f;
++  if (!(far_depth >= 0.0f && far_depth <= 1.0f))
++    far_depth = 1.0f;
++  if (near_depth > far_depth)
++    std::swap(near_depth, far_depth);
++#endif
+   glDepthRangef(near_depth, far_depth);
+ }
+ 
+diff --git a/Source/Core/VideoBackends/OGL/OGLMain.cpp b/Source/Core/VideoBackends/OGL/OGLMain.cpp
+index df0c28a..be4d775 100644
+--- a/Source/Core/VideoBackends/OGL/OGLMain.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLMain.cpp
+@@ -39,6 +39,12 @@ Make AA apply instantly during gameplay if possible
+ #include <string>
+ #include <vector>
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++
++extern "C" int DolphinWeb_UseWorkerOwnedWebGL();
++#endif
++
+ #include "Common/Common.h"
+ #include "Common/GL/GLContext.h"
+ #include "Common/GL/GLUtil.h"
+@@ -60,6 +66,41 @@ Make AA apply instantly during gameplay if possible
+ 
+ namespace OGL
+ {
++#ifdef __EMSCRIPTEN__
++namespace
++{
++bool UseWorkerOwnedWebGL()
++{
++  return DolphinWeb_UseWorkerOwnedWebGL() != 0;
++}
++
++void FillConservativeEmscriptenBackendInfo()
++{
++  g_backend_info.api_type = APIType::OpenGL;
++  g_backend_info.MaxTextureSize = 4096;
++  g_backend_info.bUsesLowerLeftOrigin = true;
++  g_backend_info.bSupportsExclusiveFullscreen = false;
++  g_backend_info.bSupportsPostProcessing = true;
++  // WebGL2 lacks GL_ARB_clip_control; reverse-Z without clip control breaks
++  // every depth test, so leave reverse-Z off in the conservative defaults.
++  g_backend_info.bSupportsReversedDepthRange = false;
++  g_backend_info.bSupportsLogicOp = false;
++  g_backend_info.bSupportsCopyToVram = true;
++  g_backend_info.bSupportsLargePoints = true;
++  g_backend_info.bSupportsDepthReadback = false;
++  g_backend_info.bSupportsPartialDepthCopies = false;
++  g_backend_info.bSupportsShaderBinaries = false;
++  g_backend_info.bSupportsPipelineCacheData = false;
++  g_backend_info.bSupportsLodBiasInSampler = false;
++  g_backend_info.bSupportsPartialMultisampleResolve = false;
++  g_backend_info.bSupportsDynamicVertexLoader = false;
++  g_backend_info.bUsesExplictQuadBuffering = true;
++  g_backend_info.Adapters.clear();
++  g_backend_info.AAModes = {1};
++}
++}  // namespace
++#endif
++
+ std::string VideoBackend::GetConfigName() const
+ {
+   return CONFIG_NAME;
+@@ -75,6 +116,16 @@ std::string VideoBackend::GetDisplayName() const
+ 
+ void VideoBackend::InitBackendInfo(const WindowSystemInfo& wsi)
+ {
++#ifdef __EMSCRIPTEN__
++  if (UseWorkerOwnedWebGL())
++  {
++    // Avoid consuming the transferred OffscreenCanvas with a probe context. The real context is
++    // created on Dolphin's GPU thread during Initialize(), where PopulateConfig can query support.
++    FillConservativeEmscriptenBackendInfo();
++    return;
++  }
++#endif
++
+   std::unique_ptr<GLContext> temp_gl_context =
+       GLContext::Create(wsi, g_Config.stereo_mode == StereoMode::QuadBuffer, true,
+                         Config::Get(Config::GFX_PREFER_GLES));
+@@ -188,6 +239,15 @@ bool VideoBackend::FillBackendInfo(GLContext* context)
+     return false;
+   }
+ 
++  // Reverse-Z requires clip control (glClipControl GL_ZERO_TO_ONE) to remap
++  // the NDC depth range from [-1, 1] to [0, 1]. Without GL_ARB_clip_control
++  // (e.g. WebGL2 has no equivalent), enabling reverse-Z corrupts every depth
++  // test - geometry either Z-fails out, or renders to wrong depth. The
++  // resulting black-screen-after-boot symptom in browser builds was caused
++  // by reverse-Z enabled while clip control was off. Gate one on the other.
++  if (!g_backend_info.bSupportsClipControl)
++    g_backend_info.bSupportsReversedDepthRange = false;
++
+   // TODO: Move the remaining fields from the Renderer constructor here.
+   return true;
+ }
+diff --git a/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp b/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
+index 921ef61..2262fe3 100644
+--- a/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLNativeVertexFormat.cpp
+@@ -38,12 +38,27 @@ static void SetPointer(ShaderAttrib attrib, u32 stride, const AttributeFormat& f
+     return;
+ 
+   glEnableVertexAttribArray(static_cast<GLuint>(attrib));
++#ifdef __EMSCRIPTEN__
++  // WebGL2 / ANGLE in some configurations silently fails glVertexAttribIPointer
++  // on the per-vertex matrix-index attribute, leaving uint4 posmtx in the
++  // shader reading zero. That collapses every character vertex through
++  // matrix slot 0 and they all clip out of the view frustum, making fighter
++  // models invisible while stage geometry (which doesn't use posmtx) renders
++  // normally. Lane BB tracer pinpointed this as the cause of "characters
++  // missing in match" on the browser path.
++  // Always use glVertexAttribPointer with normalize=false; the unsigned-byte
++  // values 0..255 reach the shader as float 0.0..255.0, and the matched
++  // shader change emits `in vec4 posmtx` so int(posmtx.r) works the same.
++  glVertexAttribPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
++                        format.integer ? GL_FALSE : GL_TRUE, stride, (u8*)nullptr + format.offset);
++#else
+   if (format.integer)
+     glVertexAttribIPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
+                            stride, (u8*)nullptr + format.offset);
+   else
+     glVertexAttribPointer(static_cast<GLuint>(attrib), format.components, VarToGL(format.type),
+                           true, stride, (u8*)nullptr + format.offset);
++#endif
+ }
+ 
+ GLVertexFormat::GLVertexFormat(const PortableVertexDeclaration& vtx_decl)
+diff --git a/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp b/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
+index 2eec584..0958e21 100644
+--- a/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLStreamBuffer.cpp
+@@ -148,9 +148,12 @@ public:
+       glBufferData(m_buffertype, m_size, nullptr, GL_STREAM_DRAW);
+       m_iterator = 0;
+     }
+-    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size,
+-                                        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT |
+-                                            GL_MAP_UNSYNCHRONIZED_BIT);
++    GLbitfield flags =
++        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
++#ifdef __EMSCRIPTEN__
++    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
++    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size, flags);
+     return std::make_pair(pointer, m_iterator);
+   }
+ 
+@@ -183,9 +186,12 @@ public:
+   std::pair<u8*, u32> Map(u32 size) override
+   {
+     AllocMemory(size);
+-    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size,
+-                                        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT |
+-                                            GL_MAP_UNSYNCHRONIZED_BIT);
++    GLbitfield flags =
++        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
++#ifdef __EMSCRIPTEN__
++    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
++    u8* pointer = (u8*)glMapBufferRange(m_buffertype, m_iterator, size, flags);
+     return std::make_pair(pointer, m_iterator);
+   }
+ 
+@@ -346,6 +352,10 @@ public:
+ // Chooses the best streaming method based on the supported extensions and known issues
+ std::unique_ptr<StreamBuffer> StreamBuffer::Create(u32 type, u32 size)
+ {
++#ifdef __EMSCRIPTEN__
++  return std::make_unique<BufferSubData>(type, size);
++#endif
++
+   // without basevertex support, only streaming methods whith uploads everything to zero works fine:
+   if (!g_ogl_config.bSupportsGLBaseVertex)
+   {
+diff --git a/Source/Core/VideoBackends/OGL/OGLTexture.cpp b/Source/Core/VideoBackends/OGL/OGLTexture.cpp
+index 003a7ec..965f548 100644
+--- a/Source/Core/VideoBackends/OGL/OGLTexture.cpp
++++ b/Source/Core/VideoBackends/OGL/OGLTexture.cpp
+@@ -461,6 +461,12 @@ std::unique_ptr<OGLStagingTexture> OGLStagingTexture::Create(StagingTextureType
+       map_flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
+     }
+ 
++#ifdef __EMSCRIPTEN__
++    // WebGL2 requires GL_MAP_INVALIDATE_BUFFER_BIT or GL_MAP_INVALIDATE_RANGE_BIT
++    // for any glMapBufferRange call that includes GL_MAP_WRITE_BIT.
++    if (map_flags & GL_MAP_WRITE_BIT)
++      map_flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
+     glBufferStorage(target, buffer_size, nullptr, buffer_flags);
+     buffer_ptr = static_cast<char*>(glMapBufferRange(target, 0, buffer_size, map_flags));
+     ASSERT(buffer_ptr != nullptr);
+@@ -638,6 +644,12 @@ bool OGLStagingTexture::Map()
+     flags = GL_MAP_WRITE_BIT;
+   else
+     flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
++#ifdef __EMSCRIPTEN__
++  // WebGL2 requires GL_MAP_INVALIDATE_BUFFER_BIT or GL_MAP_INVALIDATE_RANGE_BIT
++  // for any glMapBufferRange call that includes GL_MAP_WRITE_BIT.
++  if (flags & GL_MAP_WRITE_BIT)
++    flags |= GL_MAP_INVALIDATE_RANGE_BIT;
++#endif
+   glBindBuffer(m_target, m_buffer_name);
+   m_map_pointer = static_cast<char*>(glMapBufferRange(m_target, 0, m_buffer_size, flags));
+   glBindBuffer(m_target, 0);
+diff --git a/Source/Core/VideoBackends/Software/Rasterizer.cpp b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+index 2839e05..ced6b9a 100644
+--- a/Source/Core/VideoBackends/Software/Rasterizer.cpp
++++ b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+@@ -22,6 +22,15 @@
+ 
+ namespace Rasterizer
+ {
++#ifdef __EMSCRIPTEN__
++extern "C" int DolphinWeb_FastSoftwareRaster();
++#else
++static int DolphinWeb_FastSoftwareRaster()
++{
++  return 0;
++}
++#endif
++
+ static constexpr int BLOCK_SIZE = 2;
+ 
+ struct SlopeContext
+@@ -148,6 +157,17 @@ void SetTevKonstColors()
+ 
+ static void Draw(s32 x, s32 y, s32 xi, s32 yi)
+ {
++  static const int fast_software_raster = DolphinWeb_FastSoftwareRaster();
++  // fastsw skips 3 of every 4 pixels (level 1) or 15 of every 16 (level 2)
++  // and relies on the skipped pixels inheriting their neighbor's color via
++  // a post-pass at the end of Draw() below. The skip itself is the speed
++  // win; the inheritance is what keeps shaded/blended surfaces from showing
++  // through to the clear color (Melee's stage shadows show this clearly).
++  if (fast_software_raster > 1 && ((x | y) & 3) != 0)
++    return;
++  if (fast_software_raster > 0 && ((x | y) & 1) != 0)
++    return;
++
+   INCSTAT(g_stats.this_frame.rasterized_pixels);
+ 
+   s32 z = (s32)std::clamp<float>(ZSlope.GetValue(x, y), 0.0f, 16777215.0f);
+@@ -202,6 +222,54 @@ static void Draw(s32 x, s32 y, s32 xi, s32 yi)
+   }
+ 
+   tev.Draw();
++
++  // fastsw post-pass: replicate the rendered cell's post-blend color over
++  // the skipped neighbors so shaded gradients/blends don't leak the clear
++  // color through to the final frame (the "dotted black hole" pattern on
++  // TEV-shaded surfaces like the Peach's Castle dome and Hyrule Temple
++  // shadow walls).
++  //
++  // Level 1 (step=2): fills a 2x2 block; the rendered (even, even) cell
++  // plus its 3 same-block neighbors. The rasterizer iterates 2x2 blocks
++  // so the neighbors are always inside the same scissor-clamped block.
++  //
++  // Level 2 (step=4): fills a 4x4 block. The rendered cell is at
++  // ((x|y)&3)==0; the other 15 cells span two 2x2 raster blocks in each
++  // axis. Cells outside the EFB bounds are skipped; cells outside the
++  // current scissor MAY be written (mild edge bleed in partial-coverage
++  // triangles), which is acceptable given level 2 is an aggressive
++  // low-quality mode.
++  //
++  // Gated on color_update because if BlendTev didn't write at (x, y) we'd
++  // be propagating stale data — harmless but wasteful. Depth isn't
++  // propagated: the skipped cells won't be re-rasterized this frame, so
++  // their stale depth has no effect on correctness.
++  if (fast_software_raster > 0 && bpmem.blendmode.color_update)
++  {
++    const s32 step = (fast_software_raster > 1) ? 4 : 2;
++    const s32 max_dx =
++        std::min(step, static_cast<s32>(EFB_WIDTH) - x);
++    const s32 max_dy =
++        std::min(step, static_cast<s32>(EFB_HEIGHT) - y);
++    const u8* src =
++        EfbInterface::GetPixelPointer(static_cast<u16>(x), static_cast<u16>(y), false);
++    const u8 c0 = src[0];
++    const u8 c1 = src[1];
++    const u8 c2 = src[2];
++    for (s32 dy = 0; dy < max_dy; dy++)
++    {
++      for (s32 dx = 0; dx < max_dx; dx++)
++      {
++        if (dx == 0 && dy == 0)
++          continue;
++        u8* dst = EfbInterface::GetPixelPointer(static_cast<u16>(x + dx),
++                                                static_cast<u16>(y + dy), false);
++        dst[0] = c0;
++        dst[1] = c1;
++        dst[2] = c2;
++      }
++    }
++  }
+ }
+ 
+ static inline void CalculateLOD(s32* lodp, bool* linear, u32 texmap, u32 texcoord)
+diff --git a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
+index 7797b1d..9f2fa02 100644
+--- a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
++++ b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <cstring>
+ #include <vector>
+ 
+@@ -19,6 +20,22 @@
+ #include "VideoCommon/PerfQueryBase.h"
+ #include "VideoCommon/VideoCommon.h"
+ 
++#ifdef __EMSCRIPTEN__
++extern "C" int DolphinWeb_FastSoftwareRaster();
++extern "C" void DolphinWeb_RecordSoftwareXfbEncodeProfile(u32 convert_us, u32 copy_us,
++                                                          u32 total_us, u32 width, u32 height,
++                                                          u32 dst_height);
++#else
++static int DolphinWeb_FastSoftwareRaster()
++{
++  return 0;
++}
++
++static void DolphinWeb_RecordSoftwareXfbEncodeProfile(u32, u32, u32, u32, u32, u32)
++{
++}
++#endif
++
+ namespace EfbInterface
+ {
+ static std::array<u8, EFB_WIDTH * EFB_HEIGHT * 6> efb;
+@@ -561,6 +578,116 @@ static yuv444 ConvertColorToYUV(u32 color)
+   return {y_round, u_round, v_round};
+ }
+ 
++static u32 ElapsedProfileMicros(std::chrono::steady_clock::time_point start,
++                                std::chrono::steady_clock::time_point end)
++{
++  return static_cast<u32>(
++      std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
++}
++
++static inline u8 XfbLerpU8(u8 a, u8 b)
++{
++  return static_cast<u8>((static_cast<u16>(a) + static_cast<u16>(b) + 1) >> 1);
++}
++
++static void FastEncodeXFB(u8* xfb_in_ram, u32 memory_stride,
++                          const MathUtil::Rectangle<int>& source_rect, float y_scale, int mode,
++                          std::chrono::steady_clock::time_point profile_start)
++{
++  const int left = source_rect.left;
++  const int top = source_rect.top;
++  const int src_width = source_rect.GetWidth();
++  const int src_height = source_rect.GetHeight();
++  const int dst_height = std::max(1, static_cast<int>(src_height * y_scale));
++
++  yuv422_packed* dst = reinterpret_cast<yuv422_packed*>(xfb_in_ram);
++  const int even_width = src_width & ~1;
++
++  // mode 3 ("tuned"): same per-row work as mode 2 (only even dst rows run the
++  // scalar YUV convert), but the skipped odd rows are reconstructed by vertical
++  // interpolation between the encoded rows above/below instead of a nearest-row
++  // memcpy. This yields smooth vertical gradients (no blocky row-doubling on 3D)
++  // at ~mode-2 cost and with no temporal flicker. encode_mode drives the inner
++  // per-row sampling; the odd rows are filled in a second pass below.
++  const bool lerp_reconstruct = mode >= 3;
++  const int encode_mode = lerp_reconstruct ? 2 : mode;
++
++  for (int dst_y = 0; dst_y < dst_height; ++dst_y)
++  {
++    yuv422_packed* row = dst + static_cast<std::size_t>(dst_y) * memory_stride;
++    if (encode_mode > 1 && dst_y > 0 && (dst_y & 1) != 0)
++    {
++      if (lerp_reconstruct)
++        continue;  // filled by the reconstruction pass after the row loop
++      std::memcpy(row, row - memory_stride, static_cast<std::size_t>(src_width) * sizeof(*row));
++      continue;
++    }
++
++    const auto scaled_y =
++        static_cast<int>((static_cast<std::int64_t>(dst_y) * src_height) / dst_height);
++    u16 src_y =
++        static_cast<u16>(std::clamp(top + scaled_y, 0, static_cast<int>(EFB_HEIGHT) - 1));
++    if (encode_mode > 0)
++      src_y &= ~u16{1};
++
++    for (int x = 0; x < even_width; x += 2)
++    {
++      u16 src_x0 =
++          static_cast<u16>(std::clamp(left + x, 0, static_cast<int>(EFB_WIDTH) - 1));
++      u16 src_x1 =
++          static_cast<u16>(std::clamp(left + x + 1, 0, static_cast<int>(EFB_WIDTH) - 1));
++      if (encode_mode > 0)
++      {
++        src_x0 &= ~u16{1};
++        src_x1 = src_x0;
++      }
++      const yuv444 yuv0 = ConvertColorToYUV(GetColor(src_x0, src_y));
++      const yuv444 yuv1 = encode_mode > 1 ? yuv0 : ConvertColorToYUV(GetColor(src_x1, src_y));
++
++      row[x].Y = yuv0.Y + 16;
++      row[x].UV = 128 + yuv0.U;
++      row[x + 1].Y = yuv1.Y + 16;
++      row[x + 1].UV = 128 + yuv1.V;
++    }
++
++    if (even_width != src_width)
++    {
++      u16 src_x =
++          static_cast<u16>(std::clamp(left + even_width, 0, static_cast<int>(EFB_WIDTH) - 1));
++      if (encode_mode > 0)
++        src_x &= ~u16{1};
++      const yuv444 yuv = ConvertColorToYUV(GetColor(src_x, src_y));
++      row[even_width].Y = yuv.Y + 16;
++      row[even_width].UV = 128 + yuv.U;
++    }
++  }
++
++  if (lerp_reconstruct)
++  {
++    // Fill each skipped odd row as the average of the encoded even rows above
++    // and below it. The final odd row (when dst_height is even) has no row
++    // below, so it falls back to the row above (a plain copy).
++    for (int dst_y = 1; dst_y < dst_height; dst_y += 2)
++    {
++      yuv422_packed* row = dst + static_cast<std::size_t>(dst_y) * memory_stride;
++      const yuv422_packed* above = row - memory_stride;
++      const int below_y = (dst_y + 1 < dst_height) ? dst_y + 1 : dst_y - 1;
++      const yuv422_packed* below = dst + static_cast<std::size_t>(below_y) * memory_stride;
++      for (int x = 0; x < src_width; ++x)
++      {
++        row[x].Y = XfbLerpU8(above[x].Y, below[x].Y);
++        row[x].UV = XfbLerpU8(above[x].UV, below[x].UV);
++      }
++    }
++  }
++
++  const auto profile_done = std::chrono::steady_clock::now();
++  const u32 total_us = ElapsedProfileMicros(profile_start, profile_done);
++  DolphinWeb_RecordSoftwareXfbEncodeProfile(total_us, 0, total_us, static_cast<u32>(src_width),
++                                            static_cast<u32>(src_height),
++                                            static_cast<u32>(dst_height));
++}
++
+ static u32 GetDepth(u16 x, u16 y)
+ {
+   u32 offset = GetDepthOffset(x, y);
+@@ -583,8 +710,20 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
+     return;
+   }
+ 
++  const auto profile_start = std::chrono::steady_clock::now();
+   const int left = source_rect.left;
+   const int right = source_rect.right;
++  const int src_width = source_rect.GetWidth();
++  const int src_height = source_rect.GetHeight();
++  const int dst_height = std::max(1, static_cast<int>(src_height * y_scale));
++  const int fast_software_raster = DolphinWeb_FastSoftwareRaster();
++  if (fast_software_raster > 0)
++  {
++    FastEncodeXFB(xfb_in_ram, memory_stride, source_rect, y_scale, fast_software_raster,
++                  profile_start);
++    return;
++  }
++
+   const bool clamp_top = bpmem.triggerEFBCopy.clamp_top;
+   const bool clamp_bottom = bpmem.triggerEFBCopy.clamp_bottom;
+   const float gamma_rcp = 1.0f / gamma;
+@@ -653,14 +792,17 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
+     }
+     src_ptr += memory_stride;
+   }
++  const auto convert_done = std::chrono::steady_clock::now();
+ 
+-  const int src_width = source_rect.GetWidth();
+-  const int src_height = source_rect.GetHeight();
+   const int dst_width = src_width;
+-  const int dst_height = src_height * y_scale;
+ 
+   SW::CopyRegion(source.data(), src_width, src_height, reinterpret_cast<yuv422_packed*>(xfb_in_ram),
+                  dst_width, dst_height);
++  const auto copy_done = std::chrono::steady_clock::now();
++  DolphinWeb_RecordSoftwareXfbEncodeProfile(
++      ElapsedProfileMicros(profile_start, convert_done), ElapsedProfileMicros(convert_done, copy_done),
++      ElapsedProfileMicros(profile_start, copy_done), static_cast<u32>(src_width),
++      static_cast<u32>(src_height), static_cast<u32>(dst_height));
+ }
+ 
+ bool ZCompare(u16 x, u16 y, u32 z)
+diff --git a/Source/Core/VideoBackends/Software/SWGfx.cpp b/Source/Core/VideoBackends/Software/SWGfx.cpp
+index 7004c50..386bd66 100644
+--- a/Source/Core/VideoBackends/Software/SWGfx.cpp
++++ b/Source/Core/VideoBackends/Software/SWGfx.cpp
+@@ -57,6 +57,9 @@ SWGfx::CreateFramebuffer(AbstractTexture* color_attachment, AbstractTexture* dep
+ 
+ bool SWGfx::BindBackbuffer(const ClearColor& clear_color)
+ {
++  if (!m_window->GetContext())
++    return true;
++
+   // Look for framebuffer resizes
+   if (!g_presenter->SurfaceResizedTestAndClear())
+     return true;
+@@ -138,6 +141,9 @@ void SWGfx::SetScissorRect(const MathUtil::Rectangle<int>& rc)
+ SurfaceInfo SWGfx::GetSurfaceInfo() const
+ {
+   GLContext* context = m_window->GetContext();
++  if (!context)
++    return {640, 480, 1.0f, AbstractTextureFormat::RGBA8};
++
+   return {std::max(context->GetBackBufferWidth(), 1u), std::max(context->GetBackBufferHeight(), 1u),
+           1.0f, AbstractTextureFormat::RGBA8};
+ }
+diff --git a/Source/Core/VideoBackends/Software/SWOGLWindow.cpp b/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
+index a002e3e..7f2b5f0 100644
+--- a/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
++++ b/Source/Core/VideoBackends/Software/SWOGLWindow.cpp
+@@ -29,11 +29,14 @@ std::unique_ptr<SWOGLWindow> SWOGLWindow::Create(const WindowSystemInfo& wsi)
+ 
+ bool SWOGLWindow::IsHeadless() const
+ {
+-  return m_gl_context->IsHeadless();
++  return !m_gl_context || m_gl_context->IsHeadless();
+ }
+ 
+ bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
+ {
++#ifdef __EMSCRIPTEN__
++  return true;
++#else
+   m_gl_context = GLContext::Create(wsi);
+   if (!m_gl_context)
+     return false;
+@@ -82,11 +85,15 @@ bool SWOGLWindow::Initialize(const WindowSystemInfo& wsi)
+ 
+   glGenVertexArrays(1, &m_image_vao);
+   return true;
++#endif
+ }
+ 
+ void SWOGLWindow::ShowImage(const AbstractTexture* image,
+                             const MathUtil::Rectangle<int>& xfb_region)
+ {
++  if (!m_gl_context)
++    return;
++
+   const SW::SWTexture* sw_image = static_cast<const SW::SWTexture*>(image);
+   m_gl_context->Update();  // just updates the render window position and the backbuffer size
+ 

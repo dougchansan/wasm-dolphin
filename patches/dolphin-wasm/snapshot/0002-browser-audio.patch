@@ -1,0 +1,239 @@
+From 94667ca61df1cb0d321dc49e67cec0a2c3dda404 Mon Sep 17 00:00:00 2001
+From: wasm-dolphin patch snapshot <snapshot@local.invalid>
+Date: Thu, 9 Jul 2026 14:42:30 -1000
+Subject: [PATCH 2/6] Browser audio snapshot
+
+
+diff --git a/Source/Core/AudioCommon/AudioCommon.cpp b/Source/Core/AudioCommon/AudioCommon.cpp
+index 73e1094..332f2e5 100644
+--- a/Source/Core/AudioCommon/AudioCommon.cpp
++++ b/Source/Core/AudioCommon/AudioCommon.cpp
+@@ -3,6 +3,12 @@
+ 
+ #include "AudioCommon/AudioCommon.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <atomic>
++#include <cstdint>
++#include <string>
++#endif
++
+ #include <fmt/chrono.h>
+ #include <fmt/format.h>
+ 
+@@ -14,6 +20,9 @@
+ #include "AudioCommon/OpenSLESStream.h"
+ #include "AudioCommon/PulseAudioStream.h"
+ #include "AudioCommon/WASAPIStream.h"
++#ifdef __EMSCRIPTEN__
++#include "AudioCommon/WebAudioStream.h"
++#endif
+ #include "Common/FileUtil.h"
+ #include "Common/Logging/Log.h"
+ #include "Common/TimeUtil.h"
+@@ -25,9 +34,22 @@ namespace AudioCommon
+ {
+ constexpr int AUDIO_VOLUME_MIN = 0;
+ constexpr int AUDIO_VOLUME_MAX = 100;
++#ifdef __EMSCRIPTEN__
++constexpr std::string_view BACKEND_WEB_AUDIO = "Web Audio";
++static std::atomic<std::uint64_t> s_web_ai_buffer_count{0};
++static std::atomic<std::uint64_t> s_web_ai_frame_count{0};
++static std::atomic<std::uint64_t> s_web_ai_nonzero_sample_count{0};
++static std::atomic<std::uint32_t> s_web_ai_last_frames{0};
++static std::atomic<std::uint32_t> s_web_ai_last_nonzero_samples{0};
++static std::string s_web_audio_common_stats = "ai:buf:0 frames:0 nz:0 last:0/0";
++#endif
+ 
+ static std::unique_ptr<SoundStream> CreateSoundStreamForBackend(std::string_view backend)
+ {
++#ifdef __EMSCRIPTEN__
++  if (backend == BACKEND_WEB_AUDIO && WebAudioStream::IsValid())
++    return std::make_unique<WebAudioStream>();
++#endif
+   if (backend == BACKEND_CUBEB && CubebStream::IsValid())
+     return std::make_unique<CubebStream>();
+   else if (backend == BACKEND_OPENAL && OpenALStream::IsValid())
+@@ -94,6 +116,9 @@ void ShutdownSoundStream(Core::System& system)
+ 
+ std::string GetDefaultSoundBackend()
+ {
++#if defined(__EMSCRIPTEN__)
++  return std::string(BACKEND_WEB_AUDIO);
++#endif
+ #if defined(ANDROID)
+   return BACKEND_OPENSLES;
+ #else
+@@ -119,6 +144,10 @@ std::vector<std::string> GetSoundBackends()
+   std::vector<std::string> backends;
+ 
+   backends.emplace_back(BACKEND_NULLSOUND);
++#ifdef __EMSCRIPTEN__
++  if (WebAudioStream::IsValid())
++    backends.emplace_back(BACKEND_WEB_AUDIO);
++#endif
+   if (CubebStream::IsValid())
+     backends.emplace_back(BACKEND_CUBEB);
+   if (AlsaSound::IsValid())
+@@ -196,6 +225,24 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
+ {
+   const SoundStream* const sound_stream = system.GetSoundStream();
+ 
++#ifdef __EMSCRIPTEN__
++  std::uint32_t nonzero_samples = 0;
++  if (samples)
++  {
++    const std::size_t sample_count = static_cast<std::size_t>(num_samples) * 2;
++    for (std::size_t index = 0; index < sample_count; ++index)
++    {
++      if (samples[index] != 0)
++        ++nonzero_samples;
++    }
++  }
++  s_web_ai_buffer_count.fetch_add(1, std::memory_order_relaxed);
++  s_web_ai_frame_count.fetch_add(num_samples, std::memory_order_relaxed);
++  s_web_ai_nonzero_sample_count.fetch_add(nonzero_samples, std::memory_order_relaxed);
++  s_web_ai_last_frames.store(num_samples, std::memory_order_relaxed);
++  s_web_ai_last_nonzero_samples.store(nonzero_samples, std::memory_order_relaxed);
++#endif
++
+   if (!sound_stream)
+     return;
+ 
+@@ -212,6 +259,19 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
+   }
+ }
+ 
++#ifdef __EMSCRIPTEN__
++extern "C" const char* DolphinWeb_GetAudioCommonStats()
++{
++  s_web_audio_common_stats =
++      "ai:buf:" + std::to_string(s_web_ai_buffer_count.load(std::memory_order_relaxed)) +
++      " frames:" + std::to_string(s_web_ai_frame_count.load(std::memory_order_relaxed)) +
++      " nz:" + std::to_string(s_web_ai_nonzero_sample_count.load(std::memory_order_relaxed)) +
++      " last:" + std::to_string(s_web_ai_last_frames.load(std::memory_order_relaxed)) + "/" +
++      std::to_string(s_web_ai_last_nonzero_samples.load(std::memory_order_relaxed));
++  return s_web_audio_common_stats.c_str();
++}
++#endif
++
+ void StartAudioDump(Core::System& system)
+ {
+   const SoundStream* const sound_stream = system.GetSoundStream();
+diff --git a/Source/Core/AudioCommon/CMakeLists.txt b/Source/Core/AudioCommon/CMakeLists.txt
+index 04ad967..b7f9248 100644
+--- a/Source/Core/AudioCommon/CMakeLists.txt
++++ b/Source/Core/AudioCommon/CMakeLists.txt
+@@ -13,6 +13,13 @@ add_library(audiocommon
+   WaveFile.h
+ )
+ 
++if(EMSCRIPTEN)
++  target_sources(audiocommon PRIVATE
++    WebAudioStream.cpp
++    WebAudioStream.h
++  )
++endif()
++
+ if(ENABLE_CUBEB)
+   message(STATUS "Cubeb found, enabling Cubeb sound backend")
+   target_sources(audiocommon PRIVATE
+diff --git a/Source/Core/AudioCommon/WebAudioStream.cpp b/Source/Core/AudioCommon/WebAudioStream.cpp
+new file mode 100644
+index 0000000..6c2a51a
+--- /dev/null
++++ b/Source/Core/AudioCommon/WebAudioStream.cpp
+@@ -0,0 +1,59 @@
++// Copyright 2026
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include "AudioCommon/WebAudioStream.h"
++
++#include <algorithm>
++#include <cstring>
++
++WebAudioStream::WebAudioStream() = default;
++
++WebAudioStream::~WebAudioStream()
++{
++  m_running.store(false, std::memory_order_release);
++}
++
++bool WebAudioStream::Init()
++{
++  GetMixer()->SetSampleRate(48000);
++  return true;
++}
++
++bool WebAudioStream::SetRunning(bool running)
++{
++  m_running.store(running, std::memory_order_release);
++  return true;
++}
++
++void WebAudioStream::SetVolume(int volume)
++{
++  m_volume.store(std::clamp(volume, 0, 100), std::memory_order_release);
++}
++
++std::size_t WebAudioStream::Mix(s16* samples, std::size_t frames)
++{
++  if (!samples || frames == 0)
++    return 0;
++
++  if (!m_running.load(std::memory_order_acquire))
++  {
++    std::memset(samples, 0, frames * 2 * sizeof(s16));
++    return frames;
++  }
++
++  const std::size_t mixed = GetMixer()->Mix(samples, frames);
++  const int volume = m_volume.load(std::memory_order_acquire);
++  if (volume <= 0)
++  {
++    std::memset(samples, 0, mixed * 2 * sizeof(s16));
++    return mixed;
++  }
++
++  if (volume < 100)
++  {
++    for (std::size_t index = 0; index < mixed * 2; ++index)
++      samples[index] = static_cast<s16>((static_cast<int>(samples[index]) * volume) / 100);
++  }
++
++  return mixed;
++}
+diff --git a/Source/Core/AudioCommon/WebAudioStream.h b/Source/Core/AudioCommon/WebAudioStream.h
+new file mode 100644
+index 0000000..c07dd18
+--- /dev/null
++++ b/Source/Core/AudioCommon/WebAudioStream.h
+@@ -0,0 +1,28 @@
++// Copyright 2026
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <atomic>
++
++#include "AudioCommon/SoundStream.h"
++#include "Common/CommonTypes.h"
++
++class WebAudioStream final : public SoundStream
++{
++public:
++  WebAudioStream();
++  ~WebAudioStream() override;
++
++  static bool IsValid() { return true; }
++
++  bool Init() override;
++  bool SetRunning(bool running) override;
++  void SetVolume(int volume) override;
++
++  std::size_t Mix(s16* samples, std::size_t frames);
++
++private:
++  std::atomic<bool> m_running{false};
++  std::atomic<int> m_volume{100};
++};

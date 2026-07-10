@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "abiVersion": 1,
+  "coreId": "sha256:03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f",
+  "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
+  "artifacts": [
+    {
+      "path": "cores/dolphin/dolphin-core-upstream.js",
+      "hashMode": "lf-normalized",
+      "size": 260703,
+      "sha256": "2465f3c0d43864eb7ce0aa2f8bde33ee082e8a835b88b7d4813199f0cdfde3c8"
+    },
+    {
+      "path": "cores/dolphin/dolphin-core-upstream.wasm",
+      "size": 12800707,
+      "sha256": "03df79d2eb4be6c1e05d58d79ad4ab9590a9407c19fa5ae70e088401f424af3f"
+    }
+  ],
+  "contractSources": [
+    {
+      "path": "core/upstream/dolphin_web_core.cpp",
+      "hashMode": "lf-normalized",
+      "size": 38114,
+      "sha256": "bcad7e80a20671db1b409a9b24aba3bd063be3a700f151380cd7abd41c0becc5"
+    },
+    {
+      "path": "src/upstream-discio-worker.js",
+      "hashMode": "lf-normalized",
+      "size": 262621,
+      "sha256": "fdfba2498c1e58cd2561e371fa4ea6ff9ac731934fe48711535b425d5007139d"
+    },
+    {
+      "path": "src/upstream-worker-adapter.js",
+      "hashMode": "lf-normalized",
+      "size": 25389,
+      "sha256": "2bd5bff4f3fb49e1958f340003863ebc4fe0e53c305b73f0c781f08f2d8da515"
+    },
+    {
+      "path": "src/upstream-worker-protocol.js",
+      "hashMode": "lf-normalized",
+      "size": 636,
+      "sha256": "59d28fac75de67c7f6148e346834e964bf8b2c4833b89ef77ea844f80dcfbf2b"
+    }
+  ],
+  "memoryContract": {
+    "wasmPageBytes": 65536,
+    "jsGlue": {
+      "initialMemoryBytes": 1610612736,
+      "initialPages": 24576
+    },
+    "wasmImports": [
+      {
+        "module": "a",
+        "name": "a",
+        "flags": 3,
+        "minimum": 24576,
+        "maximum": 24576,
+        "shared": true,
+        "memory64": false
+      }
+    ],
+    "wrapperDynamicJitPages": [
+      24576
+    ],
+    "activePatchSeries": {
+      "initialMemoryBytes": 1610612736,
+      "initialPages": 24576
+    }
+  },
+  "memoryContractStatus": "consistent",
+  "moduleExports": [
+    "_AudioBuffer",
+    "_AudioBufferFrames",
+    "_AudioChannels",
+    "_AudioSampleRate",
+    "_BootDisc",
+    "_CoreInit",
+    "_DolphinWeb_RecordCacheHit",
+    "_DolphinWeb_RecordCacheMiss",
+    "_DolphinWeb_RecordInstanceUs",
+    "_DolphinWeb_RecordModuleUs",
+    "_FrameBuffer",
+    "_FrameHeight",
+    "_FrameWidth",
+    "_GetApploaderDate",
+    "_GetApploaderSize",
+    "_GetAudioStats",
+    "_GetBootDolOffset",
+    "_GetBootDolSize",
+    "_GetCPUCoreName",
+    "_GetCachedInterpreterDisableMask",
+    "_GetCoreState",
+    "_GetCoreStateName",
+    "_GetCoreStatus",
+    "_GetCoreTicksHigh",
+    "_GetCoreTicksLow",
+    "_GetCoreTicksPerSecond",
+    "_GetCoreTitle",
+    "_GetDataSize",
+    "_GetDiscNumber",
+    "_GetFrame",
+    "_GetFrameRingCapacity",
+    "_GetFrameRingEntryPtr",
+    "_GetFrameRingEntrySize",
+    "_GetFrameRingHead",
+    "_GetFrameSignalPtr",
+    "_GetFstOffset",
+    "_GetFstSize",
+    "_GetGameId",
+    "_GetGameTitle",
+    "_GetMakerId",
+    "_GetPPCPC",
+    "_GetPlatform",
+    "_GetPpcProfileStats",
+    "_GetPpcWasmBlockCompileCount",
+    "_GetPpcWasmBlockRunCount",
+    "_GetPpcWasmHelperStats",
+    "_GetRawSize",
+    "_GetRegion",
+    "_GetRootEntryCount",
+    "_GetRootEntryIsDirectory",
+    "_GetRootEntryName",
+    "_GetRootEntryOffset",
+    "_GetRootEntryPath",
+    "_GetRootEntrySize",
+    "_GetVideoStats",
+    "_LoadCoreState",
+    "_LoadState",
+    "_LoadStateFile",
+    "_MixAudio",
+    "_MountDisc",
+    "_PumpHostJobs",
+    "_ReadDisc",
+    "_ReadDiscFile",
+    "_Reset",
+    "_ResetCore",
+    "_RunFrame",
+    "_RunPpcWasmAddiSmoke",
+    "_RunPpcWasmDolphinStateAddiSmoke",
+    "_RunPpcWasmDoublePrecisionArithmeticSmoke",
+    "_RunPpcWasmFloatCompareSmoke",
+    "_RunPpcWasmIntegerBlockSmoke",
+    "_RunPpcWasmMultipleWordMemorySmoke",
+    "_RunPpcWasmPairedQuantizedMemorySmoke",
+    "_RunPpcWasmSinglePrecisionArithmeticSmoke",
+    "_RunPpcWasmStateAddiSmoke",
+    "_RunWasmJitSmoke",
+    "_SaveCoreState",
+    "_SaveState",
+    "_SaveStateFile",
+    "_SetAudioMuted",
+    "_SetCachedInterpreterDisableMask",
+    "_SetCorePaused",
+    "_SetCpuCore",
+    "_SetCpuOverclock",
+    "_SetCpuThread",
+    "_SetEmulationSpeed",
+    "_SetFastSoftwareRaster",
+    "_SetInputMask",
+    "_SetInputState",
+    "_SetPpcProfileEnabled",
+    "_SetPpcWasmJitEnabled",
+    "_SetPresentationScale",
+    "_SetVideoBackend",
+    "_StopCore",
+    "_TestDcbxLoopPattern",
+    "_TestPpcWasmDirectCandidate",
+    "_TestPpcWasmDirectCandidateCompiles",
+    "_free",
+    "_malloc"
+  ],
+  "runtimeMethods": [
+    "FS",
+    "HEAPU8",
+    "ccall",
+    "cwrap"
+  ],
+  "workerProtocol": {
+    "requestEnvelopeFields": [
+      "id",
+      "type",
+      "payload"
+    ],
+    "responseEnvelopeFields": [
+      "id",
+      "ok",
+      "error"
+    ],
+    "requestTypes": [
+      "bootProbe",
+      "load",
+      "loadState",
+      "loadStateFile",
+      "mixAudio",
+      "mountFile",
+      "reset",
+      "runFrame",
+      "saveState",
+      "saveStateFile",
+      "setAudioMuted",
+      "setInputMask",
+      "setInputState"
+    ],
+    "notificationFields": {
+      "detachedOglFrame": [
+        "type",
+        "bitmap",
+        "width",
+        "height"
+      ],
+      "status": [
+        "type",
+        "message"
+      ]
+    }
+  },
+  "limitations": [
+    "The active snapshot series captures the ignored vendor delta, but a hermetic rebuild has not yet proven byte or behavioral parity with this baked artifact.",
+    "Legacy patches 0001-0009 are research history and are deliberately excluded from the active source lock.",
+    "Runtime selection by core content hash is not yet implemented; the current URL remains the compatibility selector."
+  ]
+}

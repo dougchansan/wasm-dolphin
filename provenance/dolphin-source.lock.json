@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/dolphin-emu/dolphin.git",
+    "commit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1"
+  },
+  "repositories": {
+    ".": {
+      "commit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1"
+    },
+    "Externals/SFML/SFML": {
+      "commit": "0fa201c969e48ecc253581c5841ce73f44d42f49"
+    },
+    "Externals/xxhash/xxHash": {
+      "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363"
+    }
+  },
+  "patchSeriesSha256": "aabf2eed72adda73399ac9d7c51ce3cb0ab61543c519b2c727937f69f70ba8b9",
+  "patches": [
+    {
+      "order": 1,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0001-browser-platform-core.patch",
+      "hashMode": "lf-normalized",
+      "size": 84299,
+      "sha256": "539fc9310f8d5c31fd0662e43f521d3d5730d37d12ac9be5cf8d124e3f0d8132"
+    },
+    {
+      "order": 2,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0002-browser-audio.patch",
+      "hashMode": "lf-normalized",
+      "size": 7222,
+      "sha256": "e134e7397f98e8e377be3573b1ad8e5acfeafd062bd3ed6fffe0d5f6f7493889"
+    },
+    {
+      "order": 3,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0003-ppc-wasm-jit.patch",
+      "hashMode": "lf-normalized",
+      "size": 452603,
+      "sha256": "efc071bfb3a6930145576738cc3672858f8f520944864ef1d46514324aac5795"
+    },
+    {
+      "order": 4,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0004-software-ogl-video.patch",
+      "hashMode": "lf-normalized",
+      "size": 24508,
+      "sha256": "44b2b7173c293aadac14822566618ef30a82cfc0325c8ffa76cd3a14570f5e18"
+    },
+    {
+      "order": 5,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0005-video-common-shaders.patch",
+      "hashMode": "lf-normalized",
+      "size": 59737,
+      "sha256": "bee75cfb1bdf3cd10cf4af3ec1eeafeaaad3fc11646cc4da4094a24df0c52fb0"
+    },
+    {
+      "order": 6,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0006-webgpu-backend.patch",
+      "hashMode": "lf-normalized",
+      "size": 160617,
+      "sha256": "552af3bdd107d5f69fee6696d722e45a9f0af6f144ce017e90b167b5c5ad352f"
+    },
+    {
+      "order": 7,
+      "cwd": "Externals/SFML/SFML",
+      "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
+      "hashMode": "lf-normalized",
+      "size": 406,
+      "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
+    },
+    {
+      "order": 8,
+      "cwd": "Externals/xxhash/xxHash",
+      "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
+      "hashMode": "lf-normalized",
+      "size": 708,
+      "sha256": "eadc1ec28a44506fed436e31982d78e4d0d2880a1d1d29778f2747d45a7bac8a"
+    }
+  ],
+  "unlockedResearchHistory": {
+    "pathPattern": "patches/dolphin-wasm/0001-0009",
+    "reason": "Retained as development history; excluded from the active reproducible snapshot series."
+  }
+}
