@@ -15,15 +15,19 @@ the correct frames, and browser WebGPU presents or blits those frames to the
 canvas. It is not hardware-accelerated emulation of Dolphin's GPU pipeline.
 
 “Near-100% game speed” describes emulation/core timing. It does not promise
-native-smooth unique visual output. Full-quality software rasterization can
+native-smooth unique visual output. The best-quality recommended fast mode can
 produce low unique visual FPS during heavy motion even while the game advances
-at nearly the intended rate. `fastsw=2` and `fastsw=3` improve unique-frame
-cadence by trading away image quality; `fastsw=1` remains the full-quality
-choice.
+at nearly the intended rate. `fastsw=2` and `fastsw=3` trade more image
+quality for distinct-frame cadence, but can also reduce game speed in some
+scenes. `fastsw=1` is the balanced/crisp default; literal full-resolution
+software rasterization is `fastsw=0`.
 
 The true WebGPU hardware renderer is selected with `video=wgpu`. It is
-experimental and parked, and it may render black on some Windows GPUs. Wii and
-broader GameCube compatibility are not the current focus.
+experimental and parked. On the current validation machine, command transport
+reaches real draws and present completion, but post-draw EFB readbacks remain
+zero (`EFB_DRAW_NO_MUTATION`), so the canvas stops at a diagnostic pattern
+instead of game content. Wii and broader GameCube compatibility are not the
+current focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |
@@ -35,5 +39,5 @@ broader GameCube compatibility are not the current focus.
 | General compatibility | Unverified | Low |
 
 Record machine-specific evidence in
-[the Melee software-hybrid results sheet](perf-results/melee-software-hybrid.md)
+[the latest Melee evidence package](perf-results/melee-performance-evidence-2026-07-10.md)
 rather than treating these status statements as universal benchmark results.

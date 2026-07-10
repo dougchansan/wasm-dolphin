@@ -13,7 +13,7 @@ software-rendered framebuffer reaches the browser canvas.
 | `video=software&presenter=webgl` | Software rasterizer + WebGL presenter | Fallback | Use if WebGPU presenter fails |
 | `video=software&presenter=canvas` or `presenter=2d` | Software rasterizer + 2D canvas | Diagnostic fallback | Slowest/simple path |
 | `video=webgpu` | Legacy/alias hybrid path, not true hardware WebGPU | Avoid in docs | Keep for compatibility if code supports it |
-| `video=wgpu` | True WebGPU hardware renderer | Experimental | May render black on some GPUs |
+| `video=wgpu` | True WebGPU hardware renderer | Experimental | May render black or only a diagnostic pattern |
 | `video=ogl` | OGL/WebGL2-style path | Experimental/diagnostic | JIT defaults differ here |
 | `oglsab=1` | SharedArrayBuffer pixel transport for OGL readback | Diagnostic | Requires cross-origin isolation |
 
@@ -28,8 +28,10 @@ still comes from Dolphin's CPU software rasterizer, so its cost limits the
 cadence of distinct visual frames. The WebGL and 2D presenters retain the same
 software rasterization stage and are useful fallbacks or diagnostics.
 
-`fastsw=1` is the full-quality software setting. `fastsw=2` and `fastsw=3`
-reduce raster/encode work and image quality to increase unique-frame cadence.
+`fastsw=0` is the literal full-resolution upstream software setting.
+`fastsw=1` is the balanced/crisp recommended fast mode. `fastsw=2` and
+`fastsw=3` use more aggressive raster/encode approximations; they can raise
+distinct-frame cadence but are not guaranteed to raise game speed.
 
 ## Hardware and diagnostic paths
 

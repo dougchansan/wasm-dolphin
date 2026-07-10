@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "abiVersion": 1,
+  "coreId": "sha256:3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+  "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
+  "artifacts": [
+    {
+      "path": "cores/dolphin/dolphin-core-upstream.js",
+      "hashMode": "lf-normalized",
+      "size": 261224,
+      "sha256": "00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658"
+    },
+    {
+      "path": "cores/dolphin/dolphin-core-upstream.wasm",
+      "size": 12807931,
+      "sha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a"
+    }
+  ],
+  "contractSources": [
+    {
+      "path": "core/upstream/dolphin_web_discio.cpp",
+      "hashMode": "lf-normalized",
+      "size": 37142,
+      "sha256": "0fec5f15d1323f52e8036ac00dd382eeada01b83e9461f99cf88a49e0208bef7"
+    },
+    {
+      "path": "core/upstream/dolphin_web_xfb_fastpaths.h",
+      "hashMode": "lf-normalized",
+      "size": 2948,
+      "sha256": "a0262feec1d2044dc576b6f67240a8a99b36a4ba27cf37013cc99d855f3c755e"
+    },
+    {
+      "path": "core/upstream/dolphin_web_core.cpp",
+      "hashMode": "lf-normalized",
+      "size": 40001,
+      "sha256": "4bfc9cc73b15c64ffe846c1f8c58030326e713f69a8048fbd2afa69a2864be15"
+    },
+    {
+      "path": "src/app.js",
+      "hashMode": "lf-normalized",
+      "size": 40001,
+      "sha256": "df4042525e84bae6d9c3efd4c29d0427f0ab37501022e21496af9876a9d84b9a"
+    },
+    {
+      "path": "src/audio.js",
+      "hashMode": "lf-normalized",
+      "size": 8576,
+      "sha256": "a4d46dd19ce907d3bd57684e4902a3b00a916c81cfbc0daccf38bd8e503c7295"
+    },
+    {
+      "path": "src/causal-telemetry.js",
+      "hashMode": "lf-normalized",
+      "size": 10789,
+      "sha256": "5b944479b7e29551e8324ecf8add7170674b3d3ccbbb1f914add0e15ca0765fe"
+    },
+    {
+      "path": "src/core-host.js",
+      "hashMode": "lf-normalized",
+      "size": 51952,
+      "sha256": "8ab348585e66ec3d07051391f649bc5f96f1d99d4867e40886fa195c4bae88a6"
+    },
+    {
+      "path": "src/main-profiler.js",
+      "hashMode": "lf-normalized",
+      "size": 16968,
+      "sha256": "9301ee171741924eeb07409d783858d44f85e2fea510cfc05c939e5df1b762a8"
+    },
+    {
+      "path": "src/presentation-pacing.js",
+      "hashMode": "lf-normalized",
+      "size": 480,
+      "sha256": "1f120148b0a715a0ed5e3df30af0eded2b276d5126868c67243a112d2ecbb198"
+    },
+    {
+      "path": "src/upstream-discio-worker.js",
+      "hashMode": "lf-normalized",
+      "size": 292783,
+      "sha256": "2d634efaf59a8968530f3f0b9d5d04bbb8919d95b62f432308e64acbe882baed"
+    },
+    {
+      "path": "src/upstream-main-thread-adapter.js",
+      "hashMode": "lf-normalized",
+      "size": 20189,
+      "sha256": "786d9429acdef46d0135be3e60a819138fe0f58e608c2a301ec608f218784f8f"
+    },
+    {
+      "path": "src/upstream-worker-adapter.js",
+      "hashMode": "lf-normalized",
+      "size": 32598,
+      "sha256": "4a23fcac6a9ef63200948f615b4c16c7253c33bc6633e24fdd64c83a498a315c"
+    },
+    {
+      "path": "src/upstream-worker-protocol.js",
+      "hashMode": "lf-normalized",
+      "size": 4667,
+      "sha256": "4e34308f5b4c14a194c0c02f1c3a3287c2a22d15d7b0796d2b7038ef3677f8e6"
+    },
+    {
+      "path": "src/wgpu-replay-diagnostics.js",
+      "hashMode": "lf-normalized",
+      "size": 8674,
+      "sha256": "af52a7e0f631348ed46a71e99cd9a644fe2506b612d753bbee3c69c321ee6df7"
+    }
+  ],
+  "memoryContract": {
+    "wasmPageBytes": 65536,
+    "jsGlue": {
+      "initialMemoryBytes": 1610612736,
+      "initialPages": 24576
+    },
+    "wasmImports": [
+      {
+        "module": "a",
+        "name": "a",
+        "flags": 3,
+        "minimum": 24576,
+        "maximum": 24576,
+        "shared": true,
+        "memory64": false
+      }
+    ],
+    "wrapperDynamicJitPages": [
+      24576
+    ],
+    "activePatchSeries": {
+      "initialMemoryBytes": 1610612736,
+      "initialPages": 24576
+    }
+  },
+  "memoryContractStatus": "consistent",
+  "sourceOnlyExportsPendingRebuild": [],
+  "moduleExports": [
+    "_AudioBuffer",
+    "_AudioBufferFrames",
+    "_AudioChannels",
+    "_AudioSampleRate",
+    "_BootDisc",
+    "_CoreInit",
+    "_DolphinWeb_RecordCacheHit",
+    "_DolphinWeb_RecordCacheMiss",
+    "_DolphinWeb_RecordInstanceUs",
+    "_DolphinWeb_RecordModuleUs",
+    "_FrameBuffer",
+    "_FrameHeight",
+    "_FrameWidth",
+    "_GetApploaderDate",
+    "_GetApploaderSize",
+    "_GetAudioStats",
+    "_GetBootDolOffset",
+    "_GetBootDolSize",
+    "_GetCPUCoreName",
+    "_GetCachedInterpreterDisableMask",
+    "_GetCoreState",
+    "_GetCoreStateName",
+    "_GetCoreStatus",
+    "_GetCoreTicksHigh",
+    "_GetCoreTicksLow",
+    "_GetCoreTicksPerSecond",
+    "_GetCoreTitle",
+    "_GetDataSize",
+    "_GetDiscNumber",
+    "_GetFrame",
+    "_GetFrameRingCapacity",
+    "_GetFrameRingEntryPtr",
+    "_GetFrameRingEntrySize",
+    "_GetFrameRingHead",
+    "_GetFrameSignalPtr",
+    "_GetFstOffset",
+    "_GetFstSize",
+    "_GetGameId",
+    "_GetGameTitle",
+    "_GetLastLoadedCheckpointGeneration",
+    "_GetLastLoadedCoreTicksHigh",
+    "_GetLastLoadedCoreTicksLow",
+    "_GetLastLoadedPPCPC",
+    "_GetMakerId",
+    "_GetPPCPC",
+    "_GetPlatform",
+    "_GetPpcProfileStats",
+    "_GetPpcWasmBlockCompileCount",
+    "_GetPpcWasmBlockRunCount",
+    "_GetPpcWasmHelperStats",
+    "_GetRawSize",
+    "_GetRegion",
+    "_GetRootEntryCount",
+    "_GetRootEntryIsDirectory",
+    "_GetRootEntryName",
+    "_GetRootEntryOffset",
+    "_GetRootEntryPath",
+    "_GetRootEntrySize",
+    "_GetVideoStats",
+    "_LoadCoreState",
+    "_LoadState",
+    "_LoadStateFile",
+    "_MixAudio",
+    "_MountDisc",
+    "_PumpHostJobs",
+    "_ReadDisc",
+    "_ReadDiscFile",
+    "_Reset",
+    "_ResetCore",
+    "_RunFrame",
+    "_RunPpcWasmAddiSmoke",
+    "_RunPpcWasmDolphinStateAddiSmoke",
+    "_RunPpcWasmDoublePrecisionArithmeticSmoke",
+    "_RunPpcWasmFloatCompareSmoke",
+    "_RunPpcWasmIntegerBlockSmoke",
+    "_RunPpcWasmMultipleWordMemorySmoke",
+    "_RunPpcWasmPairedQuantizedMemorySmoke",
+    "_RunPpcWasmSinglePrecisionArithmeticSmoke",
+    "_RunPpcWasmStateAddiSmoke",
+    "_RunWasmJitSmoke",
+    "_SaveCoreState",
+    "_SaveState",
+    "_SaveStateFile",
+    "_SetAudioMuted",
+    "_SetCachedInterpreterDisableMask",
+    "_SetCorePaused",
+    "_SetCpuCore",
+    "_SetCpuOverclock",
+    "_SetCpuThread",
+    "_SetEmulationSpeed",
+    "_SetFastSoftwareRaster",
+    "_SetInputMask",
+    "_SetInputState",
+    "_SetPpcProfileEnabled",
+    "_SetPpcWasmJitEnabled",
+    "_SetPresentationScale",
+    "_SetVideoBackend",
+    "_SetXfbFastPaths",
+    "_StopCore",
+    "_TestDcbxLoopPattern",
+    "_TestPpcWasmDirectCandidate",
+    "_TestPpcWasmDirectCandidateCompiles",
+    "_free",
+    "_malloc"
+  ],
+  "runtimeMethods": [
+    "FS",
+    "HEAPU8",
+    "PThread",
+    "UTF8ToString",
+    "ccall",
+    "cwrap"
+  ],
+  "workerProtocol": {
+    "requestEnvelopeFields": [
+      "id",
+      "type",
+      "payload",
+      "oneWay"
+    ],
+    "responseEnvelopeFields": [
+      "id",
+      "ok",
+      "error"
+    ],
+    "requestTypes": [
+      "bootProbe",
+      "load",
+      "loadState",
+      "loadStateFile",
+      "mixAudio",
+      "mountFile",
+      "rendererDiagnostics",
+      "reset",
+      "runFrame",
+      "saveState",
+      "saveStateFile",
+      "setAudioMuted",
+      "setInputMask",
+      "setInputState",
+      "validationSetCorePaused"
+    ],
+    "notificationFields": {
+      "detachedOglFrame": [
+        "type",
+        "bitmap",
+        "width",
+        "height"
+      ],
+      "status": [
+        "type",
+        "message"
+      ]
+    }
+  },
+  "limitations": [
+    "The active snapshot series captures the ignored vendor delta, but a hermetic rebuild has not yet proven byte or behavioral parity with this baked artifact.",
+    "Legacy patches 0001-0009 are research history and are deliberately excluded from the active source lock.",
+    "Runtime selection by core content hash is not yet implemented; the current URL remains the compatibility selector."
+  ]
+}

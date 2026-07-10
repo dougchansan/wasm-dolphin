@@ -46,7 +46,12 @@ export class AudioController {
       lastGapMs: 0,
       maxMixMs: 0,
       sumMixMs: 0,
-      mixSamples: 0
+      mixSamples: 0,
+      pumpPendingSkipCount: 0,
+      underrunCount: 0,
+      overrunCount: 0,
+      scheduleLeadSeconds: 0,
+      scheduleDriftSeconds: 0
     };
   }
 
@@ -138,7 +143,11 @@ export class AudioController {
     this.lastPumpAt = pumpEnteredAt;
     this.profile.pumpCount += 1;
 
-    if (this.muted || !this.source || !this.context || !this.gain || this.pumpPending) {
+    if (this.pumpPending) {
+      this.profile.pumpPendingSkipCount += 1;
+      return;
+    }
+    if (this.muted || !this.source || !this.context || !this.gain) {
       return;
     }
 
@@ -149,6 +158,11 @@ export class AudioController {
       }
 
       const now = this.context.currentTime;
+      const leadBeforeFill = this.nextPlayTime - now;
+      if (this.nextPlayTime > 0 && leadBeforeFill < 0) this.profile.underrunCount += 1;
+      if (leadBeforeFill > this.targetLeadSeconds + this.chunkFrames / 48000) {
+        this.profile.overrunCount += 1;
+      }
       if (this.nextPlayTime < now + this.startLeadSeconds) {
         this.nextPlayTime = now + this.startLeadSeconds;
       }
@@ -211,6 +225,8 @@ export class AudioController {
     const startAt = Math.max(this.context.currentTime + this.startLeadSeconds, this.nextPlayTime);
     node.start(startAt);
     this.nextPlayTime = startAt + usableFrames / sampleRate;
+    this.profile.scheduleLeadSeconds = this.nextPlayTime - this.context.currentTime;
+    this.profile.scheduleDriftSeconds = this.profile.scheduleLeadSeconds - this.targetLeadSeconds;
     this.available = true;
     this.stats = chunk.stats || `audio:frames:${usableFrames}`;
     return true;
@@ -218,5 +234,23 @@ export class AudioController {
 
   label() {
     return this.available ? (this.muted ? "Muted" : "Audio") : "Audio off";
+  }
+
+  causalTelemetry() {
+    const p = this.profile;
+    return {
+      pumpCount: p.pumpCount,
+      pumpPendingSkipCount: p.pumpPendingSkipCount,
+      pumpMissCount: p.pumpMisses,
+      pumpGapLastMs: p.lastGapMs,
+      pumpGapAverageMs: p.gapSamples > 0 ? p.sumGapMs / p.gapSamples : 0,
+      pumpGapMaxMs: p.maxGapMs,
+      mixRoundTripAverageMs: p.mixSamples > 0 ? p.sumMixMs / p.mixSamples : 0,
+      mixRoundTripMaxMs: p.maxMixMs,
+      underrunCount: p.underrunCount,
+      overrunCount: p.overrunCount,
+      scheduleLeadSeconds: p.scheduleLeadSeconds,
+      scheduleDriftSeconds: p.scheduleDriftSeconds
+    };
   }
 }

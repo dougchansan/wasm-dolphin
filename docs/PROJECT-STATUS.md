@@ -1,84 +1,74 @@
-# Project Status — Checkpoint
+# Project status — measured checkpoint
 
-_Checkpoint of wasm-dolphin progress. Snapshot of what is built, measured, and
-decided. See `SESSION-*-NOTES.md` under `patches/dolphin-wasm/` for the
-day-by-day trail and `docs/core-roadmap.md` for forward plans._
+This is the current repository checkpoint after the seven-part browser
+performance program. For exact machine, fixture, commit, raw-artifact hashes,
+and verdicts, use the
+[2026-07-10 performance audit](performance-audit-2026-07-10.md) and its
+[evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
 
-## Product direction (locked)
+## Product direction
 
-**Correct + fast native software hybrid.** The shipping path is Dolphin's
-software rasterizer presented through WebGPU (`video=software` +
-`presenter=webgpu`). The default page load is always a working build; every
-experimental renderer or JIT lever is gated behind an opt-in, default-off URL
-flag. Performance effort targets the **CPU (PPC→WASM JIT)** and the
-**presentation path**, because profiling showed rendering cost — not the CPU —
-is the felt bottleneck, while the CPU JIT is where raw throughput lives.
+The recommended path remains Dolphin's software rasterizer presented through
+browser WebGPU:
 
-## What works today
+```text
+?core=upstream&video=software&presenter=webgpu&cpu=dual&speed=1&wasmjit=1&jitwarmup=700&oc=1&pacing=tick&fastsw=1&metrics=1
+```
 
-- **Super Smash Bros. Melee boots and plays** in Chrome at ~100% game speed on
-  a modern desktop.
-- **PPC→WASM JIT with GPR register cache** — default-on, user-verified correct
-  under live controller input.
-- **Presentation pacing** — `pacing=tick` default; smooth canvas refresh,
-  flicker fixed.
-- **Audio** — worker-fed presentation with tuned buffering.
-- **Save-states, ISO mount (WORKERFS), input, fullscreen** — working.
-- **Headed-Chrome validation harness** — boots ISO, loads save-states, samples
-  OSD counters + screenshots.
+Melee is the only best-supported target. Near-100% game speed describes core
+timing, not 60 distinct visual frames per second. The true hardware renderer is
+`video=wgpu`; it remains experimental and is not the recommended path.
 
-## Measured performance
+## What the fixed-battle evidence established
 
-- **GPR register cache (regcache/regalloc):** clean uncapped A/B, base ~191% →
-  regcache ~265% game speed = **+38%**, fully non-overlapping. Default-on
-  (`?regalloc=0` to disable).
-- **Presentation unique-frame rate (software raster is the ceiling):** in a
-  full-motion scene, full-quality `fastsw=1` delivers ~15–22 unique fps while
-  the core runs ~60 fps. Making the raster cheaper raises unique frames directly
-  (see fast-raster table).
-- **Fast-raster modes (Great Bay battle, post-warmup mean visual fps):**
-  `fastsw=1` 14.8 · `fastsw=2` 34.5 · `fastsw=3` 28.8. `fastsw=3` (LERP)
-  removes `fastsw=2`'s row-doubling banding at ~17% below its throughput.
+- The exact Kirby-versus-Link save loads directly. Qualification does not
+  navigate menus, pause at character select, or send gameplay input.
+- The dominant visible limit on the recommended path is distinct software
+  frame production. In the repeated full-versus-balanced screen, both arms
+  sustained about 100% game speed and 60 presentation FPS, while visual cadence
+  was 5.903 FPS for `fastsw=0` and 13.556 FPS for `fastsw=1`.
+- Core/game-speed stalls also contribute. The strict 60-second JIT-on run
+  averaged 92.751% game speed and fell to 65.049%; it did not pass.
+- An avoidable tick presentation queue averaged 12.678 ms. Immediate delivery
+  reduced measured queue age to zero in six valid blocks and is retained, with
+  `legacytickqueue=1` as rollback.
+- XFB row reuse, identity decode, and both combined measured +1.049%, +1.735%,
+  and +2.503%. All missed the declared 3% screening threshold and remain
+  default-off.
+- Observer metrics, host animation-frame work, software presentation, and audio
+  did not classify as the primary throughput bottleneck on the measured
+  machine. Input-to-photon latency remains unmeasured.
+- The WGPU pthread transport now works independently of JIT caching. Hardware
+  WGPU reaches real draws and present completion, but bounded post-draw EFB
+  readbacks remain zero (`EFB_DRAW_NO_MUTATION`).
+- Two independent upstream-core builds matched byte-for-byte. Source, patch,
+  toolchain, ABI, JS, WASM, and build identities are pinned and verified.
 
-## Optimization results (what was tried)
+## Current decisions
 
-| Lever | Result |
-|-------|--------|
-| GPR register cache (WASM locals) | ✅ **+38%, default-on** |
-| `smearcompile` (spread JIT compile) | ✅ Removes mid-match hitches, default-on |
-| `pacing=tick` presentation | ✅ Felt-smoothness win, default-on |
-| `fastsw=3` LERP tuned raster | ✅ Built; smoother than `fastsw=2`, opt-in |
-| N-block JIT chaining (blockmerge/B1) | ⚪ Throughput-neutral — not adopted |
-| In-WASM loops (B2) | ⚪ Evidence-against (hot loops already batched) — not built |
-| Fastmem bounds-check hoisting | ❌ −8.5% regression — reverted |
-| Rust rewrite of core for perf | ❌ No leverage — not pursued |
+| Area | Decision |
+| --- | --- |
+| Software hybrid | Keep as the default playable route |
+| Immediate tick delivery | Retain; confirmed latency improvement |
+| `fastsw=1` | Keep as balanced default; visual cadence remains limited |
+| XFB fast paths | Keep optional/default-off; measured below threshold |
+| JIT defaults | Do not change until emit failures and warm/cold benefit are classified |
+| Audio buffering | Keep; no software-run underruns or overruns were observed |
+| Hardware WGPU | Park as experimental until the first real draw mutates the EFB |
+| Generated core artifacts | Do not change without a provenance-qualified rebuild |
 
-**Conclusion:** the register cache is the practical in-browser JIT ceiling. The
-remaining gap to native is structural: no host memory-trap (fastmem), no WASM
-SIMD, baseline-tier V8 codegen.
+## Next engineering order
 
-## Experimental / parked
+1. Instrument software raster traversal, TEV, texture sampling, FIFO generation
+   age, and stale-XFB reuse.
+2. Classify the eight guarded-JIT emit failures and long CPU slices without
+   enabling correctness-sensitive flags.
+3. Fix first-draw WGPU state so a real draw mutates the EFB, then address the
+   large replay backlog.
+4. Add separate GPU-completion and input-to-visible latency diagnostics.
+5. Optimize only the measured dominant raster/JIT phase and require state/XFB
+   parity plus repeated headed confirmation before promotion.
 
-- **WebGPU hardware renderer (`video=wgpu`).** Would bypass the software-raster
-  unique-frame ceiling. Black-3D, flicker, and dark-menu bugs were root-caused
-  and fixed, but it **renders black on some Windows GPUs** and is reverted off
-  the default. Must be verified on the target GPU's console before any redeploy;
-  the default stays the working software hybrid.
-- **Rust `naga-spirv-wgsl`** — SPIR-V→WGSL transpiler supporting the WebGPU
-  path. Built and linked; only Rust in the project.
-
-## Known issues / the core tradeoff
-
-- **Crisp vs. smooth on the software path.** `fastsw=1` is crisp but capped at
-  the raster unique-frame rate (feels slow in heavy motion); `fastsw=2/3` are
-  smoother but not full-quality. Both-at-once needs the GPU renderer (parked) or
-  a SIMD software rasterizer.
-- **WebGPU renderer is GPU-dependent** (black on some GPUs).
-
-## Next candidate levers
-
-1. Prove the WebGPU hardware renderer on the target GPU (biggest win: crisp +
-   smooth, bypasses the raster ceiling).
-2. SIMD-vectorize the software rasterizer / XFB encode (needs WASM SIMD in the
-   toolchain).
-3. Optional: SWAR-optimize the `fastsw=3` LERP pass to match `fastsw=2` speed.
+No strict end-to-end performance qualification has passed yet. The audit is a
+bottleneck classification and optimization decision record, not a claim that
+the browser build is now lag-free.

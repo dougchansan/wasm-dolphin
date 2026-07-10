@@ -1,0 +1,86 @@
+diff --git a/Source/Core/VideoBackends/Software/CMakeLists.txt b/Source/Core/VideoBackends/Software/CMakeLists.txt
+index acf152da8b..bdfbf9e459 100644
+--- a/Source/Core/VideoBackends/Software/CMakeLists.txt
++++ b/Source/Core/VideoBackends/Software/CMakeLists.txt
+@@ -39,6 +39,10 @@ PUBLIC
+   videocommon
+ )
+ 
++if(EMSCRIPTEN AND DOLPHIN_WASM_SHARED_SOURCE_DIR)
++  target_include_directories(videosoftware PRIVATE "${DOLPHIN_WASM_SHARED_SOURCE_DIR}")
++endif()
++
+ if(MSVC)
+   # Add precompiled header
+   target_link_libraries(videosoftware PRIVATE use_pch)
+diff --git a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
+index 9f2fa0220b..ed7349c841 100644
+--- a/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
++++ b/Source/Core/VideoBackends/Software/SWEfbInterface.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include "VideoBackends/Software/SWEfbInterface.h"
+ 
++#include "dolphin_web_xfb_fastpaths.h"
++
+ #include <algorithm>
+ #include <array>
+ #include <chrono>
+@@ -22,6 +24,8 @@
+ 
+ #ifdef __EMSCRIPTEN__
+ extern "C" int DolphinWeb_FastSoftwareRaster();
++extern "C" int DolphinWeb_XfbFastPaths();
++extern "C" void DolphinWeb_RecordXfbEncodedRowReuse();
+ extern "C" void DolphinWeb_RecordSoftwareXfbEncodeProfile(u32 convert_us, u32 copy_us,
+                                                           u32 total_us, u32 width, u32 height,
+                                                           u32 dst_height);
+@@ -31,6 +35,15 @@ static int DolphinWeb_FastSoftwareRaster()
+   return 0;
+ }
+ 
++static int DolphinWeb_XfbFastPaths()
++{
++  return 0;
++}
++
++static void DolphinWeb_RecordXfbEncodedRowReuse()
++{
++}
++
+ static void DolphinWeb_RecordSoftwareXfbEncodeProfile(u32, u32, u32, u32, u32, u32)
+ {
+ }
+@@ -611,6 +624,8 @@ static void FastEncodeXFB(u8* xfb_in_ram, u32 memory_stride,
+   // per-row sampling; the odd rows are filled in a second pass below.
+   const bool lerp_reconstruct = mode >= 3;
+   const int encode_mode = lerp_reconstruct ? 2 : mode;
++  const u32 xfb_fast_paths = static_cast<u32>(DolphinWeb_XfbFastPaths());
++  int previous_src_y = -1;
+ 
+   for (int dst_y = 0; dst_y < dst_height; ++dst_y)
+   {
+@@ -623,12 +638,17 @@ static void FastEncodeXFB(u8* xfb_in_ram, u32 memory_stride,
+       continue;
+     }
+ 
+-    const auto scaled_y =
+-        static_cast<int>((static_cast<std::int64_t>(dst_y) * src_height) / dst_height);
+-    u16 src_y =
+-        static_cast<u16>(std::clamp(top + scaled_y, 0, static_cast<int>(EFB_HEIGHT) - 1));
+-    if (encode_mode > 0)
+-      src_y &= ~u16{1};
++    const u16 src_y = static_cast<u16>(DolphinWeb::XfbFastPaths::FastEncodeSourceRow(
++        dst_y, src_height, dst_height, top, EFB_HEIGHT, encode_mode));
++    if (encode_mode == 1 && dst_y > 0 && DolphinWeb::XfbFastPaths::ShouldReuseEncodedRow(
++                                               xfb_fast_paths, src_y, previous_src_y))
++    {
++      std::memcpy(row, row - memory_stride, static_cast<std::size_t>(src_width) * sizeof(*row));
++      DolphinWeb_RecordXfbEncodedRowReuse();
++      previous_src_y = src_y;
++      continue;
++    }
++    previous_src_y = src_y;
+ 
+     for (int x = 0; x < even_width; x += 2)
+     {

@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-07-10T06:32:52.080Z",
+  "coreId": "sha256:3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+  "repository": {
+    "commit": "07a69d3ba28fd6deb68fa1810f4fea7fd5b19ddd",
+    "status": ""
+  },
+  "source": {
+    "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
+    "patchSeriesSha256": "ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722",
+    "vendorResultTree": "a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42",
+    "sourceLockSha256": "a0858cacf59de6c1efccb34a66e298cad74a5e024a6ecadad04e28ba8331db4e",
+    "vendorSnapshotSha256": "19261f8af008fddeda2f15bb89b2616d2457317e48fe8d2078d3239c3ee17509"
+  },
+  "toolchain": {
+    "lockSha256": "36112f1020e5c639b20510c09ba0b39063160b833eb8afc552bc9b450fe9bb77",
+    "emscriptenVersion": "5.0.7",
+    "emscriptenCompilerCommit": "263db4cffa6f9fc2ec514a70abac81362ea41849",
+    "emsdkCommit": "bafd64c26bdaf10bd829163d1575b50b759a72d8",
+    "cmakeVersion": "4.3.2",
+    "ninjaVersion": "1.13.0.git.kitware.jobserver-pipe-1",
+    "rustcVersion": "1.97.0-nightly",
+    "rustcCommit": "7c3c88f42ad444f4688b865591d84660be4ece2f",
+    "cargoVersion": "1.97.0-nightly",
+    "nagaDependencyVersion": "26.0.0",
+    "cargoLockSha256": "1f9dbc6ae36abff7af42626c17fb899275bcd7e134d36ec24a78ef79c8c4ce78"
+  },
+  "configure": {
+    "buildDir": "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a",
+    "outputDir": "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a-output",
+    "nagaLibrarySha256": "e8a3f86e18388a70b309559f82063be77ed54948675a5fa21e7d88d7646bb283",
+    "wasmMemoryPages": 24576,
+    "wasmCompileFlags": "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0",
+    "cmakeArgs": [
+      "C:\\Program Files\\CMake\\bin\\cmake.exe",
+      "-S",
+      "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\vendor\\dolphin",
+      "-B",
+      "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a",
+      "-GNinja",
+      "-DCMAKE_MAKE_PROGRAM=C:\\Users\\douglaswhittingham\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\ninja.exe",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+      "-DUSE_SYSTEM_LIBS=OFF",
+      "-DENABLE_GENERIC=ON",
+      "-DENABLE_QT=OFF",
+      "-DENABLE_NOGUI=OFF",
+      "-DENABLE_CLI_TOOL=OFF",
+      "-DENABLE_HEADLESS=OFF",
+      "-DENABLE_ALSA=OFF",
+      "-DENABLE_PULSEAUDIO=OFF",
+      "-DENABLE_CUBEB=OFF",
+      "-DENABLE_X11=OFF",
+      "-DENABLE_EGL=OFF",
+      "-DENABLE_SDL=OFF",
+      "-DENABLE_VULKAN=OFF",
+      "-DENABLE_LLVM=OFF",
+      "-DENABLE_TESTS=OFF",
+      "-DUSE_UPNP=OFF",
+      "-DUSE_DISCORD_PRESENCE=OFF",
+      "-DUSE_MGBA=OFF",
+      "-DUSE_RETRO_ACHIEVEMENTS=OFF",
+      "-DENABLE_AUTOUPDATE=OFF",
+      "-DENABLE_ANALYTICS=OFF",
+      "-DENCODE_FRAMEDUMPS=OFF",
+      "-DWITH_OPTIM=OFF",
+      "-DWITH_SSE2=OFF",
+      "-DWITH_SSSE3=OFF",
+      "-DWITH_SSE41=OFF",
+      "-DWITH_SSE42=OFF",
+      "-DWITH_PCLMULQDQ=OFF",
+      "-DWITH_AVX2=OFF",
+      "-DWITH_AVX512=OFF",
+      "-DWITH_AVX512VNNI=OFF",
+      "-DWITH_VPCLMULQDQ=OFF",
+      "-DCMAKE_C_FLAGS:STRING=-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0",
+      "-DCMAKE_CXX_FLAGS:STRING=-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0",
+      "-DDOLPHIN_WASM_NAGA_WGSL_LIB=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\tools\\naga-spirv-wgsl\\target\\wasm32-unknown-emscripten\\release\\libnaga_spirv_wgsl.a",
+      "-DDOLPHIN_WASM_JIT_CACHE_PRE_JS=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\tools\\jit-cache-prejs.js",
+      "-DDOLPHIN_WASM_MEMORY_PAGES=24576",
+      "-DDOLPHIN_WASM_BRIDGE_SOURCE=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\core\\upstream\\dolphin_web_discio.cpp",
+      "-DDOLPHIN_WASM_SHARED_SOURCE_DIR=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\core\\upstream",
+      "-DDOLPHIN_WASM_OUTPUT_DIR=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a-output",
+      "-DDOLPHIN_WASM_CORE_SOURCE=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\core\\upstream\\dolphin_web_core.cpp",
+      "-DDOLPHIN_WASM_OUTPUT_DIR=C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a-output"
+    ],
+    "cmakeCacheSha256": "09794c5bf96bf2fd4485d4c4e23204f84a391a38b9614e37c0624413193fdaf6"
+  },
+  "artifacts": {
+    "js": {
+      "path": "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a-output\\dolphin-core-upstream.js",
+      "size": 261226,
+      "sha256": "00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658",
+      "hashMode": "lf-normalized"
+    },
+    "wasm": {
+      "path": "C:\\Users\\douglaswhittingham\\wasm-dolphin-perf-integration\\build\\final-core-a-output\\dolphin-core-upstream.wasm",
+      "size": 12807931,
+      "sha256": "3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a",
+      "hashMode": "raw"
+    },
+    "wasmSections": [
+      {
+        "id": 1,
+        "size": 1992,
+        "sha256": "97a50b87e86e638a94e69d3d23daed4ad26a6ee88540ffa81e58117c5e57e1be"
+      },
+      {
+        "id": 2,
+        "size": 2413,
+        "sha256": "f6560e713e3780908d09590533eba2901d43c73388cf35abb81b60814dc0b35b"
+      },
+      {
+        "id": 3,
+        "size": 12354,
+        "sha256": "fb5184505ed3accaf56dd14de4208ab2ed4ba28ee00bd60314b11fbc078e216e"
+      },
+      {
+        "id": 4,
+        "size": 5,
+        "sha256": "38015653c5721c2ce3bbe5b686d8a1179c3e0f28e56182e825b0b0531c36ac58"
+      },
+      {
+        "id": 6,
+        "size": 49,
+        "sha256": "ae6c8301fa8bfae48a50e63fdaa8c056a34e0ab6287f95ae5e523b0e229a8e94"
+      },
+      {
+        "id": 7,
+        "size": 889,
+        "sha256": "94bb4f8bbef1c68b15d1d1e1377f669195491d2cb8e030a017ca0cf58a36acee"
+      },
+      {
+        "id": 8,
+        "size": 2,
+        "sha256": "fc3515813014b9c65d7a471acf38544538ad9d72828c32ad12ce6302da30cae2"
+      },
+      {
+        "id": 9,
+        "size": 22557,
+        "sha256": "eb9e4f016ef89aa39acb2b6e3719c076c4133a1091418208fbdbaae20de7ebb1"
+      },
+      {
+        "id": 12,
+        "size": 2,
+        "sha256": "2650664f412ba87564707daa5e3209df5d879aecc3799afc2fc3914895dfeb98"
+      },
+      {
+        "id": 10,
+        "size": 10315220,
+        "sha256": "b2b717681c4ba68a66df095765b7904fce21802b32fb7dea8587886e79e54a52"
+      },
+      {
+        "id": 11,
+        "size": 2452406,
+        "sha256": "b47165d9f983a39b108a1f75a1607bbbbcda0ebf25c6170cb3f15a6a55f40c02"
+      }
+    ]
+  }
+}

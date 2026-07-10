@@ -104,7 +104,7 @@ pub extern "C" fn naga_free_wgsl(ptr: *mut c_char) {
 // Naga errors nest the real cause in their source chain; the top-level
 // Display is often generic ("Entry point main at Fragment is
 // invalid"). Walk the chain so the C++/JS log shows the actual reason.
-fn chain(prefix: &str, e: &(dyn std::error::Error)) -> String {
+fn chain(prefix: &str, e: &dyn std::error::Error) -> String {
     let mut s = format!("{prefix}: {e}");
     let mut src = e.source();
     while let Some(c) = src {

@@ -1,25 +1,26 @@
 # Reproducible upstream-core build
 
 The repository fetches upstream Dolphin into the gitignored `vendor/dolphin/`
-tree, applies the browser patch set, configures an Emscripten/Ninja build, and
-writes the browser core into `cores/dolphin/`.
+tree, verifies and applies the browser patch snapshot, configures an
+Emscripten/Ninja build, and writes the browser core into `cores/dolphin/`.
 
 ## Toolchain record
 
-Use Node.js **20.x through 24.x**. Before calling a build reproducible, replace
-every `TODO` below with the exact value used for that build:
+The committed `provenance/wasm-toolchain.lock.json` pins the exact local
+toolchain used for the research core. `npm run verify:toolchain` rejects a
+version or executable hash mismatch before configuration.
 
 | Component | Version/revision |
 | --- | --- |
-| Node.js | `TODO: record exact version within 20.x-24.x` |
-| Emscripten SDK | `TODO: record emsdk/Emscripten version` |
-| CMake | `TODO: record CMake version` |
-| Ninja | `TODO: record Ninja version` |
-| Rust nightly | `TODO: record rustc version/date` |
+| Node.js | `24.12.0` |
+| Emscripten SDK | `5.0.7`; compiler `263db4cffa6f9fc2ec514a70abac81362ea41849`; emsdk `bafd64c26bdaf10bd829163d1575b50b759a72d8` |
+| CMake | `4.3.2` |
+| Ninja | `1.13.0.git.kitware.jobserver-pipe-1` |
+| Rust nightly | `1.97.0-nightly`; rustc `7c3c88f42ad444f4688b865591d84660be4ece2f` |
 | Rust target | `wasm32-unknown-emscripten` |
-| Naga | `26` (confirm from `tools/naga-spirv-wgsl/Cargo.toml`) |
-| Chrome | `TODO: record validation Chrome version` |
-| Upstream Dolphin commit | `TODO: record vendor/dolphin commit SHA` |
+| Naga | `26.0.0`, with the full Cargo graph locked |
+| Chrome | `149.0.7827.201` for headed diagnostics; record each performance run separately |
+| Upstream Dolphin commit | `e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1` |
 
 The Naga static library uses nightly Rust because its Emscripten pthread build
 rebuilds `std` with atomics and bulk-memory support. Install nightly plus
@@ -35,6 +36,8 @@ From a clean repository checkout in PowerShell:
 npm install
 npm test
 npm run check
+npm run verify:provenance
+npm run verify:toolchain
 npm run fetch:dolphin
 npm run patch:upstream
 npm run configure:upstream
@@ -45,28 +48,81 @@ The final target produces:
 
 - `cores/dolphin/dolphin-core-upstream.js`
 - `cores/dolphin/dolphin-core-upstream.wasm`
+- `cores/dolphin/dolphin-core-upstream.build.json`
 
-`fetch:dolphin` currently checks out the fetched upstream `master` head rather
-than a repository-pinned SHA. Recording the resolved `vendor/dolphin` commit is
-therefore part of the reproducibility record:
+The build script also packages an ignored, content-addressed candidate under
+`build/core-candidates/<wasm-sha256>/`. It contains the JS, WASM, build record,
+source/ABI/vendor/toolchain locks, Cargo lock, and a manifest of file hashes.
+Use `?coreid=sha256:<wasm-sha256>` to test it. The browser checks the full WASM
+SHA-256 before execution and rolls a rejected candidate back to the pinned
+baseline before transferring the canvas.
+
+`fetch:dolphin` reads `provenance/dolphin-source.lock.json`, fetches the exact
+commit above, verifies the fetched object, and checks it out detached. It never
+uses a moving branch head. `patch:upstream` verifies every active patch's
+canonical SHA-256, byte size, order, target repository, and base commit before
+applying it. The root `HEAD` remains the pristine upstream base after patches
+are applied, so this command proves only the base commit:
 
 ```powershell
 git -C vendor/dolphin rev-parse HEAD
 ```
 
-The true hardware-WebGPU work also exists in the working research tree beyond
-the currently enumerated `0001`-`0009` patch manifest. Before treating the
-sequence above as a release reproduction, verify that the complete Dolphin
-patch set—including the Naga call site—is committed and applied by
-`patch:upstream`. See [the bridge guide](webgpu-naga-bridge.md).
+The durable patched identity is the virtual result tree. Re-running the patch
+command classifies the complete root and submodule status, rejects extra dirty
+or untracked paths, rejects index flags that can hide changes (including
+assume-unchanged and skip-worktree), recomputes every result blob and tree, and
+reports:
+
+```text
+verified result tree a10d63f8b97d7cc81f5d509b5d3b834e8fc3ca42
+```
+
+The active lock contains eight root snapshot patches and two patches applied in
+the pinned SFML and xxHash submodules. It captures the complete forensic delta,
+including the hardware-WebGPU/Naga call site. The ordered patch-set SHA-256 is
+`ad687aaa6af3cfdbd4d453f0aa79a28036e0bc84a8ad5bef30bef1135f313722`.
+The older top-level
+`0001`-`0009` files remain research history and are not applied by the locked
+build. See [the bridge guide](webgpu-naga-bridge.md).
+
+## Existing artifact and ABI identity
+
+`provenance/dolphin-core-abi-v1.json` independently identifies the current
+baked core:
+
+| Artifact | Canonical size | SHA-256 |
+| --- | ---: | --- |
+| `dolphin-core-upstream.js` | 261,224 bytes | `00e4ab0d18e0c11201869e76291f25ad4f0ec20c145a928e81bcc9858e2eb658` |
+| `dolphin-core-upstream.wasm` | 12,807,931 bytes | `3af23a252929edb6a714c1ad4a856dc50921aa93eef7a5b921431ebebfd1301a` |
+
+The JS digest is calculated after CRLF-to-LF normalization, and
+`.gitattributes` requires LF for core JS files. This prevents checkout line
+ending policy from changing the identity of semantically identical glue. The
+WASM digest is always over raw bytes. ABI verification also checks the public
+Module exports and the 24,576-page (1.5 GiB) shared-memory contract in the JS
+glue, WASM import, C++ dynamic-JIT wrapper, and active patch series.
+
+Build success alone does not establish gameplay parity. Compare two independent
+build records with `npm run compare:core-builds -- <left> <right>`, then run the
+fixed Kirby-versus-Link save smoke on the candidate and on the default baseline.
+
+Two independent builds of this core matched byte-for-byte. The independent
+records include an identical 10,315,220-byte code section (SHA-256
+`b2b717681c4ba68a66df095765b7904fce21802b32fb7dea8587886e79e54a52`)
+and 2,452,406-byte data section (SHA-256
+`b47165d9f983a39b108a1f75a1607bbbbcda0ebf25c6170cb3f15a6a55f40c02`).
+The build and gameplay evidence are summarized in the
+[2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md).
 
 ## Known local assumptions
 
-The scripts are Windows-friendly and search common Windows locations for
-Emscripten and CMake. They should also work when `emcmake`, `cmake`, and
-`ninja` are on `PATH`. Environment overrides such as `CMAKE`, `EMCMAKE`,
-`DOLPHIN_WASM_BUILD_DIR`, and `BUILD_PARALLELISM` are supported where the
-corresponding scripts read them.
+The current lock is deliberately Windows x64-specific. Scripts resolve common
+Windows locations and accept `EMCC`, `EMCMAKE`, `CMAKE`, `NINJA`, `RUSTC`,
+`CARGO`, and `RUSTUP` overrides only when the selected file still matches the
+locked hash. `DOLPHIN_WASM_BUILD_DIR`, `DOLPHIN_WASM_OUTPUT_DIR`, and
+`BUILD_PARALLELISM` select isolated build/output locations without weakening
+the toolchain check.
 
 The Rust bridge archive is generated beneath
 `tools/naga-spirv-wgsl/target/` and is intentionally ignored. The patched
@@ -75,18 +131,20 @@ build record, not `vendor/dolphin/`.
 
 ## Release/reproduction checklist
 
-- [ ] Record the upstream Dolphin commit.
-- [ ] Confirm the complete upstream patch set is committed and replayable.
-- [ ] Record the Emscripten version.
-- [ ] Record the Rust toolchain and Naga version.
-- [ ] Record the `.wasm` byte size and a SHA-256 hash.
-- [ ] Record the Chrome version used for validation.
-- [ ] Run `npm test` and `npm run check` from the recorded checkout.
-- [ ] Store measured gameplay evidence separately from build success.
+- [x] Record the upstream Dolphin commit.
+- [x] Confirm the complete upstream patch snapshot is committed and replayable.
+- [x] Record the Emscripten version and compiler/emsdk commits.
+- [x] Record the Rust toolchain, Naga version, and Cargo lock.
+- [x] Record the existing `.wasm` byte size and SHA-256 hash.
+- [x] Record the Chrome version used for the current headed diagnostics.
+- [x] Rebuild twice in separate clean directories and establish parity.
+- [x] Run `npm test` and `npm run check` from the recorded checkout.
+- [x] Store measured gameplay evidence separately from build success.
 
 Useful artifact commands:
 
 ```powershell
+npm run verify:provenance
 (Get-Item cores/dolphin/dolphin-core-upstream.wasm).Length
 Get-FileHash cores/dolphin/dolphin-core-upstream.wasm -Algorithm SHA256
 ```

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -57,7 +58,6 @@ extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <pthread.h>
-#include <atomic>
 
 // §27d: defined in VideoCommon/Fifo.cpp — the after-load callback (CPU
 // pthread) stores a sentinel; the GPU-thread gate reads it back.
@@ -118,6 +118,11 @@ void DolphinWeb_RunGeneratedWasmVoidI32(const unsigned char*, int, int)
 
 namespace
 {
+#ifndef DOLPHIN_WASM_MEMORY_PAGES
+#error "DOLPHIN_WASM_MEMORY_PAGES must be supplied by the pinned CMake configuration"
+#endif
+constexpr std::uint32_t DOLPHIN_WASM_SHARED_MEMORY_PAGES = DOLPHIN_WASM_MEMORY_PAGES;
+
 void EmitU32Leb(std::vector<std::uint8_t>& bytes, std::uint32_t value)
 {
   do
@@ -198,8 +203,8 @@ std::vector<std::uint8_t> BuildStateAddImmediateModule(std::uint32_t dest_offset
   // values trigger LinkError("memory max 24576 > WASM binary max 16384") in
   // the JIT block compiler around frame 700. Keep both numbers in step
   // with INITIAL_MEMORY.
-  EmitU32Leb(imports, 24576);
-  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -353,8 +358,8 @@ std::vector<std::uint8_t> BuildPpcIntegerBlockModule(std::span<const UGeckoInstr
   imports.push_back(0x02);
   imports.push_back(0x03);
   // See INITIAL_MEMORY sync note above.
-  EmitU32Leb(imports, 24576);
-  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -444,6 +449,14 @@ constexpr int AUDIO_PULL_MAX_FRAMES = 4096;
 std::array<s16, AUDIO_PULL_MAX_FRAMES * 2> s_audio_pull_buffer{};
 std::string s_audio_stats = "audio:unavailable";
 std::string s_audio_stats_snapshot = "audio:unavailable";
+// CoreTiming::GetTicks() is CPU-thread-only. The browser worker normally
+// polls from the disc-I/O worker, so those legacy observations can differ
+// slightly from the exact state-load checkpoint. Capture the authoritative
+// checkpoint at the start of the existing CPU-thread after-load callback.
+std::atomic<std::uint32_t> s_last_loaded_ticks_low{0};
+std::atomic<std::uint32_t> s_last_loaded_ticks_high{0};
+std::atomic<std::uint32_t> s_last_loaded_ppc_pc{0};
+std::atomic<std::uint32_t> s_last_loaded_checkpoint_generation{0};
 
 bool BrowserMsgHandler(const char* caption, const char* text, bool yes_no, Common::MsgType style)
 {
@@ -577,6 +590,14 @@ void EnsureRuntime()
   // self-rederive once commands flow again, so no consumer reset is
   // needed for this construct.
   State::SetOnAfterLoadCallback([]() {
+    auto& system = Core::System::GetInstance();
+    const std::uint64_t loaded_ticks = system.GetCoreTiming().GetTicks();
+    s_last_loaded_ticks_low.store(static_cast<std::uint32_t>(loaded_ticks),
+                                  std::memory_order_relaxed);
+    s_last_loaded_ticks_high.store(static_cast<std::uint32_t>(loaded_ticks >> 32),
+                                   std::memory_order_relaxed);
+    s_last_loaded_ppc_pc.store(system.GetPPCState().pc, std::memory_order_relaxed);
+    s_last_loaded_checkpoint_generation.fetch_add(1, std::memory_order_release);
     // §27b disambiguator: which pthread runs the after-load callback
     // (= the LoadAsFromCore context)? Compare to the long-lived CPU
     // pthread tid ([s27-GPB]) and GPU pthread tid ([s27-gate]). A
@@ -1037,6 +1058,26 @@ std::uint32_t GetPPCPC()
   if (!s_runtime_initialized)
     return 0;
   return Core::System::GetInstance().GetPPCState().pc;
+}
+
+std::uint32_t GetLastLoadedCoreTicksLow()
+{
+  return s_last_loaded_ticks_low.load(std::memory_order_acquire);
+}
+
+std::uint32_t GetLastLoadedCoreTicksHigh()
+{
+  return s_last_loaded_ticks_high.load(std::memory_order_acquire);
+}
+
+std::uint32_t GetLastLoadedPPCPC()
+{
+  return s_last_loaded_ppc_pc.load(std::memory_order_acquire);
+}
+
+std::uint32_t GetLastLoadedCheckpointGeneration()
+{
+  return s_last_loaded_checkpoint_generation.load(std::memory_order_acquire);
 }
 
 const char* GetCPUCoreName()

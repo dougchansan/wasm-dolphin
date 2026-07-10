@@ -1,11 +1,18 @@
 import { parseDolHeader } from "./dol.js";
-import { DEFAULT_UPSTREAM_CORE_URL, WORKERFS_MOUNT_DIR, sanitizeDiscFileName } from "./upstream-worker-protocol.js";
+import {
+  DEFAULT_UPSTREAM_CORE_SHA256,
+  DEFAULT_UPSTREAM_CORE_URL,
+  WORKERFS_MOUNT_DIR,
+  sanitizeDiscFileName,
+  verifyUpstreamCoreWasm
+} from "./upstream-worker-protocol.js";
 
 const MIN_FULL_BOOT_BYTES = 16 * 1024 * 1024;
 
 export class UpstreamMainThreadAdapter {
   constructor({
     coreUrl = DEFAULT_UPSTREAM_CORE_URL,
+    expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256,
     canvas,
     onStatus = () => {},
     videoBackend = "OGL",
@@ -20,9 +27,11 @@ export class UpstreamMainThreadAdapter {
     emulationSpeed = 1,
     presentationScale = 1,
     oglTestClear = false,
-    fastSoftwareRaster = 0
+    fastSoftwareRaster = 0,
+    xfbFastPaths = 0
   } = {}) {
     this.coreUrl = coreUrl;
+    this.expectedCoreSha256 = expectedCoreSha256;
     this.canvas = canvas;
     this.onStatus = onStatus;
     this.videoBackend = videoBackend;
@@ -38,6 +47,7 @@ export class UpstreamMainThreadAdapter {
     this.presentationScale = presentationScale;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
+    this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.module = null;
     this.api = null;
     this.loaded = false;
@@ -75,7 +85,17 @@ export class UpstreamMainThreadAdapter {
       return this.module;
     }
 
-    const coreUrl = new URL(this.coreUrl, window.location.href).href;
+    let verified;
+    try {
+      verified = await verifyUpstreamCoreWasm(this.coreUrl, this.expectedCoreSha256, window.location.href);
+    } catch (error) {
+      if (this.coreUrl === DEFAULT_UPSTREAM_CORE_URL) throw error;
+      this.onStatus(`Candidate core rejected; rolling back to pinned baseline: ${error.message}`);
+      this.coreUrl = DEFAULT_UPSTREAM_CORE_URL;
+      this.expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256;
+      verified = await verifyUpstreamCoreWasm(this.coreUrl, this.expectedCoreSha256, window.location.href);
+    }
+    const coreUrl = verified.coreUrl;
     const imported = await import(coreUrl);
     const factory = imported.default ?? imported.createDolphinCore ?? window.createDolphinCore;
     if (typeof factory !== "function") {
@@ -85,10 +105,12 @@ export class UpstreamMainThreadAdapter {
     this.canvas.id = this.canvas.id || "canvas";
     this.module = await factory({
       noInitialRun: true,
+      wasmBinary: verified.wasmBinary,
       canvas: this.canvas,
       dolphinOglWorkerWebGl: this.videoBackend === "OGL",
       dolphinOglTestClear: this.oglTestClear,
       dolphinFastSoftwareRaster: this.fastSoftwareRaster,
+      dolphinXfbFastPaths: this.xfbFastPaths,
       locateFile: (path) => new URL(path, coreUrl).href,
       print: (message) => this.onStatus(String(message)),
       printErr: (message) => this.onStatus(String(message)),
@@ -105,6 +127,7 @@ export class UpstreamMainThreadAdapter {
     this.api.setEmulationSpeed?.(Number(this.emulationSpeed));
     this.api.setPresentationScale?.(Number(this.presentationScale));
     this.api.setFastSoftwareRaster?.(this.fastSoftwareRaster);
+    this.api.setXfbFastPaths?.(this.xfbFastPaths);
     this.api.coreInit?.();
     this.loaded = true;
     this.refreshStats();
@@ -127,6 +150,7 @@ export class UpstreamMainThreadAdapter {
       setEmulationSpeed: optionalCwrap("SetEmulationSpeed", null, ["number"]),
       setPresentationScale: optionalCwrap("SetPresentationScale", null, ["number"]),
       setFastSoftwareRaster: optionalCwrap("SetFastSoftwareRaster", "number", ["number"]),
+      setXfbFastPaths: optionalCwrap("SetXfbFastPaths", "number", ["number"]),
       bootDisc: optionalCwrap("BootDisc", "number", ["string"]),
       setCorePaused: optionalCwrap("SetCorePaused", "number", ["number"]),
       resetCore: optionalCwrap("ResetCore", "number", []),

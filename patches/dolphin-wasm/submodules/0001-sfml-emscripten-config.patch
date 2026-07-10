@@ -1,0 +1,17 @@
+diff --git a/include/SFML/Config.hpp b/include/SFML/Config.hpp
+index 36a8b1a..c5a8fd7 100644
+--- a/include/SFML/Config.hpp
++++ b/include/SFML/Config.hpp
+@@ -76,6 +76,11 @@
+ // Android
+ #define SFML_SYSTEM_ANDROID
+ 
++#elif defined(__EMSCRIPTEN__)
++
++// Emscripten provides the POSIX socket headers needed by Dolphin's bundled SFML subset.
++#define SFML_SYSTEM_LINUX
++
+ #elif defined(__linux__)
+ 
+ // Linux
+

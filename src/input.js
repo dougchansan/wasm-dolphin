@@ -94,6 +94,18 @@ export const DEFAULT_PAD_STATE = Object.freeze({
   analogB: 0
 });
 
+const GAMEPAD_STATE_FIELDS = Object.freeze([
+  "mask",
+  "stickX",
+  "stickY",
+  "cStickX",
+  "cStickY",
+  "triggerLeft",
+  "triggerRight",
+  "analogA",
+  "analogB"
+]);
+
 export function resolveKeyboardButton(code, bindings = DEFAULT_KEY_BINDINGS) {
   return bindings[code] ?? null;
 }
@@ -137,6 +149,53 @@ export function buttonMaskFromPressed(pressed) {
 // digital threshold past typical Xbox drift.
 const DEFAULT_GAMEPAD_ANALOG_DEADZONE = 0.18;
 const DEFAULT_GAMEPAD_DIGITAL_DEADZONE = 0.55;
+
+export function selectPreferredGamepad(gamepads) {
+  let fallback = null;
+  let preferred = null;
+  let preferredButtonCount = -1;
+  const length = Number(gamepads?.length) || 0;
+
+  for (let index = 0; index < length; index += 1) {
+    const gamepad = gamepads[index];
+    if (!gamepad) {
+      continue;
+    }
+    fallback ??= gamepad;
+    if (gamepad.mapping !== "standard") {
+      continue;
+    }
+
+    const buttonCount = Number(gamepad.buttons?.length) || 0;
+    if (!preferred || buttonCount > preferredButtonCount) {
+      preferred = gamepad;
+      preferredButtonCount = buttonCount;
+    }
+  }
+
+  return preferred || fallback;
+}
+
+export function gamepadInputsEqual(left, right) {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.pressed?.size !== right.pressed?.size) {
+    return false;
+  }
+
+  for (const button of left.pressed) {
+    if (!right.pressed.has(button)) {
+      return false;
+    }
+  }
+  for (const field of GAMEPAD_STATE_FIELDS) {
+    if (left.state?.[field] !== right.state?.[field]) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function pressedFromGamepad(
   gamepad,

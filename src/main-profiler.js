@@ -215,7 +215,11 @@ export class MainThreadProfiler {
       avgGapMs: p.sumGapMs / p.gapSamples,
       maxGapMs: p.maxGapMs,
       avgMixMs: p.mixSamples ? p.sumMixMs / p.mixSamples : 0,
-      maxMixMs: p.maxMixMs
+      maxMixMs: p.maxMixMs,
+      underruns: p.underrunCount || 0,
+      overruns: p.overrunCount || 0,
+      leadSeconds: p.scheduleLeadSeconds || 0,
+      driftSeconds: p.scheduleDriftSeconds || 0
     };
   }
 
@@ -256,8 +260,9 @@ export class MainThreadProfiler {
     const audio = this._audio();
     const frame = window.__lastFrameInfo || {};
     const helper = String(frame.ppcWasmHelperStats || "");
-    const under = /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "?";
-    const drop = /\bdrop:(\d+)/.exec(helper)?.[1] ?? "?";
+    const causal = frame.causalTelemetry || window.__causalTelemetry || null;
+    const under = causal?.presentation?.underrunCount ?? /\bunderrun:(\d+)/.exec(helper)?.[1] ?? "?";
+    const drop = causal?.presentation?.droppedFrameCount ?? /\bdrop:(\d+)/.exec(helper)?.[1] ?? "?";
     return {
       elapsedS,
       loaf: this.loafSupported
@@ -285,7 +290,8 @@ export class MainThreadProfiler {
         buckets: Array.from(this.rafGapBuckets)
       },
       audio,
-      worker: { underrun: under, drop },
+      presentationQueue: { underrun: under, drop },
+      causalTelemetry: causal,
       hostStalls: this._hostStalls(),
       topScripts: this.topScripts(6)
     };
@@ -321,7 +327,10 @@ export class MainThreadProfiler {
     } else {
       lines.push("  audio-pump: no samples yet (unmute + be in-game for data)");
     }
-    lines.push(`  worker audio: ${s.worker.underrun}u/${s.worker.drop}d`);
+    lines.push(
+      `  presentation queue: ${s.presentationQueue.underrun} underruns / ` +
+        `${s.presentationQueue.drop} drops`
+    );
     if (s.hostStalls) {
       const h = s.hostStalls;
       lines.push(
@@ -387,7 +396,9 @@ export class MainThreadProfiler {
     } else {
       rows.push("pump: unmute + play for data");
     }
-    rows.push(`worker ${s.worker.underrun}u/${s.worker.drop}d`);
+    rows.push(
+      `queue ${s.presentationQueue.underrun} underruns / ${s.presentationQueue.drop} drops`
+    );
     if (s.hostStalls) {
       const h = s.hostStalls;
       rows.push(`>20ms JS: loop ${h.loop} msg ${h.msg} sab ${h.sab}  (rAF>33 ${h.rafOver33})`);

@@ -2,11 +2,11 @@
 # Demo/attract intro (no savestate) = deterministic full-motion, SPEED=1 so visualFps is the felt metric.
 # Captures post-warmup mean visualFps + coreFps + gameSpeed; harness auto-saves tNNN screenshots for quality compare.
 $ErrorActionPreference="Continue"
-$root="C:\Users\douglaswhittingham\wasm-dolphin"; $dur=50
+$root=(Resolve-Path (Join-Path $PSScriptRoot "..")).Path; $dur=50
 $rom="F:/Emulation/super-smash-bros.-melee-usa-en-ja-rev-2.nkit_202203/Super Smash Bros. Melee (USA) (En,Ja) (Rev 2).nkit.iso"
 $conds=@(@{name="fsw1";fastsw="1"},@{name="fsw2";fastsw="2"},@{name="fsw3";fastsw="3"})
 function Kill-DebugChrome { Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -match 'chrome-debug' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }
-function PostWarmupVisual($outDir){ $sj=Join-Path $outDir "samples.json"; if(-not(Test-Path $sj)){return $null}; try{$s=Get-Content $sj -Raw|ConvertFrom-Json}catch{return $null}; $vf=@(); $cf=@(); $gs=@(); foreach($x in $s){ $v=[double]$x.visualFps; if($v -gt 0){$vf+=$v; $cf+=[double]$x.coreFps; $gs+=[double]($x.gameSpeed -replace '%','')} }; if($vf.Count -lt 6){return $null}; $skip=[math]::Floor($vf.Count*0.4); $vw=$vf[$skip..($vf.Count-1)]; $cw=$cf[$skip..($cf.Count-1)]; $gw=$gs[$skip..($gs.Count-1)]; [pscustomobject]@{ visual=[math]::Round(($vw|Measure-Object -Average).Average,1); visualMax=($vw|Measure-Object -Maximum).Maximum; core=[math]::Round(($cw|Measure-Object -Average).Average,1); speed=[math]::Round(($gw|Measure-Object -Average).Average,1); n=$vw.Count } }
+function PostWarmupVisual($outDir){ $sj=Join-Path $outDir "samples.json"; if(-not(Test-Path $sj)){return $null}; try{$s=@(Get-Content $sj -Raw|ConvertFrom-Json)}catch{return $null}; if($s.Count -lt 6){return $null}; $skip=[math]::Floor($s.Count*0.4); $win=@($s[$skip..($s.Count-1)]); $vf=@($win|ForEach-Object{[double]$_.visualFps}); $cf=@($win|ForEach-Object{[double]$_.coreFps}); $gs=@($win|ForEach-Object{[double]($_.gameSpeed -replace '%','')}); [pscustomobject]@{ visual=[math]::Round(($vf|Measure-Object -Average).Average,1); visualMax=($vf|Measure-Object -Maximum).Maximum; core=[math]::Round(($cf|Measure-Object -Average).Average,1); speed=[math]::Round(($gs|Measure-Object -Average).Average,1); n=$win.Count } }
 $results=@()
 foreach($c in $conds){
   Kill-DebugChrome

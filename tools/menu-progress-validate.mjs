@@ -15,6 +15,12 @@ import { createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
+import {
+  collectRunMetadata,
+  parseProfileMetrics,
+  recordsToCsv,
+} from "./perf-artifacts.mjs";
+
 const root = process.cwd();
 const args = parseArgs(process.argv.slice(2));
 const baseUrl = args.baseUrl || process.env.BASE_URL || "http://127.0.0.1:8082/";
@@ -23,6 +29,8 @@ const romPath = args.rom || process.env.ROM ||
 const durationSeconds = args.duration ?? Number(process.env.DURATION || 360);
 const sampleMs = args.sampleMs ?? Number(process.env.SAMPLE_MS || 1000);
 const screenshotEverySeconds = args.shotEvery ?? Number(process.env.SHOT_EVERY || 4);
+const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
+const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
 const oglProxy = process.env.OGL_PROXY_MODE || "proxy";
 const videoMode = process.env.VIDEO || "ogl"; // "ogl" or "software"
 const headed = process.env.HEADED === "1" || args.headed;
@@ -80,14 +88,31 @@ function makeAggressiveInputScript() {
 }
 const defaultInputScript = makeAggressiveInputScript();
 
-const inputScript = parseInputScript(process.env.INPUT_SCRIPT || defaultInputScript);
+// INPUT_SCRIPT=none (or an explicitly empty value in shells that preserve it)
+// means "send no gameplay input". This is important for fixed-state benchmarks,
+// where the scene must not drift because menu navigation kept pressing buttons
+// after the state loaded.
+const rawInputScript = process.env.INPUT_SCRIPT;
+const configuredInputScript =
+  rawInputScript == null
+    ? defaultInputScript
+    : /^(?:none|off)$/i.test(rawInputScript.trim())
+      ? ""
+      : rawInputScript;
+const inputScript = parseInputScript(configuredInputScript);
 // Optional: load a Dolphin .sav (served by the dev server) once the
 // core is running. SAVE_STATE_URL = path under the dev server (e.g.
 // /__savestate_probe.sav); SAVE_STATE_AT = seconds into the run to do
 // it (must be after boot — Core must be running for State::LoadAs).
 const saveStateUrl = process.env.SAVE_STATE_URL || "";
+// Optional local counterpart used only for provenance. SAVE_STATE_URL is what
+// the browser loads; SAVE_STATE_PATH lets the harness record the exact bytes
+// without assuming how the development server maps URLs to disk.
+const saveStatePath = process.env.SAVE_STATE_PATH || "";
 const saveStateAt = Number(process.env.SAVE_STATE_AT || 30);
+const sceneLabel = process.env.SCENE_LABEL || "";
 let saveStateDone = false;
+let saveStateLoadResult = null;
 // Capture a version-matched state at SAVE_STATE_CAPTURE_AT (write the
 // .sav into outDir for reuse), then reload it from the worker FS at
 // SAVE_STATE_RELOAD_AT to prove a deterministic round-trip.
@@ -139,6 +164,7 @@ if (videoMode === "ogl") {
 }
 url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
+if (process.env.XFBFAST) url.searchParams.set("xfbfast", process.env.XFBFAST);
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
 if (process.env.REDISPATCH) url.searchParams.set("redispatch", process.env.REDISPATCH);
 if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCKMERGE);
@@ -203,6 +229,34 @@ const browser = persistBrowserData
       console.warn(`Failed ${browserName} channel; falling back to bundled chromium: ${error.message}`);
       return chromium.launch({ headless: !headed });
     });
+
+const browserVersion =
+  (typeof browser.version === "function" ? browser.version() : browser.browser?.()?.version?.()) || null;
+const browserExecutable =
+  typeof browserEngine.executablePath === "function" ? browserEngine.executablePath() : null;
+const runMetadata = await collectRunMetadata({
+  root,
+  url: url.href,
+  browserName,
+  browserChannel: process.env.BROWSER_CHANNEL || (browserName === "chromium" ? "chrome" : null),
+  browserVersion,
+  browserExecutable,
+  headed,
+  durationSeconds,
+  sampleMs,
+  screenshotEverySeconds,
+  captureScreenshots,
+  showDebugPanel,
+  romPath,
+  hashRom: process.env.HASH_ROM !== "0",
+  corePath: path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm"),
+  saveStateUrl,
+  saveStatePath,
+  saveStateAt,
+  inputScript: configuredInputScript,
+  sceneLabel,
+});
+await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
 
 // launchPersistentContext returns a BrowserContext (not Browser). Both
 // expose .newPage()/.on() with the same signatures we need below, so we
@@ -300,12 +354,13 @@ await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
   inputEvents.push(entry);
 });
 
+let probeError = null;
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.evaluate(() => {
+  await page.evaluate((showDebugPanel) => {
     const panel = document.querySelector("#debugPanel");
     const toggle = document.querySelector("#debugToggle");
-    if (panel?.hidden) toggle?.click();
+    if (showDebugPanel && panel?.hidden) toggle?.click();
     // Install LoAF observer. Browsers that don't support
     // "long-animation-frame" (older Chrome, Firefox, Safari) throw —
     // swallow the error so the rest of the probe still runs.
@@ -346,7 +401,7 @@ try {
     } catch (err) {
       // PerformanceEventTiming not supported — input latency stays empty.
     }
-  });
+  }, showDebugPanel);
   // Boot timeline (Day 13). All times are wall-clock ms from "ROM upload
   // dispatched", so we know exactly where each second of startup goes.
   const bootT0 = Date.now();
@@ -474,6 +529,69 @@ try {
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
 
+  const loadConfiguredSaveState = async (elapsed) => {
+    saveStateDone = true;
+    let readiness = null;
+    // A mounted worker can still report Dolphin's state as Starting on slower
+    // presenter paths. Loading during that window returns rc=0. Wait for a
+    // small amount of real core-frame progress before transferring the state.
+    if (elapsed <= 0) {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        readiness = await page.evaluate(() => {
+          const info = window.__lastFrameInfo || {};
+          return {
+            frame: Number(info.frame) || 0,
+            coreTicks: Number(info.coreTicks) || 0,
+            running: Boolean(info.running),
+          };
+        });
+        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
+        await page.waitForTimeout(250);
+      }
+      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
+        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
+      }
+    }
+    console.log(
+      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
+    );
+    try {
+      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: Boolean(response?.loaded),
+        readiness,
+        response,
+      };
+      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
+      if (!response?.loaded) {
+        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
+      }
+      milestoneLog.push({
+        t: elapsed.toFixed(1),
+        event: "save-state-loaded",
+        response,
+      });
+    } catch (error) {
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: false,
+        error: error?.message || String(error),
+      };
+      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
+      throw error;
+    }
+    await page.waitForTimeout(1500);
+    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+  };
+
+  // SAVE_STATE_AT=0 is the deterministic battle-benchmark path: mount the
+  // core, load the state immediately, let it settle, then start the timed
+  // sampling window. Menu navigation and character selection are bypassed.
+  if (saveStateUrl && saveStateAt <= 0) {
+    await loadConfiguredSaveState(0);
+  }
+
   const startedAt = Date.now();
   const totalSamples = Math.ceil((durationSeconds * 1000) / sampleMs);
   let lastShotSecond = -screenshotEverySeconds;
@@ -489,16 +607,7 @@ try {
     }
 
     if (saveStateUrl && !saveStateDone && elapsed >= saveStateAt) {
-      saveStateDone = true;
-      console.log(`[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}…`);
-      try {
-        const r = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
-        console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(r)}`);
-      } catch (e) {
-        console.log(`[menu-progress] loadStateFile threw: ${e?.message || e}`);
-      }
-      await page.waitForTimeout(1500);
-      await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+      await loadConfiguredSaveState(elapsed);
     }
 
     if (ssCaptureAt > 0 && !ssCaptureDone && elapsed >= ssCaptureAt) {
@@ -534,7 +643,11 @@ try {
       await capture(page, `savestate-reloaded-t${Math.round(elapsed)}.png`);
     }
 
-    const sample = await readSample(page, elapsed);
+    const rawSample = await readSample(page, elapsed);
+    const sample = {
+      ...rawSample,
+      ...parseProfileMetrics(rawSample.helper, rawSample.frameProfile),
+    };
     samples.push(sample);
 
     if (sample.visibleHash && !distinctHashes.has(sample.visibleHash)) {
@@ -565,6 +678,7 @@ try {
 
   await capture(page, "zz-final.png");
 } catch (error) {
+  probeError = error;
   consoleLines.push(`[probe-error] ${error.stack || error.message}`);
   await capture(page, "zz-error.png");
 } finally {
@@ -621,6 +735,7 @@ try {
   }
   await writeFile(path.join(outDir, "console.log"), consoleLines.join("\n")).catch(() => {});
   await writeFile(path.join(outDir, "samples.json"), JSON.stringify(samples, null, 2));
+  await writeFile(path.join(outDir, "samples.csv"), recordsToCsv(samples));
   await writeFile(path.join(outDir, "milestones.json"), JSON.stringify(milestoneLog, null, 2));
   if (longAnimationFrames.length) {
     await writeFile(
@@ -656,6 +771,27 @@ try {
     inputEvents,
     bootMarks,
   });
+  runMetadata.finishedAt = new Date().toISOString();
+  runMetadata.result = {
+    sampleCount: samples.length,
+    distinctCanvasHashes: distinctHashes.size,
+    summaryFile: "summary.json",
+    samplesJsonFile: "samples.json",
+    samplesCsvFile: "samples.csv",
+    saveStateLoad: saveStateLoadResult,
+  };
+  summary.provenance = {
+    metadataFile: "run-metadata.json",
+    commit: runMetadata.git.commit,
+    dirty: runMetadata.git.dirty,
+    browserVersion: runMetadata.browser.version,
+    url: runMetadata.benchmark.url,
+    romSha256: runMetadata.artifacts.rom.sha256,
+    coreSha256: runMetadata.artifacts.core.sha256,
+    saveStateSha256: runMetadata.artifacts.saveState?.sha256 || null,
+    saveStateLoaded: Boolean(saveStateLoadResult?.loaded),
+  };
+  await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
   await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
   console.log(`\n[menu-progress] done: ${JSON.stringify(summary, null, 2)}`);
   console.log(`[menu-progress] ${distinctHashes.size} distinct canvas hashes across ${samples.length} samples`);
@@ -676,6 +812,8 @@ try {
   }
   await browser.close();
 }
+
+if (probeError) throw probeError;
 
 function summarize(samples, hashes, extras = {}) {
   const { audioSamples = [], longAnimationFrames = [], inputEvents = [], bootMarks = null } =
@@ -1204,36 +1342,55 @@ async function readSample(page, elapsedSeconds) {
       // Bucket the hash to ignore tiny variations.
       visibleHash = (hash >>> 0) & 0xfffffff0;
     } catch (e) { visibleError = e.message || String(e); }
-    // ppcWasmJit element is rendered as "runCount / compileCount" with locale
-    // group separators. Parse the second integer as the JIT block compile total.
-    const jitText = read("#ppcWasmJit");
-    const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
-    const jitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
-    const jitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
     // Structured worker stats (set by app.js's handleFrame). Reading via
     // window is cheaper than DOM scraping and preserves numeric fields
     // (histogram array, lifetime counters, stddev) without round-tripping
     // through textContent.
     const info = window.__lastFrameInfo || {};
+    const metricText = (value, fallback = "") =>
+      value == null || value === "" ? fallback : String(value);
+    const percentText = (value, fallback = "") =>
+      value == null || value === "" ? fallback : `${Math.max(0, Number(value) || 0)}%`;
+    const formatGap = () => {
+      if (info.presentationP95IntervalMs == null && info.presentationMaxIntervalMs == null) {
+        return read("#presentationGapCounter");
+      }
+      const p95 = Number(info.presentationP95IntervalMs) || 0;
+      const max = Number(info.presentationMaxIntervalMs) || 0;
+      const longFrames = Number(info.presentationLongFrameCount) || 0;
+      return `${p95.toFixed(p95 >= 10 ? 0 : 1)} p95 / ` +
+        `${max.toFixed(max >= 10 ? 0 : 1)} max / ${longFrames}`;
+    };
+    // Fall back to the rendered counter for older builds that do not expose
+    // structured JIT counters. The debug panel is intentionally kept closed
+    // during benchmarks so it cannot trigger its screenshot/download loop.
+    const jitText = read("#ppcWasmJit");
+    const jitParts = jitText.split("/").map((part) => part.replace(/[^0-9]+/g, ""));
+    const parsedJitBlockRunCount = Number.parseInt(jitParts[0] || "0", 10) || 0;
+    const parsedJitBlockCompileCount = Number.parseInt(jitParts[1] || "0", 10) || 0;
+    const jitBlockRunCount = Number(info.ppcWasmBlockRunCount ?? parsedJitBlockRunCount) || 0;
+    const jitBlockCompileCount =
+      Number(info.ppcWasmBlockCompileCount ?? parsedJitBlockCompileCount) || 0;
     // Parse drop/underrun out of the helper string. These are emitted as
     // "drop:N underrun:N" inside the worker's ppcWasmHelperStats. The
     // structured fields aren't yet surfaced separately to the DOM but the
     // helper string is always available.
-    const helperStr = read("#ppcWasmHelperStats");
+    const helperStr = String(info.ppcWasmHelperStats || read("#ppcWasmHelperStats"));
     const helperDropMatch = /\bdrop:(\d+)/.exec(helperStr);
     const helperUnderrunMatch = /\bunderrun:(\d+)/.exec(helperStr);
     const helperLongMatch = /\blong:(\d+)/.exec(helperStr);
     const helperRawFpsMatch = /\braw:(\d+)/.exec(helperStr);
     return {
       elapsedSeconds,
-      frame: read("#frameCounter"),
-      presentFps: read("#fpsCounter"),
-      visualFps: read("#visualFpsCounter"),
-      coreFps: read("#coreFpsCounter"),
-      gameSpeed: read("#gameSpeedCounter"),
-      gap: read("#presentationGapCounter"),
+      frame: metricText(info.frame, read("#frameCounter")),
+      presentFps: metricText(info.presentationFps ?? info.fps, read("#fpsCounter")),
+      visualFps: metricText(info.visualChangeFps, read("#visualFpsCounter")),
+      coreFps: metricText(info.coreFps, read("#coreFpsCounter")),
+      gameSpeed: percentText(info.gameSpeed, read("#gameSpeedCounter")),
+      gap: formatGap(),
       helper: helperStr,
-      coreMode: read("#coreMode"),
+      frameProfile: String(info.frameProfileStats || read("#frameProfileStats")),
+      coreMode: info.mode === "dolphin" ? "Dolphin" : read("#coreMode"),
       mountNote: read("#mountNote"),
       gameTitle: read("#gameTitle"),
       statusPill: read("#statusPill"),
@@ -1264,6 +1421,8 @@ async function readSample(page, elapsedSeconds) {
       )
         ? info.presentationIntervalHistogramBuckets.slice()
         : null,
+      presentationFrameLag: Number(info.presentationFrameLag) || 0,
+      presentationQueueAgeMs: Number(info.presentationQueueAgeMs) || 0,
       // Parsed from helper string (worker doesn't surface these to DOM yet).
       helperDropCount: helperDropMatch ? Number(helperDropMatch[1]) : 0,
       helperUnderrunCount: helperUnderrunMatch ? Number(helperUnderrunMatch[1]) : 0,
@@ -1274,10 +1433,18 @@ async function readSample(page, elapsedSeconds) {
 }
 
 async function capture(page, name) {
+  if (!captureScreenshots) return;
   try { await page.screenshot({ path: path.join(outDir, name), timeout: 5000 }); } catch {}
 }
 
 async function importPlaywright() {
+  if (process.env.PLAYWRIGHT_MODULE) {
+    const configured = path.resolve(process.env.PLAYWRIGHT_MODULE);
+    if (!existsSync(configured)) {
+      throw new Error(`PLAYWRIGHT_MODULE does not exist: ${configured}`);
+    }
+    return import(pathToFileURL(configured).href);
+  }
   const local = path.join(root, ".omx", "browser-probe", "node_modules", "playwright", "index.mjs");
   if (existsSync(local)) return import(pathToFileURL(local).href);
   return import("playwright");

@@ -1,0 +1,180 @@
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { loadWasmToolchainLock, sha256File, sha256NormalizedTextFile } from "./wasm-toolchain.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function normalizedTextHash(path) {
+  return sha256(Buffer.from(readFileSync(path, "utf8").replace(/\r\n/g, "\n")));
+}
+
+function fileInfo(path, hashMode = "raw") {
+  const bytes = readFileSync(path);
+  return {
+    path,
+    size: bytes.length,
+    sha256: hashMode === "lf-normalized" ? normalizedTextHash(path) : sha256(bytes),
+    hashMode
+  };
+}
+
+function readUleb(bytes, start) {
+  let value = 0;
+  let shift = 0;
+  let offset = start;
+  while (offset < bytes.length) {
+    const byte = bytes[offset++];
+    value |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value: value >>> 0, offset };
+    shift += 7;
+    if (shift > 35) throw new Error("Invalid WASM ULEB value");
+  }
+  throw new Error("Truncated WASM ULEB value");
+}
+
+export function wasmSectionInfo(path) {
+  const bytes = readFileSync(path);
+  if (bytes.subarray(0, 4).toString("hex") !== "0061736d") throw new Error(`${path} is not a WASM module`);
+  const sections = [];
+  let offset = 8;
+  while (offset < bytes.length) {
+    const id = bytes[offset++];
+    const size = readUleb(bytes, offset);
+    offset = size.offset;
+    const end = offset + size.value;
+    if (end > bytes.length) throw new Error(`Truncated WASM section ${id}`);
+    const payload = bytes.subarray(offset, end);
+    sections.push({ id, size: payload.length, sha256: sha256(payload) });
+    offset = end;
+  }
+  return sections;
+}
+
+function git(args, cwd = root) {
+  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true });
+  if (result.status !== 0) return null;
+  return result.stdout.trim();
+}
+
+export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_BUILD_INFO_PATH } = {}) {
+  const absoluteBuildDir = resolve(buildDir ?? process.env.DOLPHIN_WASM_BUILD_DIR ?? resolve(root, "build/dolphin-wasm"));
+  const configurePath = resolve(absoluteBuildDir, "wasm-dolphin-configure.json");
+  if (!existsSync(configurePath)) throw new Error(`Missing configure record ${configurePath}`);
+  const configure = JSON.parse(readFileSync(configurePath, "utf8"));
+  const jsPath = resolve(configure.outputDir, "dolphin-core-upstream.js");
+  const wasmPath = resolve(configure.outputDir, "dolphin-core-upstream.wasm");
+  if (!existsSync(jsPath) || !existsSync(wasmPath)) throw new Error("Core build did not produce both JS and WASM artifacts");
+
+  const sourceLockPath = resolve(root, "provenance/dolphin-source.lock.json");
+  const vendorSnapshotPath = resolve(root, "provenance/dolphin-vendor-snapshot-v1.json");
+  const toolchainLockPath = resolve(root, "provenance/wasm-toolchain.lock.json");
+  const cargoLockPath = resolve(root, "tools/naga-spirv-wgsl/Cargo.lock");
+  const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
+  const vendorSnapshot = JSON.parse(readFileSync(vendorSnapshotPath, "utf8"));
+  const toolchain = loadWasmToolchainLock();
+  const wasm = fileInfo(wasmPath);
+
+  const info = {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    coreId: `sha256:${wasm.sha256}`,
+    repository: {
+      commit: git(["rev-parse", "HEAD"]),
+      status: git(["status", "--porcelain=v1", "--untracked-files=all"])
+    },
+    source: {
+      upstreamCommit: sourceLock.upstream.commit,
+      patchSeriesSha256: sourceLock.patchSeriesSha256,
+      vendorResultTree: vendorSnapshot.root.resultTree,
+      sourceLockSha256: sha256File(sourceLockPath),
+      vendorSnapshotSha256: sha256File(vendorSnapshotPath)
+    },
+    toolchain: {
+      lockSha256: sha256File(toolchainLockPath),
+      emscriptenVersion: toolchain.emscripten.version,
+      emscriptenCompilerCommit: toolchain.emscripten.compilerCommit,
+      emsdkCommit: toolchain.emscripten.emsdkCommit,
+      cmakeVersion: toolchain.cmake.version,
+      ninjaVersion: toolchain.ninja.version,
+      rustcVersion: toolchain.rust.rustcVersion,
+      rustcCommit: toolchain.rust.rustcCommit,
+      cargoVersion: toolchain.rust.cargoVersion,
+      nagaDependencyVersion: toolchain.naga.dependencyVersion,
+      cargoLockSha256: sha256NormalizedTextFile(cargoLockPath)
+    },
+    configure: {
+      buildDir: configure.buildDir,
+      outputDir: configure.outputDir,
+      nagaLibrarySha256: configure.nagaLibrarySha256,
+      wasmMemoryPages: configure.wasmMemoryPages,
+      wasmCompileFlags: configure.wasmCompileFlags,
+      cmakeArgs: configure.cmakeArgs,
+      cmakeCacheSha256: sha256File(resolve(absoluteBuildDir, "CMakeCache.txt"))
+    },
+    artifacts: {
+      js: fileInfo(jsPath, "lf-normalized"),
+      wasm,
+      wasmSections: wasmSectionInfo(wasmPath)
+    }
+  };
+
+  const destination = resolve(outputPath ?? resolve(configure.outputDir, `${basename(wasmPath, ".wasm")}.build.json`));
+  writeFileSync(destination, `${JSON.stringify(info, null, 2)}\n`);
+  return { destination, info };
+}
+
+export function packageCoreCandidate(buildInfoPath) {
+  const absoluteBuildInfo = resolve(buildInfoPath);
+  const info = JSON.parse(readFileSync(absoluteBuildInfo, "utf8"));
+  if (info.schemaVersion !== 1 || !/^sha256:[0-9a-f]{64}$/.test(info.coreId ?? "")) {
+    throw new Error("Core build info is not a supported content-addressed build");
+  }
+  const hash = info.coreId.slice("sha256:".length);
+  const js = info.artifacts?.js;
+  const wasm = info.artifacts?.wasm;
+  if (!js?.path || !wasm?.path) throw new Error("Core build info is missing artifacts");
+  if (normalizedTextHash(js.path) !== js.sha256 || sha256File(wasm.path) !== wasm.sha256 || wasm.sha256 !== hash) {
+    throw new Error("Core artifacts changed after build evidence was written");
+  }
+
+  const destination = resolve(root, `build/core-candidates/${hash}`);
+  mkdirSync(destination, { recursive: true });
+  copyFileSync(js.path, resolve(destination, "dolphin-core-upstream.js"));
+  copyFileSync(wasm.path, resolve(destination, "dolphin-core-upstream.wasm"));
+  copyFileSync(absoluteBuildInfo, resolve(destination, "dolphin-core-upstream.build.json"));
+  for (const relativePath of [
+    "provenance/dolphin-source.lock.json",
+    "provenance/dolphin-core-abi-v1.json",
+    "provenance/dolphin-vendor-snapshot-v1.json",
+    "provenance/wasm-toolchain.lock.json",
+    "tools/naga-spirv-wgsl/Cargo.lock"
+  ]) {
+    const source = resolve(root, relativePath);
+    const target = resolve(destination, basename(relativePath));
+    copyFileSync(source, target);
+  }
+  const manifest = {
+    schemaVersion: 1,
+    coreId: info.coreId,
+    buildInfoSha256: sha256File(absoluteBuildInfo),
+    files: [
+      "dolphin-core-upstream.js",
+      "dolphin-core-upstream.wasm",
+      "dolphin-core-upstream.build.json",
+      "dolphin-source.lock.json",
+      "dolphin-core-abi-v1.json",
+      "dolphin-vendor-snapshot-v1.json",
+      "wasm-toolchain.lock.json",
+      "Cargo.lock"
+    ].map((name) => ({ name, sha256: sha256File(resolve(destination, name)) }))
+  };
+  writeFileSync(resolve(destination, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  return { destination, manifest };
+}

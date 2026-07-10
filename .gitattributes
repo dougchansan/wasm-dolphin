@@ -1,0 +1,5 @@
+cores/dolphin/*.js text eol=lf
+patches/dolphin-wasm/snapshot/*.patch text eol=lf whitespace=-trailing-space
+patches/dolphin-wasm/submodules/*.patch text eol=lf whitespace=-trailing-space
+tools/naga-spirv-wgsl/Cargo.lock text eol=lf
+provenance/*.json text eol=lf
