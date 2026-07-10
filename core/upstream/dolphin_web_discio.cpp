@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -103,25 +104,40 @@ std::array<std::uint32_t, MAX_XFB_WIDTH * MAX_XFB_HEIGHT> s_framebuffer{};
 int s_frame_width = METADATA_FRAME_WIDTH;
 int s_frame_height = METADATA_FRAME_HEIGHT;
 std::uint32_t s_frame = 0;
-std::uint32_t s_input_mask = 0;
-std::uint8_t s_stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
-std::uint8_t s_stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
-std::uint8_t s_c_stick_x = GCPadStatus::C_STICK_CENTER_X;
-std::uint8_t s_c_stick_y = GCPadStatus::C_STICK_CENTER_Y;
-std::uint8_t s_trigger_left = 0;
-std::uint8_t s_trigger_right = 0;
-std::uint8_t s_analog_a = 0;
-std::uint8_t s_analog_b = 0;
+
+struct InputStateSnapshot
+{
+  std::uint32_t mask = 0;
+  std::uint32_t generation = 0;
+  std::uint8_t stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
+  std::uint8_t stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
+  std::uint8_t c_stick_x = GCPadStatus::C_STICK_CENTER_X;
+  std::uint8_t c_stick_y = GCPadStatus::C_STICK_CENTER_Y;
+  std::uint8_t trigger_left = 0;
+  std::uint8_t trigger_right = 0;
+  std::uint8_t analog_a = 0;
+  std::uint8_t analog_b = 0;
+};
+
+struct PadPollSnapshot
+{
+  std::uint32_t poll_count = 0;
+  std::uint32_t input_mask = 0;
+  std::uint32_t input_generation = 0;
+  std::uint16_t button_mask = 0;
+  std::uint8_t stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
+  std::uint8_t stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
+};
+
+std::mutex s_input_state_mutex;
+InputStateSnapshot s_input_state;
+std::mutex s_pad_poll_mutex;
+PadPollSnapshot s_pad_poll;
 bool s_using_xfb_frame = false;
 std::string s_video_stats = "xfb:0";
 float s_presentation_scale = 0.5f;
 std::uint32_t s_frame_signal = 0;
-std::uint32_t s_input_update_count = 0;
-std::uint32_t s_pad_poll_count = 0;
-std::uint32_t s_last_polled_input_mask = 0;
-std::uint16_t s_last_polled_button_mask = 0;
-std::uint8_t s_last_polled_stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
-std::uint8_t s_last_polled_stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
+std::atomic<std::uint32_t> s_input_update_count{0};
 WebProfileClock::time_point s_last_xfb_profile_time{};
 std::uint64_t s_last_xfb_interval_us = 0;
 std::uint64_t s_total_xfb_interval_us = 0;
@@ -308,12 +324,19 @@ void PublishFrameSignal()
 
 std::string PadDebugStats()
 {
+  PadPollSnapshot poll;
+  {
+    const std::lock_guard<std::mutex> lock(s_pad_poll_mutex);
+    poll = s_pad_poll;
+  }
   std::ostringstream out;
-  out << " pad polls:" << s_pad_poll_count << " updates:" << s_input_update_count
-      << " input:" << std::hex << s_last_polled_input_mask
-      << " buttons:" << s_last_polled_button_mask << std::dec
-      << " stick:" << static_cast<int>(s_last_polled_stick_x) << ","
-      << static_cast<int>(s_last_polled_stick_y)
+  out << " pad polls:" << poll.poll_count << " updates:"
+      << s_input_update_count.load(std::memory_order_relaxed)
+      << " input:" << std::hex << poll.input_mask << std::dec
+      << " gen:" << poll.input_generation
+      << " buttons:" << std::hex << poll.button_mask << std::dec
+      << " stick:" << static_cast<int>(poll.stick_x) << ","
+      << static_cast<int>(poll.stick_y)
       << " fastsw:" << DolphinWeb_FastSoftwareRaster();
   return out.str();
 }
@@ -362,6 +385,90 @@ std::string XfbProfileStats()
   return out.str();
 }
 
+constexpr std::size_t RASTER_CASE_TOP_COUNT = 8;
+
+std::string TextureCaseStats(const DolphinWeb::RasterProfile::TextureCaseTableSnapshot& cases)
+{
+  using Entry = DolphinWeb::RasterProfile::CaseEntry<DolphinWeb::RasterProfile::TextureCaseKey>;
+  std::vector<const Entry*> ranked;
+  ranked.reserve(cases.entries.size());
+  for (const Entry& entry : cases.entries)
+  {
+    if (entry.occupied)
+      ranked.push_back(&entry);
+  }
+  std::sort(ranked.begin(), ranked.end(), [](const Entry* left, const Entry* right) {
+    if (left->samples != right->samples)
+      return left->samples > right->samples;
+    return left->key.packed < right->key.packed;
+  });
+
+  std::uint64_t other_samples = cases.other_samples;
+  std::uint64_t other_work = cases.other_work;
+  for (std::size_t i = RASTER_CASE_TOP_COUNT; i < ranked.size(); ++i)
+  {
+    other_samples += ranked[i]->samples;
+    other_work += ranked[i]->work;
+  }
+
+  std::ostringstream out;
+  out << " texcase:" << cases.total_samples << "/" << cases.total_work << "/"
+      << other_samples << "/" << other_work << "/" << cases.collision_count << ":";
+  const std::size_t count = std::min(RASTER_CASE_TOP_COUNT, ranked.size());
+  if (count == 0)
+    out << "-";
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    if (i != 0)
+      out << ",";
+    out << std::hex << ranked[i]->key.packed << std::dec << "=" << ranked[i]->samples << "/"
+        << ranked[i]->work;
+  }
+  return out.str();
+}
+
+std::string TevCaseStats(const DolphinWeb::RasterProfile::TevCaseTableSnapshot& cases)
+{
+  using Entry = DolphinWeb::RasterProfile::CaseEntry<DolphinWeb::RasterProfile::TevCaseKey>;
+  std::vector<const Entry*> ranked;
+  ranked.reserve(cases.entries.size());
+  for (const Entry& entry : cases.entries)
+  {
+    if (entry.occupied)
+      ranked.push_back(&entry);
+  }
+  std::sort(ranked.begin(), ranked.end(), [](const Entry* left, const Entry* right) {
+    if (left->samples != right->samples)
+      return left->samples > right->samples;
+    if (left->key.structure != right->key.structure)
+      return left->key.structure < right->key.structure;
+    return left->key.program_fingerprint < right->key.program_fingerprint;
+  });
+
+  std::uint64_t other_samples = cases.other_samples;
+  std::uint64_t other_work = cases.other_work;
+  for (std::size_t i = RASTER_CASE_TOP_COUNT; i < ranked.size(); ++i)
+  {
+    other_samples += ranked[i]->samples;
+    other_work += ranked[i]->work;
+  }
+
+  std::ostringstream out;
+  out << " tevcase:" << cases.total_samples << "/" << cases.total_work << "/"
+      << other_samples << "/" << other_work << "/" << cases.collision_count << ":";
+  const std::size_t count = std::min(RASTER_CASE_TOP_COUNT, ranked.size());
+  if (count == 0)
+    out << "-";
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    if (i != 0)
+      out << ",";
+    out << std::hex << ranked[i]->key.structure << "." << ranked[i]->key.program_fingerprint
+        << std::dec << "=" << ranked[i]->samples << "/" << ranked[i]->work;
+  }
+  return out.str();
+}
+
 std::string RasterProfileStats()
 {
   if (!DolphinWeb::RasterProfile::Enabled())
@@ -370,12 +477,15 @@ std::string RasterProfileStats()
 
   std::ostringstream out;
   out << " swphase:1"
+      << " caseseed:" << profile.case_sample_seed
       << " rast:" << profile.raster.calls << "/" << profile.raster.timed_samples << "/"
       << profile.raster.sampled_total_us << "/" << profile.raster_candidate_pixels
       << " tev:" << profile.tev.calls << "/" << profile.tev_stages << "/"
       << profile.tev.timed_samples << "/" << profile.tev.sampled_total_us
       << " tex:" << profile.texture.calls << "/" << profile.texture.timed_samples << "/"
       << profile.texture.sampled_total_us
+      << TextureCaseStats(profile.texture_cases)
+      << TevCaseStats(profile.tev_cases)
       << " fifo:" << profile.fifo_burst_count << "/" << profile.fifo_consume_count << "/"
       << profile.fifo_bytes_last << "/" << profile.fifo_bytes_max << "/"
       << profile.fifo_age_last_us << "/" << profile.fifo_age_max_us << "/"
@@ -532,6 +642,12 @@ void RenderMetadataFrame()
   for (std::size_t i = 0; i < s_game_id.size() && i < 4; ++i)
     id_seed = (id_seed << 8) ^ static_cast<unsigned char>(s_game_id[i]);
 
+  std::uint32_t input_mask = 0;
+  {
+    const std::lock_guard<std::mutex> lock(s_input_state_mutex);
+    input_mask = s_input_state.mask;
+  }
+
   for (int y = 0; y < METADATA_FRAME_HEIGHT; ++y)
   {
     for (int x = 0; x < METADATA_FRAME_WIDTH; ++x)
@@ -540,7 +656,7 @@ void RenderMetadataFrame()
       const std::uint8_t g =
           static_cast<std::uint8_t>((y + (s_frame >> 1) + ((id_seed >> 8) & 0xff)) & 0xff);
       const std::uint8_t b =
-          static_cast<std::uint8_t>((x ^ y ^ s_input_mask ^ ((id_seed >> 16) & 0xff)) & 0xff);
+          static_cast<std::uint8_t>((x ^ y ^ input_mask ^ ((id_seed >> 16) & 0xff)) & 0xff);
       s_framebuffer[static_cast<std::size_t>(y) * METADATA_FRAME_WIDTH + x] =
           0xff000000u | (static_cast<std::uint32_t>(b) << 16) |
           (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(r);
@@ -649,31 +765,42 @@ void Reset()
 
 void SetInputMask(std::uint32_t mask)
 {
-  s_input_mask = mask;
-  ++s_input_update_count;
-  s_stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
-  s_stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
-  s_c_stick_x = GCPadStatus::C_STICK_CENTER_X;
-  s_c_stick_y = GCPadStatus::C_STICK_CENTER_Y;
-  s_trigger_left = 0;
-  s_trigger_right = 0;
-  s_analog_a = 0;
-  s_analog_b = 0;
+  {
+    const std::lock_guard<std::mutex> lock(s_input_state_mutex);
+    s_input_state.mask = mask;
+    s_input_state.generation = 0;
+    s_input_state.stick_x = GCPadStatus::MAIN_STICK_CENTER_X;
+    s_input_state.stick_y = GCPadStatus::MAIN_STICK_CENTER_Y;
+    s_input_state.c_stick_x = GCPadStatus::C_STICK_CENTER_X;
+    s_input_state.c_stick_y = GCPadStatus::C_STICK_CENTER_Y;
+    s_input_state.trigger_left = 0;
+    s_input_state.trigger_right = 0;
+    s_input_state.analog_a = 0;
+    s_input_state.analog_b = 0;
+  }
+  s_input_update_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 void SetInputState(std::uint32_t mask, int stick_x, int stick_y, int c_stick_x, int c_stick_y,
-                   int trigger_left, int trigger_right, int analog_a, int analog_b)
+                   int trigger_left, int trigger_right, int analog_a, int analog_b,
+                   std::uint32_t generation)
 {
-  s_input_mask = mask;
-  ++s_input_update_count;
-  s_stick_x = ClampPadByte(stick_x);
-  s_stick_y = ClampPadByte(stick_y);
-  s_c_stick_x = ClampPadByte(c_stick_x);
-  s_c_stick_y = ClampPadByte(c_stick_y);
-  s_trigger_left = ClampPadByte(trigger_left);
-  s_trigger_right = ClampPadByte(trigger_right);
-  s_analog_a = ClampPadByte(analog_a);
-  s_analog_b = ClampPadByte(analog_b);
+  InputStateSnapshot next;
+  next.mask = mask;
+  next.generation = generation;
+  next.stick_x = ClampPadByte(stick_x);
+  next.stick_y = ClampPadByte(stick_y);
+  next.c_stick_x = ClampPadByte(c_stick_x);
+  next.c_stick_y = ClampPadByte(c_stick_y);
+  next.trigger_left = ClampPadByte(trigger_left);
+  next.trigger_right = ClampPadByte(trigger_right);
+  next.analog_a = ClampPadByte(analog_a);
+  next.analog_b = ClampPadByte(analog_b);
+  {
+    const std::lock_guard<std::mutex> lock(s_input_state_mutex);
+    s_input_state = next;
+  }
+  s_input_update_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 int SetPresentationScale(float scale)
@@ -922,18 +1049,24 @@ int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status)
   if (!status || pad_num != 0)
     return 0;
 
+  InputStateSnapshot input;
+  {
+    const std::lock_guard<std::mutex> lock(s_input_state_mutex);
+    input = s_input_state;
+  }
+
   *status = {};
   status->isConnected = true;
-  status->stickX = s_stick_x;
-  status->stickY = s_stick_y;
-  status->substickX = s_c_stick_x;
-  status->substickY = s_c_stick_y;
-  status->triggerLeft = s_trigger_left;
-  status->triggerRight = s_trigger_right;
-  status->analogA = s_analog_a;
-  status->analogB = s_analog_b;
+  status->stickX = input.stick_x;
+  status->stickY = input.stick_y;
+  status->substickX = input.c_stick_x;
+  status->substickY = input.c_stick_y;
+  status->triggerLeft = input.trigger_left;
+  status->triggerRight = input.trigger_right;
+  status->analogA = input.analog_a;
+  status->analogB = input.analog_b;
 
-  const std::uint32_t mask = s_input_mask;
+  const std::uint32_t mask = input.mask;
   if (mask & INPUT_A)
   {
     status->button |= PAD_BUTTON_A;
@@ -991,11 +1124,15 @@ int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status)
   else if ((mask & INPUT_C_STICK_DOWN) && !(mask & INPUT_C_STICK_UP))
     status->substickY = 0x20;
 
-  ++s_pad_poll_count;
-  s_last_polled_input_mask = mask;
-  s_last_polled_button_mask = status->button;
-  s_last_polled_stick_x = status->stickX;
-  s_last_polled_stick_y = status->stickY;
+  {
+    const std::lock_guard<std::mutex> lock(s_pad_poll_mutex);
+    ++s_pad_poll.poll_count;
+    s_pad_poll.input_mask = mask;
+    s_pad_poll.input_generation = input.generation;
+    s_pad_poll.button_mask = status->button;
+    s_pad_poll.stick_x = status->stickX;
+    s_pad_poll.stick_y = status->stickY;
+  }
 
   return 1;
 }

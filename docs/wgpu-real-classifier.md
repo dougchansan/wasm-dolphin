@@ -76,12 +76,13 @@ at that snapshot boundary. A snapshot can therefore split a valid producer
 pass, discard the consumer's pass-local state, and replay later state or draw
 records with no pass open.
 
-The consumer now scans the visible ring prefix and stops before an incomplete
-`BEGIN_PASS`. It advances the shared read index only after the matching
-`END_PASS` is visible, while still consuming safe resource records before the
-pass. The ring is large enough for the observed command batches; retain
-`wgpuatomic=0` while validating unusual scenes in case a future pass approaches
-the ring capacity.
+Patch `0015` now stages a pass privately on the producer and publishes the
+complete record batch with one release-store `PushBatch`. Timeout, poison, or
+oversize failure leaves the public write index unchanged. Required
+create/upload failure poisons and fails the pass closed, and the consumer
+submits only committed passes. The older consumer prefix scan remains useful
+for compatibility. Retain `wgpuatomic=0` only as a controlled legacy
+diagnostic; it is not a recommended runtime mode.
 
 This is a replay-correctness fix, not a claim that `video=wgpu` is playable.
 The current evidence package contains synthetic boundary tests plus headed
@@ -96,7 +97,7 @@ optional.
 The later upload-watermark rebuild changed the rendering diagnosis. A headed
 run against the direct-loaded Kirby/Link battle sampled the first completed EFB
 pass immediately: texture 14 contained 182,949 nonzero color bytes out of
-1,351,680 after 108 draws, and the classifier reported
+1,351,680. The latest final smoke observed that result after 120 draws and the classifier reported
 `FIRST_EFB_PASS_MUTATED`. The visible canvas also showed the changing battle
 once legacy tick/show-image repaint paths stopped overwriting the WGPU-owned
 canvas. Earlier zero-at-present samples were therefore insufficient to claim a
@@ -135,6 +136,17 @@ changed from 67.12% to 68.205%. The real WGPU backend now enables the bounded
 pump by default; `wgpupump=0` is the rollback. This reduces replay age, not the
 underlying replay cost, and does not make the renderer full speed.
 
+Exact producer-side state suppression is separately available with
+`wgpustatecache=1`. It suppresses only successfully published exact repeats of
+pipeline, bind-group, vertex-buffer, and index-buffer state. Cache state resets
+on abort, pass boundaries, destruction, and load fencing; a failed state apply
+never populates it. New cores use the producer counters as authoritative;
+consumer caching is only an older-core compatibility fallback.
+
+Three final balanced pairs cut commands/s 39.75% and backlog high-water 38.62%,
+but did not improve game or presentation cadence. The cache therefore remains
+default-off. This is a record-volume diagnostic, not a performance promotion.
+
 Machine-readable current evidence is in
 `perf-results/wgpu-replay-and-latency-2026-07-10.json`. The older
 `wgpu-first-efb` and `wgpu-replay-epoch` files remain historical diagnostics,
@@ -149,6 +161,7 @@ not current status.
 | `wgpuatomic=0` | Roll back atomic-pass replay for controlled comparison | Atomic replay is on |
 | `wgpuloadfence=1` | Discard a pre-load incomplete pass through its first end marker | Off |
 | `wgpupump=0` | Disable frequent replay polling and the 16,384-record credit window | On for `video=wgpu` |
+| `wgpustatecache=1` | Suppress exact successfully-published stable state records | Off |
 | `wgpudetached=1` | Send GPU-completed worker-canvas bitmaps to the main canvas | Off |
 
 ## Validation discipline

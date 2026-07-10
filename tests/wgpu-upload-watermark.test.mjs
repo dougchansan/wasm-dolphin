@@ -9,8 +9,55 @@ import {
   enableWgpuUploadWatermark,
   nextWgpuUploadRead,
   publishWgpuUploadRead,
+  rebaseWgpuStagedUploadWindow,
   WGPU_UPLOAD_READ_HEADER_INDEX
 } from "../src/wgpu-upload-watermark.js";
+
+test("held upload staging advances past a consumed prefix", () => {
+  assert.deepEqual(rebaseWgpuStagedUploadWindow({
+    startIndex: 120,
+    writeIndex: 160,
+    scanCursor: 140,
+    stagedUploadIndices: [125, 139]
+  }), {
+    ok: true,
+    startIndex: 120,
+    scanCursor: 140
+  });
+
+  assert.equal(rebaseWgpuStagedUploadWindow({
+    startIndex: 120,
+    writeIndex: 160,
+    scanCursor: 110,
+    stagedUploadIndices: []
+  }).scanCursor, 120, "a cursor in the consumed prefix must restart at the new suffix");
+});
+
+test("held upload staging rejects a retained upload from the consumed prefix", () => {
+  assert.deepEqual(rebaseWgpuStagedUploadWindow({
+    startIndex: 120,
+    writeIndex: 160,
+    scanCursor: 140,
+    stagedUploadIndices: [110, 130]
+  }), {
+    ok: false,
+    startIndex: 120,
+    invalidIndex: 110
+  });
+});
+
+test("held upload staging rebases across uint32 wrap", () => {
+  assert.deepEqual(rebaseWgpuStagedUploadWindow({
+    startIndex: 0xffff_fffc,
+    writeIndex: 0x20,
+    scanCursor: 0x10,
+    stagedUploadIndices: [0xffff_fffe, 0x08]
+  }), {
+    ok: true,
+    startIndex: 0xffff_fffc,
+    scanCursor: 0x10
+  });
+});
 
 test("upload watermark advances through alignment gaps", () => {
   assert.equal(nextWgpuUploadRead({
@@ -149,6 +196,9 @@ test("the locked source patch blocks upload-arena overwrite", async () => {
     "held suffix uploads must be staged after the replayable prefix");
   assert.match(worker, /!deferBeginPass && read === replayLimit && replayLimit !== write/);
   assert.match(worker, /ring\.stagedScanCursor = index/);
+  assert.match(worker, /rebaseWgpuStagedUploadWindow\(\{/);
+  assert.match(worker, /stagedUploadIndices: ring\.stagedUploads\.keys\(\)/);
+  assert.doesNotMatch(worker, /held pass changed with staged uploads pending/);
   assert.match(worker, /WGPU_MAX_STAGED_UPLOAD_BYTES/);
   assert.match(worker, /stagedUploads\?\.size \?\? 0/);
   assert.match(worker, /const uploadSource = stagedUpload\?\.data/);

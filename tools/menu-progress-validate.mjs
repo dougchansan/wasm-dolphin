@@ -32,6 +32,8 @@ const sampleMs = args.sampleMs ?? Number(process.env.SAMPLE_MS || 1000);
 const screenshotEverySeconds = args.shotEvery ?? Number(process.env.SHOT_EVERY || 4);
 const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
 const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
+const inputMarkerCanvasObservationEnabled =
+  process.env.INPUTLATENCY === "1" && process.env.INPUTMARKEROBSERVE !== "0";
 const oglProxy = process.env.OGL_PROXY_MODE || "proxy";
 const videoMode = process.env.VIDEO || "ogl"; // "ogl" or "software"
 const headed = process.env.HEADED === "1" || args.headed;
@@ -176,9 +178,11 @@ if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.F
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPUCOMPLETE);
 if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
+if (process.env.INPUTREADBACK) url.searchParams.set("inputreadback", process.env.INPUTREADBACK);
 for (const [environmentName, queryName] of [
   ["WGPUCLASSIFY", "wgpuclassify"],
   ["WGPUPUMP", "wgpupump"],
+  ["WGPUSTATECACHE", "wgpustatecache"],
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
@@ -361,6 +365,7 @@ await page.exposeFunction("__menuProgressReportAudio", (sample) => {
 // latency. True input-to-paint latency would need GPU scanout timing
 // (out of scope); processingStart-startTime is a decent proxy.
 const inputEvents = []; // { startTime, processingStart, duration, name }
+let inputMarkerCanvasObservations = null;
 // Boot timeline marks (Day 13). Wall-clock ms from t0 (ROM upload start).
 // Declared at module scope so the `finally` block can still see them
 // if the try-body bails out partway through boot.
@@ -417,6 +422,9 @@ try {
       // PerformanceEventTiming not supported — input latency stays empty.
     }
   }, showDebugPanel);
+  if (inputMarkerCanvasObservationEnabled) {
+    await page.evaluate(installInputMarkerCanvasObserver);
+  }
   // Boot timeline (Day 13). All times are wall-clock ms from "ROM upload
   // dispatched", so we know exactly where each second of startup goes.
   const bootT0 = Date.now();
@@ -697,6 +705,19 @@ try {
   consoleLines.push(`[probe-error] ${error.stack || error.message}`);
   await capture(page, "zz-error.png");
 } finally {
+  if (inputMarkerCanvasObservationEnabled) {
+    try {
+      inputMarkerCanvasObservations = await page.evaluate(() =>
+        window.__menuProgressInputMarkerObserver?.stop?.() ?? null
+      );
+    } catch (error) {
+      inputMarkerCanvasObservations = {
+        schema: "wasm-dolphin.input-marker-canvas-observations.v1",
+        enabled: true,
+        captureError: String(error?.message || error),
+      };
+    }
+  }
   // Stop CDP tracing and stream the trace file out before browser
   // teardown. Trace is a JSON of trace events; size ~10-50 MB for a
   // 90-second run with our category set. Openable in Chrome DevTools
@@ -792,6 +813,12 @@ try {
       JSON.stringify(inputEvents, null, 2)
     );
   }
+  if (inputMarkerCanvasObservations) {
+    await writeFile(
+      path.join(outDir, "input-marker-observations.json"),
+      JSON.stringify(inputMarkerCanvasObservations, null, 2)
+    );
+  }
   await writeFile(
     path.join(outDir, "distinct-hashes.json"),
     JSON.stringify(
@@ -808,6 +835,14 @@ try {
     inputEvents,
     bootMarks,
   });
+  summary.inputMarkerCanvas = inputMarkerCanvasObservations?.summary ?? null;
+  if (inputMarkerCanvasObservationEnabled &&
+      inputMarkerCanvasObservations?.summary?.acceptance?.passed !== true) {
+    const reasons = inputMarkerCanvasObservations?.summary?.acceptance?.reasons || [
+      inputMarkerCanvasObservations?.captureError || "marker observer produced no acceptance summary",
+    ];
+    probeError ??= new Error(`Input marker acceptance failed: ${reasons.join(", ")}`);
+  }
   runMetadata.finishedAt = new Date().toISOString();
   runMetadata.result = {
     sampleCount: samples.length,
@@ -816,6 +851,9 @@ try {
     samplesJsonFile: "samples.json",
     samplesCsvFile: "samples.csv",
     rendererDiagnosticsFile: rendererDiagnostics ? "renderer-diagnostics.json" : null,
+    inputMarkerObservationsFile: inputMarkerCanvasObservations
+      ? "input-marker-observations.json"
+      : null,
     saveStateLoad: saveStateLoadResult,
   };
   summary.rendererDiagnostics = rendererDiagnostics;
@@ -1475,6 +1513,732 @@ async function readSample(page, elapsedSeconds) {
 async function capture(page, name) {
   if (!captureScreenshots) return;
   try { await page.screenshot({ path: path.join(outDir, name), timeout: 5000 }); } catch {}
+}
+
+// INPUTLATENCY=1 installs this page-side observer. Keeping the rAF loop and
+// canvas readback inside the page avoids a Playwright round-trip per frame.
+// The returned latency ends at the first rAF-time read of #screen containing
+// a matching 8x8 sample from the deterministic 32x32 sensor-visible marker;
+// it does not claim compositor or panel scanout.
+function installInputMarkerCanvasObserver() {
+  if (window.__menuProgressInputMarkerObserver) return;
+
+  const MARKER_SIZE = 8;
+  const RENDERED_MARKER_SIZE = 32;
+  const GENERATION_MASK = 0x3ffff;
+  const MAX_RAW_OBSERVATIONS = 120000;
+  const legacyBackbufferReadbackEnabled = /(?:^|[?&])inputreadback=1(?:&|$)/.test(
+    String(globalThis.location?.search || "")
+  );
+  const scratch = document.createElement("canvas");
+  scratch.width = MARKER_SIZE;
+  scratch.height = MARKER_SIZE;
+  const context = scratch.getContext("2d", {
+    alpha: false,
+    willReadFrequently: true,
+  });
+  const inputByGeneration = new Map();
+  const firstCandidateByEncodedGeneration = new Map();
+  const provisionalByGeneration = new Map();
+  const validatedByGeneration = new Map();
+  const state = {
+    schema: "wasm-dolphin.input-marker-canvas-observations.v1",
+    enabled: true,
+    meaning:
+      "input generation to first deterministic marker read from #screen at requestAnimationFrame cadence",
+    observationBoundary:
+      "browser canvas readback in a requestAnimationFrame callback; compositor-to-panel scanout is excluded",
+    scanoutIncluded: false,
+    perturbsRendering: true,
+    perturbation:
+      "drawImage plus getImageData runs every requestAnimationFrame and can synchronize GPU/canvas work; compare only diagnostic runs with the same observer setting",
+    legacyBackbufferReadbackEnabled,
+    markerSampleSize: MARKER_SIZE,
+    renderedMarkerSize: RENDERED_MARKER_SIZE,
+    startedAtEpochMs: Date.now(),
+    stoppedAtEpochMs: 0,
+    rafSampleCount: 0,
+    canvasReadCount: 0,
+    canvasReadErrorCount: 0,
+    canvasReadTotalMs: 0,
+    canvasReadMaxMs: 0,
+    canvasUnavailableCount: 0,
+    rawObservationDropCount: 0,
+    lastCanvasReadError: "",
+    inputGenerations: [],
+    rawObservations: [],
+    provisionalGenerations: [],
+    validatedGenerations: [],
+    finalJoinPromotionCount: 0,
+    latestWorkerMarkerStats: null,
+    summary: null,
+  };
+  let stopped = false;
+  let rafId = 0;
+  let lastInputEvent = null;
+  let adapterPatch = null;
+  let finalSnapshot = null;
+
+  const finiteOrNull = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const eventEpochMs = (event) => {
+    const timestamp = Number(event.timeStamp);
+    if (!Number.isFinite(timestamp)) return Date.now();
+    return timestamp > 1e12 ? timestamp : performance.timeOrigin + timestamp;
+  };
+  const recordInputEvent = (event) => {
+    lastInputEvent = {
+      type: event.type,
+      code: event.code || "",
+      key: event.key || "",
+      atEpochMs: eventEpochMs(event),
+    };
+  };
+  document.addEventListener("keydown", recordInputEvent, true);
+  document.addEventListener("keyup", recordInputEvent, true);
+
+  function restoreAdapterPatch() {
+    if (!adapterPatch) return;
+    if (adapterPatch.adapter.setInputState === adapterPatch.wrapped) {
+      adapterPatch.adapter.setInputState = adapterPatch.original;
+    }
+    adapterPatch = null;
+  }
+
+  function patchAdapter() {
+    const adapter = window.__host?.adapter;
+    if (!adapter || typeof adapter.setInputState !== "function") return;
+    if (adapterPatch?.adapter === adapter) return;
+    restoreAdapterPatch();
+
+    const original = adapter.setInputState;
+    const wrapped = function inputMarkerObservedSetInputState(...args) {
+      const before = Number(this.inputTelemetry?.mainGeneration) >>> 0;
+      const adapterCallStartedAtEpochMs = Date.now();
+      try {
+        return original.apply(this, args);
+      } finally {
+        const generation = Number(this.inputTelemetry?.mainGeneration) >>> 0;
+        if (generation && generation !== before && !inputByGeneration.has(generation)) {
+          const eventAgeMs = lastInputEvent
+            ? adapterCallStartedAtEpochMs - lastInputEvent.atEpochMs
+            : Number.POSITIVE_INFINITY;
+          const relatedEvent = eventAgeMs >= -2 && eventAgeMs <= 250
+            ? { ...lastInputEvent }
+            : null;
+          const inputState = args[0] || {};
+          const record = {
+            generation,
+            adapterCallStartedAtEpochMs,
+            adapterCallFinishedAtEpochMs: Date.now(),
+            event: relatedEvent,
+            inputMask: Number(inputState.mask) >>> 0,
+          };
+          inputByGeneration.set(generation, record);
+          state.inputGenerations.push(record);
+        }
+      }
+    };
+    adapter.setInputState = wrapped;
+    adapterPatch = { adapter, original, wrapped };
+  }
+
+  function workerMarkerInfo(decodedGeneration) {
+    const telemetry =
+      window.__lastFrameInfo?.causalTelemetry || window.__causalTelemetry || null;
+    const marker = telemetry?.input?.marker || null;
+    if (!marker) {
+      return {
+        telemetryCapturedAtMs: null,
+        generation: 0,
+        sample: null,
+        timestamps: null,
+        markerStats: null,
+      };
+    }
+
+    const samples = Array.isArray(marker.samples) ? marker.samples : [];
+    const generationCandidates = [
+      marker.activeGeneration,
+      marker.lastCompletedGeneration,
+      ...samples.map((sample) => sample?.generation),
+    ];
+    let generation = 0;
+    for (let index = generationCandidates.length - 1; index >= 0; index -= 1) {
+      const candidate = Number(generationCandidates[index]) >>> 0;
+      if (candidate && (candidate & GENERATION_MASK) === decodedGeneration) {
+        generation = candidate;
+        break;
+      }
+    }
+    const sample = generation
+      ? [...samples].reverse().find(
+          (candidate) => (Number(candidate?.generation) >>> 0) === generation
+        ) || null
+      : null;
+    const timestampNames = [
+      "sentAtEpochMs",
+      "appliedAtEpochMs",
+      "polledAtEpochMs",
+      "submittedAtEpochMs",
+      "completedAtEpochMs",
+    ];
+    const timestamps = {};
+    for (const name of timestampNames) {
+      const topLevelName = `last${name[0].toUpperCase()}${name.slice(1)}`;
+      timestamps[name] = finiteOrNull(sample?.[name] ?? marker?.[topLevelName]);
+    }
+    const timestampJoinAvailable = Object.values(timestamps).some((value) => value !== null);
+    const markerStatNames = [
+      "appliedCount",
+      "exactCorePollCount",
+      "markerSubmittedCount",
+      "markerCompletedCount",
+      "expiredMarkerCount",
+      "expiredInFlightCount",
+      "generationMismatchCount",
+      "generationUnavailableCount",
+    ];
+    const markerStats = { enabled: marker.enabled === true };
+    for (const name of markerStatNames) {
+      markerStats[name] = finiteOrNull(marker[name]);
+    }
+    return {
+      telemetryCapturedAtMs: finiteOrNull(telemetry.capturedAtMs),
+      generation,
+      sample: sample
+        ? {
+            generation: Number(sample.generation) >>> 0,
+            coreFrame: Number(sample.coreFrame) >>> 0,
+            source: String(sample.source || ""),
+            completionKind: String(sample.completionKind || ""),
+            completionAgeMs: finiteOrNull(sample.completionAgeMs),
+            pollToCompletionMs: finiteOrNull(sample.pollToCompletionMs),
+          }
+        : null,
+      timestamps: timestampJoinAvailable ? timestamps : null,
+      markerStats,
+    };
+  }
+
+  function matchingInputRecord(decodedGeneration) {
+    const records = state.inputGenerations;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index];
+      if ((record.generation & GENERATION_MASK) === decodedGeneration) return record;
+    }
+    return null;
+  }
+
+  function appendRawObservation(observation) {
+    if (state.rawObservations.length < MAX_RAW_OBSERVATIONS) {
+      state.rawObservations.push(observation);
+    } else {
+      state.rawObservationDropCount += 1;
+    }
+  }
+
+  function stageDelta(end, start) {
+    return Number.isFinite(end) && Number.isFinite(start) ? end - start : null;
+  }
+
+  function completeWorkerTimestamps(timestamps) {
+    return Boolean(timestamps) && [
+      timestamps.sentAtEpochMs,
+      timestamps.appliedAtEpochMs,
+      timestamps.polledAtEpochMs,
+      timestamps.submittedAtEpochMs,
+      timestamps.completedAtEpochMs,
+    ].every(Number.isFinite);
+  }
+
+  function monotonicWorkerTimestamps(timestamps, browserCanvasVisibleAtEpochMs) {
+    if (!completeWorkerTimestamps(timestamps) ||
+        !Number.isFinite(browserCanvasVisibleAtEpochMs)) {
+      return false;
+    }
+    const ordered = [
+      timestamps.sentAtEpochMs,
+      timestamps.appliedAtEpochMs,
+      timestamps.polledAtEpochMs,
+      timestamps.submittedAtEpochMs,
+      timestamps.completedAtEpochMs,
+      browserCanvasVisibleAtEpochMs,
+    ];
+    return ordered.every((value, index) => index === 0 || value >= ordered[index - 1]);
+  }
+
+  function buildGenerationObservation({
+    generation,
+    decodedGeneration,
+    firstObserved,
+    input,
+    worker,
+    adapterValidated,
+    workerValidated,
+  }) {
+    const inputEventAtEpochMs = input?.event?.atEpochMs ?? null;
+    const adapterCallStartedAtEpochMs = input?.adapterCallStartedAtEpochMs ?? null;
+    const adapterCallFinishedAtEpochMs = input?.adapterCallFinishedAtEpochMs ?? null;
+    const timestamps = worker?.timestamps ?? null;
+    const sentAtEpochMs = timestamps?.sentAtEpochMs ?? null;
+    const appliedAtEpochMs = timestamps?.appliedAtEpochMs ?? null;
+    const polledAtEpochMs = timestamps?.polledAtEpochMs ?? null;
+    const submittedAtEpochMs = timestamps?.submittedAtEpochMs ?? null;
+    const completedAtEpochMs = timestamps?.completedAtEpochMs ?? null;
+    const browserCanvasVisibleAtEpochMs = firstObserved.canvasReadAtEpochMs;
+    return {
+      generation,
+      decodedGeneration,
+      firstObservedRafIndex: firstObserved.rafIndex,
+      firstObservedAtEpochMs: browserCanvasVisibleAtEpochMs,
+      browserCanvasVisibleAtEpochMs,
+      rgba: firstObserved.rgba,
+      inputEventAtEpochMs,
+      adapterGeneratedAtEpochMs: adapterCallStartedAtEpochMs,
+      adapterCallStartedAtEpochMs,
+      adapterCallFinishedAtEpochMs,
+      workerSentAtEpochMs: sentAtEpochMs,
+      appliedAtEpochMs,
+      polledAtEpochMs,
+      submittedAtEpochMs,
+      completedAtEpochMs,
+      adapterToBrowserCanvasVisibleMs: stageDelta(
+        browserCanvasVisibleAtEpochMs,
+        adapterCallStartedAtEpochMs
+      ),
+      inputEventToBrowserCanvasVisibleMs: stageDelta(
+        browserCanvasVisibleAtEpochMs,
+        inputEventAtEpochMs
+      ),
+      workerSentToBrowserCanvasVisibleMs: stageDelta(
+        browserCanvasVisibleAtEpochMs,
+        sentAtEpochMs
+      ),
+      stageDeltas: {
+        inputEventToAdapterStartMs: stageDelta(
+          adapterCallStartedAtEpochMs,
+          inputEventAtEpochMs
+        ),
+        adapterCallDurationMs: stageDelta(
+          adapterCallFinishedAtEpochMs,
+          adapterCallStartedAtEpochMs
+        ),
+        adapterFinishedToWorkerAppliedMs: stageDelta(
+          appliedAtEpochMs,
+          adapterCallFinishedAtEpochMs
+        ),
+        workerSentToAppliedMs: stageDelta(appliedAtEpochMs, sentAtEpochMs),
+        workerAppliedToCorePollMs: stageDelta(polledAtEpochMs, appliedAtEpochMs),
+        corePollToMarkerSubmitMs: stageDelta(submittedAtEpochMs, polledAtEpochMs),
+        markerSubmitToGpuCompleteMs: stageDelta(completedAtEpochMs, submittedAtEpochMs),
+        gpuCompleteToBrowserCanvasVisibleMs: stageDelta(
+          browserCanvasVisibleAtEpochMs,
+          completedAtEpochMs
+        ),
+        inputEventToBrowserCanvasVisibleMs: stageDelta(
+          browserCanvasVisibleAtEpochMs,
+          inputEventAtEpochMs
+        ),
+      },
+      workerTimestampsComplete: completeWorkerTimestamps(timestamps),
+      workerTimestampsMonotonic: monotonicWorkerTimestamps(
+        timestamps,
+        browserCanvasVisibleAtEpochMs
+      ),
+      adapterValidated,
+      workerValidated,
+      workerTelemetryCapturedAtMs: worker?.telemetryCapturedAtMs ?? null,
+      workerSample: worker?.sample ?? null,
+      workerTimestamps: timestamps,
+    };
+  }
+
+  function promoteWorkerValidatedObservation({
+    generation,
+    decodedGeneration,
+    firstObserved,
+    input,
+    worker,
+    adapterValidated,
+    joinedAtStop = false,
+  }) {
+    if (!generation || worker?.generation !== generation) return false;
+    const workerObservation = buildGenerationObservation({
+      generation,
+      decodedGeneration,
+      firstObserved,
+      input,
+      worker,
+      adapterValidated,
+      workerValidated: true,
+    });
+    workerObservation.joinedAtStop = joinedAtStop;
+    const validated = validatedByGeneration.get(generation);
+    if (validated) {
+      Object.assign(validated, workerObservation);
+    } else {
+      validatedByGeneration.set(generation, workerObservation);
+      state.validatedGenerations.push(workerObservation);
+    }
+    const provisional = provisionalByGeneration.get(generation);
+    if (provisional) {
+      provisional.promotedToWorkerValidated = true;
+      provisional.joinedAtStop = joinedAtStop;
+    }
+    return !validated;
+  }
+
+  function joinFinalCompletedWorkerSamples() {
+    for (const provisional of state.provisionalGenerations) {
+      if (validatedByGeneration.has(provisional.generation)) continue;
+      const worker = workerMarkerInfo(provisional.decodedGeneration);
+      if (worker.generation !== provisional.generation ||
+          !worker.sample ||
+          !completeWorkerTimestamps(worker.timestamps)) {
+        continue;
+      }
+      const firstObserved = {
+        rafIndex: provisional.firstObservedRafIndex,
+        canvasReadAtEpochMs: provisional.browserCanvasVisibleAtEpochMs,
+        rgba: provisional.rgba,
+      };
+      const promoted = promoteWorkerValidatedObservation({
+        generation: provisional.generation,
+        decodedGeneration: provisional.decodedGeneration,
+        firstObserved,
+        input: inputByGeneration.get(provisional.generation) || null,
+        worker,
+        adapterValidated: true,
+        joinedAtStop: true,
+      });
+      if (promoted) state.finalJoinPromotionCount += 1;
+      if (worker.markerStats) state.latestWorkerMarkerStats = { ...worker.markerStats };
+    }
+  }
+
+  function observe(rafTimestampMs) {
+    if (stopped) return;
+    patchAdapter();
+    state.rafSampleCount += 1;
+    const rafIndex = state.rafSampleCount;
+    const screen = document.querySelector("#screen");
+    const baseObservation = {
+      rafIndex,
+      rafTimestampMs: Number(rafTimestampMs.toFixed(3)),
+      rafCallbackAtEpochMs: performance.timeOrigin + rafTimestampMs,
+      canvasWidth: Number(screen?.width) || 0,
+      canvasHeight: Number(screen?.height) || 0,
+    };
+
+    if (!screen || !context || screen.width < MARKER_SIZE || screen.height < MARKER_SIZE) {
+      state.canvasUnavailableCount += 1;
+      appendRawObservation({ ...baseObservation, status: "canvas-unavailable" });
+      rafId = requestAnimationFrame(observe);
+      return;
+    }
+
+    const canvasReadStartedAt = performance.now();
+    try {
+      context.drawImage(
+        screen,
+        0,
+        0,
+        MARKER_SIZE,
+        MARKER_SIZE,
+        0,
+        0,
+        MARKER_SIZE,
+        MARKER_SIZE
+      );
+      const bytes = context.getImageData(0, 0, MARKER_SIZE, MARKER_SIZE).data;
+      const canvasReadDurationMs = Math.max(0, performance.now() - canvasReadStartedAt);
+      state.canvasReadTotalMs += canvasReadDurationMs;
+      state.canvasReadMaxMs = Math.max(state.canvasReadMaxMs, canvasReadDurationMs);
+      const rgba = [bytes[0], bytes[1], bytes[2], bytes[3]];
+      let uniformPixelCount = 0;
+      for (let offset = 0; offset < bytes.length; offset += 4) {
+        if (
+          bytes[offset] === rgba[0] &&
+          bytes[offset + 1] === rgba[1] &&
+          bytes[offset + 2] === rgba[2] &&
+          bytes[offset + 3] === rgba[3]
+        ) {
+          uniformPixelCount += 1;
+        }
+      }
+      const markerSignature =
+        uniformPixelCount === MARKER_SIZE * MARKER_SIZE &&
+        (rgba[0] & 0xc0) === 0x40 &&
+        (rgba[1] & 0xc0) === 0x80 &&
+        (rgba[2] & 0xc0) === 0xc0 &&
+        rgba[3] === 0xff;
+      const decodedGeneration = markerSignature
+        ? (rgba[0] & 0x3f) | ((rgba[1] & 0x3f) << 6) | ((rgba[2] & 0x3f) << 12)
+        : 0;
+      const canvasReadAtEpochMs = performance.timeOrigin + performance.now();
+      const worker = decodedGeneration ? workerMarkerInfo(decodedGeneration) : null;
+      if (worker?.markerStats) state.latestWorkerMarkerStats = { ...worker.markerStats };
+      const input = decodedGeneration ? matchingInputRecord(decodedGeneration) : null;
+      const currentAdapterGeneration =
+        Number(window.__host?.adapter?.inputTelemetry?.mainGeneration) >>> 0;
+      const fullGeneration =
+        worker?.generation || input?.generation ||
+        ((currentAdapterGeneration & GENERATION_MASK) === decodedGeneration
+          ? currentAdapterGeneration
+          : 0);
+      const adapterValidated = Boolean(fullGeneration && (
+        input?.generation === fullGeneration || currentAdapterGeneration === fullGeneration
+      ));
+      const workerValidated = Boolean(
+        fullGeneration && worker?.generation === fullGeneration
+      );
+      const generationValidated = markerSignature && Boolean(
+        decodedGeneration && (adapterValidated || workerValidated)
+      );
+      const rawObservation = {
+        ...baseObservation,
+        status: "read",
+        canvasReadDurationMs,
+        canvasReadAtEpochMs,
+        rgba,
+        uniformPixelCount,
+        markerSignature,
+        decodedGeneration,
+        fullGeneration,
+        currentAdapterGeneration,
+        adapterValidated,
+        workerValidated,
+        generationValidated,
+        workerTelemetryCapturedAtMs: worker?.telemetryCapturedAtMs ?? null,
+        workerSample: worker?.sample ?? null,
+        workerTimestamps: worker?.timestamps ?? null,
+      };
+      appendRawObservation(rawObservation);
+      state.canvasReadCount += 1;
+
+      if (markerSignature && decodedGeneration) {
+        let firstCandidate = firstCandidateByEncodedGeneration.get(decodedGeneration);
+        if (!firstCandidate) {
+          firstCandidate = {
+            rafIndex,
+            canvasReadAtEpochMs,
+            rgba,
+          };
+          firstCandidateByEncodedGeneration.set(decodedGeneration, firstCandidate);
+        }
+        if (generationValidated && fullGeneration) {
+          const inputStart = input?.adapterCallStartedAtEpochMs ?? null;
+          const candidateAfterInput = inputStart === null ||
+            firstCandidate.canvasReadAtEpochMs >= inputStart - 2;
+          const firstObserved = candidateAfterInput ? firstCandidate : {
+            rafIndex,
+            canvasReadAtEpochMs,
+            rgba,
+          };
+          if (adapterValidated && !provisionalByGeneration.has(fullGeneration)) {
+            const provisional = buildGenerationObservation({
+              generation: fullGeneration,
+              decodedGeneration,
+              firstObserved,
+              input,
+              worker: null,
+              adapterValidated: true,
+              workerValidated: false,
+            });
+            provisional.promotedToWorkerValidated = workerValidated;
+            provisionalByGeneration.set(fullGeneration, provisional);
+            state.provisionalGenerations.push(provisional);
+          }
+          if (workerValidated) {
+            promoteWorkerValidatedObservation({
+              generation: fullGeneration,
+              decodedGeneration,
+              firstObserved,
+              input,
+              worker,
+              adapterValidated,
+              joinedAtStop: false,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      const canvasReadDurationMs = Math.max(0, performance.now() - canvasReadStartedAt);
+      state.canvasReadTotalMs += canvasReadDurationMs;
+      state.canvasReadMaxMs = Math.max(state.canvasReadMaxMs, canvasReadDurationMs);
+      state.canvasReadErrorCount += 1;
+      state.lastCanvasReadError = String(error?.message || error);
+      appendRawObservation({
+        ...baseObservation,
+        status: "read-error",
+        canvasReadDurationMs,
+        error: state.lastCanvasReadError,
+      });
+    }
+
+    rafId = requestAnimationFrame(observe);
+  }
+
+  function latencyStats(values) {
+    const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+    if (!sorted.length) {
+      return { sampleCount: 0, averageMs: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 };
+    }
+    const percentile = (quantile) =>
+      sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * quantile) - 1))];
+    const average = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+    return {
+      sampleCount: sorted.length,
+      averageMs: Number(average.toFixed(3)),
+      p50Ms: Number(percentile(0.5).toFixed(3)),
+      p95Ms: Number(percentile(0.95).toFixed(3)),
+      maxMs: Number(sorted.at(-1).toFixed(3)),
+    };
+  }
+
+  function buildSummary() {
+    const workerValidated = state.validatedGenerations.filter(
+      (sample) => sample.workerValidated === true
+    );
+    const expectedGenerationCount = state.inputGenerations.length;
+    const markerStats = state.latestWorkerMarkerStats;
+    const count = (name) => finiteOrNull(markerStats?.[name]);
+    const parityCounts = {
+      expected: expectedGenerationCount,
+      applied: count("appliedCount"),
+      polled: count("exactCorePollCount"),
+      submitted: count("markerSubmittedCount"),
+      completed: count("markerCompletedCount"),
+      browserCanvasVisible: workerValidated.length,
+    };
+    const workerTimestampJoinCount = workerValidated.filter(
+      (sample) => sample.workerTimestampsComplete
+    ).length;
+    const monotonicTimestampCount = workerValidated.filter(
+      (sample) => sample.workerTimestampsMonotonic
+    ).length;
+    const acceptanceReasons = [];
+    if (expectedGenerationCount < 6) {
+      acceptanceReasons.push("expected-generation-count-below-six");
+    }
+    for (const [stage, actual] of Object.entries(parityCounts)) {
+      if (stage !== "expected" && actual !== expectedGenerationCount) {
+        acceptanceReasons.push(`${stage}-parity-${actual ?? "unavailable"}-of-${expectedGenerationCount}`);
+      }
+    }
+    if (workerTimestampJoinCount !== expectedGenerationCount) {
+      acceptanceReasons.push(
+        `complete-worker-timestamp-parity-${workerTimestampJoinCount}-of-${expectedGenerationCount}`
+      );
+    }
+    if (monotonicTimestampCount !== expectedGenerationCount) {
+      acceptanceReasons.push(
+        `monotonic-timestamp-parity-${monotonicTimestampCount}-of-${expectedGenerationCount}`
+      );
+    }
+    for (const name of [
+      "expiredMarkerCount",
+      "expiredInFlightCount",
+      "generationMismatchCount",
+      "generationUnavailableCount",
+    ]) {
+      const value = count(name);
+      if (value !== 0) acceptanceReasons.push(`${name}-${value ?? "unavailable"}`);
+    }
+    if (state.canvasReadErrorCount !== 0) {
+      acceptanceReasons.push(`canvas-read-errors-${state.canvasReadErrorCount}`);
+    }
+    if (state.canvasUnavailableCount !== 0) {
+      acceptanceReasons.push(`canvas-unavailable-${state.canvasUnavailableCount}`);
+    }
+    if (state.rawObservationDropCount !== 0) {
+      acceptanceReasons.push(`raw-observation-drops-${state.rawObservationDropCount}`);
+    }
+    if (state.legacyBackbufferReadbackEnabled) {
+      acceptanceReasons.push("inputreadback-must-be-disabled");
+    }
+    const stageNames = [
+      "inputEventToAdapterStartMs",
+      "adapterCallDurationMs",
+      "adapterFinishedToWorkerAppliedMs",
+      "workerSentToAppliedMs",
+      "workerAppliedToCorePollMs",
+      "corePollToMarkerSubmitMs",
+      "markerSubmitToGpuCompleteMs",
+      "gpuCompleteToBrowserCanvasVisibleMs",
+      "inputEventToBrowserCanvasVisibleMs",
+    ];
+    const stageLatency = Object.fromEntries(stageNames.map((name) => [
+      name,
+      latencyStats(workerValidated.map((sample) => sample.stageDeltas?.[name])),
+    ]));
+    return {
+      enabled: true,
+      measurement:
+        "worker-validated input generation to first matching 8x8 sample of the 32x32 browser-canvas-visible marker",
+      observationBoundary: state.observationBoundary,
+      scanoutIncluded: false,
+      physicalPhotonBoundaryIncluded: false,
+      perturbsRendering: true,
+      perturbation: state.perturbation,
+      legacyBackbufferReadbackEnabled: state.legacyBackbufferReadbackEnabled,
+      rafSampleCount: state.rafSampleCount,
+      canvasReadCount: state.canvasReadCount,
+      canvasReadErrorCount: state.canvasReadErrorCount,
+      canvasUnavailableCount: state.canvasUnavailableCount,
+      rawObservationDropCount: state.rawObservationDropCount,
+      canvasReadAverageMs: state.canvasReadCount + state.canvasReadErrorCount > 0
+        ? state.canvasReadTotalMs / (state.canvasReadCount + state.canvasReadErrorCount)
+        : 0,
+      canvasReadMaxMs: state.canvasReadMaxMs,
+      provisionalGenerationCount: state.provisionalGenerations.length,
+      finalJoinPromotionCount: state.finalJoinPromotionCount,
+      validatedGenerationCount: workerValidated.length,
+      workerValidatedGenerationCount: workerValidated.length,
+      workerTimestampJoinCount,
+      monotonicTimestampCount,
+      workerMarkerStats: markerStats,
+      acceptance: {
+        passed: acceptanceReasons.length === 0,
+        reasons: acceptanceReasons,
+        minimumExpectedGenerationCount: 6,
+        expectedGenerationCount,
+        parityCounts,
+        completeWorkerTimestampCount: workerTimestampJoinCount,
+        monotonicTimestampCount,
+      },
+      adapterToBrowserCanvasVisible: latencyStats(
+        workerValidated.map((sample) => sample.adapterToBrowserCanvasVisibleMs)
+      ),
+      inputEventToBrowserCanvasVisible: latencyStats(
+        workerValidated.map((sample) => sample.inputEventToBrowserCanvasVisibleMs)
+      ),
+      workerSentToBrowserCanvasVisible: latencyStats(
+        workerValidated.map((sample) => sample.workerSentToBrowserCanvasVisibleMs)
+      ),
+      stageLatency,
+    };
+  }
+
+  function stop() {
+    if (finalSnapshot) return finalSnapshot;
+    stopped = true;
+    cancelAnimationFrame(rafId);
+    document.removeEventListener("keydown", recordInputEvent, true);
+    document.removeEventListener("keyup", recordInputEvent, true);
+    restoreAdapterPatch();
+    joinFinalCompletedWorkerSamples();
+    state.stoppedAtEpochMs = Date.now();
+    state.summary = buildSummary();
+    finalSnapshot = state;
+    return finalSnapshot;
+  }
+
+  window.__menuProgressInputMarkerObserver = { stop };
+  rafId = requestAnimationFrame(observe);
 }
 
 async function importPlaywright() {

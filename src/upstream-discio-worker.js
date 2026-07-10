@@ -36,10 +36,25 @@ import {
   parsePadPollStats
 } from "./input-latency-telemetry.js";
 import {
+  INPUT_VISUAL_MARKER_SIZE,
+  applyInputMarkerRgba,
+  createInputVisualMarkerTracker,
+  inputMarkerRgba
+} from "./input-visual-marker.js";
+import {
+  compareInputGenerations,
+  readInputStateSnapshot
+} from "./input-transport.js";
+import {
   enableWgpuUploadWatermark,
   nextWgpuUploadRead,
-  publishWgpuUploadRead
+  publishWgpuUploadRead,
+  rebaseWgpuStagedUploadWindow
 } from "./wgpu-upload-watermark.js";
+import {
+  createWgpuPassStateCache,
+  parseWgpuProducerStateStats
+} from "./wgpu-pass-state-cache.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -126,11 +141,17 @@ let wgpuInputBackbufferReadbackPending = false;
 let wgpuInputVisualBaselineReady = false;
 let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
+let wgpuStateCacheEnabled = false;
+let wgpuProducerStateCacheAvailable = false;
+let wgpuConsumerStateCacheEnabled = false;
+let wgpuPassStateCache = createWgpuPassStateCache();
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
 let inputLatencyDiagnostics = false;
+let inputReadbackDiagnostics = false;
 let inputVisibleLatencyTracker = createInputVisibleLatencyTracker();
+let inputVisualMarkerTracker = createInputVisualMarkerTracker();
 let wgpuDetachedPresenter = false;
 let wgpuDetachedBitmapPending = false;
 let wgpuLoadEpochFence = false;
@@ -158,6 +179,9 @@ const causalInputStats = {
   workerPostApplyCount: 0,
   workerSabApplyCount: 0,
   workerSabGeneration: 0,
+  duplicateGenerationCount: 0,
+  staleGenerationCount: 0,
+  sabSnapshotRetryCount: 0,
   ageLastMs: 0,
   ageTotalMs: 0,
   ageSamples: 0,
@@ -446,7 +470,13 @@ async function handleMessage(type, payload) {
         enabled: gpuCompletionDiagnostics
       });
       inputLatencyDiagnostics = Boolean(payload.inputLatencyDiagnostics);
+      inputReadbackDiagnostics = Boolean(
+        inputLatencyDiagnostics && payload.inputReadbackDiagnostics
+      );
       inputVisibleLatencyTracker = createInputVisibleLatencyTracker({
+        enabled: inputLatencyDiagnostics
+      });
+      inputVisualMarkerTracker = createInputVisualMarkerTracker({
         enabled: inputLatencyDiagnostics
       });
       frameReuseTelemetry = createFrameReuseTelemetry();
@@ -499,6 +529,7 @@ async function handleMessage(type, payload) {
         wgpuLoadEpochFence: payload.wgpuLoadEpochFence,
         wgpuReplayPump: payload.wgpuReplayPump,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
+        wgpuStateCache: payload.wgpuStateCache,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -509,15 +540,8 @@ async function handleMessage(type, payload) {
       api?.setInputMask(inputMask);
       return {};
     case "setInputState":
-      inputMask = payload.mask >>> 0;
-      recordInputApplied({
-        generation: payload.inputGeneration,
-        inputMask,
-        sentAtEpochMs: payload.inputSentAtEpochMs,
-        source: "post"
-      });
-      api?.setInputState?.({
-        mask: inputMask,
+      applyInputStateSnapshot({
+        mask: payload.mask,
         stickX: payload.stickX,
         stickY: payload.stickY,
         cStickX: payload.cStickX,
@@ -525,10 +549,9 @@ async function handleMessage(type, payload) {
         triggerLeft: payload.triggerLeft,
         triggerRight: payload.triggerRight,
         analogA: payload.analogA,
-        analogB: payload.analogB
-      });
-      recordInputAge(payload.inputSentAtEpochMs);
-      causalInputStats.workerPostApplyCount += 1;
+        analogB: payload.analogB,
+        inputGeneration: payload.inputGeneration
+      }, payload.inputSentAtEpochMs, "post");
       return {};
     case "runFrame":
       if (!presentationLoopActive) {
@@ -750,6 +773,7 @@ async function loadCore({
   wgpuLoadEpochFence: requestedWgpuLoadEpochFence = false,
   wgpuReplayPump: requestedWgpuReplayPump = false,
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
+  wgpuStateCache: requestedWgpuStateCache = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -776,14 +800,17 @@ async function loadCore({
   wgpuInputVisualBaselineReady = false;
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
+  wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
+  wgpuProducerStateCacheAvailable = false;
+  wgpuConsumerStateCacheEnabled = false;
+  wgpuPassStateCache = createWgpuPassStateCache();
   wgpuDeepReplayDiagnostics = Boolean(requestedWgpuDeepReplayDiagnostics);
   wgpuDetachedPresenter = Boolean(requestedWgpuDetachedPresenter);
   wgpuDetachedBitmapPending = false;
   wgpuLoadEpochFence = Boolean(requestedWgpuLoadEpochFence);
   wgpuLoadFenceActive = false;
   wgpuReplayPumpEnabled = Boolean(requestedWgpuReplayPump);
-  webGpuCausalStats.replayWindowRecords = wgpuReplayPumpEnabled
-    ? WGPU_REPLAY_WINDOW_RECORDS : 0;
+  webGpuCausalStats.replayWindowRecords = WGPU_REPLAY_WINDOW_RECORDS;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
@@ -995,6 +1022,13 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
+  wgpuProducerStateCacheAvailable = Boolean(api.setWebGpuStateCacheEnabled);
+  // The producer and consumer see the same ordered SET_* stream. Once the
+  // producer suppresses exact repeats, comparing every remaining record again
+  // in JS only adds work. Keep the JS cache as a compatibility fallback for a
+  // core that predates the producer export.
+  wgpuConsumerStateCacheEnabled =
+    wgpuStateCacheEnabled && !wgpuProducerStateCacheAvailable;
   // Renderer transport is required even when persistent JIT caching is not.
   // ?nojitcache=1 gates only the optional cache channel below.
   installDolphinPthreadChannels(moduleInstance, {
@@ -1022,6 +1056,7 @@ async function loadCore({
     `setPpcWasmJitEnabled(${ppcWasmJitTier === "mixed" ? 2 : 1}))`);
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
+  api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
@@ -1088,6 +1123,11 @@ function bindApi(module) {
       typeof module._SetPpcProfileEnabled === "function"
         ? (enabled) => ccall("SetPpcProfileEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
+    setWebGpuStateCacheEnabled:
+      typeof module._SetWebGpuStateCacheEnabled === "function"
+        ? (enabled) => ccall("SetWebGpuStateCacheEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
+    getWebGpuStateCacheStats: optionalCwrap("GetWebGpuStateCacheStats", "string", []),
     setCpuOverclock:
       typeof module._SetCpuOverclock === "function"
         ? (factor) => ccall("SetCpuOverclock", "number", ["number"], [Number(factor) || 1])
@@ -1174,7 +1214,7 @@ function bindApi(module) {
             ccall(
               "SetInputState",
               null,
-              ["number", "number", "number", "number", "number", "number", "number", "number", "number"],
+              ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
               [
                 state.mask >>> 0,
                 state.stickX | 0,
@@ -1184,7 +1224,8 @@ function bindApi(module) {
                 state.triggerLeft | 0,
                 state.triggerRight | 0,
                 state.analogA | 0,
-                state.analogB | 0
+                state.analogB | 0,
+                state.inputGeneration >>> 0
               ]
             )
         : null,
@@ -1362,11 +1403,34 @@ function readDetailedCoreStat(name, readStat) {
   return readStat();
 }
 
+function collectWebGpuProducerStateStats() {
+  if (!collectMetrics) return null;
+  const text = api?.getWebGpuStateCacheStats?.() ?? null;
+  const parsed = parseWgpuProducerStateStats(text);
+  if (parsed) {
+    webGpuCausalStats.producerStateCacheEnabled = parsed.enabled;
+    webGpuCausalStats.producerPipelineRecordsSuppressed =
+      parsed.pipelineRecordsSuppressed;
+    webGpuCausalStats.producerBindGroupRecordsSuppressed =
+      parsed.bindGroupRecordsSuppressed;
+    webGpuCausalStats.producerVertexBufferRecordsSuppressed =
+      parsed.vertexBufferRecordsSuppressed;
+    webGpuCausalStats.producerIndexBufferRecordsSuppressed =
+      parsed.indexBufferRecordsSuppressed;
+    webGpuCausalStats.commandDroppedCount = parsed.commandDroppedCount;
+    webGpuCausalStats.batchAbortCount = parsed.batchAbortCount;
+    webGpuCausalStats.batchOversizeCount = parsed.batchOversizeCount;
+    webGpuCausalStats.uploadTimeoutCount = parsed.uploadTimeoutCount;
+  }
+  return text;
+}
+
 function metadataPayload() {
   const rootEntryCount = api?.getRootEntryCount() ?? -1;
   const loadedCheckpoint = readLastLoadedCheckpoint();
   const helperStats = readDetailedCoreStat("helperStats", api?.getPpcWasmHelperStats);
   const profileStats = readDetailedCoreStat("profileStats", api?.getPpcProfileStats);
+  const webGpuStateCacheStats = collectWebGpuProducerStateStats();
   const videoStats = api?.getVideoStats?.();
   return {
     width: api?.frameWidth() ?? 320,
@@ -1407,6 +1471,7 @@ function metadataPayload() {
       helperStats,
       videoStats,
       profileStats,
+      webGpuStateCacheStats,
       `metrics:${collectMetrics ? "on" : "off"}`
     )
   };
@@ -1552,6 +1617,7 @@ function framePayload() {
   const length = width * height * 4;
   const ppcWasmHelperStats = readDetailedCoreStat("helperStats", api?.getPpcWasmHelperStats);
   const ppcProfileStats = readDetailedCoreStat("profileStats", api?.getPpcProfileStats);
+  const webGpuStateCacheStats = collectWebGpuProducerStateStats();
   const videoStats = api.getVideoStats?.();
   const loadedCheckpoint = readLastLoadedCheckpoint();
   if (renderBackend === "ogl") {
@@ -1607,6 +1673,7 @@ function framePayload() {
       ppcWasmHelperStats,
       videoStats,
       ppcProfileStats,
+      webGpuStateCacheStats,
       `metrics:${collectMetrics ? "on" : "off"}`,
       `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} delivery:${freshFrameDeliveryForPacing(presentationPacingMode, legacyTickQueue)} legacytickqueue:${legacyTickQueue ? 1 : 0} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} qmax:${presentationQueueDepthHighWater} qage:${presentationQueueAgeMs.toFixed(1)}/${presentationQueueAgeMaxMs.toFixed(1)}ms fresh:${immediateFreshFrameCount}/${queuedFreshFrameCount} tickpaint:${tickRepaintCount} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}` +
       // §28v: extra on-screen telemetry for the user's screenshots —
@@ -1711,6 +1778,11 @@ function maybeCreateCausalTelemetry(videoStats) {
     webgpu: {
       ...webGpuCausalStats,
       registered: Boolean(webGpuCmdRing),
+      stateCacheEnabled: wgpuStateCacheEnabled,
+      producerStateCacheEnabled:
+        wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
+      consumerStateCacheEnabled: wgpuConsumerStateCacheEnabled,
+      stateCache: wgpuConsumerStateCacheEnabled ? wgpuPassStateCache.snapshot() : null,
     },
     audio: {
       ...causalAudioStats,
@@ -1719,12 +1791,17 @@ function maybeCreateCausalTelemetry(videoStats) {
       workerPostApplyCount: causalInputStats.workerPostApplyCount,
       workerSabApplyCount: causalInputStats.workerSabApplyCount,
       workerSabGeneration: causalInputStats.workerSabGeneration,
+      duplicateGenerationCount: causalInputStats.duplicateGenerationCount,
+      staleGenerationCount: causalInputStats.staleGenerationCount,
+      sabSnapshotRetryCount: causalInputStats.sabSnapshotRetryCount,
       ageLastMs: causalInputStats.ageLastMs,
       ageAverageMs: causalInputStats.ageSamples > 0
         ? causalInputStats.ageTotalMs / causalInputStats.ageSamples
         : 0,
       ageMaxMs: causalInputStats.ageMaxMs,
       visible: inputVisibleLatencyTracker.snapshot(),
+      marker: inputVisualMarkerTracker.snapshot(),
+      legacyReadbackEnabled: inputReadbackDiagnostics,
     },
   });
 }
@@ -1777,12 +1854,40 @@ function startTickRepaintLoop() {
     // rate, not the tick rate. lastPresentedAt is bumped so back-to-back ticks
     // honor the SKIP_IF_RECENT_MS gate.
     const tickBytes = _lastFrameCopy.subarray(0, _lastFrameLength);
+    const coreFrame = api?.getFrame?.() ?? 0;
+    const marker = prepareInputVisualMarker(coreFrame);
+    const marked = frameWithInputMarker(
+      tickBytes,
+      _lastFrameWidth,
+      _lastFrameHeight,
+      marker
+    );
+    const markerApplied = marked.applied;
+    const displayBytes = markerApplied ? marked.bytes : tickBytes;
+    let markerOutputIssued = false;
     if (renderGpu) {
-      drawFrameBytesToWebGpu(_lastFrameWidth, _lastFrameHeight, tickBytes);
+      drawFrameBytesToWebGpu(_lastFrameWidth, _lastFrameHeight, displayBytes);
+      markerOutputIssued = markerApplied;
     } else if (renderGl) {
-      drawFrameBytesToWebGl(_lastFrameWidth, _lastFrameHeight, tickBytes);
+      drawFrameBytesToWebGl(_lastFrameWidth, _lastFrameHeight, displayBytes);
+      markerOutputIssued = markerApplied;
     } else if (renderContext) {
-      drawFrameBytesToCanvas(_lastFrameWidth, _lastFrameHeight, tickBytes);
+      drawFrameBytesToCanvas(_lastFrameWidth, _lastFrameHeight, displayBytes);
+      markerOutputIssued = markerApplied;
+    } else if (markerApplied && oglPixelSabView && oglMetaSabView) {
+      markerOutputIssued = publishOglSabFrame(
+        _lastFrameWidth,
+        _lastFrameHeight,
+        displayBytes
+      );
+    }
+    if (markerOutputIssued) {
+      recordInputMarkerSubmission(
+        marker,
+        coreFrame,
+        `software-tick-${renderBackend}`,
+        renderGpu?.device?.queue
+      );
     }
     tickRepaintCount += 1;
     lastPresentedAt = now;
@@ -1894,39 +1999,65 @@ function scheduleFrameSignalWait() {
     });
 }
 
+function applyInputStateSnapshot(state, sentAtEpochMs, source) {
+  if (!api?.setInputState || !state) return false;
+  const generation = Number(state.inputGeneration) >>> 0;
+  if (!generation) return false;
+  const order = compareInputGenerations(generation, lastInputStateGeneration);
+  if (order === 0) {
+    causalInputStats.duplicateGenerationCount += 1;
+    return false;
+  }
+  if (order < 0) {
+    causalInputStats.staleGenerationCount += 1;
+    return false;
+  }
+
+  lastInputStateGeneration = generation;
+  const mask = Number(state.mask) >>> 0;
+  inputMask = mask;
+  const wrappedSentAt = source === "sab"
+    ? wrappedEpochMilliseconds(Number(sentAtEpochMs) >>> 0)
+    : Number(sentAtEpochMs);
+  recordInputApplied({
+    generation,
+    inputMask: mask,
+    sentAtEpochMs: wrappedSentAt,
+    source
+  });
+  api.setInputState({
+    mask,
+    stickX: Number(state.stickX) | 0,
+    stickY: Number(state.stickY) | 0,
+    cStickX: Number(state.cStickX) | 0,
+    cStickY: Number(state.cStickY) | 0,
+    triggerLeft: Number(state.triggerLeft) | 0,
+    triggerRight: Number(state.triggerRight) | 0,
+    analogA: Number(state.analogA) | 0,
+    analogB: Number(state.analogB) | 0,
+    inputGeneration: generation
+  });
+  recordInputAge(sentAtEpochMs, source === "sab");
+  if (source === "sab") {
+    causalInputStats.workerSabApplyCount += 1;
+    causalInputStats.workerSabGeneration = generation;
+  } else {
+    causalInputStats.workerPostApplyCount += 1;
+  }
+  return true;
+}
+
 function pollInputStateFromSab() {
   if (!inputStateSabView || !api?.setInputState) {
     return;
   }
-  const generation = Atomics.load(inputStateSabView, 9);
-  if (generation === lastInputStateGeneration) {
+  const result = readInputStateSnapshot(inputStateSabView);
+  causalInputStats.sabSnapshotRetryCount += Math.max(0, result.attempts - 1);
+  if (!result.snapshot) {
+    causalInputStats.sabSnapshotRetryCount += 1;
     return;
   }
-  lastInputStateGeneration = generation;
-  causalInputStats.workerSabApplyCount += 1;
-  causalInputStats.workerSabGeneration = generation >>> 0;
-  if (inputStateSabView.length > 10) {
-    recordInputAge(Atomics.load(inputStateSabView, 10) >>> 0, true);
-  }
-  const mask = Atomics.load(inputStateSabView, 0) >>> 0;
-  inputMask = mask;
-  recordInputApplied({
-    generation: generation >>> 0,
-    inputMask: mask,
-    sentAtEpochMs: wrappedEpochMilliseconds(Atomics.load(inputStateSabView, 10) >>> 0),
-    source: "sab"
-  });
-  api.setInputState({
-    mask,
-    stickX: Atomics.load(inputStateSabView, 1),
-    stickY: Atomics.load(inputStateSabView, 2),
-    cStickX: Atomics.load(inputStateSabView, 3),
-    cStickY: Atomics.load(inputStateSabView, 4),
-    triggerLeft: Atomics.load(inputStateSabView, 5),
-    triggerRight: Atomics.load(inputStateSabView, 6),
-    analogA: Atomics.load(inputStateSabView, 7),
-    analogB: Atomics.load(inputStateSabView, 8)
-  });
+  applyInputStateSnapshot(result.snapshot, result.snapshot.sentAtEpochMsLow, "sab");
 }
 
 function runPresentationLoop() {
@@ -2349,6 +2480,21 @@ let _lastFrameLength = 0;
 // (the flicker seen in pacing=tick).
 let _lastFrameCopy = null;
 let _lastFrameCopyValid = false;
+let _inputMarkerFrameCopy = null;
+
+function frameWithInputMarker(bytes, width, height, marker) {
+  if (!marker || !bytes?.byteLength) return { bytes, applied: false };
+  if (!_inputMarkerFrameCopy || _inputMarkerFrameCopy.length < bytes.byteLength) {
+    _inputMarkerFrameCopy = new Uint8Array(bytes.byteLength);
+  }
+  const marked = _inputMarkerFrameCopy.subarray(0, bytes.byteLength);
+  marked.set(bytes);
+  return {
+    bytes: marked,
+    applied: applyInputMarkerRgba(marked, width, height, marker.generation)
+  };
+}
+
 function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?.() ?? 0) {
   const firstPaint = !_firstPaintLogged;
   const presentStartedAt = collectMetrics || firstPaint ? performance.now() : 0;
@@ -2367,6 +2513,10 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
     moduleInstance && pointer > 0 && length > 0
       ? new Uint8Array(moduleInstance.HEAPU8.buffer, pointer, length)
       : null;
+  const marker = prepareInputVisualMarker(coreFrame);
+  let displayFrameView = frameView;
+  let sourceFrameView = frameView;
+  let markerApplied = false;
 
   // §28cx tick-flicker fix: snapshot this complete frame into a stable buffer
   // so the tick re-paint never reads s_framebuffer while the core writes the
@@ -2384,28 +2534,48 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
     _lastFrameHeight = height;
     _lastFrameLength = length;
     _lastFrameCopyValid = true;
+    sourceFrameView = _lastFrameCopy.subarray(0, length);
+    const marked = frameWithInputMarker(sourceFrameView, width, height, marker);
+    markerApplied = marked.applied;
+    if (markerApplied) displayFrameView = marked.bytes;
   }
 
   const drawStartedAt = startProfileSample();
+  let markerOutputIssued = false;
   if (renderGpu) {
-    drawFrameToWebGpu(width, height, pointer, length);
+    if (markerApplied) drawFrameBytesToWebGpu(width, height, displayFrameView);
+    else drawFrameToWebGpu(width, height, pointer, length);
+    markerOutputIssued = markerApplied;
   } else if (renderGl) {
-    drawFrameToWebGl(width, height, pointer, length);
+    if (markerApplied) drawFrameBytesToWebGl(width, height, displayFrameView);
+    else drawFrameToWebGl(width, height, pointer, length);
+    markerOutputIssued = markerApplied;
   } else if (renderContext) {
-    drawFrameToCanvas(width, height, pointer, length);
+    if (markerApplied) drawFrameBytesToCanvas(width, height, displayFrameView);
+    else drawFrameToCanvas(width, height, pointer, length);
+    markerOutputIssued = markerApplied;
   }
   // SAB pixel transport: copy s_framebuffer bytes into the shared pixel
   // buffer and bump the generation counter atomically. Main thread reads
   // the counter on RAF and putImageDatas the SAB contents onto the visible
   // canvas. The drawFrame* path above is a no-op in SAB mode (no presenter
   // was set up), so this IS the visible-paint pipeline for OGL+SAB.
-  if (frameView && oglPixelSabView && oglMetaSabView) {
-    publishOglSabFrame(width, height, frameView);
+  if (displayFrameView && oglPixelSabView && oglMetaSabView) {
+    const published = publishOglSabFrame(width, height, displayFrameView);
+    if (markerApplied && published) markerOutputIssued = true;
   }
   finishProfileSample("draw", drawStartedAt);
+  if (markerOutputIssued) {
+    recordInputMarkerSubmission(
+      marker,
+      coreFrame,
+      `software-frame-${renderBackend}`,
+      renderGpu?.device?.queue
+    );
+  }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(frameView), true);
+  recordVisualFrameHash(hashFrameBytes(sourceFrameView), true);
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -2435,7 +2605,7 @@ function publishOglSabFrame(width, height, frameView) {
   if (now - oglSabLastPublishMs < OGL_SAB_MIN_INTERVAL_MS) {
     oglSabThrottleSkipCount += 1;
     maybeReportOglSabRates(now);
-    return;
+    return false;
   }
   oglSabLastPublishMs = now;
 
@@ -2446,7 +2616,7 @@ function publishOglSabFrame(width, height, frameView) {
   const sabBytes = oglPixelSabView.length;
   const fbBytes = frameView.length;
   const copyBytes = fbBytes < sabBytes ? fbBytes : sabBytes;
-  if (copyBytes === 0) return;
+  if (copyBytes === 0) return false;
   if (copyBytes === sabBytes && copyBytes === fbBytes) {
     // Common path: same-size memcpy via TypedArray.set, which compiles to
     // a SIMD memmove on Chrome.
@@ -2461,6 +2631,7 @@ function publishOglSabFrame(width, height, frameView) {
   Atomics.add(oglMetaSabView, 0, 1);
   oglSabWriteCount += 1;
   maybeReportOglSabRates(now);
+  return true;
 }
 function maybeReportOglSabRates(now) {
   if (oglSabLastReportMs === 0) {
@@ -2491,15 +2662,32 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
     return;
   }
 
+  const marker = prepareInputVisualMarker(coreFrame);
+  const marked = frameWithInputMarker(bytes, width, height, marker);
+  const markerApplied = marked.applied;
+  const displayBytes = markerApplied ? marked.bytes : bytes;
+
   const drawStartedAt = startProfileSample();
+  let markerOutputIssued = false;
   if (renderGpu) {
-    drawFrameBytesToWebGpu(width, height, bytes);
+    drawFrameBytesToWebGpu(width, height, displayBytes);
+    markerOutputIssued = markerApplied;
   } else if (renderGl) {
-    drawFrameBytesToWebGl(width, height, bytes);
+    drawFrameBytesToWebGl(width, height, displayBytes);
+    markerOutputIssued = markerApplied;
   } else if (renderContext) {
-    drawFrameBytesToCanvas(width, height, bytes);
+    drawFrameBytesToCanvas(width, height, displayBytes);
+    markerOutputIssued = markerApplied;
   }
   finishProfileSample("draw", drawStartedAt);
+  if (markerOutputIssued) {
+    recordInputMarkerSubmission(
+      marker,
+      coreFrame,
+      `software-queued-${renderBackend}`,
+      renderGpu?.device?.queue
+    );
+  }
 
   // §28cx tick-flicker fix (REAL one): feed the tick re-paint cache from THIS
   // clean paced frame. `bytes` is the queue entry's own stable copy, with dims
@@ -2816,6 +3004,12 @@ function recordInputApplied({ generation, inputMask: mask, sentAtEpochMs, source
     baselineVisualHash: visualFrameHash,
     source
   });
+  inputVisualMarkerTracker.recordApplied({
+    generation,
+    inputMask: mask,
+    sentAtEpochMs,
+    baselinePollCount: baseline?.pollCount ?? 0
+  });
 }
 
 function recordInputVisibleObservation(hash) {
@@ -2828,6 +3022,51 @@ function recordInputVisibleObservation(hash) {
     visualHash: hash,
     coreFrame: api?.getFrame?.() ?? 0
   });
+}
+
+function prepareInputVisualMarker(coreFrame = api?.getFrame?.() ?? 0) {
+  if (!inputLatencyDiagnostics) return null;
+  const pad = currentPadPollStats();
+  if (pad) {
+    inputVisualMarkerTracker.recordCorePoll({
+      pollCount: pad.pollCount,
+      inputMask: pad.inputMask,
+      inputGeneration: pad.inputGeneration,
+      coreFrame
+    });
+  }
+  return inputVisualMarkerTracker.currentMarker();
+}
+
+function recordInputMarkerSubmission(marker, coreFrame, source, queue = null) {
+  if (!marker?.needsSubmission) return false;
+  const submitted = inputVisualMarkerTracker.recordMarkerSubmitted({
+    generation: marker.generation,
+    coreFrame,
+    source
+  });
+  if (!submitted) return false;
+
+  if (typeof queue?.onSubmittedWorkDone === "function") {
+    Promise.resolve(queue.onSubmittedWorkDone()).then(() => {
+      inputVisualMarkerTracker.recordMarkerCompleted({
+        generation: marker.generation,
+        coreFrame,
+        source,
+        completionKind: "gpu-queue-complete"
+      });
+    }).catch((error) => {
+      recordRendererError("input-marker-completion", error?.message || error);
+    });
+  } else {
+    inputVisualMarkerTracker.recordMarkerCompleted({
+      generation: marker.generation,
+      coreFrame,
+      source,
+      completionKind: "draw-issued"
+    });
+  }
+  return true;
 }
 
 function formatProfileWindow(elapsedMs) {
@@ -3056,7 +3295,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       format,
       alphaMode: "opaque",
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputLatencyDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
     });
   } catch (e) {
     recordRendererError("validation", `context.configure: ${e?.message || e}`);
@@ -3259,7 +3498,7 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
       device: gpu.device,
       format: gpu.format,
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputLatencyDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
     });
     gpu.canvasWidth = width;
     gpu.canvasHeight = height;
@@ -4205,6 +4444,84 @@ let webGpuTestFsModule = null;
 const webGpuTextDecoder =
   typeof TextDecoder === "function" ? new TextDecoder("utf-8") : null;
 
+function encodeHardwareInputMarker(encoder, texture, format, marker) {
+  if (!inputLatencyDiagnostics || !encoder || !texture || !marker || !renderGpu?.device) {
+    return false;
+  }
+  const device = renderGpu.device;
+  let state = renderGpu.inputMarkerState;
+  if (!state || state.format !== format) {
+    const shader = device.createShaderModule({
+      label: "dolphin-input-marker",
+      code: `
+struct MarkerColor { rgba: vec4f };
+@group(0) @binding(0) var<uniform> marker: MarkerColor;
+
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  var positions = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0)
+  );
+  return vec4f(positions[index], 0.0, 1.0);
+}
+
+@fragment
+fn fs() -> @location(0) vec4f {
+  return marker.rgba;
+}
+`
+    });
+    const pipeline = device.createRenderPipeline({
+      label: "dolphin-input-marker",
+      layout: "auto",
+      vertex: { module: shader, entryPoint: "vs" },
+      fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
+      primitive: { topology: "triangle-list" }
+    });
+    const colorBuffer = device.createBuffer({
+      label: "dolphin-input-marker-color",
+      size: 16,
+      usage: 0x40 | 0x8
+    });
+    const bindGroup = device.createBindGroup({
+      label: "dolphin-input-marker",
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: colorBuffer } }]
+    });
+    state = { bindGroup, colorBuffer, format, generation: 0, pipeline };
+    renderGpu.inputMarkerState = state;
+  }
+
+  if (state.generation !== marker.generation) {
+    const rgba = inputMarkerRgba(marker.generation).map((value) => value / 255);
+    device.queue.writeBuffer(state.colorBuffer, 0, new Float32Array(rgba));
+    state.generation = marker.generation;
+  }
+
+  const pass = encoder.beginRenderPass({
+    label: "dolphin-input-marker",
+    colorAttachments: [{
+      view: texture.createView(),
+      loadOp: "load",
+      storeOp: "store"
+    }]
+  });
+  pass.setPipeline(state.pipeline);
+  pass.setBindGroup(0, state.bindGroup);
+  pass.setViewport(0, 0, texture.width, texture.height, 0, 1);
+  pass.setScissorRect(
+    0,
+    0,
+    Math.min(INPUT_VISUAL_MARKER_SIZE, texture.width),
+    Math.min(INPUT_VISUAL_MARKER_SIZE, texture.height)
+  );
+  pass.draw(3);
+  pass.end();
+  return true;
+}
+
 function handleWebGpuCmdRing(event) {
   const data = event.data;
   if (!data || data.type !== "webgpu-cmd-ring") return;
@@ -4283,15 +4600,25 @@ function stageHeldWgpuUploads(ring, startIndex, writeIndex, u32, heap) {
   const startedAt = performance.now();
   const normalizedStart = startIndex >>> 0;
   if (ring.stagedPassStart !== normalizedStart) {
-    // A held pass is consumed before another can become the suffix. Refuse
-    // to skip over retained bytes if that invariant is ever violated.
-    if (ring.stagedUploads.size > 0) {
+    // Replaying a completed held pass can expose a later incomplete pass in
+    // the same drain. Uploads retained for that later suffix remain valid;
+    // only an upload from the newly consumed prefix is an ordering failure.
+    const rebased = rebaseWgpuStagedUploadWindow({
+      startIndex: normalizedStart,
+      writeIndex,
+      scanCursor: ring.stagedScanCursor,
+      stagedUploadIndices: ring.stagedUploads.keys()
+    });
+    if (!rebased.ok) {
       webGpuCausalStats.errorCount += 1;
-      recordRendererError("upload-stage-order", "held pass changed with staged uploads pending");
+      recordRendererError(
+        "upload-stage-order",
+        `staged upload ${rebased.invalidIndex} precedes held suffix ${normalizedStart}`
+      );
       return;
     }
-    ring.stagedPassStart = normalizedStart;
-    ring.stagedScanCursor = normalizedStart;
+    ring.stagedPassStart = rebased.startIndex;
+    ring.stagedScanCursor = rebased.scanCursor;
   }
   let index = ring.stagedScanCursor ?? normalizedStart;
   let scannedRecords = 0;
@@ -4361,10 +4688,11 @@ function stageHeldWgpuUploads(ring, startIndex, writeIndex, u32, heap) {
 function publishWgpuReadIndex(ring, readIndex) {
   const normalized = readIndex >>> 0;
   ring.consumerRead = normalized;
-  const reserve = wgpuReplayPumpEnabled
-    ? Math.max(0, ring.capacity - WGPU_REPLAY_WINDOW_RECORDS)
-    : 0;
-  Atomics.store(ring.headerI32, 1, (normalized - reserve) | 0);
+  // Slot ownership follows actual consumption. The old replay-pump path
+  // subtracted capacity-16K here, which made the producer treat already
+  // consumed slots as occupied and reduced a 262K ring to an effective 16K.
+  // WGPU_REPLAY_WINDOW_RECORDS is a per-drain work budget, not a reservation.
+  Atomics.store(ring.headerI32, 1, normalized | 0);
 }
 
 function startWgpuReplayPump() {
@@ -4918,6 +5246,15 @@ const webGpuCausalStats = {
   heldUploadStagedHighWaterBytes: 0,
   heldUploadStageLimitCount: 0,
   heldUploadScanCount: 0,
+  producerStateCacheEnabled: false,
+  producerPipelineRecordsSuppressed: 0,
+  producerBindGroupRecordsSuppressed: [0, 0, 0],
+  producerVertexBufferRecordsSuppressed: 0,
+  producerIndexBufferRecordsSuppressed: 0,
+  commandDroppedCount: 0,
+  batchAbortCount: 0,
+  batchOversizeCount: 0,
+  uploadTimeoutCount: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -4976,6 +5313,7 @@ function drainWebGpuCmdRing() {
   webGpuCausalStats.backlogLast = backlog;
   webGpuCausalStats.backlogHighWater = Math.max(webGpuCausalStats.backlogHighWater, backlog);
   if (wgpuLoadFenceActive && write !== read) {
+    if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset("load-fence-discard");
     const fenceU32 = new Uint32Array(moduleInstance.HEAPU8.buffer);
     let discardTo = read;
     let completedAtRecordIndex = null;
@@ -5074,11 +5412,12 @@ function drainWebGpuCmdRing() {
     ? selectAtomicReplayLimit({
         read,
         write,
+        maxRecords: WGPU_REPLAY_WINDOW_RECORDS,
         opAt: (index) => u32[
           (ring.slotsBase + (index % ring.capacity) * 32) >>> 2
         ]
       })
-    : write;
+    : (read + Math.min(backlog, WGPU_REPLAY_WINDOW_RECORDS)) >>> 0;
   if (replayLimit !== write) {
     ring.heldReplayStart ??= replayLimit;
     wgpuReplayClassifier?.recordAtomicHold({ recordIndex: replayLimit, writeIndex: write });
@@ -5094,6 +5433,9 @@ function drainWebGpuCmdRing() {
   let passDepthId = 0;
   let passLoadOp = "load";
   let passHasPipe = false;
+  let passNeedsVertexBuffer = false;
+  let vertexBufferValid = false;
+  let indexBufferValid = false;
   let currentBackbufferSourceTextureId = 0;
   let lastBackbufferSourceTextureId = wgpuLastBackbufferSourceTextureId;
   let lastBackbufferTexture = null;
@@ -5301,6 +5643,7 @@ function drainWebGpuCmdRing() {
       try { pass.end(); } catch (e) {}
       wgpuReplayClassifier?.recordPassEnd({ reason, recordIndex });
       pass = null;
+      if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset(reason);
       flushPassDiag();
 
       // Present-time EFB sampling can be invalidated by a later clear.  When
@@ -5684,7 +6027,11 @@ function drainWebGpuCmdRing() {
                                 u32[recWord + 3]);
           break;
         case WGPU_CMD_OP_BEGIN_PASS: {
+          const passWasOpen = Boolean(pass);
           endPass("begin-pass", read);
+          if (!passWasOpen && wgpuConsumerStateCacheEnabled) {
+            wgpuPassStateCache.reset("begin-pass");
+          }
           ensureEnc();
           const fbId = u32[recWord + 1];
           const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
@@ -5823,6 +6170,9 @@ function drainWebGpuCmdRing() {
             });
           }
           passHasPipe = false;
+          passNeedsVertexBuffer = false;
+          vertexBufferValid = false;
+          indexBufferValid = false;
           bgValid[0] = bgValid[1] = bgValid[2] = false;  // §28j
           if (drawState) {
             drawState.bindGroups.fill(0);
@@ -5858,6 +6208,11 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_SET_PIPELINE: {
           const pid = u32[recWord + 1];
           self._wgCurPipe = pid;
+          // A SET_* record is a requested transition, not a hint. If the
+          // resource is missing or the call fails, retaining the previous
+          // pipeline would silently execute the next draw with stale state.
+          passHasPipe = false;
+          passNeedsVertexBuffer = false;
           if (!pass) {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "set-pipeline", recordIndex: read });
           }
@@ -5866,7 +6221,26 @@ function drainWebGpuCmdRing() {
                               !!self._wgPassRevZ)
             : null;
           if (pass && p) {
-            pass.setPipeline(p); passHasPipe = true; webGpuExecStats.setPipe++; pd.pipeOk++;
+            const needsApply = !wgpuConsumerStateCacheEnabled ||
+              wgpuPassStateCache.pipelineNeedsApply(p);
+            try {
+              if (needsApply) {
+                pass.setPipeline(p);
+                if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.recordPipelineApplied(p);
+              }
+              passHasPipe = true;
+              passNeedsVertexBuffer = Boolean(
+                webGpuObjects.pipeTpl.get(pid)?.desc?.vertex?.buffers?.length
+              );
+              webGpuExecStats.setPipe++;
+              pd.pipeOk++;
+            } catch (error) {
+              if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.recordPipelineApplyFailed();
+              passHasPipe = false;
+              recordRendererError("set-pipeline", error?.message || error);
+              webGpuExecStats.missPipe++;
+              pd.pipeMiss++;
+            }
           } else {
             webGpuExecStats.missPipe++; pd.pipeMiss++;
             if (pass && !p) {
@@ -5903,16 +6277,44 @@ function drainWebGpuCmdRing() {
             // §16: arg.u[2]=nDynOff, u[3..6]=per-draw ring offsets
             // (group0 has 4 dynamic-offset UBO bindings; groups 1/2: 0).
             const nOff = u32[recWord + 3];
-            if (nOff) {
-              for (let k = 0; k < nOff; k++)
-                WGPU_DYN_OFF_SCRATCH[k] = u32[recWord + 4 + k];
-              // Zero-alloc overload: (slot, bg, data, dataStart, dataLen)
-              pass.setBindGroup(u32[recWord + 1], bg,
-                                WGPU_DYN_OFF_SCRATCH, 0, nOff);
-            } else {
-              pass.setBindGroup(u32[recWord + 1], bg);
+            for (let k = 0; k < nOff; k++) {
+              WGPU_DYN_OFF_SCRATCH[k] = u32[recWord + 4 + k];
             }
-            webGpuExecStats.setBg++; pd.bgOk++;
+            const needsApply = !wgpuConsumerStateCacheEnabled ||
+              wgpuPassStateCache.bindGroupNeedsApply(
+                bgSlot,
+                bg,
+                WGPU_DYN_OFF_SCRATCH,
+                nOff
+              );
+            try {
+              if (needsApply) {
+                if (nOff) {
+                  // Zero-alloc overload: (slot, bg, data, dataStart, dataLen)
+                  pass.setBindGroup(bgSlot, bg, WGPU_DYN_OFF_SCRATCH, 0, nOff);
+                } else {
+                  pass.setBindGroup(bgSlot, bg);
+                }
+                if (wgpuConsumerStateCacheEnabled) {
+                  wgpuPassStateCache.recordBindGroupApplied(
+                    bgSlot,
+                    bg,
+                    WGPU_DYN_OFF_SCRATCH,
+                    nOff
+                  );
+                }
+              }
+              webGpuExecStats.setBg++;
+              pd.bgOk++;
+            } catch (error) {
+              if (wgpuConsumerStateCacheEnabled) {
+                wgpuPassStateCache.recordBindGroupApplyFailed(bgSlot);
+              }
+              if (bgSlot < 3) bgValid[bgSlot] = false;
+              recordRendererError("set-bind-group", error?.message || error);
+              webGpuExecStats.missBg++;
+              pd.bgMiss++;
+            }
           }
           else { webGpuExecStats.missBg++; pd.bgMiss++; }
           break;
@@ -5920,21 +6322,38 @@ function drainWebGpuCmdRing() {
         case WGPU_CMD_OP_SET_VERTEX_BUFFER: {
           const bufferId = u32[recWord + 2];
           const b = webGpuObjects.buffers.get(bufferId);
+          const slot = u32[recWord + 1];
+          if (slot === 0) vertexBufferValid = false;
           if (!pass) {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "set-vertex-buffer", recordIndex: read });
           }
           if (!b) wgpuReplayClassifier?.recordMissingResource({ kind: "vertex-buffer", id: bufferId });
           if (pass && b) {
-            const slot = u32[recWord + 1];
             const offset = u32[recWord + 3];
-            pass.setVertexBuffer(slot, b, offset);
-            if (drawState) drawState.vertexBuffer = { slot, id: bufferId, offset };
+            const needsApply = !wgpuConsumerStateCacheEnabled ||
+              wgpuPassStateCache.vertexBufferNeedsApply(slot, b, offset);
+            try {
+              if (needsApply) {
+                pass.setVertexBuffer(slot, b, offset);
+                if (wgpuConsumerStateCacheEnabled) {
+                  wgpuPassStateCache.recordVertexBufferApplied(slot, b, offset);
+                }
+              }
+              if (slot === 0) vertexBufferValid = true;
+              if (drawState) drawState.vertexBuffer = { slot, id: bufferId, offset };
+            } catch (error) {
+              if (wgpuConsumerStateCacheEnabled) {
+                wgpuPassStateCache.recordVertexBufferApplyFailed(slot);
+              }
+              recordRendererError("set-vertex-buffer", error?.message || error);
+            }
           }
           break;
         }
         case WGPU_CMD_OP_SET_INDEX_BUFFER: {
           const bufferId = u32[recWord + 1];
           const b = webGpuObjects.buffers.get(bufferId);
+          indexBufferValid = false;
           if (!pass) {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "set-index-buffer", recordIndex: read });
           }
@@ -5942,8 +6361,23 @@ function drainWebGpuCmdRing() {
           if (pass && b) {
             const format = u32[recWord + 2] === 1 ? "uint32" : "uint16";
             const offset = u32[recWord + 3];
-            pass.setIndexBuffer(b, format, offset);
-            if (drawState) drawState.indexBuffer = { id: bufferId, format, offset };
+            const needsApply = !wgpuConsumerStateCacheEnabled ||
+              wgpuPassStateCache.indexBufferNeedsApply(b, format, offset);
+            try {
+              if (needsApply) {
+                pass.setIndexBuffer(b, format, offset);
+                if (wgpuConsumerStateCacheEnabled) {
+                  wgpuPassStateCache.recordIndexBufferApplied(b, format, offset);
+                }
+              }
+              indexBufferValid = true;
+              if (drawState) drawState.indexBuffer = { id: bufferId, format, offset };
+            } catch (error) {
+              if (wgpuConsumerStateCacheEnabled) {
+                wgpuPassStateCache.recordIndexBufferApplyFailed();
+              }
+              recordRendererError("set-index-buffer", error?.message || error);
+            }
           }
           break;
         }
@@ -6029,7 +6463,8 @@ function drainWebGpuCmdRing() {
           if (!pass) {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "draw", recordIndex: read });
           }
-          if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2]) {
+          if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
+              (!passNeedsVertexBuffer || vertexBufferValid)) {
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
@@ -6044,16 +6479,18 @@ function drainWebGpuCmdRing() {
               })
             });
           }
-          else if (pass && passHasPipe) { webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1; }
+          else if (pass) {
+            webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
+          }
           break;
         case WGPU_CMD_OP_DRAW_INDEXED:
           if (!pass) {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "draw-indexed", recordIndex: read });
           }
-          if (pass && passHasPipe &&
-              !(bgValid[0] && bgValid[1] && bgValid[2])) {
+          if (pass && !(passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
+              (!passNeedsVertexBuffer || vertexBufferValid) && indexBufferValid)) {
             webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
-          } else if (pass && passHasPipe) {
+          } else if (pass) {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
@@ -6474,6 +6911,25 @@ function drainWebGpuCmdRing() {
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
           endPass("submit-present", read);
           let presentAlreadySubmitted = false;
+          const hardwareInputMarkerCoreFrame = api?.getFrame?.() ?? 0;
+          const hardwareInputMarker = prepareInputVisualMarker(hardwareInputMarkerCoreFrame);
+          let hardwareInputMarkerApplied = false;
+          const applyHardwareInputMarker = () => {
+            if (hardwareInputMarkerApplied || !hardwareInputMarker || !lastBackbufferTexture) {
+              return hardwareInputMarkerApplied;
+            }
+            try {
+              hardwareInputMarkerApplied = encodeHardwareInputMarker(
+                ensureEnc(),
+                lastBackbufferTexture,
+                renderGpu.format,
+                hardwareInputMarker
+              );
+            } catch (error) {
+              recordRendererError("input-marker-encode", error?.message || error);
+            }
+            return hardwareInputMarkerApplied;
+          };
           if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
             const efb = webGpuObjects.textures.get(self._wgEfbColorId);
             const bs = efb ? ensureBlitState() : null;
@@ -6551,7 +7007,7 @@ function drainWebGpuCmdRing() {
             // ownership.  Establish one baseline, then sample only while an
             // input generation is pending.  This is opt-in because a mapped
             // GPU readback is intentionally too expensive for normal play.
-            const _inputBackbufferOk = inputLatencyDiagnostics &&
+            const _inputBackbufferOk = inputReadbackDiagnostics &&
               lastBackbufferTexture && !wgpuInputBackbufferReadbackPending &&
               (!wgpuInputVisualBaselineReady || inputVisibleLatencyTracker.hasPending());
             const _sourceOk = lastBackbufferSourceTextureId > 0 && Boolean(
@@ -6648,6 +7104,10 @@ function drainWebGpuCmdRing() {
               if (pending.some((entry) => entry.kind === "xfb")) {
                 wgpuClassifierXfbReadbackPending = true;
               }
+              // Diagnostic copies must observe the unmodified game output.
+              // The deterministic marker is encoded only after those copies,
+              // but before the same queue submission reaches the canvas.
+              applyHardwareInputMarker();
               presentAlreadySubmitted = submitEnc("present");
               for (const p of pending) {
                 p.rb.mapAsync(0x1).then(() => {
@@ -6747,8 +7207,17 @@ function drainWebGpuCmdRing() {
             }
             }
           }
+          if (!presentAlreadySubmitted) applyHardwareInputMarker();
           const submittedPresent = presentAlreadySubmitted || submitEnc("present");
           if (!submittedPresent) break;
+          if (hardwareInputMarkerApplied) {
+            recordInputMarkerSubmission(
+              hardwareInputMarker,
+              hardwareInputMarkerCoreFrame,
+              "hardware-wgpu",
+              q
+            );
+          }
           // Count hardware presents at the same boundary used by the
           // software presenters: a successful queue submission.  The old
           // path incremented only a private WGPU counter, which made the
@@ -6778,7 +7247,13 @@ function drainWebGpuCmdRing() {
           const m = tag === 1 ? webGpuObjects.buffers
                   : tag === 2 ? webGpuObjects.textures
                   : tag === 3 ? webGpuObjects.bindGroups : null;
-          if (m) m.delete(id);
+          if (m) {
+            const resource = m.get(id);
+            if (resource && wgpuConsumerStateCacheEnabled) {
+              wgpuPassStateCache.invalidateDestroyedResource(tag, resource);
+            }
+            m.delete(id);
+          }
           break;
         }
         case WGPU_CMD_OP_BLIT_TEXTURE: {

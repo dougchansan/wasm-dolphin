@@ -4,13 +4,19 @@ export function requestedInputLatencyDiagnostics(search = globalThis.location?.s
   return new URLSearchParams(search).get("inputlatency") === "1";
 }
 
+export function requestedInputReadbackDiagnostics(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("inputreadback") === "1";
+}
+
 export function parsePadPollStats(value) {
   const text = String(value || "");
   const match = /pad polls:(\d+).*?\binput:([0-9a-f]+)/i.exec(text);
   if (!match) return null;
+  const generation = /\bgen:(\d+)/i.exec(text);
   return {
     pollCount: Number.parseInt(match[1], 10) >>> 0,
-    inputMask: Number.parseInt(match[2], 16) >>> 0
+    inputMask: Number.parseInt(match[2], 16) >>> 0,
+    inputGeneration: generation ? Number.parseInt(generation[1], 10) >>> 0 : 0
   };
 }
 

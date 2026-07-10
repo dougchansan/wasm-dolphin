@@ -5,6 +5,10 @@ import {
   verifyUpstreamCoreWasm
 } from "./upstream-worker-protocol.js";
 import {
+  INPUT_STATE_SLOT_COUNT,
+  writeInputStateSnapshot
+} from "./input-transport.js";
+import {
   countTransferBytes,
   createCausalTelemetry,
   deepMerge,
@@ -63,8 +67,10 @@ export class UpstreamWorkerAdapter {
     wgpuLoadEpochFence = false,
     wgpuReplayPump = false,
     wgpuAtomicPassReplay = true,
+    wgpuStateCache = false,
     gpuCompletionDiagnostics = false,
     inputLatencyDiagnostics = false,
+    inputReadbackDiagnostics = false,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -118,8 +124,10 @@ export class UpstreamWorkerAdapter {
     this.wgpuLoadEpochFence = Boolean(wgpuLoadEpochFence);
     this.wgpuReplayPump = Boolean(wgpuReplayPump);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
+    this.wgpuStateCache = Boolean(wgpuStateCache);
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
+    this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -192,11 +200,13 @@ export class UpstreamWorkerAdapter {
     // SharedArrayBuffer-backed input state. Bypasses postMessage queue.
     // Slots: 0=mask, 1=stickX, 2=stickY, 3=cStickX, 4=cStickY,
     //        5=triggerLeft, 6=triggerRight, 7=analogA, 8=analogB,
-    //        9=generation (incremented on every write so the worker can
-    //                       detect a new value without re-reading every slot),
-    //        10=Date.now() low 32 bits for input-age telemetry.
+    //        9=generation (incremented on every changed state),
+    //        10=Date.now() low 32 bits for input-age telemetry,
+    //        11=odd/even seqlock. The writer publishes odd before changing
+    //           fields and even after generation, so the worker cannot pair
+    //           a generation with fields from a concurrent later write.
     if (typeof SharedArrayBuffer === "function") {
-      this.inputStateSab = new SharedArrayBuffer(44); // 11 * Int32
+      this.inputStateSab = new SharedArrayBuffer(INPUT_STATE_SLOT_COUNT * Int32Array.BYTES_PER_ELEMENT);
       this.inputStateView = new Int32Array(this.inputStateSab);
     } else {
       this.inputStateSab = null;
@@ -269,8 +279,10 @@ export class UpstreamWorkerAdapter {
       wgpuLoadEpochFence: this.wgpuLoadEpochFence,
       wgpuReplayPump: this.wgpuReplayPump,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+      wgpuStateCache: this.wgpuStateCache,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
+      inputReadbackDiagnostics: this.inputReadbackDiagnostics,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,
@@ -403,19 +415,19 @@ export class UpstreamWorkerAdapter {
     this.inputTelemetry.mainGeneration = inputGeneration;
 
     if (this.inputStateView) {
-      // Write each slot, then bump the generation counter last so the worker
-      // sees a coherent snapshot.
-      Atomics.store(this.inputStateView, 0, mask | 0);
-      Atomics.store(this.inputStateView, 1, stickX);
-      Atomics.store(this.inputStateView, 2, stickY);
-      Atomics.store(this.inputStateView, 3, cStickX);
-      Atomics.store(this.inputStateView, 4, cStickY);
-      Atomics.store(this.inputStateView, 5, triggerLeft);
-      Atomics.store(this.inputStateView, 6, triggerRight);
-      Atomics.store(this.inputStateView, 7, analogA);
-      Atomics.store(this.inputStateView, 8, analogB);
-      Atomics.store(this.inputStateView, 10, inputSentAtEpochMs | 0);
-      Atomics.store(this.inputStateView, 9, inputGeneration | 0);
+      writeInputStateSnapshot(this.inputStateView, {
+        mask,
+        stickX,
+        stickY,
+        cStickX,
+        cStickY,
+        triggerLeft,
+        triggerRight,
+        analogA,
+        analogB,
+        inputGeneration,
+        sentAtEpochMs: inputSentAtEpochMs
+      });
       this.inputTelemetry.mainSabGeneration = inputGeneration;
       this.inputTelemetry.mainSabWriteCount += 1;
     }

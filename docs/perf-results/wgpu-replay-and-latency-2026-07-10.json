@@ -112,6 +112,69 @@
       "p95PresentationIntervalReductionPercent": 34.56
     }
   },
+  "finalAtomicAndStateCache": {
+    "coreSha256": "f7ce56729d92404082994f97900dc0efb8fe66019b4e179f2321b7822377f523",
+    "atomicSmoke": {
+      "rawPath": ".omx/next/final-wgpu-transactions/smoke-cache0-fixed",
+      "status": "valid-correctness-diagnostic",
+      "gameSpeedPercent": 69.18,
+      "coreFps": 41.76,
+      "presentationFps": 35.88,
+      "distinctCanvasHashes": 21,
+      "firstCompletedEfbPassDraws": 120,
+      "firstCompletedEfbPassNonzeroColorBytes": 182949,
+      "passBeginCount": 10925,
+      "passEndCount": 10925,
+      "passSplits": 0,
+      "recordsOutsidePass": 0,
+      "replayErrors": 0,
+      "commandDrops": 0,
+      "batchAborts": 0,
+      "batchOversize": 0,
+      "uploadTimeouts": 0,
+      "backlogHighWater": 62737,
+      "backlogFinal": 717,
+      "drainTotalMs": 7006.734998971224,
+      "drainMaxMs": 1631.375
+    },
+    "stateCacheAb": {
+      "status": "nonqualifying-default-off",
+      "pairOrder": ["off/on", "on/off", "off/on"],
+      "runs": 6,
+      "allZeroReplayResourceAndAtomicityFailures": true,
+      "allChangingCanvasAndNonzeroDownstreamOutput": true,
+      "strictFirstPassMutationRuns": 1,
+      "offMean": {
+        "gameSpeedPercent": 70.27666666666666,
+        "coreFps": 42.096666666666664,
+        "presentationFps": 36.803333333333335,
+        "commandsPerSecond": 227729.7072593952,
+        "commandsPerEfbDraw": 10.009843586430465,
+        "backlogHighWater": 62794.666666666664,
+        "drainTotalMs": 6281.566666712363
+      },
+      "onMean": {
+        "gameSpeedPercent": 69.96,
+        "coreFps": 42,
+        "presentationFps": 36.23666666666667,
+        "commandsPerSecond": 137205.7953376265,
+        "commandsPerEfbDraw": 6.062779555449161,
+        "backlogHighWater": 38542.666666666664,
+        "drainTotalMs": 6069.530000428359,
+        "suppressedStateRecords": 1651225.6666666667
+      },
+      "descriptiveChange": {
+        "gameSpeedPoints": -0.3166666666666629,
+        "coreFps": -0.09666666666666401,
+        "presentationFps": -0.5666666666666629,
+        "commandsPerSecondPercent": -39.75059425104234,
+        "commandsPerEfbDrawPercent": -39.43182525181531,
+        "backlogHighWaterPercent": -38.62111431968744,
+        "drainTotalPercent": -3.3755379435458477
+      },
+      "decision": "Keep wgpustatecache default-off."
+    }
+  },
   "hardwareLatencyRun": {
     "rawPath": ".omx/next/wgpu-input-visible-2",
     "gameSpeedPercent": 62.14,

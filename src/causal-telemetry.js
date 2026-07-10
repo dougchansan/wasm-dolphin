@@ -41,6 +41,7 @@ export function createCausalTelemetry(overrides = {}) {
         encodeConvertMs: null,
         encodeCopyMs: null,
         profileEnabled: false,
+        caseSampleSeed: 0,
         rasterTraversalCount: 0,
         rasterTraversalTimedSampleCount: 0,
         rasterTraversalSampledTotalMs: null,
@@ -55,6 +56,8 @@ export function createCausalTelemetry(overrides = {}) {
         textureTimedSampleCount: 0,
         textureSampledTotalMs: null,
         textureSampledAverageMs: null,
+        textureCases: emptyRasterCaseProfile(),
+        tevCases: emptyRasterCaseProfile(),
         fifoBurstCount: 0,
         fifoConsumeCount: 0,
         fifoBytesLast: 0,
@@ -126,6 +129,15 @@ export function createCausalTelemetry(overrides = {}) {
         backlogHighWater: 0,
         deferredBeginPassCount: 0,
         errorCount: 0,
+        producerStateCacheEnabled: false,
+        producerPipelineRecordsSuppressed: 0,
+        producerBindGroupRecordsSuppressed: [0, 0, 0],
+        producerVertexBufferRecordsSuppressed: 0,
+        producerIndexBufferRecordsSuppressed: 0,
+        commandDroppedCount: 0,
+        batchAbortCount: 0,
+        batchOversizeCount: 0,
+        uploadTimeoutCount: 0,
       },
       workerTraffic: {
         mainToWorker: emptyTrafficDirection(),
@@ -165,6 +177,17 @@ export function createCausalTelemetry(overrides = {}) {
         ageAverageMs: 0,
         ageMaxMs: 0,
         visible: emptyInputVisibleLatencyTelemetry(),
+        marker: {
+          enabled: false,
+          exactCorePollCount: 0,
+          markerCompletedCount: 0,
+          completionAgeLastMs: 0,
+          completionAgeP95Ms: 0,
+          pollToCompletionLastMs: 0,
+          pollToCompletionP95Ms: 0,
+          lastCompletedGeneration: 0,
+          lastCompletionKind: "",
+        },
       },
       host: {
         rafLoopCount: 0,
@@ -210,6 +233,17 @@ export function emptyStageWindow() {
   };
 }
 
+export function emptyRasterCaseProfile() {
+  return {
+    sampledCount: 0,
+    workCount: 0,
+    otherSampleCount: 0,
+    otherWorkCount: 0,
+    collisionCount: 0,
+    topCases: [],
+  };
+}
+
 export function stageWindowFromProfile(profile = {}, elapsedMs = 0) {
   const result = emptyStageWindow();
   result.elapsedMs = finite(elapsedMs);
@@ -224,6 +258,82 @@ export function stageWindowFromProfile(profile = {}, elapsedMs = 0) {
   return result;
 }
 
+function unpackBits(value, shift, width) {
+  return Math.floor(Number(value) / (2 ** shift)) % (2 ** width);
+}
+
+function parseCaseHeader(match) {
+  return {
+    sampledCount: finite(match?.[1]),
+    workCount: finite(match?.[2]),
+    otherSampleCount: finite(match?.[3]),
+    otherWorkCount: finite(match?.[4]),
+    collisionCount: finite(match?.[5]),
+  };
+}
+
+function parseTextureCaseProfile(match) {
+  const profile = { ...emptyRasterCaseProfile(), ...parseCaseHeader(match) };
+  const encoded = String(match?.[6] || "");
+  if (!encoded || encoded === "-") return profile;
+  profile.topCases = encoded.split(",").flatMap((entry) => {
+    const parsed = /^([0-9a-f]+)=(\d+)\/(\d+)$/i.exec(entry);
+    if (!parsed) return [];
+    const packed = Number.parseInt(parsed[1], 16);
+    if (!Number.isSafeInteger(packed)) return [];
+    return [{
+      key: `0x${parsed[1].toLowerCase()}`,
+      sampleCount: finite(parsed[2]),
+      decodeWorkCount: finite(parsed[3]),
+      textureFormat: unpackBits(packed, 0, 4),
+      linear: unpackBits(packed, 4, 1) === 1,
+      mipmapFilter: unpackBits(packed, 5, 2),
+      baseMip: unpackBits(packed, 7, 5),
+      mipLinear: unpackBits(packed, 12, 1) === 1,
+      wrapS: unpackBits(packed, 13, 2),
+      wrapT: unpackBits(packed, 15, 2),
+      manuallyManaged: unpackBits(packed, 17, 1) === 1,
+      tlutFormat: unpackBits(packed, 18, 2),
+      widthPowerOfTwo: unpackBits(packed, 20, 1) === 1,
+      heightPowerOfTwo: unpackBits(packed, 21, 1) === 1,
+      decodeWorkPerSample: unpackBits(packed, 22, 4),
+      minFilter: unpackBits(packed, 26, 1),
+      magFilter: unpackBits(packed, 27, 1),
+    }];
+  });
+  return profile;
+}
+
+function parseTevCaseProfile(match) {
+  const profile = { ...emptyRasterCaseProfile(), ...parseCaseHeader(match) };
+  const encoded = String(match?.[6] || "");
+  if (!encoded || encoded === "-") return profile;
+  profile.topCases = encoded.split(",").flatMap((entry) => {
+    const parsed = /^([0-9a-f]+)\.([0-9a-f]+)=(\d+)\/(\d+)$/i.exec(entry);
+    if (!parsed) return [];
+    const structure = Number.parseInt(parsed[1], 16);
+    if (!Number.isSafeInteger(structure)) return [];
+    return [{
+      structuralKey: `0x${parsed[1].toLowerCase()}`,
+      programFingerprint: `0x${parsed[2].toLowerCase()}`,
+      sampleCount: finite(parsed[3]),
+      stageWorkCount: finite(parsed[4]),
+      tevStageCount: unpackBits(structure, 0, 5),
+      indirectStageCount: unpackBits(structure, 5, 3),
+      textureGenerationCount: unpackBits(structure, 8, 4),
+      colorChannelCount: unpackBits(structure, 12, 3),
+      textureEnabledStageCount: unpackBits(structure, 15, 5),
+      activeIndirectStageCount: unpackBits(structure, 20, 5),
+      usedIndirectTextureMask: unpackBits(structure, 25, 4),
+      colorCompareStageCount: unpackBits(structure, 29, 5),
+      alphaCompareStageCount: unpackBits(structure, 34, 5),
+      colorClampStageCount: unpackBits(structure, 39, 5),
+      alphaClampStageCount: unpackBits(structure, 44, 5),
+    }];
+  });
+  return profile;
+}
+
 export function parseCoreProfileTelemetry(text = "") {
   const source = String(text || "");
   const xfb = /\bxfb:(\d+)(?:\s+(\d+)x(\d+))?/i.exec(source);
@@ -233,9 +343,12 @@ export function parseCoreProfileTelemetry(text = "") {
   const profile = /\bcoreprof\s+xfb_dt:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+decode:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+vo_sync:([\d.]+)\/max([\d.]+)\s+vo_pub:([\d.]+)\/max([\d.]+)\s+vo_total:([\d.]+)\/max([\d.]+)\s+swxfb:([\d.]+)\s+conv:([\d.]+)\s+copy:([\d.]+)/.exec(source);
   const number = (match, index) => nullable(match?.[index]);
   const swphase = /\bswphase:(\d+)/i.exec(source);
+  const caseSampleSeed = /\bcaseseed:(\d+)/i.exec(source);
   const raster = /\brast:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const tev = /\btev:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const texture = /\btex:(\d+)\/(\d+)\/(\d+)/i.exec(source);
+  const textureCases = /\btexcase:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+):([^\s|]+)/i.exec(source);
+  const tevCases = /\btevcase:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+):([^\s|]+)/i.exec(source);
   const fifo = /\bfifo:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
   const fifoUnderflow = /\bfifouf:(\d+)/i.exec(source);
   const xfbGeneration = /\bxfbgen:(\d+)\/(\d+)\/(\d+)\/(\d+)/i.exec(source);
@@ -272,6 +385,7 @@ export function parseCoreProfileTelemetry(text = "") {
     encodeConvertMs: number(profile, 14),
     encodeCopyMs: number(profile, 15),
     profileEnabled: swphase?.[1] === "1",
+    caseSampleSeed: finite(caseSampleSeed?.[1]),
     rasterTraversalCount: finite(raster?.[1]),
     rasterTraversalTimedSampleCount: finite(raster?.[2]),
     rasterTraversalSampledTotalMs: micros(raster, 3),
@@ -286,6 +400,8 @@ export function parseCoreProfileTelemetry(text = "") {
     textureTimedSampleCount: finite(texture?.[2]),
     textureSampledTotalMs: micros(texture, 3),
     textureSampledAverageMs: sampledAverage(texture, 3, 2),
+    textureCases: parseTextureCaseProfile(textureCases),
+    tevCases: parseTevCaseProfile(tevCases),
     fifoBurstCount: finite(fifo?.[1]),
     fifoConsumeCount: finite(fifo?.[2]),
     fifoBytesLast: finite(fifo?.[3]),
@@ -353,6 +469,7 @@ export function flattenCausalTelemetry(value) {
     causalSoftwareEncodeMs: telemetry.softwareRaster.encodeTotalMs,
     causalXfbDecodeMs: telemetry.softwareRaster.xfbDecodeLastMs,
     causalSoftwareRasterProfileEnabled: telemetry.softwareRaster.profileEnabled,
+    causalRasterCaseSampleSeed: telemetry.softwareRaster.caseSampleSeed,
     causalRasterTraversalCount: telemetry.softwareRaster.rasterTraversalCount,
     causalRasterTraversalTimedSamples: telemetry.softwareRaster.rasterTraversalTimedSampleCount,
     causalRasterTraversalSampledTotalMs: telemetry.softwareRaster.rasterTraversalSampledTotalMs,
@@ -364,6 +481,24 @@ export function flattenCausalTelemetry(value) {
     causalTextureSampleCount: telemetry.softwareRaster.textureSampleCount,
     causalTextureTimedSamples: telemetry.softwareRaster.textureTimedSampleCount,
     causalTextureSampledTotalMs: telemetry.softwareRaster.textureSampledTotalMs,
+    causalTextureCaseSampleCount: telemetry.softwareRaster.textureCases.sampledCount,
+    causalTextureCaseWorkCount: telemetry.softwareRaster.textureCases.workCount,
+    causalTextureCaseOtherSampleCount: telemetry.softwareRaster.textureCases.otherSampleCount,
+    causalTextureCaseCollisionCount: telemetry.softwareRaster.textureCases.collisionCount,
+    causalTextureTopCaseKey: telemetry.softwareRaster.textureCases.topCases[0]?.key ?? null,
+    causalTextureTopCaseSamples:
+      telemetry.softwareRaster.textureCases.topCases[0]?.sampleCount ?? 0,
+    causalTextureTopCaseDecodeWork:
+      telemetry.softwareRaster.textureCases.topCases[0]?.decodeWorkCount ?? 0,
+    causalTevCaseSampleCount: telemetry.softwareRaster.tevCases.sampledCount,
+    causalTevCaseWorkCount: telemetry.softwareRaster.tevCases.workCount,
+    causalTevCaseOtherSampleCount: telemetry.softwareRaster.tevCases.otherSampleCount,
+    causalTevCaseCollisionCount: telemetry.softwareRaster.tevCases.collisionCount,
+    causalTevTopStructuralKey:
+      telemetry.softwareRaster.tevCases.topCases[0]?.structuralKey ?? null,
+    causalTevTopProgramFingerprint:
+      telemetry.softwareRaster.tevCases.topCases[0]?.programFingerprint ?? null,
+    causalTevTopCaseSamples: telemetry.softwareRaster.tevCases.topCases[0]?.sampleCount ?? 0,
     causalFifoBytesLast: telemetry.softwareRaster.fifoBytesLast,
     causalFifoBytesMax: telemetry.softwareRaster.fifoBytesMax,
     causalFifoConsumerObservedBacklogAgeLastMs:
@@ -406,6 +541,19 @@ export function flattenCausalTelemetry(value) {
     causalTickRepaintCount: telemetry.presentation.tickRepaintCount,
     causalWgpuDrainMs: telemetry.webgpu.drainLastMs,
     causalWgpuBacklog: telemetry.webgpu.backlogLast,
+    causalWgpuProducerStateCacheEnabled: telemetry.webgpu.producerStateCacheEnabled,
+    causalWgpuProducerPipelineRecordsSuppressed:
+      telemetry.webgpu.producerPipelineRecordsSuppressed,
+    causalWgpuProducerBindGroupRecordsSuppressed:
+      telemetry.webgpu.producerBindGroupRecordsSuppressed,
+    causalWgpuProducerVertexBufferRecordsSuppressed:
+      telemetry.webgpu.producerVertexBufferRecordsSuppressed,
+    causalWgpuProducerIndexBufferRecordsSuppressed:
+      telemetry.webgpu.producerIndexBufferRecordsSuppressed,
+    causalWgpuCommandDroppedCount: telemetry.webgpu.commandDroppedCount,
+    causalWgpuBatchAbortCount: telemetry.webgpu.batchAbortCount,
+    causalWgpuBatchOversizeCount: telemetry.webgpu.batchOversizeCount,
+    causalWgpuUploadTimeoutCount: telemetry.webgpu.uploadTimeoutCount,
     causalWorkerRequestCount: telemetry.workerTraffic.mainToWorker.requestCount,
     causalWorkerPostCount: telemetry.workerTraffic.mainToWorker.oneWayCount,
     causalWorkerTransferOutBytes: telemetry.workerTraffic.mainToWorker.transferBytes,
@@ -421,6 +569,15 @@ export function flattenCausalTelemetry(value) {
     causalInputCorePollAgeMs: telemetry.input.visible.pollAgeLastMs,
     causalInputVisibleAgeMs: telemetry.input.visible.visibleAgeLastMs,
     causalInputPollToVisibleMs: telemetry.input.visible.pollToVisibleLastMs,
+    causalInputMarkerEnabled: telemetry.input.marker.enabled,
+    causalInputMarkerExactCorePollCount: telemetry.input.marker.exactCorePollCount,
+    causalInputMarkerCompletedCount: telemetry.input.marker.markerCompletedCount,
+    causalInputMarkerCompletionAgeMs: telemetry.input.marker.completionAgeLastMs,
+    causalInputMarkerCompletionAgeP95Ms: telemetry.input.marker.completionAgeP95Ms,
+    causalInputMarkerPollToCompletionMs: telemetry.input.marker.pollToCompletionLastMs,
+    causalInputMarkerPollToCompletionP95Ms: telemetry.input.marker.pollToCompletionP95Ms,
+    causalInputMarkerLastCompletedGeneration: telemetry.input.marker.lastCompletedGeneration,
+    causalInputMarkerCompletionKind: telemetry.input.marker.lastCompletionKind,
   };
   return valid
     ? flattened

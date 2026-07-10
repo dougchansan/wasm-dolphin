@@ -34,10 +34,23 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.presentation.js.capture.count, 0);
   assert.equal(value.presentation.gpuCompletion.enabled, false);
   assert.equal(value.presentation.gpuCompletion.completedCount, 0);
+  assert.equal(value.webgpu.producerStateCacheEnabled, false);
+  assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
+  assert.equal(value.webgpu.commandDroppedCount, 0);
   assert.equal(value.softwareRaster.profileEnabled, false);
+  assert.equal(value.softwareRaster.caseSampleSeed, 0);
   assert.equal(value.softwareRaster.rasterTraversalCount, 0);
   assert.equal(value.softwareRaster.tevPixelCount, 0);
   assert.equal(value.softwareRaster.textureSampleCount, 0);
+  assert.deepEqual(value.softwareRaster.textureCases, {
+    sampledCount: 0,
+    workCount: 0,
+    otherSampleCount: 0,
+    otherWorkCount: 0,
+    collisionCount: 0,
+    topCases: [],
+  });
+  assert.deepEqual(value.softwareRaster.tevCases, value.softwareRaster.textureCases);
   assert.equal(value.softwareRaster.fifoConsumerObservedBacklogAgeLastMs, null);
   assert.equal(value.softwareRaster.fifoOldestPendingAgeLastMs, null);
   assert.equal(value.softwareRaster.sampledStaleFrameRatio, 0);
@@ -46,6 +59,10 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.input.mainGeneration, 0);
   assert.equal(value.input.visible.enabled, false);
   assert.equal(value.input.visible.causalVisualAttribution, false);
+  assert.equal(value.input.marker.enabled, false);
+  assert.equal(value.input.marker.exactCorePollCount, 0);
+  assert.equal(value.input.marker.markerCompletedCount, 0);
+  assert.equal(value.input.marker.lastCompletionKind, "");
 });
 
 test("core profile text is promoted without changing the compatibility string", () => {
@@ -54,7 +71,9 @@ test("core profile text is promoted without changing the compatibility string", 
     "coreprof xfb_dt:16.7 avg:17.1 max:41.2 decode:1.3 avg:1.4 max:2.8 " +
     "vo_sync:0.2/max0.6 vo_pub:0.3/max0.7 vo_total:0.5/max1.1 " +
     "swxfb:0.9 conv:0.8 copy:0.1 " +
-    "swphase:1 rast:120/4/840/4096 tev:1024/8192/2/410 tex:4096/2/260 " +
+    "swphase:1 caseseed:305419896 rast:120/4/840/4096 tev:1024/8192/2/410 tex:4096/2/260 " +
+    "texcase:10/80/2/16/3:61b31d6=8/64 " +
+    "tevcase:10/20/2/4/5:21002a112322.deadbeef=8/16 " +
     "fifo:128/127/64/512/900/2400/127 fifouf:0 xfbgen:77/900/69300/1800 " +
     "framegen:77/16600/1278200/41000/76";
   assert.deepEqual(parseCoreProfileTelemetry(source), {
@@ -80,6 +99,7 @@ test("core profile text is promoted without changing the compatibility string", 
     encodeConvertMs: 0.8,
     encodeCopyMs: 0.1,
     profileEnabled: true,
+    caseSampleSeed: 305419896,
     rasterTraversalCount: 120,
     rasterTraversalTimedSampleCount: 4,
     rasterTraversalSampledTotalMs: 0.84,
@@ -94,6 +114,56 @@ test("core profile text is promoted without changing the compatibility string", 
     textureTimedSampleCount: 2,
     textureSampledTotalMs: 0.26,
     textureSampledAverageMs: 0.13,
+    textureCases: {
+      sampledCount: 10,
+      workCount: 80,
+      otherSampleCount: 2,
+      otherWorkCount: 16,
+      collisionCount: 3,
+      topCases: [{
+        key: "0x61b31d6",
+        sampleCount: 8,
+        decodeWorkCount: 64,
+        textureFormat: 6,
+        linear: true,
+        mipmapFilter: 2,
+        baseMip: 3,
+        mipLinear: true,
+        wrapS: 1,
+        wrapT: 2,
+        manuallyManaged: true,
+        tlutFormat: 2,
+        widthPowerOfTwo: true,
+        heightPowerOfTwo: false,
+        decodeWorkPerSample: 8,
+        minFilter: 1,
+        magFilter: 0,
+      }],
+    },
+    tevCases: {
+      sampledCount: 10,
+      workCount: 20,
+      otherSampleCount: 2,
+      otherWorkCount: 4,
+      collisionCount: 5,
+      topCases: [{
+        structuralKey: "0x21002a112322",
+        programFingerprint: "0xdeadbeef",
+        sampleCount: 8,
+        stageWorkCount: 16,
+        tevStageCount: 2,
+        indirectStageCount: 1,
+        textureGenerationCount: 3,
+        colorChannelCount: 2,
+        textureEnabledStageCount: 2,
+        activeIndirectStageCount: 1,
+        usedIndirectTextureMask: 5,
+        colorCompareStageCount: 1,
+        alphaCompareStageCount: 0,
+        colorClampStageCount: 2,
+        alphaClampStageCount: 2,
+      }],
+    },
     fifoBurstCount: 128,
     fifoConsumeCount: 127,
     fifoBytesLast: 64,
@@ -139,9 +209,28 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
     softwareRaster: {
       encodeTotalMs: 1.25,
       profileEnabled: true,
+      caseSampleSeed: 305419896,
       rasterTraversalCount: 120,
       tevPixelCount: 1024,
       textureSampleCount: 4096,
+      textureCases: {
+        sampledCount: 10,
+        workCount: 80,
+        otherSampleCount: 2,
+        collisionCount: 3,
+        topCases: [{ key: "0x61b31d6", sampleCount: 8, decodeWorkCount: 64 }],
+      },
+      tevCases: {
+        sampledCount: 10,
+        workCount: 20,
+        otherSampleCount: 2,
+        collisionCount: 5,
+        topCases: [{
+          structuralKey: "0x21002a112322",
+          programFingerprint: "0xdeadbeef",
+          sampleCount: 8,
+        }],
+      },
       fifoOldestPendingAgeMaxMs: 2.4,
       sampledSourceFrameCount: 10,
       sampledUniqueFrameCount: 4,
@@ -178,6 +267,17 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         visibleAgeLastMs: 18,
         pollToVisibleLastMs: 13,
       },
+      marker: {
+        enabled: true,
+        exactCorePollCount: 4,
+        markerCompletedCount: 3,
+        completionAgeLastMs: 22,
+        completionAgeP95Ms: 30,
+        pollToCompletionLastMs: 12,
+        pollToCompletionP95Ms: 18,
+        lastCompletedGeneration: 9,
+        lastCompletionKind: "gpu-complete",
+      },
     },
   });
   const flat = flattenCausalTelemetry(value);
@@ -185,9 +285,24 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalCoreTicks, 55);
   assert.equal(flat.causalSoftwareEncodeMs, 1.25);
   assert.equal(flat.causalSoftwareRasterProfileEnabled, true);
+  assert.equal(flat.causalRasterCaseSampleSeed, 305419896);
   assert.equal(flat.causalRasterTraversalCount, 120);
   assert.equal(flat.causalTevPixelCount, 1024);
   assert.equal(flat.causalTextureSampleCount, 4096);
+  assert.equal(flat.causalTextureCaseSampleCount, 10);
+  assert.equal(flat.causalTextureCaseWorkCount, 80);
+  assert.equal(flat.causalTextureCaseOtherSampleCount, 2);
+  assert.equal(flat.causalTextureCaseCollisionCount, 3);
+  assert.equal(flat.causalTextureTopCaseKey, "0x61b31d6");
+  assert.equal(flat.causalTextureTopCaseSamples, 8);
+  assert.equal(flat.causalTextureTopCaseDecodeWork, 64);
+  assert.equal(flat.causalTevCaseSampleCount, 10);
+  assert.equal(flat.causalTevCaseWorkCount, 20);
+  assert.equal(flat.causalTevCaseOtherSampleCount, 2);
+  assert.equal(flat.causalTevCaseCollisionCount, 5);
+  assert.equal(flat.causalTevTopStructuralKey, "0x21002a112322");
+  assert.equal(flat.causalTevTopProgramFingerprint, "0xdeadbeef");
+  assert.equal(flat.causalTevTopCaseSamples, 8);
   assert.equal(flat.causalFifoOldestPendingAgeMaxMs, 2.4);
   assert.equal(flat.causalFifoConsumerObservedBacklogAgeMaxMs, 2.4);
   assert.equal(flat.causalSampledStaleFrameRatio, 0.6);
@@ -212,6 +327,18 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalInputCorePollAgeMs, 5);
   assert.equal(flat.causalInputVisibleAgeMs, 18);
   assert.equal(flat.causalInputPollToVisibleMs, 13);
+  assert.equal(flat.causalInputMarkerEnabled, true);
+  assert.equal(flat.causalInputMarkerExactCorePollCount, 4);
+  assert.equal(flat.causalInputMarkerCompletedCount, 3);
+  assert.equal(flat.causalInputMarkerCompletionAgeMs, 22);
+  assert.equal(flat.causalInputMarkerCompletionAgeP95Ms, 30);
+  assert.equal(flat.causalInputMarkerPollToCompletionMs, 12);
+  assert.equal(flat.causalInputMarkerPollToCompletionP95Ms, 18);
+  assert.equal(flat.causalInputMarkerLastCompletedGeneration, 9);
+  assert.equal(flat.causalInputMarkerCompletionKind, "gpu-complete");
+  assert.equal(flat.causalWgpuProducerStateCacheEnabled, false);
+  assert.deepEqual(flat.causalWgpuProducerBindGroupRecordsSuppressed, [0, 0, 0]);
+  assert.equal(flat.causalWgpuCommandDroppedCount, 0);
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
 });
 

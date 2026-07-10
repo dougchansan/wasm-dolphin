@@ -30,6 +30,16 @@ export function requestedWgpuReplayPump(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuStateCache(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpustatecache");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }
@@ -38,14 +48,23 @@ export function selectAtomicReplayLimit({
   read,
   write,
   opAt,
+  maxRecords = Number.POSITIVE_INFINITY,
   beginOp = 12,
   endOp = 21
 }) {
   const available = (write - read) >>> 0;
+  const requestedBudget = Number(maxRecords);
+  const budget = Number.isFinite(requestedBudget)
+    ? Math.min(available, Math.max(0, Math.trunc(requestedBudget)))
+    : available;
   let safeLimit = read >>> 0;
   let passStart = null;
 
   for (let offset = 0; offset < available; offset += 1) {
+    // The budget limits ordinary drain work. Once a pass has started,
+    // continue through its END_PASS even if that crosses the budget so a
+    // 16,385-record pass cannot deadlock behind a 16,384-record window.
+    if (offset >= budget && passStart === null) break;
     const index = (read + offset) >>> 0;
     const op = opAt(index);
     if (passStart === null) {

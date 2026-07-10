@@ -1,0 +1,125 @@
+diff --git a/Source/Core/VideoBackends/Software/Tev.cpp b/Source/Core/VideoBackends/Software/Tev.cpp
+index 7cff266..d893baf 100644
+--- a/Source/Core/VideoBackends/Software/Tev.cpp
++++ b/Source/Core/VideoBackends/Software/Tev.cpp
+@@ -396,6 +396,78 @@ void Tev::Draw()
+   DolphinWeb::RasterProfile::RecordTevStages(
+       static_cast<std::uint64_t>(bpmem.genMode.numindstages) +
+       static_cast<std::uint64_t>(bpmem.genMode.numtevstages) + 1);
++  if (profile_scope.ShouldRecordCase())
++  {
++    const u32 tev_stage_count = bpmem.genMode.numtevstages.Value() + 1;
++    const u32 indirect_stage_count = bpmem.genMode.numindstages.Value();
++    u32 texture_enabled_count = 0;
++    u32 active_indirect_count = 0;
++    u32 used_indirect_texture_mask = 0;
++    u32 color_compare_count = 0;
++    u32 alpha_compare_count = 0;
++    u32 color_clamp_count = 0;
++    u32 alpha_clamp_count = 0;
++    std::uint64_t fingerprint = DolphinWeb::RasterProfile::TEV_PROGRAM_FINGERPRINT_SEED;
++    fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint,
++                                                                   bpmem.genMode.hex);
++    fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint,
++                                                                   bpmem.tevindref.hex);
++    for (u32 stage_num = 0; stage_num < indirect_stage_count; ++stage_num)
++    {
++      const u32 scale_index = stage_num >> 1;
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(
++          fingerprint, bpmem.texscale[scale_index].hex);
++    }
++
++    for (u32 stage_num = 0; stage_num < tev_stage_count; ++stage_num)
++    {
++      const u32 stage_odd = stage_num & 1;
++      const TwoTevStageOrders& order = bpmem.tevorders[stage_num >> 1];
++      const TevStageCombiner::ColorCombiner& cc = bpmem.combiners[stage_num].colorC;
++      const TevStageCombiner::AlphaCombiner& ac = bpmem.combiners[stage_num].alphaC;
++      const TevStageIndirect& indirect = bpmem.tevind[stage_num];
++      const bool texture_enabled = order.getEnable(stage_odd) != 0;
++      const bool indirect_active = indirect.IsActive();
++      texture_enabled_count += texture_enabled ? 1 : 0;
++      active_indirect_count += indirect_active ? 1 : 0;
++      if (indirect_active)
++        used_indirect_texture_mask |= 1u << indirect.bt.Value();
++      color_compare_count += cc.bias == TevBias::Compare ? 1 : 0;
++      alpha_compare_count += ac.bias == TevBias::Compare ? 1 : 0;
++      color_clamp_count += cc.clamp ? 1 : 0;
++      alpha_clamp_count += ac.clamp ? 1 : 0;
++
++      const u32 order_word = order.getTexMap(stage_odd) |
++                             (order.getTexCoord(stage_odd) << 3) |
++                             (static_cast<u32>(texture_enabled) << 6) |
++                             (static_cast<u32>(order.getColorChan(stage_odd)) << 7);
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, order_word);
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(
++          fingerprint, indirect.fullhex & 0x1fffff);
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, cc.hex);
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, ac.hex);
++      const u32 konst_word = static_cast<u32>(bpmem.tevksel.GetKonstColor(stage_num)) |
++                             (static_cast<u32>(bpmem.tevksel.GetKonstAlpha(stage_num)) << 8);
++      fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, konst_word);
++      for (const u32 swap_table_id : {ac.rswap.Value(), ac.tswap.Value()})
++      {
++        const auto swap = bpmem.tevksel.GetSwapTable(swap_table_id);
++        const u32 swap_word = static_cast<u32>(swap[ColorChannel::Red]) |
++                              (static_cast<u32>(swap[ColorChannel::Green]) << 2) |
++                              (static_cast<u32>(swap[ColorChannel::Blue]) << 4) |
++                              (static_cast<u32>(swap[ColorChannel::Alpha]) << 6);
++        fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, swap_word);
++      }
++    }
++
++    const std::uint64_t structural_key = DolphinWeb::RasterProfile::PackTevStructuralKey(
++        tev_stage_count, indirect_stage_count, bpmem.genMode.numtexgens.Value(),
++        bpmem.genMode.numcolchans.Value(), texture_enabled_count, active_indirect_count,
++        used_indirect_texture_mask, color_compare_count, alpha_compare_count, color_clamp_count,
++        alpha_clamp_count);
++    DolphinWeb::RasterProfile::RecordTevCase(
++        structural_key, fingerprint, indirect_stage_count + tev_stage_count, profile_scope.Epoch());
++  }
+ #endif
+   ASSERT(Position[0] >= 0 && Position[0] < s32(EFB_WIDTH));
+   ASSERT(Position[1] >= 0 && Position[1] < s32(EFB_HEIGHT));
+diff --git a/Source/Core/VideoBackends/Software/TextureSampler.cpp b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+index befe33e..fa8b32c 100644
+--- a/Source/Core/VideoBackends/Software/TextureSampler.cpp
++++ b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+@@ -23,6 +23,11 @@
+ 
+ namespace TextureSampler
+ {
++static constexpr bool IsPowerOfTwo(u32 value)
++{
++  return value != 0 && (value & (value - 1)) == 0;
++}
++
+ static inline void WrapCoord(int* coordp, WrapMode wrap_mode, int image_size)
+ {
+   int coord = *coordp;
+@@ -99,6 +104,25 @@ void Sample(s32 s, s32 t, s32 lod, bool linear, u8 texmap, u8* sample)
+       baseMip++;
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  if (profile_scope.ShouldRecordCase())
++  {
++    const TexImage0& ti0 = texUnit.texImage0;
++    const u32 width = ti0.width.Value() + 1;
++    const u32 height = ti0.height.Value() + 1;
++    const u32 decode_work = (linear ? 4u : 1u) * (mipLinear ? 2u : 1u);
++    const std::uint64_t case_key = DolphinWeb::RasterProfile::PackTextureCaseKey(
++        static_cast<u32>(ti0.format.Value()), linear,
++        static_cast<u32>(tm0.mipmap_filter.Value()), static_cast<u32>(baseMip), mipLinear,
++        static_cast<u32>(tm0.wrap_s.Value()), static_cast<u32>(tm0.wrap_t.Value()),
++        texUnit.texImage1.cache_manually_managed.Value(),
++        static_cast<u32>(texUnit.texTlut.tlut_format.Value()), IsPowerOfTwo(width),
++        IsPowerOfTwo(height), decode_work, static_cast<u32>(tm0.min_filter.Value()),
++        static_cast<u32>(tm0.mag_filter.Value()));
++    DolphinWeb::RasterProfile::RecordTextureCase(case_key, decode_work, profile_scope.Epoch());
++  }
++#endif
++
+   if (mipLinear)
+   {
+     u8 sampledTex[4];

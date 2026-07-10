@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "05fc890838da65a459ad04a57ddc91259540e00d0571475d325ec32557d9dde0",
+  "patchSeriesSha256": "80a1c15ab588e440207aa15cb7d79029d121b77797de11505e6c84f427f89f63",
   "patches": [
     {
       "order": 1,
@@ -117,6 +117,46 @@
     },
     {
       "order": 12,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0012-software-raster-case-profile.patch",
+      "hashMode": "lf-normalized",
+      "size": 6500,
+      "sha256": "3459c603b79f83b137067501fd4f448da73cf968a7ef0589857b1597ebd54c7c"
+    },
+    {
+      "order": 13,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0013-webgpu-pass-state-cache.patch",
+      "hashMode": "lf-normalized",
+      "size": 22358,
+      "sha256": "bc815552cdb3c4ce2a5731b8fccc6db6600fe4507210789495665fb4ad3cc675"
+    },
+    {
+      "order": 14,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0014-correlated-core-timing-profile.patch",
+      "hashMode": "lf-normalized",
+      "size": 26209,
+      "sha256": "350dbbf0a2b1d4301c023de38b39cc1361dc774c96bf9075603f5dd617f9824e"
+    },
+    {
+      "order": 15,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0015-webgpu-pass-transactions.patch",
+      "hashMode": "lf-normalized",
+      "size": 35959,
+      "sha256": "b780df30f8621b04ae76836a3ffc83f98e956ae8b04725ede02a19c529350e4f"
+    },
+    {
+      "order": 16,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0016-software-texture-hot-case.patch",
+      "hashMode": "lf-normalized",
+      "size": 7930,
+      "sha256": "6efa2d800ff691fb56dfd39688e9c3a805681346dc5cddebee35367e8496a0a4"
+    },
+    {
+      "order": 17,
       "cwd": "Externals/SFML/SFML",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "hashMode": "lf-normalized",
@@ -124,7 +164,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 13,
+      "order": 18,
       "cwd": "Externals/xxhash/xxHash",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",

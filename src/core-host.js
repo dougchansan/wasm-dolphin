@@ -14,13 +14,17 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
-  requestedWgpuReplayDiagnostics
+  requestedWgpuReplayDiagnostics,
+  requestedWgpuStateCache
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
-import { requestedInputLatencyDiagnostics } from "./input-latency-telemetry.js";
+import {
+  requestedInputLatencyDiagnostics,
+  requestedInputReadbackDiagnostics
+} from "./input-latency-telemetry.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -82,8 +86,10 @@ export class EmulatorHost {
       this.videoBackend === "WebGPU-Real"
     );
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
+    this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
+    this.inputReadbackDiagnostics = requestedInputReadbackDiagnostics(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
     // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
@@ -296,8 +302,10 @@ export class EmulatorHost {
             wgpuLoadEpochFence: this.wgpuLoadEpochFence,
             wgpuReplayPump: this.wgpuReplayPump,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+            wgpuStateCache: this.wgpuStateCache,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
-            inputLatencyDiagnostics: this.inputLatencyDiagnostics
+            inputLatencyDiagnostics: this.inputLatencyDiagnostics,
+            inputReadbackDiagnostics: this.inputReadbackDiagnostics
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";

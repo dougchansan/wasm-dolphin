@@ -21,6 +21,9 @@
 - [Performance audit (2026-07-10)](performance-audit-2026-07-10.md) — current
   bottleneck classification, five-priority follow-up, decisions, and rollback
   paths.
+- [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
+  CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
+  deterministic 32×32 input-marker results.
 - [2026-07-10 evidence package](perf-results/melee-performance-evidence-2026-07-10.md) —
   aggregate rows, machine-readable decisions, and raw-artifact hashes.
 - [Melee JIT diagnostics](perf-results/melee-jit-diagnostics-2026-07-10.md) —
@@ -28,7 +31,8 @@
 - [Independent core-build parity](perf-results/melee-core-build-parity-2026-07-10.json) —
   machine-readable source, toolchain, JS, WASM, code, and data equality.
 - [GPU completion and input propagation diagnostics](perf-results/melee-latency-diagnostics-2026-07-10.md) —
-  opt-in queue-completion and host-to-visible-bound measurements.
+  opt-in queue completion, legacy propagation bounds, and causal
+  input-to-browser-canvas marker measurements.
 - [WGPU replay and hardware-latency diagnostics](perf-results/wgpu-replay-and-latency-2026-07-10.md) —
   immediate EFB-pass mutation, repeated replay-pump A/B, GPU completion, and
   GPU-readback input-to-visible evidence.

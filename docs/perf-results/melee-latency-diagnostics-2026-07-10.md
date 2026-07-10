@@ -66,3 +66,34 @@ The later real-WGPU measurement uses a mapped hardware backbuffer rather than
 the software XFB hash. Its six input transitions, queue-completion samples, and
 validation caveats are recorded separately in
 [WGPU replay and hardware-latency diagnostics](wgpu-replay-and-latency-2026-07-10.md).
+
+## Final deterministic 32×32 marker
+
+The final `f7ce5672…` software-hybrid diagnostic replaced next-distinct-frame
+attribution with an exact generation-coded marker. The renderer draws 32×32
+pixels for external sensing; the browser observer validates the uniform
+top-left 8×8 region. Six expected transitions reached applied, core-polled,
+submitted, GPU-completed, and browser-canvas-visible state with complete,
+monotonic timestamps. Mismatch, unavailable-generation, expiry, canvas-read,
+and raw-drop counters were zero; `inputreadback=false`.
+
+| Boundary, six samples | Average | p50 | p95/max |
+| --- | ---: | ---: | ---: |
+| Worker applied → core poll | 28.833 ms | 20 ms | 50 ms |
+| Core poll → marker submit | 0.500 ms | 0 ms | 1 ms |
+| Marker submit → GPU completion | 2.333 ms | 2 ms | 4 ms |
+| GPU completion → browser canvas | 22.334 ms | 19.700 ms | 29.945 ms |
+| Input event → browser canvas | 54.185 ms | 51.540 ms | 82.300 ms |
+
+The run averaged 99.0% game speed, 59.9 presentation FPS, 59.5 core FPS,
+14.1 unique visual FPS, and zero audio underruns. Acceptance passed 6/6.
+This is causal marker timing to the browser canvas, not input-to-photon.
+Compositor scheduling, scanout, the display panel, and photon emission are
+excluded. Use `INPUTMARKEROBSERVE=0` with an external camera or photodiode to
+measure the physical boundary without the observer's per-rAF readback.
+
+Raw output is under
+`.omx/next/final-input-marker/software-hybrid-32px-final/`; its `summary.json`
+and `input-marker-observations.json` SHA-256 values are `e6f4710e…8b8a` and
+`639c4bbe…b397`. Full identities are in
+[the next-program package](melee-next-program-2026-07-10.json).

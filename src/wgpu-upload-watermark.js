@@ -5,6 +5,34 @@ export const WGPU_UPLOAD_READ_HEADER_INDEX = 3;
 export const WGPU_PROTOCOL_FLAGS_HEADER_INDEX = 4;
 export const WGPU_UPLOAD_WATERMARK_PROTOCOL_FLAG = 1;
 
+export function rebaseWgpuStagedUploadWindow({
+  startIndex,
+  writeIndex,
+  scanCursor,
+  stagedUploadIndices = []
+}) {
+  const start = startIndex >>> 0;
+  const write = writeIndex >>> 0;
+  const suffixLength = (write - start) >>> 0;
+
+  // Command-ring occupancy is bounded well below 2^32 records, so unsigned
+  // distance from the new suffix start gives an unambiguous wrap-safe range.
+  for (const value of stagedUploadIndices) {
+    const index = Number(value) >>> 0;
+    if (((index - start) >>> 0) >= suffixLength) {
+      return { ok: false, startIndex: start, invalidIndex: index };
+    }
+  }
+
+  const cursor = scanCursor == null ? start : scanCursor >>> 0;
+  const cursorDistance = (cursor - start) >>> 0;
+  return {
+    ok: true,
+    startIndex: start,
+    scanCursor: cursorDistance <= suffixLength ? cursor : start
+  };
+}
+
 export function nextWgpuUploadRead({
   currentRead,
   uploadPointer,

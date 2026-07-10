@@ -50,6 +50,55 @@
       "maxUs": 15899
     }
   ],
+  "correlatedValidation": {
+    "qualification": "diagnostic-dirty-candidate",
+    "coreSha256": "54908c4a16c1a8fa0ad29913f63c59fe6b107a72ab5865c9d54835d3d10d92af",
+    "browser": "Chrome 143.0.7499.4 headed",
+    "durationSeconds": 30,
+    "scene": "Melee Kirby vs Link fixed battle, direct save load",
+    "worstSlice": {
+      "totalUs": 57590,
+      "advanceUs": 57580,
+      "executeUs": 9,
+      "compileUs": 0,
+      "throttleWaitUs": 57235,
+      "dvdWaitUs": 0,
+      "videoWorkUs": 255,
+      "event": "VICallback"
+    },
+    "classification": {
+      "owner": "pacing-wait",
+      "source": "structured-correlated-slice",
+      "dominanceRatio": 0.9938357353707241,
+      "unattributedUs": 91
+    },
+    "timedWindow": {
+      "gameSpeedPercent": 98.68,
+      "coreFps": 59.28,
+      "presentationFps": 57.52,
+      "uniqueVisualFps": 12.8
+    },
+    "wholeRun": {
+      "emitFailureCount": 0,
+      "compileFailureCount": 0,
+      "moduleCompileMaxUs": 744,
+      "moduleInstantiateMaxUs": 60,
+      "compileBurstMaxUs": 1138,
+      "finishReadDvdThread": {
+        "count": 9,
+        "averageMs": 12.921,
+        "p95Ms": 16.059,
+        "maxMs": 16.059,
+        "note": "The retained worst correlated tuple had dvdWaitUs=0."
+      }
+    },
+    "rawEvidence": {
+      "directory": ".omx/next/final-correlated-slices/software-hybrid-1/",
+      "summarySha256": "015dfc66d00cd528153e2f3f9017f847c3e2c5a937fbf43da9bb7a81bb7ad540",
+      "consoleSha256": "d11579db7469cc9ea3c6681fe316079d1853fac7b60db16a745352ba0ce9a09c",
+      "analysisSha256": "0f94bef39f00d8708d74e2bab2073a62905d05ffb194fbdce75624788acfe6d9"
+    }
+  },
   "rawEvidence": {
     "directory": ".omx/final-qualification/software-default-current/software-stable/",
     "summarySha256": "c5e647f2689ba4a85665e2bb0db4e31d5a810383d52abfe15dae0a83f7f8c3f3",

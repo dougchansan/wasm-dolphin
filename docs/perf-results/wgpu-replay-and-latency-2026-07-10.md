@@ -95,3 +95,39 @@ no performance or latency result.
 - The current experimental renderer is limited by both ~67% emulation speed
   with JIT off and expensive command replay. It is not presently a full-speed
   replacement for the software-hybrid default.
+
+## Final atomic replay and stable-state diagnostic
+
+The final `f7ce5672…` smoke supersedes the rejected run that logged three
+`upload-stage-order` errors. The broad check incorrectly rejected retained
+uploads belonging to a later incomplete suffix after an earlier pass was
+consumed. The replacement is wrap-safe and still rejects an upload retained
+from the consumed prefix.
+
+The corrected smoke had zero replay errors, missing resources, drops, batch
+aborts, oversize batches, upload timeouts, pass splits, and records outside a
+pass. Pass begin/end counts were 10,925/10,925. The first completed 120-draw
+EFB pass contained 182,949 nonzero color bytes; XFB and backbuffer samples were
+also nonzero. It averaged 69.18% game speed, 41.76 core FPS, and 35.88
+presentation FPS, with backlog high-water 62,737.
+
+Three balanced `wgpustatecache=0/1`, `1/0`, `0/1` pairs then measured exact
+producer-side state suppression:
+
+| Arm mean | Game speed % | Presentation FPS | Commands/s | Commands/EFB draw | Backlog high-water | Drain total ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cache off | 70.277 | 36.803 | 227,730 | 10.010 | 62,795 | 6,281.567 |
+| Cache on | 69.960 | 36.237 | 137,206 | 6.063 | 38,543 | 6,069.530 |
+| Change | −0.317 pp | −0.567 | −39.75% | −39.43% | −38.62% | −3.38% |
+
+All six arms had zero replay/resource/atomicity failures and changing,
+nonzero downstream output. Cache-on suppressed about 1.65 million records per
+run, but did not improve cadence; median paired game-speed and presentation
+changes were −0.77 points and −0.47 FPS. GPU p95 also worsened in two pairs.
+`wgpustatecache` therefore remains default-off.
+
+Five arms sampled a legitimate one-draw post-load EFB pass with no mutation,
+so this six-run set misses the strict first-pass classifier gate and is not a
+performance promotion. The separate corrected smoke and third cache-on arm
+did prove completed-pass mutation. Full run records are in
+[the next-program package](melee-next-program-2026-07-10.md).

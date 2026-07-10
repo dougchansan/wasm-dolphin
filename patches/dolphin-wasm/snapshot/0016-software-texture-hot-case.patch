@@ -1,0 +1,214 @@
+diff --git a/Source/Core/VideoBackends/Software/TextureSampler.cpp b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+index fa8b32c..a19bd52 100644
+--- a/Source/Core/VideoBackends/Software/TextureSampler.cpp
++++ b/Source/Core/VideoBackends/Software/TextureSampler.cpp
+@@ -3,6 +3,10 @@
+ 
+ #include "VideoBackends/Software/TextureSampler.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include "VideoBackends/Software/TextureSamplerHotCase.h"
++#endif
++
+ #include <algorithm>
+ #include <span>
+ 
+@@ -179,6 +183,27 @@ void SampleMip(s32 s, s32 t, s32 mip, bool linear, u8 texmap, u8* sample)
+   const int tlutAddress = texTlut.tmem_offset << 9;
+   const std::span<const u8> tlut = TexDecoder_GetTmemSpan(tlutAddress);
+ 
++#ifdef __EMSCRIPTEN__
++  // These two exact cases account for roughly three quarters of sampled texture decode work in
++  // the fixed Melee battle profile (keys 0xd38a01e and 0xd34a01e). TLUT state is part of those keys
++  // even though CMPR does not consult a palette. Keep the predicate deliberately narrow so every
++  // unmeasured mode continues through the generic sampler.
++  const bool is_measured_cmpr_hot_case =
++      mip == 0 && linear && texfmt == TextureFormat::CMPR &&
++      tm0.mipmap_filter == MipMode::None && tm0.min_filter == FilterMode::Linear &&
++      tm0.mag_filter == FilterMode::Linear && tm0.wrap_s == WrapMode::Repeat &&
++      tm0.wrap_t == WrapMode::Repeat && !texUnit.texImage1.cache_manually_managed &&
++      (tlutfmt == TLUTFormat::RGB565 || tlutfmt == TLUTFormat::RGB5A3) &&
++      IsPowerOfTwo(static_cast<u32>(image_width_minus_1 + 1)) &&
++      IsPowerOfTwo(static_cast<u32>(image_height_minus_1 + 1));
++  if (is_measured_cmpr_hot_case)
++  {
++    HotCase::SampleCmprLinearRepeatPow2(image_src, image_width_minus_1, image_height_minus_1, s, t,
++                                        sample);
++    return;
++  }
++#endif
++
+   // reduce sample location and texture size to mip level
+   // move texture pointer to mip location
+   if (mip)
+diff --git a/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h b/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h
+new file mode 100644
+index 0000000..1d5e66c
+--- /dev/null
++++ b/Source/Core/VideoBackends/Software/TextureSamplerHotCase.h
+@@ -0,0 +1,165 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <span>
++
++#include "Common/CommonTypes.h"
++#include "Common/SpanUtils.h"
++#include "Common/Swap.h"
++#include "VideoCommon/LookUpTables.h"
++#include "VideoCommon/TextureDecoder_Util.h"
++
++namespace TextureSampler::HotCase
++{
++namespace detail
++{
++struct DecodedCmprBlock
++{
++  std::size_t offset;
++  DXTBlock block;
++  u16 color1;
++  u16 color2;
++  int red1;
++  int red2;
++  int green1;
++  int green2;
++  int blue1;
++  int blue2;
++};
++
++class CmprBlockCache
++{
++public:
++  explicit CmprBlockCache(std::span<const u8> source) : m_source(source) {}
++
++  const DecodedCmprBlock& Get(std::size_t offset)
++  {
++    for (std::size_t i = 0; i < m_size; ++i)
++    {
++      if (m_blocks[i].offset == offset)
++        return m_blocks[i];
++    }
++
++    DecodedCmprBlock& decoded = m_blocks[m_size++];
++    decoded.offset = offset;
++    decoded.block = Common::SafeSpanRead<DXTBlock>(m_source, offset);
++    decoded.color1 = Common::swap16(decoded.block.color1);
++    decoded.color2 = Common::swap16(decoded.block.color2);
++    decoded.blue1 = Convert5To8(decoded.color1 & 0x1f);
++    decoded.blue2 = Convert5To8(decoded.color2 & 0x1f);
++    decoded.green1 = Convert6To8((decoded.color1 >> 5) & 0x3f);
++    decoded.green2 = Convert6To8((decoded.color2 >> 5) & 0x3f);
++    decoded.red1 = Convert5To8((decoded.color1 >> 11) & 0x1f);
++    decoded.red2 = Convert5To8((decoded.color2 >> 11) & 0x1f);
++    return decoded;
++  }
++
++private:
++  std::span<const u8> m_source;
++  std::array<DecodedCmprBlock, 4> m_blocks;
++  std::size_t m_size = 0;
++};
++
++inline u32 DecodeCmprColor(const DecodedCmprBlock& decoded, int s, int t)
++{
++  int color_selector = decoded.block.lines[t & 3];
++  color_selector = (color_selector >> (6 - ((s & 3) << 1))) & 3;
++  color_selector |= decoded.color1 > decoded.color2 ? 0 : 4;
++
++  switch (color_selector)
++  {
++  case 0:
++  case 4:
++    return MakeRGBA(decoded.red1, decoded.green1, decoded.blue1, 255);
++  case 1:
++  case 5:
++    return MakeRGBA(decoded.red2, decoded.green2, decoded.blue2, 255);
++  case 2:
++    return MakeRGBA(DXTBlend(decoded.red2, decoded.red1),
++                    DXTBlend(decoded.green2, decoded.green1),
++                    DXTBlend(decoded.blue2, decoded.blue1), 255);
++  case 3:
++    return MakeRGBA(DXTBlend(decoded.red1, decoded.red2),
++                    DXTBlend(decoded.green1, decoded.green2),
++                    DXTBlend(decoded.blue1, decoded.blue2), 255);
++  case 6:
++    return MakeRGBA((decoded.red1 + decoded.red2) / 2,
++                    (decoded.green1 + decoded.green2) / 2,
++                    (decoded.blue1 + decoded.blue2) / 2, 255);
++  case 7:
++    return MakeRGBA((decoded.red1 + decoded.red2) / 2,
++                    (decoded.green1 + decoded.green2) / 2,
++                    (decoded.blue1 + decoded.blue2) / 2, 0);
++  default:
++    return 0;
++  }
++}
++
++inline u32 DecodeCmprTexel(CmprBlockCache& cache, int s, int t, int image_width_minus_1)
++{
++  const int s_dxt = s >> 2;
++  const int t_dxt = t >> 2;
++  const int width_blocks = (image_width_minus_1 >> 3) + 1;
++  const std::size_t macro_block =
++      static_cast<std::size_t>((t_dxt >> 1) * width_blocks + (s_dxt >> 1));
++  const std::size_t sub_block = static_cast<std::size_t>(((t_dxt & 1) << 1) + (s_dxt & 1));
++  const std::size_t offset = macro_block * 32 + sub_block * sizeof(DXTBlock);
++  return DecodeCmprColor(cache.Get(offset), s, t);
++}
++
++constexpr u32 Channel(u32 color, unsigned int channel)
++{
++  return (color >> (channel * 8)) & 0xff;
++}
++}  // namespace detail
++
++// Bit-exact specialization of the generic CMPR + bilinear + repeat path. The caller is responsible
++// for restricting this to power-of-two dimensions; repeat wrapping can then use the same logical
++// AND operation as the generic sampler. SafeSpanRead preserves the generic decoder's truncated-span
++// behavior, while the four-entry cache avoids decoding the same CMPR endpoints up to four times.
++inline void SampleCmprLinearRepeatPow2(std::span<const u8> source, int image_width_minus_1,
++                                       int image_height_minus_1, s32 s, s32 t, u8* sample)
++{
++  s -= 64;
++  t -= 64;
++
++  int image_s = s >> 7;
++  int image_t = t >> 7;
++  int image_s_plus_1 = image_s + 1;
++  int image_t_plus_1 = image_t + 1;
++  const u32 fract_s = static_cast<u32>(s & 0x7f);
++  const u32 fract_t = static_cast<u32>(t & 0x7f);
++
++  image_s &= image_width_minus_1;
++  image_s_plus_1 &= image_width_minus_1;
++  image_t &= image_height_minus_1;
++  image_t_plus_1 &= image_height_minus_1;
++
++  detail::CmprBlockCache cache(source);
++  const u32 colors[4] = {
++      detail::DecodeCmprTexel(cache, image_s, image_t, image_width_minus_1),
++      detail::DecodeCmprTexel(cache, image_s_plus_1, image_t, image_width_minus_1),
++      detail::DecodeCmprTexel(cache, image_s, image_t_plus_1, image_width_minus_1),
++      detail::DecodeCmprTexel(cache, image_s_plus_1, image_t_plus_1, image_width_minus_1),
++  };
++  const u32 weights[4] = {
++      (128 - fract_s) * (128 - fract_t),
++      fract_s * (128 - fract_t),
++      (128 - fract_s) * fract_t,
++      fract_s * fract_t,
++  };
++
++  for (unsigned int channel = 0; channel < 4; ++channel)
++  {
++    u32 value = detail::Channel(colors[0], channel) * weights[0];
++    value += detail::Channel(colors[1], channel) * weights[1];
++    value += detail::Channel(colors[2], channel) * weights[2];
++    value += detail::Channel(colors[3], channel) * weights[3];
++    sample[channel] = static_cast<u8>(value >> 14);
++  }
++}
++}  // namespace TextureSampler::HotCase

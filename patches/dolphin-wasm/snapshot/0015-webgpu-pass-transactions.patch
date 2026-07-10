@@ -1,0 +1,1062 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 56becfe779..1ff313d4be 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -96,7 +96,10 @@ void WebGPUCommandStream::EnsureRing()
+ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+ {
+   if (!m_header)
++  {
++    PoisonPass();
+     return false;
++  }
+ 
+   const u32 w = m_header->write.load(std::memory_order_relaxed);
+   if (w - m_header->read.load(std::memory_order_acquire) >= m_capacity)
+@@ -142,6 +145,7 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+               },
+               static_cast<int>(m_dropped));
+         }
++        PoisonPass();
+         return false;
+       }
+     }
+@@ -154,7 +158,73 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+   return true;
+ }
+ 
+-void WebGPUCommandStream::PushClear(float r, float g, float b, float a)
++bool WebGPUCommandStream::PushBatch(const CmdRecord* records, u32 count)
++{
++  if (!m_header || !records || count == 0)
++  {
++    ++m_batch_abort_count;
++    return false;
++  }
++  if (count > m_capacity)
++  {
++    ++m_batch_abort_count;
++    ++m_batch_oversize_count;
++    return false;
++  }
++
++  // Single producer: no other write can advance while this pass waits. Keep
++  // the published write fixed until all slots are populated, then make the
++  // whole pass visible with one release-store.
++  const u32 w = m_header->write.load(std::memory_order_relaxed);
++  constexpr u32 kMaxSpins = 500000u;
++  u32 spins = 0;
++  while (w - m_header->read.load(std::memory_order_acquire) > m_capacity - count)
++  {
++    if (++spins >= kMaxSpins)
++    {
++      ++m_batch_abort_count;
++      return false;
++    }
++  }
++
++  for (u32 i = 0; i < count; ++i)
++    m_slots[(w + i) % m_capacity] = records[i];
++  m_header->write.store(w + count, std::memory_order_release);
++  return true;
++}
++
++bool WebGPUCommandStream::StagePassRecord(const CmdRecord& rec)
++{
++  if (!m_pass_staging || m_pass_poisoned)
++    return false;
++  m_pass_records.push_back(rec);
++  return true;
++}
++
++void WebGPUCommandStream::PoisonPass()
++{
++  if (m_pass_staging)
++    m_pass_poisoned = true;
++  else
++    m_required_publication_failed = true;
++}
++
++void WebGPUCommandStream::ResetPassStaging()
++{
++  m_pass_records.clear();
++  m_pass_staging = false;
++  m_pass_poisoned = false;
++}
++
++void WebGPUCommandStream::AbortPass()
++{
++  if (!m_pass_staging)
++    return;
++  ++m_batch_abort_count;
++  ResetPassStaging();
++}
++
++bool WebGPUCommandStream::PushClear(float r, float g, float b, float a)
+ {
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::Clear);
+@@ -162,20 +232,26 @@ void WebGPUCommandStream::PushClear(float r, float g, float b, float a)
+   rec.arg.f[1] = g;
+   rec.arg.f[2] = b;
+   rec.arg.f[3] = a;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+ u32 WebGPUCommandStream::PushCreateShader(const char* wgsl, size_t len, u32 stage)
+ {
+   if (!m_header || !wgsl || len == 0)
++  {
++    PoisonPass();
+     return 0;
++  }
+ 
+   // Persistent blob in the shared wasm heap. The consumer copies the
+   // WGSL into a JS string at replay (small, bounded — Dolphin caches
+   // shaders), so a never-freed pool is acceptable.
+   void* blob = std::malloc(len);
+   if (!blob)
++  {
++    PoisonPass();
+     return 0;
++  }
+   std::memcpy(blob, wgsl, len);
+ 
+   const u32 id = m_next_id++;
+@@ -196,7 +272,10 @@ u32 WebGPUCommandStream::PushCreateShader(const char* wgsl, size_t len, u32 stag
+ u32 WebGPUCommandStream::PushCreatePipeline(u32 vs_shader_id, u32 fs_shader_id, u32 topology)
+ {
+   if (!m_header || vs_shader_id == 0 || fs_shader_id == 0)
++  {
++    PoisonPass();
+     return 0;
++  }
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::CreatePipeline);
+@@ -209,23 +288,26 @@ u32 WebGPUCommandStream::PushCreatePipeline(u32 vs_shader_id, u32 fs_shader_id,
+   return id;
+ }
+ 
+-void WebGPUCommandStream::PushDrawTest(u32 pipeline_id, u32 vertex_count)
++bool WebGPUCommandStream::PushDrawTest(u32 pipeline_id, u32 vertex_count)
+ {
+   if (!m_header || pipeline_id == 0)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::DrawTest);
+   rec.arg.u[0] = pipeline_id;
+   rec.arg.u[1] = vertex_count;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+ // ---- Phase A producer API ----------------------------------------
+ 
+ u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+ {
+-  if (!m_upload_base || m_upload_size == 0 || len == 0 || len > m_upload_size)
++  if (!data || !m_upload_base || m_upload_size == 0 || len == 0 || len > m_upload_size)
++  {
++    PoisonPass();
+     return 0;
++  }
+   if (align < 4)
+     align = 4;
+ 
+@@ -297,6 +379,7 @@ u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+       if (++waits >= kMaxUploadWaits)
+       {
+         ++m_upload_wait_timeouts;
++        m_upload_timeout_count.fetch_add(1, std::memory_order_relaxed);
+         if (m_upload_wait_timeouts == 1 || (m_upload_wait_timeouts % 100) == 0)
+         {
+           EM_ASM(
+@@ -306,6 +389,7 @@ u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+               },
+               static_cast<int>(m_upload_wait_timeouts));
+         }
++        PoisonPass();
+         return 0;
+       }
+     }
+@@ -339,7 +423,10 @@ void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
+ u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
+ {
+   if (!m_header)
++  {
++    PoisonPass();
+     return 0;
++  }
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::CreateBuffer);
+@@ -351,10 +438,13 @@ u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
+   return id;
+ }
+ 
+-void WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len)
++bool WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len)
+ {
+   if (!m_header || id == 0 || src_heap_ptr == 0 || len == 0)
+-    return;
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::UploadBuffer);
+   rec.arg.u[0] = id;
+@@ -362,14 +452,21 @@ void WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_
+   rec.arg.u[2] = src_heap_ptr;
+   rec.arg.u[3] = len;
+   if (!Push(rec))
++  {
+     RollbackLastUpload(src_heap_ptr, len);
++    return false;
++  }
++  return true;
+ }
+ 
+ u32 WebGPUCommandStream::PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 usage_flags,
+                                            u32 layers)
+ {
+   if (!m_header)
++  {
++    PoisonPass();
+     return 0;
++  }
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::CreateTexture);
+@@ -384,11 +481,14 @@ u32 WebGPUCommandStream::PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 us
+   return id;
+ }
+ 
+-void WebGPUCommandStream::PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_per_row, u32 w,
++bool WebGPUCommandStream::PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_per_row, u32 w,
+                                             u32 h, u32 mip_level, u32 layer)
+ {
+   if (!m_header || id == 0 || src_heap_ptr == 0)
+-    return;
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::UploadTexture);
+   rec.arg.u[0] = id;
+@@ -399,16 +499,26 @@ void WebGPUCommandStream::PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_
+   rec.arg.u[5] = mip_level;
+   rec.arg.u[6] = layer;
+   if (!Push(rec))
++  {
+     RollbackLastUpload(src_heap_ptr, bytes_per_row * h);
++    return false;
++  }
++  return true;
+ }
+ 
+ u32 WebGPUCommandStream::PushCreatePipelineCfg(const void* blob, size_t len)
+ {
+   if (!m_header || !blob || len == 0)
++  {
++    PoisonPass();
+     return 0;
++  }
+   void* owned = std::malloc(len);
+   if (!owned)
++  {
++    PoisonPass();
+     return 0;
++  }
+   std::memcpy(owned, blob, len);
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+@@ -427,7 +537,10 @@ u32 WebGPUCommandStream::PushCreatePipelineCfg(const void* blob, size_t len)
+ u32 WebGPUCommandStream::PushCreateSampler(u32 packed)
+ {
+   if (!m_header)
++  {
++    PoisonPass();
+     return 0;
++  }
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::CreateSampler);
+@@ -441,10 +554,16 @@ u32 WebGPUCommandStream::PushCreateSampler(u32 packed)
+ u32 WebGPUCommandStream::PushCreateBindGroup(const void* blob, size_t len, u32 layout_key)
+ {
+   if (!m_header || !blob || len == 0)
++  {
++    PoisonPass();
+     return 0;
++  }
+   void* owned = std::malloc(len);
+   if (!owned)
++  {
++    PoisonPass();
+     return 0;
++  }
+   std::memcpy(owned, blob, len);
+   const u32 id = m_next_id++;
+   CmdRecord rec{};
+@@ -461,11 +580,28 @@ u32 WebGPUCommandStream::PushCreateBindGroup(const void* blob, size_t len, u32 l
+   return id;
+ }
+ 
+-void WebGPUCommandStream::PushBeginPass(u32 fb_id, float r, float g, float b, float a,
++bool WebGPUCommandStream::PushBeginPass(u32 fb_id, float r, float g, float b, float a,
+                                         u32 load_op, u32 depth_fb_id)
+ {
+   if (!m_header)
+-    return;
++    return false;
++  // A required resource/upload command can fail before the draw opens its
++  // pass (VertexManager commits first). Consume that failure by rejecting one
++  // pass rather than drawing with stale data; the owning path retries its
++  // resource publication on a later frame.
++  if (m_required_publication_failed)
++  {
++    m_required_publication_failed = false;
++    ++m_batch_abort_count;
++    return false;
++  }
++  // A nested BEGIN indicates the caller lost ownership of the previous pass.
++  // Drop that private batch before accepting a new transaction.
++  if (m_pass_staging)
++    AbortPass();
++  m_pass_staging = true;
++  m_pass_poisoned = false;
++  m_pass_records.clear();
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::BeginPass);
+   rec.arg.u[0] = fb_id;
+@@ -475,24 +611,30 @@ void WebGPUCommandStream::PushBeginPass(u32 fb_id, float r, float g, float b, fl
+   rec.arg.f[4] = a;
+   rec.arg.u[5] = load_op;
+   rec.arg.u[6] = depth_fb_id;
+-  Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+ bool WebGPUCommandStream::PushSetPipeline(u32 pipeline_id)
+ {
+   if (!m_header || pipeline_id == 0)
++  {
++    PoisonPass();
+     return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetPipeline);
+   rec.arg.u[0] = pipeline_id;
+-  return Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+ bool WebGPUCommandStream::PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_offsets,
+                                            u32 num_dyn)
+ {
+   if (!m_header || bg_id == 0)
++  {
++    PoisonPass();
+     return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetBindGroup);
+   rec.arg.u[0] = slot;
+@@ -504,38 +646,47 @@ bool WebGPUCommandStream::PushSetBindGroup(u32 slot, u32 bg_id, const u32* dyn_o
+   rec.arg.u[2] = num_dyn;
+   for (u32 i = 0; i < num_dyn; i++)
+     rec.arg.u[3 + i] = dyn_offsets[i];
+-  return Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+ bool WebGPUCommandStream::PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset)
+ {
+   if (!m_header || buf_id == 0)
++  {
++    PoisonPass();
+     return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetVertexBuffer);
+   rec.arg.u[0] = slot;
+   rec.arg.u[1] = buf_id;
+   rec.arg.u[2] = offset;
+-  return Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+ bool WebGPUCommandStream::PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset)
+ {
+   if (!m_header || buf_id == 0)
++  {
++    PoisonPass();
+     return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetIndexBuffer);
+   rec.arg.u[0] = buf_id;
+   rec.arg.u[1] = fmt;
+   rec.arg.u[2] = offset;
+-  return Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetViewport(float x, float y, float w, float h, float min_d,
++bool WebGPUCommandStream::PushSetViewport(float x, float y, float w, float h, float min_d,
+                                           float max_d)
+ {
+   if (!m_header)
+-    return;
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetViewport);
+   rec.arg.f[0] = x;
+@@ -544,75 +695,100 @@ void WebGPUCommandStream::PushSetViewport(float x, float y, float w, float h, fl
+   rec.arg.f[3] = h;
+   rec.arg.f[4] = min_d;
+   rec.arg.f[5] = max_d;
+-  Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+-void WebGPUCommandStream::PushSetScissor(u32 x, u32 y, u32 w, u32 h)
++bool WebGPUCommandStream::PushSetScissor(u32 x, u32 y, u32 w, u32 h)
+ {
+   if (!m_header)
+-    return;
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SetScissor);
+   rec.arg.u[0] = x;
+   rec.arg.u[1] = y;
+   rec.arg.u[2] = w;
+   rec.arg.u[3] = h;
+-  Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+-void WebGPUCommandStream::PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx)
++bool WebGPUCommandStream::PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx)
+ {
+-  if (!m_header || vtx_count == 0)
+-    return;
++  if (vtx_count == 0)
++    return true;
++  if (!m_header)
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::Draw);
+   rec.arg.u[0] = vtx_count;
+   rec.arg.u[1] = inst_count;
+   rec.arg.u[2] = first_vtx;
+-  Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+-void WebGPUCommandStream::PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx,
++bool WebGPUCommandStream::PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx,
+                                           u32 base_vtx)
+ {
+-  if (!m_header || idx_count == 0)
+-    return;
++  if (idx_count == 0)
++    return true;
++  if (!m_header)
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::DrawIndexed);
+   rec.arg.u[0] = idx_count;
+   rec.arg.u[1] = inst_count;
+   rec.arg.u[2] = first_idx;
+   rec.arg.u[3] = base_vtx;
+-  Push(rec);
++  return StagePassRecord(rec);
+ }
+ 
+-void WebGPUCommandStream::PushEndPass()
++bool WebGPUCommandStream::PushEndPass()
+ {
+-  if (!m_header)
+-    return;
++  if (!m_header || !m_pass_staging)
++    return false;
++  if (m_pass_poisoned)
++  {
++    AbortPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::EndPass);
+-  Push(rec);
++  m_pass_records.push_back(rec);
++  const bool committed = PushBatch(m_pass_records.data(), static_cast<u32>(m_pass_records.size()));
++  ResetPassStaging();
++  return committed;
+ }
+ 
+-void WebGPUCommandStream::PushSubmitPresent()
++bool WebGPUCommandStream::PushSubmitPresent()
+ {
+   if (!m_header)
+-    return;
++    return false;
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::SubmitPresent);
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+-void WebGPUCommandStream::PushDestroy(u32 class_tag, u32 id)
++bool WebGPUCommandStream::PushDestroy(u32 class_tag, u32 id)
+ {
+   if (!m_header || id == 0)
+-    return;
++    return false;
++  // A destroy may drain immediately, but it cannot leave a private pass that
++  // references the resource eligible for later publication.
++  if (m_pass_staging)
++    PoisonPass();
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::Destroy);
+   rec.arg.u[0] = class_tag;
+   rec.arg.u[1] = id;
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+ static u32 Pack16(u32 lo, u32 hi)
+@@ -620,14 +796,21 @@ static u32 Pack16(u32 lo, u32 hi)
+   return (lo & 0xFFFFu) | ((hi & 0xFFFFu) << 16);
+ }
+ 
+-void WebGPUCommandStream::PushBlitTexture(u32 src_id, u32 dst_id, u32 src_x, u32 src_y,
++bool WebGPUCommandStream::PushBlitTexture(u32 src_id, u32 dst_id, u32 src_x, u32 src_y,
+                                           u32 src_w, u32 src_h, u32 dst_x, u32 dst_y,
+                                           u32 dst_w, u32 dst_h, u32 src_layer, u32 src_level,
+                                           u32 dst_layer, u32 dst_level)
+ {
+   if (!m_header || src_id == 0 || dst_id == 0 || src_w == 0 || src_h == 0 || dst_w == 0 ||
+       dst_h == 0)
+-    return;
++    return false;
++  // BLIT_TEXTURE is an immediate encoder operation and cannot execute ahead
++  // of an unpublished pass that produces its source.
++  if (m_pass_staging)
++  {
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::BlitTexture);
+   rec.arg.u[0] = src_id;
+@@ -638,7 +821,7 @@ void WebGPUCommandStream::PushBlitTexture(u32 src_id, u32 dst_id, u32 src_x, u32
+   rec.arg.u[5] = Pack16(dst_w, dst_h);
+   rec.arg.u[6] = (src_layer & 0xFFu) | ((src_level & 0xFFu) << 8) |
+                  ((dst_layer & 0xFFu) << 16) | ((dst_level & 0xFFu) << 24);
+-  Push(rec);
++  return Push(rec);
+ }
+ 
+ WebGPUCommandStream& GetCommandStream()
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 2017de67ab..b22bb476d5 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -5,6 +5,7 @@
+ 
+ #include <atomic>
+ #include <cstddef>
++#include <vector>
+ 
+ #include "Common/CommonTypes.h"
+ 
+@@ -169,8 +170,8 @@ struct CmdRingHeader
+ static_assert(sizeof(CmdRingHeader) == 20,
+               "CmdRingHeader must stay 20 bytes (JS bridge assumes fixed layout)");
+ 
+-// A nonzero count means replay may contain a partial pass and invalidates
+-// renderer performance evidence for the process.
++// A nonzero count means an immediate command publication failed. Passes are
++// committed transactionally below, so a failed pass never becomes visible.
+ u64 GetWebGpuCommandDroppedRecordCount();
+ 
+ class WebGPUCommandStream
+@@ -187,8 +188,12 @@ public:
+   // commands than block the video pthread.
+   bool Push(const CmdRecord& rec);
+ 
++  // Publish a complete staged pass with one release-store. The write index is
++  // unchanged on timeout or when the batch cannot fit in the ring.
++  bool PushBatch(const CmdRecord* records, u32 count);
++
+   // Convenience for the Day-27 opcode.
+-  void PushClear(float r, float g, float b, float a);
++  bool PushClear(float r, float g, float b, float a);
+ 
+   // Day-28: allocate a shared-heap blob, copy `data` into it, and
+   // emit CreateShader(id, blobPtr, blobLen, stage). The blob is
+@@ -203,7 +208,7 @@ public:
+   u32 PushCreatePipeline(u32 vs_shader_id, u32 fs_shader_id, u32 topology);
+   // Day-32: emit DrawTest(pipelineId, vertexCount) — the per-frame
+   // render pass + draw + present test path.
+-  void PushDrawTest(u32 pipeline_id, u32 vertex_count);
++  bool PushDrawTest(u32 pipeline_id, u32 vertex_count);
+ 
+   // ---- Phase A producer API --------------------------------------
+   // Ring-allocate `len` bytes into the upload arena, copy
+@@ -214,9 +219,9 @@ public:
+   u32 UploadAlloc(const void* data, size_t len, u32 align = 4);
+ 
+   u32 PushCreateBuffer(u32 size, u32 usage_flags);
+-  void PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len);
++  bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len);
+   u32 PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 usage_flags, u32 layers = 1);
+-  void PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_per_row, u32 w, u32 h,
++  bool PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_per_row, u32 w, u32 h,
+                          u32 mip_level = 0, u32 layer = 0);
+   // Serialized AbstractPipelineConfig blob (owned/persistent, like
+   // shaders — Dolphin caches pipelines). Returns the pipeline id.
+@@ -225,7 +230,7 @@ public:
+   // `blob` = N×{u32 binding,u32 kind,u32 resId,u32 offset,u32 size}.
+   u32 PushCreateBindGroup(const void* blob, size_t len, u32 layout_key);
+ 
+-  void PushBeginPass(u32 fb_id, float r, float g, float b, float a, u32 load_op,
++  bool PushBeginPass(u32 fb_id, float r, float g, float b, float a, u32 load_op,
+                      u32 depth_fb_id);
+   bool PushSetPipeline(u32 pipeline_id);
+   // dyn_offsets: per-draw uniform-ring byte offsets, one per
+@@ -235,20 +240,39 @@ public:
+                         u32 num_dyn = 0);
+   bool PushSetVertexBuffer(u32 slot, u32 buf_id, u32 offset);
+   bool PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset);
+-  void PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
+-  void PushSetScissor(u32 x, u32 y, u32 w, u32 h);
+-  void PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
+-  void PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx, u32 base_vtx);
+-  void PushEndPass();
+-  void PushSubmitPresent();
+-  void PushDestroy(u32 class_tag, u32 id);
++  bool PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
++  bool PushSetScissor(u32 x, u32 y, u32 w, u32 h);
++  bool PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
++  bool PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx, u32 base_vtx);
++  bool PushEndPass();
++  bool PushSubmitPresent();
++  bool PushDestroy(u32 class_tag, u32 id);
+   // GPU texture blit. Coords/dims are clamped to 16 bits (EFB/XFB
+   // never exceed that); layers/levels to 8 bits. No-op if either id
+   // is 0 (CPU-only fallback path still ran the memcpy).
+-  void PushBlitTexture(u32 src_id, u32 dst_id, u32 src_x, u32 src_y, u32 src_w,
++  bool PushBlitTexture(u32 src_id, u32 dst_id, u32 src_x, u32 src_y, u32 src_w,
+                        u32 src_h, u32 dst_x, u32 dst_y, u32 dst_w, u32 dst_h,
+                        u32 src_layer, u32 src_level, u32 dst_layer, u32 dst_level);
+ 
++  // Discard the current staged pass without publishing BEGIN_PASS or any of
++  // its state/draw records. Safe to call redundantly.
++  void AbortPass();
++  bool pass_staging() const { return m_pass_staging; }
++  bool pass_poisoned() const { return m_pass_poisoned; }
++
++  u64 GetBatchAbortCount() const
++  {
++    return m_batch_abort_count.load(std::memory_order_relaxed);
++  }
++  u64 GetBatchOversizeCount() const
++  {
++    return m_batch_oversize_count.load(std::memory_order_relaxed);
++  }
++  u64 GetUploadTimeoutCount() const
++  {
++    return m_upload_timeout_count.load(std::memory_order_relaxed);
++  }
++
+   bool ready() const { return m_header != nullptr; }
+ 
+   // Producer-assigned id for the next resource of any class (opcode
+@@ -258,6 +282,9 @@ public:
+   u32 AllocId() { return m_next_id++; }
+ 
+ private:
++  bool StagePassRecord(const CmdRecord& rec);
++  void PoisonPass();
++  void ResetPassStaging();
+   void RollbackLastUpload(u32 src_heap_ptr, u32 len);
+ 
+   CmdRingHeader* m_header = nullptr;
+@@ -271,11 +298,22 @@ private:
+   u32 m_upload_write = 0;
+   u32 m_upload_wait_timeouts = 0;
+   u32 m_upload_handshake_timeouts = 0;
++  std::atomic<u64> m_upload_timeout_count{0};
+   u32 m_last_upload_write_before = 0;
+   u32 m_last_upload_write_after = 0;
+   u32 m_last_upload_ptr = 0;
+   u32 m_last_upload_len = 0;
+ 
++  // BEGIN_PASS..END_PASS records stay private until END_PASS can publish the
++  // entire batch. Resource creation/uploads remain immediate so the consumer
++  // can drain them while a large pass is assembled.
++  std::vector<CmdRecord> m_pass_records;
++  bool m_pass_staging = false;
++  bool m_pass_poisoned = false;
++  bool m_required_publication_failed = false;
++  std::atomic<u64> m_batch_abort_count{0};
++  std::atomic<u64> m_batch_oversize_count{0};
++
+   // Producer-assigned resource ids. One space is fine — opcode
+   // implies class on the consumer. Starts at 1 (0 = none/sentinel).
+   u32 m_next_id = 1;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 6a536c6b52..4217c0f30b 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -74,7 +74,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << s_bind_group_records_suppressed[2].load(std::memory_order_relaxed)
+       << " vb:" << s_vertex_buffer_records_suppressed.load(std::memory_order_relaxed)
+       << " ib:" << s_index_buffer_records_suppressed.load(std::memory_order_relaxed)
+-      << " wgdrop:" << GetWebGpuCommandDroppedRecordCount();
++      << " wgdrop:" << GetWebGpuCommandDroppedRecordCount()
++      << " wgbabort:" << GetCommandStream().GetBatchAbortCount()
++      << " wgboversize:" << GetCommandStream().GetBatchOversizeCount()
++      << " wguploadto:" << GetCommandStream().GetUploadTimeoutCount();
+   stats = out.str();
+   return stats.c_str();
+ }
+@@ -611,16 +614,14 @@ bool WebGPUGfx::BindBackbuffer(const ClearColor& clear_color)
+   m_clear_col[2] = clear_color[2];
+   m_clear_col[3] = clear_color[3];
+   m_pending_clear = true;
+-  BeginPassIfNeeded();
+-  return true;
++  return BeginPassIfNeeded();
+ }
+ 
+ void WebGPUGfx::PresentBackbuffer()
+ {
+   // Day-33 Phase C: close the backbuffer pass and submit. The canvas
+   // presents implicitly (the presenter rendered the XFB into it).
+-  EndPassIfOpen();
+-  if (m_cmd_stream.ready())
++  if (EndPassIfOpen() && m_cmd_stream.ready())
+     m_cmd_stream.PushSubmitPresent();
+ }
+ 
+@@ -776,7 +777,10 @@ void WebGPUGfx::SetScissorRect(const MathUtil::Rectangle<int>& rc)
+   m_scissor[2] = static_cast<u32>(std::max(0, rc.GetWidth()));
+   m_scissor[3] = static_cast<u32>(std::max(0, rc.GetHeight()));
+   if (m_pass_open && m_scissor[2] > 0 && m_scissor[3] > 0)
+-    m_cmd_stream.PushSetScissor(m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]);
++  {
++    if (!m_cmd_stream.PushSetScissor(m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]))
++      AbortRecordedPass();
++  }
+ }
+ 
+ // ---- Day-33 A3/A4/A5: real render-path recording -----------------
+@@ -883,30 +887,58 @@ bool WebGPUGfx::SetRecordedIndexBuffer(u32 buffer_id, u32 format, u32 offset)
+   return true;
+ }
+ 
+-void WebGPUGfx::EndPassIfOpen()
++void WebGPUGfx::AbortRecordedPass()
+ {
+-  if (m_pass_open)
++  m_cmd_stream.AbortPass();
++  m_pass_open = false;
++  ResetRecordedPassState();
++}
++
++bool WebGPUGfx::EndPassIfOpen()
++{
++  if (!m_pass_open)
++    return false;
++  const bool committed = m_cmd_stream.PushEndPass();
++  m_pass_open = false;
++  ResetRecordedPassState();
++  if (committed)
+   {
+-    m_cmd_stream.PushEndPass();
+-    m_pass_open = false;
+-    ResetRecordedPassState();
++    m_pending_clear = false;
++    return true;
+   }
++  m_cmd_stream.AbortPass();
++  return false;
+ }
+ 
+-void WebGPUGfx::BeginPassIfNeeded()
++bool WebGPUGfx::BeginPassIfNeeded()
+ {
+   if (m_pass_open)
+-    return;
+-  m_cmd_stream.PushBeginPass(m_fb_color_id, m_clear_col[0], m_clear_col[1], m_clear_col[2],
+-                             m_clear_col[3], m_pending_clear ? 1u : 0u, m_fb_depth_id);
+-  m_pending_clear = false;
++  {
++    if (m_cmd_stream.pass_staging() && !m_cmd_stream.pass_poisoned())
++      return true;
++    AbortRecordedPass();
++    return false;
++  }
++  if (!m_cmd_stream.PushBeginPass(m_fb_color_id, m_clear_col[0], m_clear_col[1],
++                                  m_clear_col[2], m_clear_col[3],
++                                  m_pending_clear ? 1u : 0u, m_fb_depth_id))
++  {
++    AbortRecordedPass();
++    return false;
++  }
+   m_pass_open = true;
+   ResetRecordedPassState();
+   // A fresh WebGPU pass resets viewport/scissor — re-emit cached.
+-  m_cmd_stream.PushSetViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3],
+-                               m_viewport[4], m_viewport[5]);
+-  if (m_scissor[2] > 0 && m_scissor[3] > 0)
+-    m_cmd_stream.PushSetScissor(m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]);
++  if (!m_cmd_stream.PushSetViewport(m_viewport[0], m_viewport[1], m_viewport[2],
++                                    m_viewport[3], m_viewport[4], m_viewport[5]) ||
++      (m_scissor[2] > 0 && m_scissor[3] > 0 &&
++       !m_cmd_stream.PushSetScissor(m_scissor[0], m_scissor[1], m_scissor[2],
++                                    m_scissor[3])))
++  {
++    AbortRecordedPass();
++    return false;
++  }
++  return true;
+ }
+ 
+ static void PutBgU32(std::vector<u8>& b, u32 v)
+@@ -1275,7 +1307,10 @@ void WebGPUGfx::SetViewport(float x, float y, float width, float height, float n
+   m_viewport[4] = near_depth;
+   m_viewport[5] = far_depth;
+   if (m_pass_open && width > 0 && height > 0)
+-    m_cmd_stream.PushSetViewport(x, y, width, height, near_depth, far_depth);
++  {
++    if (!m_cmd_stream.PushSetViewport(x, y, width, height, near_depth, far_depth))
++      AbortRecordedPass();
++  }
+ }
+ 
+ void WebGPUGfx::SetTexture(u32 index, const AbstractTexture* texture)
+@@ -1305,7 +1340,8 @@ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size)
+   const u32 src = m_cmd_stream.UploadAlloc(data, size, 16);
+   if (src == 0)
+     return kUboOffNone;
+-  m_cmd_stream.PushUploadBuffer(m_ubo_ring, off, src, size);
++  if (!m_cmd_stream.PushUploadBuffer(m_ubo_ring, off, src, size))
++    return kUboOffNone;
+   m_ubo_ring_off = off + kUboSliceStride;
+   return off;
+ }
+@@ -1368,17 +1404,23 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+     m_util_uniform_mode = false;
+     return;
+   }
+-  BeginPassIfNeeded();
++  if (!BeginPassIfNeeded())
++  {
++    m_util_uniform_mode = false;
++    return;
++  }
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+   {
+     if (!SetRecordedPipeline(m_cur_pipeline_id))
+     {
++      AbortRecordedPass();
+       m_util_uniform_mode = false;
+       return;
+     }
+   }
+   if (!PrepareDrawResources())
+   {
++    AbortRecordedPass();
+     m_util_uniform_mode = false;
+     return;
+   }
+@@ -1386,10 +1428,16 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+   if (vm && vm->GetVertexBufferId() &&
+       !SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0))
+   {
++    AbortRecordedPass();
++    m_util_uniform_mode = false;
++    return;
++  }
++  if (!m_cmd_stream.PushDraw(num_vertices, 1, base_vertex))
++  {
++    AbortRecordedPass();
+     m_util_uniform_mode = false;
+     return;
+   }
+-  m_cmd_stream.PushDraw(num_vertices, 1, base_vertex);
+   // Utility draw consumed — revert to the GX bg0 for following draws.
+   m_util_uniform_mode = false;
+ }
+@@ -1401,33 +1449,46 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+     m_util_uniform_mode = false;
+     return;
+   }
+-  BeginPassIfNeeded();
++  if (!BeginPassIfNeeded())
++  {
++    m_util_uniform_mode = false;
++    return;
++  }
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+   {
+     if (!SetRecordedPipeline(m_cur_pipeline_id))
+     {
++      AbortRecordedPass();
+       m_util_uniform_mode = false;
+       return;
+     }
+   }
+   if (!PrepareDrawResources())
+   {
++    AbortRecordedPass();
+     m_util_uniform_mode = false;
+     return;
+   }
+   const auto* vm = static_cast<const VertexManager*>(g_vertex_manager.get());
+   if (!vm || vm->GetVertexBufferId() == 0 || vm->GetIndexBufferId() == 0)
+   {
++    AbortRecordedPass();
+     m_util_uniform_mode = false;
+     return;
+   }
+   if (!SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0) ||
+       !SetRecordedIndexBuffer(vm->GetIndexBufferId(), /*u16=*/0, 0))
+   {
++    AbortRecordedPass();
++    m_util_uniform_mode = false;
++    return;
++  }
++  if (!m_cmd_stream.PushDrawIndexed(num_indices, 1, base_index, base_vertex))
++  {
++    AbortRecordedPass();
+     m_util_uniform_mode = false;
+     return;
+   }
+-  m_cmd_stream.PushDrawIndexed(num_indices, 1, base_index, base_vertex);
+   // Utility draw consumed — revert to the GX bg0 for following draws.
+   m_util_uniform_mode = false;
+ }
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 06dba16fcf..fee5324d6f 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -161,8 +161,9 @@ private:
+   // Begin a render pass for the bound framebuffer if one isn't open
+   // (lazy — VideoCommon binds the FB then draws). Re-emits viewport/
+   // scissor since a new WebGPU pass resets them.
+-  void BeginPassIfNeeded();
+-  void EndPassIfOpen();
++  bool BeginPassIfNeeded();
++  bool EndPassIfOpen();
++  void AbortRecordedPass();
+   void ResetRecordedPassState();
+   bool SetRecordedPipeline(u32 pipeline_id);
+   bool SetRecordedBindGroup(u32 slot, u32 bind_group_id, const u32* dynamic_offsets = nullptr,
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUTexture.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUTexture.cpp
+index d96136d588..af1e8852d3 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUTexture.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUTexture.cpp
+@@ -84,18 +84,19 @@ u32 WebGPUTexture::EnsureBridgeId()
+   return m_bridge_id;
+ }
+ 
+-void WebGPUTexture::EmitUpload(u32 level, u32 width, u32 height, u32 layer)
++bool WebGPUTexture::EmitUpload(u32 level, u32 width, u32 height, u32 layer)
+ {
+   WebGPUCommandStream& cs = GetCommandStream();
+   if (EnsureBridgeId() == 0)
+-    return;
++    return false;
+   const size_t texel_size = GetTexelSizeForFormat(m_config.format);
+   const u32 bytes_per_row = static_cast<u32>(width * texel_size);
+   const u8* data = GetData(layer, level);
+   const u32 len = bytes_per_row * height;
+   const u32 src = cs.UploadAlloc(data, len, 4);
+-  if (src != 0)
+-    cs.PushUploadTexture(m_bridge_id, src, bytes_per_row, width, height, level, layer);
++  if (src == 0)
++    return false;
++  return cs.PushUploadTexture(m_bridge_id, src, bytes_per_row, width, height, level, layer);
+ }
+ 
+ WebGPUTexture::~WebGPUTexture() = default;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUTexture.h b/Source/Core/VideoBackends/WebGPU/WebGPUTexture.h
+index 78f49ea3f1..396fe8e3e9 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUTexture.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUTexture.h
+@@ -51,7 +51,7 @@ private:
+   // Lazily allocate the consumer-side GPUTexture id if the ring wasn't
+   // ready at construction; returns it (0 if still unavailable).
+   u32 EnsureBridgeId();
+-  void EmitUpload(u32 level, u32 width, u32 height, u32 layer);
++  bool EmitUpload(u32 level, u32 width, u32 height, u32 layer);
+ 
+   std::vector<std::vector<std::vector<u8>>> m_data;
+   u32 m_bridge_id = 0;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index c47a776680..5ed74ef2a6 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -72,11 +72,6 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   u32 ioff = (m_index_offset + 3u) & ~3u;
+   if (ioff + ibytes > kIndexBufferSize)
+     ioff = 0;
+-  m_vertex_offset = voff + vbytes;
+-  m_index_offset = ioff + ibytes;
+-  m_last_vertex_byte = voff;
+-  m_last_index_byte = ioff;
+-
+   // DIAG one-shot: are the assembled vertex bytes non-degenerate?
+   // Dump counts/stride + first 6 floats of the batch (the first
+   // vertex's leading attribute, usually position). All-zero ⇒
+@@ -105,16 +100,24 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   if (vbytes != 0)
+   {
+     const u32 src = cs.UploadAlloc(m_base_buffer_pointer, vbytes, 4);
+-    if (src != 0)
+-      cs.PushUploadBuffer(m_vertex_buffer_id, voff, src, vbytes);
++    if (src == 0 || !cs.PushUploadBuffer(m_vertex_buffer_id, voff, src, vbytes))
++      return;
+   }
+   if (ibytes != 0)
+   {
+     const u32 src = cs.UploadAlloc(m_cpu_index_buffer.data(), ibytes, 4);
+-    if (src != 0)
+-      cs.PushUploadBuffer(m_index_buffer_id, ioff, src, ibytes);
++    if (src == 0 || !cs.PushUploadBuffer(m_index_buffer_id, ioff, src, ibytes))
++      return;
+   }
+ 
++  // Advance buffer offsets only after every required publication succeeded.
++  // A partial upload remains harmless because the owning pass is poisoned and
++  // the same offsets are eligible for a later retry before any draw sees them.
++  m_vertex_offset = voff + vbytes;
++  m_index_offset = ioff + ibytes;
++  m_last_vertex_byte = voff;
++  m_last_index_byte = ioff;
++
+   // Vertex buffer is bound at offset 0; address this batch via
+   // base_vertex (mirrors the Vulkan backend). Indices likewise via
+   // first_index.

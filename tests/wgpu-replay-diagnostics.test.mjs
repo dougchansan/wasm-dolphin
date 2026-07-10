@@ -10,6 +10,7 @@ import {
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
+  requestedWgpuStateCache,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
@@ -170,6 +171,13 @@ test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => 
   snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "EFB_DRAW_NO_MUTATION");
   assert.equal(snapshot.stages.efbMutation.postDrawReadbackCount, 1);
+});
+
+test("pass-state caching is opt-in with an explicit boolean override", () => {
+  assert.equal(requestedWgpuStateCache(""), false);
+  assert.equal(requestedWgpuStateCache("", true), true);
+  assert.equal(requestedWgpuStateCache("?wgpustatecache=1"), true);
+  assert.equal(requestedWgpuStateCache("?wgpustatecache=0", true), false);
 });
 
 test("an immediate first completed EFB pass readback is independent of present-time evidence", () => {
@@ -427,12 +435,14 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     /requestedWgpuReplayPump\(\s*window\.location\.search,\s*this\.videoBackend === "WebGPU-Real"\s*\)/
   );
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
   assert.match(adapter, /wgpuLoadEpochFence: this\.wgpuLoadEpochFence/);
   assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
+  assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
@@ -440,6 +450,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
   assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
   assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
+  assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
   assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
   assert.match(worker, /scope: "load-state-file",\s+generation: wgpuReplayClassifierGeneration/);
