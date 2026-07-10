@@ -891,14 +891,11 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
-  // Day-7 persistent JIT cache (Phase A — message channel only). Push the
-  // master cache map (currently empty) to every pthread worker so the
-  // pre-js receiver on each pthread can stash it on Module._dolphinJitCache.
-  // The EM_JS compile body will then consult the local cache on each
-  // pthread, instantiate cached Modules locally, and avoid the cross-thread
-  // table problem from Day 6. Phase B adds cache lookup in the EM_JS;
-  // Phase C adds IndexedDB persistence.
-  if (!noJitCache) installDolphinJitCacheChannel(moduleInstance);
+  // Renderer transport is required even when persistent JIT caching is not.
+  // ?nojitcache=1 gates only the optional cache channel below.
+  installDolphinPthreadChannels(moduleInstance, {
+    jitCacheEnabled: !noJitCache
+  });
   if (api.setVideoBackend) {
     api.setVideoBackend(videoBackend);
     rendererDiagnostics.configuredVideoBackend = videoBackend;
@@ -3775,19 +3772,48 @@ let dolphinJitLazyFillActive = false;
 // sessions can read from the existing IDB-path.
 let dolphinJitPrebuiltOverflow = null;
 
-async function installDolphinJitCacheChannel(moduleInstance) {
+export function installDolphinPthreadChannels(
+  moduleInstance,
+  { jitCacheEnabled = true } = {}
+) {
   const pthread = moduleInstance?.PThread;
   if (!pthread) {
-    postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
+    if (jitCacheEnabled) {
+      postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
+    }
     return;
   }
-  // dolphinJitCacheMap is already populated by loadCore() (which awaits
-  // reconcileJitCacheWithBuild before reaching this call site), so we
-  // can push immediately.
   const workers = [
     ...(pthread.runningWorkers || []),
     ...(pthread.unusedWorkers || [])
   ];
+
+  // These messages originate on whichever pthread owns Dolphin's video
+  // thread. They are transport, not JIT-cache functionality.
+  const transportListeners = [
+    ["detached OGL frame", handleDetachedOglFrame],
+    ["WebGPU show-image", handleWebGpuShowImage],
+    ["WebGPU command ring", handleWebGpuCmdRing]
+  ];
+  for (const worker of workers) {
+    for (const [label, listener] of transportListeners) {
+      try {
+        worker.addEventListener("message", listener);
+      } catch (err) {
+        if (!self._dolphinPthreadTransportErrLogged) {
+          self._dolphinPthreadTransportErrLogged = true;
+          postStatus(
+            `pthread-transport: ${label} listener installation failed: ${err?.message || err}`
+          );
+        }
+      }
+    }
+  }
+
+  if (!jitCacheEnabled) return;
+  // dolphinJitCacheMap is already populated by loadCore() (which awaits
+  // reconcileJitCacheWithBuild before reaching this call site), so we
+  // can push immediately.
   dolphinJitPthreadWorkers = workers;
   if (!workers.length) {
     postStatus("jit-cache: no pthread workers visible at boot (PTHREAD_POOL_SIZE may be 0)");
@@ -3802,31 +3828,19 @@ async function installDolphinJitCacheChannel(moduleInstance) {
   for (const w of workers) {
     try {
       w.postMessage({ type: "dolphin-jit-cache", cache: dolphinJitCacheMap });
-      w.addEventListener("message", handleDolphinJitNewCompile);
-      // Detached OGL: also catch detachedOglFrame postMessages from the
-      // GPU pthread (whichever one owns the OffscreenCanvas after
-      // Emscripten transfers it). C++ Swap() in Emscripten.cpp does the
-      // transferToImageBitmap + postMessage from that pthread; we forward
-      // it on to the main thread for drawImage onto the visible canvas.
-      // This is the no-glReadPixels paint path — bypasses the multi-
-      // second GPU-sync stalls the Chrome trace pinpointed.
-      w.addEventListener("message", handleDetachedOglFrame);
-      // Day-17 phase 4: catch `webgpu-show-image` payloads emitted by
-      // `WebGPUGfx::ShowImage` (via EM_ASM postMessage) from whichever
-      // pthread the GPU thread lands on. The discio worker owns the
-      // WGPU presenter pipeline (`renderGpu` / drawFrameBytesToWebGpu),
-      // so we route the XFB bytes to it here.
-      w.addEventListener("message", handleWebGpuShowImage);
-      // Day-27: catch the `webgpu-cmd-ring` hand-off from the video
-      // pthread (WebGPUCommandStream::EnsureRing). Registers the
-      // shared-memory command ring so the presentation loop can drain
-      // + replay GPU commands on renderGpu.device.
-      w.addEventListener("message", handleWebGpuCmdRing);
       sent += 1;
     } catch (err) {
       if (!self._dolphinJitChannelErrLogged) {
         self._dolphinJitChannelErrLogged = true;
         postStatus(`jit-cache: postMessage to pthread worker failed: ${err?.message || err}`);
+      }
+    }
+    try {
+      w.addEventListener("message", handleDolphinJitNewCompile);
+    } catch (err) {
+      if (!self._dolphinJitListenerErrLogged) {
+        self._dolphinJitListenerErrLogged = true;
+        postStatus(`jit-cache: listener installation failed: ${err?.message || err}`);
       }
     }
   }
