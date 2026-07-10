@@ -453,7 +453,7 @@ export function extractLocalModuleSpecifiers(source, relativePath) {
 
 export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], renderer = {} }) {
   const evidence = [];
-  const fatalPattern = /(?:webgpu[^\n]*(?:validation|device[ -]lost|uncaptured|real-clear error|show-image draw error|unavailable|\bfail(?:ed)?\b|\bmissing\b|threw|\berror\b)|emscripten abort|\baborted\(|webassembly\.(?:linkerror|runtimeerror)|(?:^|[^a-z])wasm[^\n]*(?:out of bounds|unreachable|abort|failed|error)|worker[^\n]*(?:uncaught|pageerror|rpc[^\n]*timed out)|status[^\n]*(?:failed|fatal))/i;
+  const fatalPattern = /(?:webgpu[^\n]*(?:validation|device[ -]lost|uncaptured|real-clear error|show-image draw error|unavailable|\bfail(?:ed)?\b(?!\s*[:=]\s*0\b)|\bmissing\b(?!\s*[:=]\s*0\b)|threw|\berror\b(?!\s*[:=]\s*(?:0|none|<none>)\b))|emscripten abort|\baborted\(|webassembly\.(?:linkerror|runtimeerror)|(?:^|[^a-z])wasm[^\n]*(?:out of bounds|unreachable|abort|failed|error)|worker[^\n]*(?:uncaught|pageerror|rpc[^\n]*timed out)|status[^\n]*(?:failed|fatal))/i;
   const retainedStatuses = (renderer.statusHistory || []).map((entry) =>
     typeof entry === "string" ? entry : entry?.message
   );

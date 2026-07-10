@@ -282,6 +282,7 @@ async function runScenario(scenario, context) {
   const samples = [];
   const invalidReasons = [];
   let browser = null;
+  let page = null;
   let browserLaunch = null;
   let manifest = null;
   let saveStateLoad = null;
@@ -294,7 +295,7 @@ async function runScenario(scenario, context) {
   try {
     browserLaunch = await launchBrowser(context.chromium, context.headed);
     browser = browserLaunch.browser;
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const recordConsole = (scope, message) => {
       const line = `[${scope}${message.type()}] ${message.text()}`;
       consoleLines.push(line);
@@ -435,6 +436,15 @@ async function runScenario(scenario, context) {
   } catch (error) {
     invalidReasons.push(error.message || String(error));
     consoleLines.push(`[probe-error] ${error.stack || error.message}`);
+    if (page && !page.isClosed() && !renderer) {
+      try {
+        renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
+      } catch (diagnosticError) {
+        consoleLines.push(
+          `[renderer-diagnostics-error] ${diagnosticError.stack || diagnosticError.message}`
+        );
+      }
+    }
     if (browser) {
       const pages = browser.contexts().flatMap((browserContext) => browserContext.pages());
       if (pages[0]) await saveScreenshot(pages[0], scenarioDir, "error.png");
@@ -469,6 +479,7 @@ async function runScenario(scenario, context) {
   );
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
+    if (renderer) manifest.renderer = renderer;
     manifest.fixture.saveStateLoaded = Boolean(saveStateLoad?.loaded);
     manifest.fixture.loadResult = saveStateLoad;
     manifest.qualification = evaluateQualificationProvenance(manifest);

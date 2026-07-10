@@ -250,6 +250,20 @@ test("all retained WebGPU, WASM LinkError, and fallback evidence is fatal", () =
   assert.ok(evidence.some((line) => line.includes("stale status")));
 });
 
+test("successful WebGPU counters are not mistaken for fatal evidence", () => {
+  const evidence = findFatalRuntimeEvidence({
+    consoleLines: [
+      "[webgpu-shader] ok=33 fail=0 (stage=0 xlat=1 id=143) firstErr=<none>",
+      "[webgpu-cmd-shader] module id=4 stage=2 compiled OK [ok=4 fail=0]",
+      "[webgpu-pcfg] variant OK 13|bgra8unorm|null|rz0 [ok=3 fail=0]",
+    ],
+    statuses: [],
+    renderer: { errors: [], emscriptenPrintErr: [], statusHistory: [], fatalStatusHistory: [] },
+  });
+
+  assert.deepEqual(evidence, []);
+});
+
 test("worker diagnostics structurally retain fatal catches and RPCs are bounded", async () => {
   const [workerSource, gateSource] = await Promise.all([
     readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
