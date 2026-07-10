@@ -23,6 +23,7 @@ import {
   evaluateMetricsModeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
+  expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
   parseBattleCheckpoint,
@@ -403,7 +404,10 @@ async function runScenario(scenario, context) {
     const observedBattleCheckpoint = parseBattleCheckpoint(response);
     let battleCheckpoint;
     try {
-      battleCheckpoint = assertBattleCheckpoint(observedBattleCheckpoint);
+      battleCheckpoint = assertBattleCheckpoint(
+        observedBattleCheckpoint,
+        expectedBattleCheckpointForParams(scenario.params)
+      );
     } catch (error) {
       if (!context.continueInvalidCheckpoint) throw error;
       invalidReasons.push(error.message || String(error));

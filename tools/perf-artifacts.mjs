@@ -31,6 +31,20 @@ export const FIXED_MELEE_BATTLE_CHECKPOINT = Object.freeze({
   minLoadedCheckpointGeneration: 1,
 });
 
+const FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW = Object.freeze({
+  0: "55dc4398",
+  1: FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash,
+});
+
+export function expectedBattleCheckpointForParams(params = {}) {
+  const video = String(params.video || "software").toLowerCase();
+  const fastsw = Number.parseInt(String(params.fastsw ?? "1"), 10);
+  const xfbHash = video === "software"
+    ? FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW[fastsw] ?? FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash
+    : FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash;
+  return { ...FIXED_MELEE_BATTLE_CHECKPOINT, xfbHash };
+}
+
 export const HOST_CORE_ABI_VERSION = 1;
 export const PERF_EVENT_SCHEMA_VERSION = 1;
 

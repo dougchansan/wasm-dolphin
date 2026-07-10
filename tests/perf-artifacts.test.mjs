@@ -16,6 +16,7 @@ import {
   evaluateMetricsModeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
+  expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
   parseProfileMetrics,
@@ -437,6 +438,35 @@ test("comparison run validity includes assertions and page/worker console errors
     "run failure: compilefail=1",
     "console error: [worker:core:error] device lost",
   ]);
+});
+
+test("fixed-battle XFB identity is locked per deliberate software raster mode", () => {
+  assert.equal(
+    expectedBattleCheckpointForParams({ video: "software", fastsw: "0" }).xfbHash,
+    "55dc4398"
+  );
+  assert.equal(
+    expectedBattleCheckpointForParams({ video: "software", fastsw: "1" }).xfbHash,
+    "4b2d0a3b"
+  );
+  assert.equal(
+    expectedBattleCheckpointForParams({ video: "wgpu", fastsw: "0" }).xfbHash,
+    "4b2d0a3b"
+  );
+  const full = expectedBattleCheckpointForParams({ video: "software", fastsw: "0" });
+  assert.equal(
+    assertBattleCheckpoint({
+      frame: 1,
+      coreTicks: full.coreTicks,
+      ppcPc: full.ppcPc,
+      xfbHash: full.xfbHash,
+      width: full.width,
+      height: full.height,
+      checkpointObservationSource: "cpu-thread-after-load",
+      loadedCheckpointGeneration: 1,
+    }, full).verified,
+    true
+  );
 });
 
 test("JIT summaries expose reuse and reject stale exported counters", () => {
