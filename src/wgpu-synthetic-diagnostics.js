@@ -1,8 +1,15 @@
 const QUERY_KEY = "wgpu-synthetic";
 const SCHEMA = "wasm-dolphin.wgpu-synthetic.v1";
+const SCHEMA_REVISION = 2;
 const DIAGNOSTIC_SIZE = 64;
+const COMMAND_RECORD_BYTES = 32;
 
-const VALID_MODES = new Set(["route", "clear", "static-triangle", "checker", "all"]);
+const VALID_MODES = new Set(["route", "clear", "static-triangle", "checker", "command-ring", "all"]);
+
+export const SYNTHETIC_WGPU_COMMAND_OP = Object.freeze({
+  CLEAR: 1,
+  DRAW_TEST: 4
+});
 
 export const SYNTHETIC_COLORS = Object.freeze({
   clear: Object.freeze([26, 77, 153, 255]),
@@ -54,8 +61,20 @@ export function readWebGpuSyntheticRequest(search) {
   const rawMode = (params.get(QUERY_KEY) || "all").trim().toLowerCase();
   const mode = rawMode === "triangle" ? "static-triangle" : rawMode;
   return {
+    autoExport: params.get("wgpu-export") === "1",
     mode,
+    outputPath: params.get("diag-output") || "",
     presenter: (params.get("presenter") || "webgpu").trim().toLowerCase(),
+    provenance: {
+      repo: {
+        commit: params.get("diag-repo-commit") || "unknown",
+        dirty: parseDirty(params.get("diag-repo-dirty"))
+      },
+      core: {
+        id: params.get("diag-core-id") || "none-js-only",
+        sha256: params.get("diag-core-sha256") || "none-js-only"
+      }
+    },
     rawMode,
     valid: VALID_MODES.has(mode)
   };
@@ -86,10 +105,14 @@ export async function runWebGpuSyntheticPage({
     canvas,
     documentRef,
     gpu: globalRef.navigator?.gpu,
-    constants: globalRef
+    constants: globalRef,
+    locationHref: globalRef.location?.href || "",
+    userAgent: globalRef.navigator?.userAgent || ""
   });
 
   globalRef.__wgpuSyntheticDiagnostics = result;
+  globalRef.__exportWgpuSyntheticDiagnostics = () =>
+    downloadWebGpuSyntheticEvidence(result, { documentRef });
   if (status) {
     status.textContent = result.status === "pass" ? "WGPU diagnostic pass" : "WGPU diagnostic fail";
     status.classList.toggle("error", result.status !== "pass");
@@ -97,6 +120,9 @@ export async function runWebGpuSyntheticPage({
   if (adapterStatus) adapterStatus.textContent = result.status === "pass" ? "Synthetic pass" : result.classifier.code;
   if (mountNote) mountNote.textContent = result.classifier.marker;
   appendEvidenceSummary(documentRef, result);
+  if (request.autoExport) {
+    globalRef.__exportWgpuSyntheticDiagnostics();
+  }
   return result;
 }
 
@@ -106,12 +132,35 @@ export async function runWebGpuSyntheticDiagnostics({
   documentRef = globalThis.document,
   gpu = globalThis.navigator?.gpu,
   constants = globalThis,
-  now = () => globalThis.performance?.now?.() ?? Date.now()
+  now = () => globalThis.performance?.now?.() ?? Date.now(),
+  wallNow = () => Date.now(),
+  locationHref = globalThis.location?.href || "",
+  userAgent = globalThis.navigator?.userAgent || ""
 }) {
   const startedAt = now();
+  const startedAtUtc = new Date(wallNow()).toISOString();
+  const runId = `wgpu-synthetic-${startedAtUtc.replaceAll(":", "").replaceAll(".", "-")}`;
+  const suggestedDirectory = request?.outputPath || `.omx/wgpu-synthetic/${runId}`;
   const evidence = {
     schema: SCHEMA,
+    schemaRevision: SCHEMA_REVISION,
     status: "running",
+    startedAtUtc,
+    attribution: {
+      url: String(locationHref || ""),
+      browser: {
+        userAgent: String(userAgent || ""),
+        chromeVersion: chromeVersion(userAgent)
+      },
+      repo: { ...request?.provenance?.repo },
+      core: { ...request?.provenance?.core }
+    },
+    output: {
+      runId,
+      suggestedDirectory,
+      rawEvidencePath: `${suggestedDirectory}/evidence.json`,
+      exportFunction: "window.__exportWgpuSyntheticDiagnostics()"
+    },
     request: { ...request },
     route: {
       requested: true,
@@ -120,6 +169,10 @@ export async function runWebGpuSyntheticDiagnostics({
     },
     deviceLoss: { status: "not-observed" },
     uncapturedErrors: [],
+    cleanup: {
+      uncapturedListenerAdded: false,
+      uncapturedListenerRemoved: false
+    },
     tests: [],
     markers: [],
     classifier: {
@@ -136,32 +189,32 @@ export async function runWebGpuSyntheticDiagnostics({
   };
 
   if (!request?.valid) {
-    return fail(evidence, mark, "INVALID_QUERY", "route", `Unsupported ${QUERY_KEY} mode: ${request?.rawMode || ""}`, startedAt, now);
+    return fail(evidence, mark, "INVALID_QUERY", "route", `Unsupported ${QUERY_KEY} mode: ${request?.rawMode || ""}`, startedAt, now, wallNow);
   }
   if (request.presenter !== "webgpu" && request.presenter !== "wgpu") {
-    return fail(evidence, mark, "PRESENTER_ROUTE_MISMATCH", "route", "Synthetic diagnostics require presenter=webgpu", startedAt, now);
+    return fail(evidence, mark, "PRESENTER_ROUTE_MISMATCH", "route", "Synthetic diagnostics require presenter=webgpu", startedAt, now, wallNow);
   }
   if (!canvas?.getContext) {
-    return fail(evidence, mark, "CANVAS_UNAVAILABLE", "context", "#screen canvas is unavailable", startedAt, now);
+    return fail(evidence, mark, "CANVAS_UNAVAILABLE", "context", "#screen canvas is unavailable", startedAt, now, wallNow);
   }
   if (!gpu?.requestAdapter) {
-    return fail(evidence, mark, "WEBGPU_API_UNAVAILABLE", "route", "navigator.gpu is unavailable", startedAt, now);
+    return fail(evidence, mark, "WEBGPU_API_UNAVAILABLE", "route", "navigator.gpu is unavailable", startedAt, now, wallNow);
   }
 
   const requiredConstants = ["GPUTextureUsage", "GPUBufferUsage", "GPUMapMode"];
   const missingConstants = requiredConstants.filter((name) => !constants?.[name]);
   if (missingConstants.length > 0) {
-    return fail(evidence, mark, "WEBGPU_CONSTANTS_UNAVAILABLE", "route", missingConstants.join(", "), startedAt, now);
+    return fail(evidence, mark, "WEBGPU_CONSTANTS_UNAVAILABLE", "route", missingConstants.join(", "), startedAt, now, wallNow);
   }
 
   let adapter;
   try {
     adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
   } catch (error) {
-    return fail(evidence, mark, "ADAPTER_REQUEST_FAILED", "adapter", messageOf(error), startedAt, now);
+    return fail(evidence, mark, "ADAPTER_REQUEST_FAILED", "adapter", messageOf(error), startedAt, now, wallNow);
   }
   if (!adapter) {
-    return fail(evidence, mark, "ADAPTER_UNAVAILABLE", "adapter", "requestAdapter returned null", startedAt, now);
+    return fail(evidence, mark, "ADAPTER_UNAVAILABLE", "adapter", "requestAdapter returned null", startedAt, now, wallNow);
   }
 
   evidence.route.adapter = {
@@ -175,7 +228,7 @@ export async function runWebGpuSyntheticDiagnostics({
   try {
     device = await adapter.requestDevice();
   } catch (error) {
-    return fail(evidence, mark, "DEVICE_REQUEST_FAILED", "device", messageOf(error), startedAt, now);
+    return fail(evidence, mark, "DEVICE_REQUEST_FAILED", "device", messageOf(error), startedAt, now, wallNow);
   }
 
   evidence.route.device = {
@@ -198,77 +251,153 @@ export async function runWebGpuSyntheticDiagnostics({
     mark("WGPU_SYNTHETIC_UNCAPTURED_ERROR");
   };
   device.addEventListener?.("uncapturederror", uncapturedHandler);
+  evidence.cleanup.uncapturedListenerAdded = typeof device.addEventListener === "function";
 
-  const context = canvas.getContext("webgpu");
-  if (!context) {
-    device.removeEventListener?.("uncapturederror", uncapturedHandler);
-    return fail(evidence, mark, "CONTEXT_UNAVAILABLE", "context", "canvas.getContext('webgpu') returned null", startedAt, now);
-  }
-
-  const format = typeof gpu.getPreferredCanvasFormat === "function" ? gpu.getPreferredCanvasFormat() : "bgra8unorm";
-  if (format !== "bgra8unorm" && format !== "rgba8unorm") {
-    device.removeEventListener?.("uncapturederror", uncapturedHandler);
-    return fail(evidence, mark, "UNSUPPORTED_CANVAS_FORMAT", "context", format, startedAt, now);
-  }
-
-  const previousSize = { width: canvas.width, height: canvas.height };
-  canvas.width = DIAGNOSTIC_SIZE;
-  canvas.height = DIAGNOSTIC_SIZE;
-  const usage = constants.GPUTextureUsage.RENDER_ATTACHMENT | constants.GPUTextureUsage.COPY_SRC;
   try {
-    context.configure({ device, format, alphaMode: "opaque", usage });
-  } catch (error) {
-    device.removeEventListener?.("uncapturederror", uncapturedHandler);
-    return fail(evidence, mark, "CONTEXT_CONFIGURE_FAILED", "context", messageOf(error), startedAt, now);
-  }
+    const context = canvas.getContext("webgpu");
+    if (!context) {
+      return fail(evidence, mark, "CONTEXT_UNAVAILABLE", "context", "canvas.getContext('webgpu') returned null", startedAt, now, wallNow);
+    }
 
-  evidence.route.context = {
-    format,
-    alphaMode: "opaque",
-    usage,
-    previousSize,
-    diagnosticSize: { width: canvas.width, height: canvas.height }
-  };
-  mark("WGPU_SYNTHETIC_CONTEXT:PASS");
-  mark("WGPU_SYNTHETIC_ROUTE:PASS");
+    const format = typeof gpu.getPreferredCanvasFormat === "function" ? gpu.getPreferredCanvasFormat() : "bgra8unorm";
+    if (format !== "bgra8unorm" && format !== "rgba8unorm") {
+      return fail(evidence, mark, "UNSUPPORTED_CANVAS_FORMAT", "context", format, startedAt, now, wallNow);
+    }
 
-  const selected = request.mode === "all" ? ["clear", "static-triangle", "checker"] : request.mode === "route" ? [] : [request.mode];
-  for (const name of selected) {
-    const result = await runOneDiagnostic({
-      name,
-      device,
-      context,
+    const previousSize = { width: canvas.width, height: canvas.height };
+    canvas.width = DIAGNOSTIC_SIZE;
+    canvas.height = DIAGNOSTIC_SIZE;
+    const usage = constants.GPUTextureUsage.RENDER_ATTACHMENT | constants.GPUTextureUsage.COPY_SRC;
+    try {
+      context.configure({ device, format, alphaMode: "opaque", usage });
+    } catch (error) {
+      return fail(evidence, mark, "CONTEXT_CONFIGURE_FAILED", "context", messageOf(error), startedAt, now, wallNow);
+    }
+
+    evidence.route.context = {
       format,
-      constants,
-      documentRef,
-      now
-    });
-    evidence.tests.push(result);
-    mark(`WGPU_SYNTHETIC_${name.toUpperCase().replaceAll("-", "_")}:${result.status.toUpperCase()}`);
+      alphaMode: "opaque",
+      usage,
+      previousSize,
+      diagnosticSize: { width: canvas.width, height: canvas.height }
+    };
+    mark("WGPU_SYNTHETIC_CONTEXT:PASS");
+    mark("WGPU_SYNTHETIC_ROUTE:PASS");
+
+    const options = { device, context, format, constants, documentRef, now };
+    const selected = request.mode === "all"
+      ? ["command-ring", "checker"]
+      : request.mode === "route"
+        ? []
+        : [request.mode];
+    for (const name of selected) {
+      if (name === "command-ring") {
+        const commandRing = await runSyntheticCommandRing(options);
+        evidence.commandRing = commandRing.evidence;
+        for (const result of commandRing.results) {
+          evidence.tests.push(result);
+          mark(`WGPU_SYNTHETIC_${result.name.toUpperCase().replaceAll("-", "_")}:${result.status.toUpperCase()}`);
+        }
+        continue;
+      }
+
+      const result = await runOneDiagnostic({ name, ...options });
+      evidence.tests.push(result);
+      mark(`WGPU_SYNTHETIC_${name.toUpperCase().replaceAll("-", "_")}:${result.status.toUpperCase()}`);
+    }
+
+    const failedTest = evidence.tests.find((test) => test.status !== "pass");
+    if (failedTest) {
+      return fail(evidence, mark, failedTest.code, failedTest.stage, failedTest.error || "Expected output mismatch", startedAt, now, wallNow);
+    }
+    if (evidence.uncapturedErrors.length > 0) {
+      return fail(evidence, mark, "UNCAUGHT_GPU_ERROR", "error", evidence.uncapturedErrors[0].message, startedAt, now, wallNow);
+    }
+    if (evidence.deviceLoss.status === "lost") {
+      return fail(evidence, mark, "DEVICE_LOST", "completion", evidence.deviceLoss.message, startedAt, now, wallNow);
+    }
+
+    evidence.status = "pass";
+    evidence.elapsedMs = roundMs(now() - startedAt);
+    evidence.finishedAtUtc = new Date(wallNow()).toISOString();
+    updateOutputManifest(evidence);
+    evidence.classifier = {
+      status: "pass",
+      code: "PASS",
+      stage: "complete",
+      marker: "WGPU_SYNTHETIC_CLASSIFIER:PASS"
+    };
+    mark(evidence.classifier.marker);
+    return evidence;
+  } catch (error) {
+    return fail(
+      evidence,
+      mark,
+      error?.code || "UNEXPECTED_DIAGNOSTIC_ERROR",
+      error?.stage || "diagnostic",
+      messageOf(error),
+      startedAt,
+      now,
+      wallNow
+    );
+  } finally {
+    try {
+      device.removeEventListener?.("uncapturederror", uncapturedHandler);
+      evidence.cleanup.uncapturedListenerRemoved =
+        evidence.cleanup.uncapturedListenerAdded && typeof device.removeEventListener === "function";
+    } catch (error) {
+      evidence.cleanup.uncapturedListenerRemoveError = messageOf(error);
+    }
+  }
+}
+
+export function encodeSyntheticWgpuCommandRecord(op, payload = []) {
+  if (op !== SYNTHETIC_WGPU_COMMAND_OP.CLEAR && op !== SYNTHETIC_WGPU_COMMAND_OP.DRAW_TEST) {
+    throw new RangeError(`Unsupported synthetic WGPU opcode: ${op}`);
+  }
+  if (payload.length > 7) {
+    throw new RangeError("Synthetic WGPU command payload exceeds seven words");
   }
 
-  device.removeEventListener?.("uncapturederror", uncapturedHandler);
-  const failedTest = evidence.tests.find((test) => test.status !== "pass");
-  if (failedTest) {
-    return fail(evidence, mark, failedTest.code, failedTest.stage, failedTest.error || "Expected output mismatch", startedAt, now);
+  const record = new ArrayBuffer(COMMAND_RECORD_BYTES);
+  const view = new DataView(record);
+  view.setUint32(0, op, true);
+  for (let index = 0; index < payload.length; index += 1) {
+    view.setFloat32((index + 1) * 4, Number(payload[index]) || 0, true);
   }
-  if (evidence.uncapturedErrors.length > 0) {
-    return fail(evidence, mark, "UNCAUGHT_GPU_ERROR", "error", evidence.uncapturedErrors[0].message, startedAt, now);
-  }
-  if (evidence.deviceLoss.status === "lost") {
-    return fail(evidence, mark, "DEVICE_LOST", "completion", evidence.deviceLoss.message, startedAt, now);
+  return new Uint8Array(record);
+}
+
+export function decodeSyntheticWgpuCommandRecord(record) {
+  const bytes = asCommandBytes(record);
+  if (bytes.byteLength !== COMMAND_RECORD_BYTES) {
+    throw new RangeError(`Synthetic WGPU command record must be ${COMMAND_RECORD_BYTES} bytes`);
   }
 
-  evidence.status = "pass";
-  evidence.elapsedMs = roundMs(now() - startedAt);
-  evidence.classifier = {
-    status: "pass",
-    code: "PASS",
-    stage: "complete",
-    marker: "WGPU_SYNTHETIC_CLASSIFIER:PASS"
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const op = view.getUint32(0, true);
+  const opName = op === SYNTHETIC_WGPU_COMMAND_OP.CLEAR
+    ? "CLEAR"
+    : op === SYNTHETIC_WGPU_COMMAND_OP.DRAW_TEST
+      ? "DRAW_TEST"
+      : "UNKNOWN";
+  return {
+    byteLength: bytes.byteLength,
+    op,
+    opName,
+    payload: Array.from({ length: 7 }, (_, index) => view.getFloat32((index + 1) * 4, true))
   };
-  mark(evidence.classifier.marker);
-  return evidence;
+}
+
+export async function dispatchSyntheticWgpuCommandRecord(record, handlers) {
+  const decoded = decodeSyntheticWgpuCommandRecord(record);
+  if (decoded.op === SYNTHETIC_WGPU_COMMAND_OP.CLEAR && typeof handlers?.clear === "function") {
+    return { decoded, handler: "clear", result: await handlers.clear(decoded) };
+  }
+  if (decoded.op === SYNTHETIC_WGPU_COMMAND_OP.DRAW_TEST && typeof handlers?.drawTest === "function") {
+    return { decoded, handler: "drawTest", result: await handlers.drawTest(decoded) };
+  }
+  throw stageError("UNSUPPORTED_SYNTHETIC_COMMAND", "command-ring.decode", `No synthetic handler for opcode ${decoded.op}`);
 }
 
 export function compareRgba(actual, expected, { tolerance = 0, mask = null } = {}) {
@@ -311,6 +440,47 @@ export function compareRgba(actual, expected, { tolerance = 0, mask = null } = {
   };
 }
 
+export function buildWebGpuSyntheticExport(result) {
+  const files = [{
+    content: `${JSON.stringify(result, null, 2)}\n`,
+    mimeType: "application/json",
+    name: "evidence.json"
+  }];
+
+  for (const test of result?.tests || []) {
+    for (const kind of ["actual", "expected", "diff"]) {
+      const dataUrl = test.imageArtifacts?.[kind];
+      if (!dataUrl) continue;
+      files.push({
+        dataUrl,
+        mimeType: "image/png",
+        name: `${safeFileName(test.name)}-${kind}.png`
+      });
+    }
+  }
+
+  return {
+    suggestedDirectory: result?.output?.suggestedDirectory || ".omx/wgpu-synthetic/unknown",
+    files
+  };
+}
+
+export function downloadWebGpuSyntheticEvidence(result, { documentRef = globalThis.document } = {}) {
+  const bundle = buildWebGpuSyntheticExport(result);
+  const downloaded = [];
+  for (const file of bundle.files) {
+    const link = documentRef?.createElement?.("a");
+    if (!link) continue;
+    link.download = `${result?.output?.runId || "wgpu-synthetic"}-${file.name}`;
+    link.href = file.dataUrl || `data:${file.mimeType};charset=utf-8,${encodeURIComponent(file.content)}`;
+    documentRef.body?.appendChild?.(link);
+    link.click();
+    link.remove();
+    downloaded.push(link.download);
+  }
+  return { downloaded, suggestedDirectory: bundle.suggestedDirectory };
+}
+
 export function makeSolidExpected(width, height, color) {
   const pixels = new Uint8ClampedArray(width * height * 4);
   for (let offset = 0; offset < pixels.length; offset += 4) pixels.set(color, offset);
@@ -349,6 +519,46 @@ export function makeTriangleExpected(width, height) {
   return { pixels, mask };
 }
 
+async function runSyntheticCommandRing(options) {
+  const records = [
+    encodeSyntheticWgpuCommandRecord(
+      SYNTHETIC_WGPU_COMMAND_OP.CLEAR,
+      SYNTHETIC_COLORS.clear.map((value) => value / 255)
+    ),
+    encodeSyntheticWgpuCommandRecord(SYNTHETIC_WGPU_COMMAND_OP.DRAW_TEST)
+  ];
+  const results = [];
+  const handled = [];
+
+  for (const record of records) {
+    const dispatched = await dispatchSyntheticWgpuCommandRecord(record, {
+      clear: async () => runOneDiagnostic({ name: "clear", ...options }),
+      drawTest: async () => runOneDiagnostic({ name: "static-triangle", ...options })
+    });
+    results.push(dispatched.result);
+    handled.push({
+      byteLength: dispatched.decoded.byteLength,
+      handler: dispatched.handler,
+      op: dispatched.decoded.op,
+      opName: dispatched.decoded.opName,
+      recordHex: bytesToHex(record),
+      resultStatus: dispatched.result.status
+    });
+  }
+
+  return {
+    evidence: {
+      status: results.every((result) => result.status === "pass") ? "pass" : "fail",
+      recordBytes: COMMAND_RECORD_BYTES,
+      source: "synthetic-js-only-complete-records",
+      handled,
+      realDolphinRingRouting: "pending-phase-6b-atomicity-and-upload-lifetime-gates",
+      realDolphinDrawsSent: false
+    },
+    results
+  };
+}
+
 async function runOneDiagnostic(options) {
   try {
     if (options.name === "clear") return await runClear(options);
@@ -356,6 +566,7 @@ async function runOneDiagnostic(options) {
     return await runChecker(options);
   } catch (error) {
     return {
+      ...(error?.partial || {}),
       name: options.name,
       status: "fail",
       code: error?.code || "UNEXPECTED_DIAGNOSTIC_ERROR",
@@ -367,7 +578,7 @@ async function runOneDiagnostic(options) {
 
 async function runClear(options) {
   const expected = makeSolidExpected(DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE, SYNTHETIC_COLORS.clear);
-  return runRenderAndValidate(options, {
+  const result = await runRenderAndValidate(options, {
     expected,
     tolerance: 1,
     encode({ encoder, view }) {
@@ -383,6 +594,8 @@ async function runClear(options) {
       pass.end();
     }
   });
+  delete result.actual;
+  return result;
 }
 
 async function runTriangle(options) {
@@ -454,22 +667,37 @@ fn fs() -> @location(0) vec4<f32> {
 async function runChecker(options) {
   const { device, format, constants } = options;
   const textureBytes = checkerTextureBytes();
-  let texture;
-  try {
-    texture = device.createTexture({
-      label: "wgpu-synthetic-checker-upload",
-      size: { width: 8, height: 8 },
-      format: "rgba8unorm",
-      usage: constants.GPUTextureUsage.TEXTURE_BINDING | constants.GPUTextureUsage.COPY_DST
-    });
-  } catch (error) {
-    throw stageError("TEXTURE_CREATE_FAILED", "checker.texture", messageOf(error));
-  }
-  const upload = await uploadCheckerTexture(device, texture, textureBytes, options.now);
+  let texture = null;
+  let textureResource = {
+    created: false,
+    destroyed: false,
+    kind: "checker-texture"
+  };
+  let bindGroupResource = {
+    created: false,
+    kind: "checker-bind-group"
+  };
+  let result = null;
 
-  const shader = createShaderModule(device, {
-    label: "wgpu-synthetic-checker-blit",
-    code: `
+  try {
+    const textureCreation = await createScopedGpuResource(device, {
+      code: "TEXTURE_CREATE_FAILED",
+      kind: "checker-texture",
+      stage: "checker.texture",
+      create: () => device.createTexture({
+        label: "wgpu-synthetic-checker-upload",
+        size: { width: 8, height: 8 },
+        format: "rgba8unorm",
+        usage: constants.GPUTextureUsage.TEXTURE_BINDING | constants.GPUTextureUsage.COPY_DST
+      })
+    });
+    texture = textureCreation.resource;
+    textureResource = textureCreation.evidence;
+    const upload = await uploadCheckerTexture(device, texture, textureBytes, options.now);
+
+    const shader = createShaderModule(device, {
+      label: "wgpu-synthetic-checker-blit",
+      code: `
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
 }
@@ -495,75 +723,125 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let y = min(i32(position.y) * i32(dimensions.y) / ${DIAGNOSTIC_SIZE}, i32(dimensions.y) - 1);
   return textureLoad(checker_texture, vec2<i32>(x, y), 0);
 }`
-  }, "checker.shader");
-  const shaderEvidence = await shaderCompilationEvidence(shader);
-  if (shaderEvidence.errors.length > 0) throw stageError("SHADER_COMPILE_FAILED", "checker.shader", shaderEvidence.errors[0].message);
-  const pipeline = await createPipeline(device, {
-    label: "wgpu-synthetic-checker-blit",
-    layout: "auto",
-    vertex: { module: shader, entryPoint: "vs" },
-    fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
-    primitive: { topology: "triangle-list" }
-  }, "checker.pipeline");
-  let bindGroup;
-  try {
-    bindGroup = device.createBindGroup({
-      label: "wgpu-synthetic-checker-bind-group",
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: texture.createView() }]
+    }, "checker.shader");
+    const shaderEvidence = await shaderCompilationEvidence(shader);
+    if (shaderEvidence.errors.length > 0) throw stageError("SHADER_COMPILE_FAILED", "checker.shader", shaderEvidence.errors[0].message);
+    const pipeline = await createPipeline(device, {
+      label: "wgpu-synthetic-checker-blit",
+      layout: "auto",
+      vertex: { module: shader, entryPoint: "vs" },
+      fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
+      primitive: { topology: "triangle-list" }
+    }, "checker.pipeline");
+    const bindGroupCreation = await createScopedGpuResource(device, {
+      code: "BIND_GROUP_CREATE_FAILED",
+      kind: "checker-bind-group",
+      stage: "checker.bind-group",
+      create: () => device.createBindGroup({
+        label: "wgpu-synthetic-checker-bind-group",
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: texture.createView() }]
+      })
     });
-  } catch (error) {
-    throw stageError("BIND_GROUP_CREATE_FAILED", "checker.bind-group", messageOf(error));
-  }
+    const bindGroup = bindGroupCreation.resource;
+    bindGroupResource = bindGroupCreation.evidence;
 
-  const result = await runRenderAndValidate(options, {
-    expected: makeCheckerExpected(DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE),
-    tolerance: 1,
-    encode({ encoder, view }) {
-      const pass = encoder.beginRenderPass({
-        label: "wgpu-synthetic-checker-pass",
-        colorAttachments: [{
-          view,
-          clearValue: normalizedColor(SYNTHETIC_COLORS.background),
-          loadOp: "clear",
-          storeOp: "store"
-        }]
-      });
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.draw(3);
-      pass.end();
+    result = await runRenderAndValidate(options, {
+      expected: makeCheckerExpected(DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE),
+      tolerance: 1,
+      encode({ encoder, view }) {
+        const pass = encoder.beginRenderPass({
+          label: "wgpu-synthetic-checker-pass",
+          colorAttachments: [{
+            view,
+            clearValue: normalizedColor(SYNTHETIC_COLORS.background),
+            loadOp: "clear",
+            storeOp: "store"
+          }]
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(3);
+        pass.end();
+      }
+    });
+    result.upload = upload;
+    result.shader = shaderEvidence;
+    result.samples = validateCheckerSamples(result.actual, DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE);
+    if (!result.samples.every((sample) => sample.pass)) {
+      result.status = "fail";
+      result.code = "CHECKER_TEXEL_MISMATCH";
+      result.stage = "checker.expected-output";
     }
-  });
-  result.upload = upload;
-  result.shader = shaderEvidence;
-  result.samples = validateCheckerSamples(result.actual, DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE);
-  if (!result.samples.every((sample) => sample.pass)) {
-    result.status = "fail";
-    result.code = "CHECKER_TEXEL_MISMATCH";
-    result.stage = "checker.expected-output";
+    delete result.actual;
+    result.resources = {
+      ...result.resources,
+      bindGroup: bindGroupResource,
+      checkerTexture: textureResource
+    };
+    return result;
+  } catch (error) {
+    error.partial = mergePartialEvidence(error.partial, {
+      resources: {
+        bindGroup: error.partial?.resources?.bindGroup || bindGroupResource,
+        checkerTexture: error.partial?.resources?.checkerTexture || textureResource
+      }
+    });
+    throw error;
+  } finally {
+    if (texture) {
+      try {
+        texture.destroy();
+        textureResource.destroyed = true;
+      } catch (error) {
+        textureResource.destroyError = messageOf(error);
+        if (result) {
+          result.status = "fail";
+          result.code = "RESOURCE_CLEANUP_FAILED";
+          result.stage = "checker.texture.destroy";
+          result.error = textureResource.destroyError;
+        }
+      }
+    }
   }
-  delete result.actual;
-  return result;
 }
 
 async function runRenderAndValidate(options, { expected, mask = null, tolerance, encode }) {
   const { name, device, context, format, constants, documentRef, now } = options;
   let scopeOpen = false;
+  let readback = null;
+  let readbackMapped = false;
+  let result = null;
+  let caught = null;
   const submit = { submitted: false, completed: false };
+  const errorScope = {
+    type: "validation",
+    pushed: false,
+    popped: false,
+    error: null
+  };
+  const resources = {
+    readback: {
+      created: false,
+      destroyed: false
+    }
+  };
+
   try {
     device.pushErrorScope("validation");
     scopeOpen = true;
+    errorScope.pushed = true;
     const texture = context.getCurrentTexture();
     const encoder = device.createCommandEncoder({ label: `wgpu-synthetic-${name}` });
     encode({ encoder, view: texture.createView() });
 
     const bytesPerRow = align(DIAGNOSTIC_SIZE * 4, 256);
-    const readback = device.createBuffer({
+    readback = device.createBuffer({
       label: `wgpu-synthetic-${name}-readback`,
       size: bytesPerRow * DIAGNOSTIC_SIZE,
       usage: constants.GPUBufferUsage.COPY_DST | constants.GPUBufferUsage.MAP_READ
     });
+    resources.readback.created = true;
     encoder.copyTextureToBuffer(
       { texture },
       { buffer: readback, bytesPerRow, rowsPerImage: DIAGNOSTIC_SIZE },
@@ -571,6 +849,7 @@ async function runRenderAndValidate(options, { expected, mask = null, tolerance,
     );
 
     const submittedAt = now();
+    submit.attemptedAtMs = roundMs(submittedAt);
     try {
       device.queue.submit([encoder.finish()]);
       submit.submitted = true;
@@ -590,40 +869,139 @@ async function runRenderAndValidate(options, { expected, mask = null, tolerance,
     try {
       scopedError = await device.popErrorScope();
       scopeOpen = false;
+      errorScope.popped = true;
     } catch (error) {
       throw stageError("ERROR_SCOPE_FAILED", `${name}.error-scope`, messageOf(error));
     }
-    if (scopedError) throw stageError("VALIDATION_ERROR", `${name}.validation`, serializeGpuError(scopedError).message);
+    if (scopedError) {
+      errorScope.error = serializeGpuError(scopedError);
+      throw stageError("VALIDATION_ERROR", `${name}.validation`, errorScope.error.message);
+    }
 
     try {
       await readback.mapAsync(constants.GPUMapMode.READ);
+      readbackMapped = true;
     } catch (error) {
       throw stageError("READBACK_FAILED", `${name}.readback`, messageOf(error));
     }
     const actual = unpackReadback(new Uint8Array(readback.getMappedRange()), DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE, bytesPerRow, format);
     readback.unmap();
+    readbackMapped = false;
 
     const validation = compareRgba(actual, expected, { tolerance, mask });
-    return {
+    result = {
       name,
       status: validation.pass ? "pass" : "fail",
       code: validation.pass ? "PASS" : "EXPECTED_OUTPUT_MISMATCH",
       stage: validation.pass ? `${name}.complete` : `${name}.expected-output`,
-      errorScope: { type: "validation", error: null },
       submit,
       validation: withoutDiff(validation),
       imageArtifacts: imageArtifacts(documentRef, actual, expected, validation.diff, DIAGNOSTIC_SIZE, DIAGNOSTIC_SIZE),
       actual
     };
+  } catch (error) {
+    caught = error?.code
+      ? error
+      : stageError("UNEXPECTED_RENDER_ERROR", `${name}.render`, messageOf(error));
   } finally {
     if (scopeOpen) {
       try {
-        await device.popErrorScope();
-      } catch {
-        // The original stage error remains the classifier source.
+        const scopedError = await device.popErrorScope();
+        errorScope.popped = true;
+        if (scopedError) errorScope.error = serializeGpuError(scopedError);
+      } catch (error) {
+        errorScope.popError = messageOf(error);
+        caught ||= stageError("ERROR_SCOPE_FAILED", `${name}.error-scope`, messageOf(error));
+      }
+    }
+    if (readbackMapped) {
+      try {
+        readback.unmap();
+      } catch (error) {
+        resources.readback.unmapError = messageOf(error);
+      }
+    }
+    if (readback) {
+      try {
+        readback.destroy();
+        resources.readback.destroyed = true;
+      } catch (error) {
+        resources.readback.destroyError = messageOf(error);
+        caught ||= stageError("RESOURCE_CLEANUP_FAILED", `${name}.readback.destroy`, messageOf(error));
       }
     }
   }
+
+  if (caught) {
+    caught.partial = mergePartialEvidence(caught.partial, {
+      errorScope: { ...errorScope },
+      resources,
+      submit: { ...submit }
+    });
+    throw caught;
+  }
+
+  result.errorScope = { ...errorScope };
+  result.resources = resources;
+  return result;
+}
+
+async function createScopedGpuResource(device, { code, kind, stage, create }) {
+  const evidence = {
+    kind,
+    created: false,
+    errorScope: {
+      type: "validation",
+      pushed: false,
+      popped: false,
+      error: null
+    }
+  };
+  let scopeOpen = false;
+  let resource = null;
+  let caught = null;
+
+  try {
+    device.pushErrorScope("validation");
+    scopeOpen = true;
+    evidence.errorScope.pushed = true;
+    resource = create();
+    evidence.created = true;
+  } catch (error) {
+    caught = stageError(code, stage, messageOf(error));
+  } finally {
+    if (scopeOpen) {
+      try {
+        const scopedError = await device.popErrorScope();
+        evidence.errorScope.popped = true;
+        if (scopedError) {
+          evidence.errorScope.error = serializeGpuError(scopedError);
+          caught ||= stageError(code, stage, evidence.errorScope.error.message);
+        }
+      } catch (error) {
+        evidence.errorScope.popError = messageOf(error);
+        caught ||= stageError("ERROR_SCOPE_FAILED", `${stage}.error-scope`, messageOf(error));
+      }
+    }
+  }
+
+  if (caught) {
+    if (resource?.destroy) {
+      try {
+        resource.destroy();
+        evidence.destroyed = true;
+      } catch (error) {
+        evidence.destroyError = messageOf(error);
+      }
+    }
+    caught.partial = mergePartialEvidence(caught.partial, {
+      errorScope: { ...evidence.errorScope },
+      resources: { [resourceEvidenceKey(kind)]: evidence }
+    });
+    throw caught;
+  }
+
+  return { evidence, resource };
 }
 
 async function createPipeline(device, descriptor, stage) {
@@ -647,9 +1025,20 @@ function createShaderModule(device, descriptor, stage) {
 async function uploadCheckerTexture(device, texture, bytes, now) {
   let scopeOpen = false;
   const startedAt = now();
+  const evidence = {
+    bytes: bytes.byteLength,
+    completed: false,
+    errorScope: {
+      type: "validation",
+      pushed: false,
+      popped: false,
+      error: null
+    }
+  };
   try {
     device.pushErrorScope("validation");
     scopeOpen = true;
+    evidence.errorScope.pushed = true;
     device.queue.writeTexture(
       { texture },
       bytes,
@@ -659,24 +1048,28 @@ async function uploadCheckerTexture(device, texture, bytes, now) {
     await device.queue.onSubmittedWorkDone();
     const scopedError = await device.popErrorScope();
     scopeOpen = false;
+    evidence.errorScope.popped = true;
     if (scopedError) {
-      throw stageError("TEXTURE_UPLOAD_VALIDATION_ERROR", "checker.upload", serializeGpuError(scopedError).message);
+      evidence.errorScope.error = serializeGpuError(scopedError);
+      throw stageError("TEXTURE_UPLOAD_VALIDATION_ERROR", "checker.upload", evidence.errorScope.error.message);
     }
-    return {
-      bytes: bytes.byteLength,
-      completed: true,
-      completionMs: roundMs(now() - startedAt),
-      errorScope: { type: "validation", error: null }
-    };
+    evidence.completed = true;
+    evidence.completionMs = roundMs(now() - startedAt);
+    return evidence;
   } catch (error) {
-    if (error?.code) throw error;
-    throw stageError("TEXTURE_UPLOAD_FAILED", "checker.upload", messageOf(error));
+    const failure = error?.code
+      ? error
+      : stageError("TEXTURE_UPLOAD_FAILED", "checker.upload", messageOf(error));
+    failure.partial = mergePartialEvidence(failure.partial, { upload: evidence });
+    throw failure;
   } finally {
     if (scopeOpen) {
       try {
-        await device.popErrorScope();
-      } catch {
-        // The upload failure remains the classifier source.
+        const scopedError = await device.popErrorScope();
+        evidence.errorScope.popped = true;
+        if (scopedError) evidence.errorScope.error = serializeGpuError(scopedError);
+      } catch (error) {
+        evidence.errorScope.popError = messageOf(error);
       }
     }
   }
@@ -773,20 +1166,44 @@ function appendEvidenceSummary(documentRef, result) {
   pre.style.fontSize = "11px";
   pre.textContent = JSON.stringify({
     schema: result.schema,
+    schemaRevision: result.schemaRevision,
     status: result.status,
+    startedAtUtc: result.startedAtUtc,
+    finishedAtUtc: result.finishedAtUtc,
+    attribution: result.attribution,
+    output: result.output,
     classifier: result.classifier,
     route: result.route,
-    tests: result.tests.map(({ name, status, code, stage, submit, validation, samples }) => ({ name, status, code, stage, submit, validation, samples })),
+    commandRing: result.commandRing,
+    tests: result.tests.map(({ name, status, code, stage, errorScope, resources, submit, upload, validation, samples }) => ({
+      name,
+      status,
+      code,
+      stage,
+      errorScope,
+      resources,
+      submit,
+      upload,
+      validation,
+      samples,
+      imageArtifacts: Object.fromEntries(
+        Object.entries(result.tests.find((candidate) => candidate.name === name)?.imageArtifacts || {})
+          .map(([kind, value]) => [kind, value ? `${name}-${kind}.png` : null])
+      )
+    })),
     uncapturedErrors: result.uncapturedErrors,
     deviceLoss: result.deviceLoss,
+    cleanup: result.cleanup,
     markers: result.markers
   }, null, 2);
   panel.append(pre);
 }
 
-function fail(evidence, mark, code, stage, error, startedAt, now) {
+function fail(evidence, mark, code, stage, error, startedAt, now, wallNow = () => Date.now()) {
   evidence.status = "fail";
   evidence.elapsedMs = roundMs(now() - startedAt);
+  evidence.finishedAtUtc = new Date(wallNow()).toISOString();
+  updateOutputManifest(evidence);
   evidence.classifier = {
     status: "fail",
     code,
@@ -798,11 +1215,63 @@ function fail(evidence, mark, code, stage, error, startedAt, now) {
   return evidence;
 }
 
+function updateOutputManifest(evidence) {
+  evidence.output.imageFiles = (evidence.tests || []).flatMap((test) =>
+    ["actual", "expected", "diff"]
+      .filter((kind) => Boolean(test.imageArtifacts?.[kind]))
+      .map((kind) => `${evidence.output.suggestedDirectory}/${safeFileName(test.name)}-${kind}.png`)
+  );
+}
+
 function stageError(code, stage, message) {
   const error = new Error(message);
   error.code = code;
   error.stage = stage;
   return error;
+}
+
+function mergePartialEvidence(current = {}, next = {}) {
+  return {
+    ...current,
+    ...next,
+    resources: {
+      ...(current.resources || {}),
+      ...(next.resources || {})
+    }
+  };
+}
+
+function resourceEvidenceKey(kind) {
+  if (kind === "checker-texture") return "checkerTexture";
+  if (kind === "checker-bind-group") return "bindGroup";
+  return String(kind || "resource").replaceAll("-", "_");
+}
+
+function asCommandBytes(record) {
+  if (record instanceof Uint8Array) return record;
+  if (record instanceof ArrayBuffer) return new Uint8Array(record);
+  if (ArrayBuffer.isView(record)) {
+    return new Uint8Array(record.buffer, record.byteOffset, record.byteLength);
+  }
+  throw new TypeError("Synthetic WGPU command record must be an ArrayBuffer or view");
+}
+
+function bytesToHex(bytes) {
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function parseDirty(value) {
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  return null;
+}
+
+function chromeVersion(userAgent) {
+  return /(?:Chrome|Chromium)\/([^\s]+)/.exec(String(userAgent || ""))?.[1] || "unknown";
+}
+
+function safeFileName(value) {
+  return String(value || "diagnostic").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "diagnostic";
 }
 
 async function adapterInfo(adapter) {
