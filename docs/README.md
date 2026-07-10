@@ -16,6 +16,8 @@
   provenance-complete fixed-battle measurements and ranked optimization work.
 - [Fixed-battle result CSV](perf-results/melee-kirby-link-fixed-battle-2026-07-09.csv) —
   aggregate rows for the audit's headed Chrome runs.
+- [Worker transport A/B](worker-transport.md) — one-way reply suppression,
+  rollback flag, and measurement counters.
 - [WebGPU Naga bridge](webgpu-naga-bridge.md) — SPIR-V-to-WGSL ABI, ownership,
   failure handling, and patched C++ integration.
 - [Core roadmap](core-roadmap.md) — longer-term core work.

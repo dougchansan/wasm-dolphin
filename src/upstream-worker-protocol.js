@@ -3,7 +3,60 @@ export const DEFAULT_UPSTREAM_CORE_SHA256 = "03df79d2eb4be6c1e05d58d79ad4ab9590a
 export const DISCIO_UPSTREAM_CORE_URL = "./cores/dolphin/dolphin-upstream.js";
 export const WORKERFS_MOUNT_DIR = "/workerfs";
 
+export const ONE_WAY_WORKER_REQUEST_TYPES = Object.freeze([
+  "setAudioMuted",
+  "setInputMask",
+  "setInputState"
+]);
+
+const ONE_WAY_WORKER_REQUEST_TYPE_SET = new Set(ONE_WAY_WORKER_REQUEST_TYPES);
+
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export function requestedLegacyOneWayAck(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("legacyonewayack") === "1";
+}
+
+export function isOneWayWorkerRequestType(type) {
+  return ONE_WAY_WORKER_REQUEST_TYPE_SET.has(type);
+}
+
+export function isStrictOneWayWorkerRequest(message) {
+  return Boolean(
+    message?.oneWay === true &&
+    message?.id === undefined &&
+    isOneWayWorkerRequestType(message?.type)
+  );
+}
+
+export function planWorkerSuccessReply(
+  message,
+  result = {},
+  { legacyOneWayAck = false } = {}
+) {
+  const { transfer = [], ...payload } = result ?? {};
+  const reply = { id: message?.id, ok: true, ...payload };
+  const oneWay = isStrictOneWayWorkerRequest(message);
+  return {
+    estimatedReplyJsonBytes: oneWay ? estimateWorkerMessageJsonBytes(reply) : 0,
+    oneWay,
+    reply,
+    suppress: oneWay && !legacyOneWayAck,
+    transfer
+  };
+}
+
+export function buildWorkerErrorReply(message, error) {
+  return {
+    id: message?.id,
+    ok: false,
+    error: String(error)
+  };
+}
+
+export function estimateWorkerMessageJsonBytes(message) {
+  return new TextEncoder().encode(JSON.stringify(message)).byteLength;
+}
 
 export function requestedUpstreamCoreBuild(search = globalThis.location?.search ?? "") {
   const requested = new URLSearchParams(search).get("coreid")?.toLowerCase().replace(/^sha256:/, "") ?? "";

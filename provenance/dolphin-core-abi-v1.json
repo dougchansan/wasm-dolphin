@@ -74,8 +74,8 @@
     {
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
-      "size": 2661,
-      "sha256": "3002241219edefdb6270302790bb714fdaf256f0e7450cb66df2db4885529495"
+      "size": 4035,
+      "sha256": "425591a53af94edf1afc211dd3d3e096d877f57bdfae59f545c64f88bbbc61d0"
     }
   ],
   "memoryContract": {
@@ -223,7 +223,8 @@
     "requestEnvelopeFields": [
       "id",
       "type",
-      "payload"
+      "payload",
+      "oneWay"
     ],
     "responseEnvelopeFields": [
       "id",

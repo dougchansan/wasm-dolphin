@@ -4,6 +4,7 @@ import { UpstreamMainThreadAdapter } from "./upstream-main-thread-adapter.js";
 import { UpstreamWorkerAdapter, upstreamBundleAvailable } from "./upstream-worker-adapter.js";
 import {
   DEFAULT_UPSTREAM_CORE_URL,
+  requestedLegacyOneWayAck,
   requestedUpstreamCoreBuild
 } from "./upstream-worker-protocol.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -53,6 +54,7 @@ export class EmulatorHost {
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
     this.collectMetrics = requestedCollectMetrics();
+    this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
     // OGL backend, we allocate two SharedArrayBuffers at boot and hand them
@@ -247,7 +249,8 @@ export class EmulatorHost {
             fastSoftwareRaster: this.fastSoftwareRaster,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
-            collectMetrics: this.collectMetrics
+            collectMetrics: this.collectMetrics,
+            legacyOneWayAck: this.legacyOneWayAck
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";

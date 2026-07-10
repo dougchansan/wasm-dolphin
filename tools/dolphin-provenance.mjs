@@ -928,26 +928,33 @@ function inspectRuntimeMethods(root, glueSource) {
 function inspectWorkerProtocol(root) {
   const worker = readFileSync(resolve(root, "src/upstream-discio-worker.js"), "utf8");
   const adapter = readFileSync(resolve(root, "src/upstream-worker-adapter.js"), "utf8");
+  const protocol = readFileSync(resolve(root, "src/upstream-worker-protocol.js"), "utf8");
   const start = worker.indexOf("async function handleMessage(type, payload)");
   const end = worker.indexOf("\nasync function loadCore(", start);
   invariant(start >= 0 && end > start, "Could not isolate the upstream worker request switch");
   const requestTypes = [...worker.slice(start, end).matchAll(/case "([^"]+)"/g)]
     .map((match) => match[1])
     .sort();
-  invariant(/const \{ id, type, payload = \{\} \} = data;/.test(worker),
+  invariant(/const \{ type, payload = \{\} \} = data;/.test(worker) &&
+    worker.includes("isStrictOneWayWorkerRequest(data)"),
     "Could not verify worker request envelope fields");
   invariant(adapter.includes("this.worker.postMessage({ id, type, payload }"),
     "Could not verify adapter request envelope fields");
-  invariant(worker.includes("self.postMessage({ id, ok: true, ...payload }"),
+  invariant(adapter.includes("{ type, payload, oneWay: true }") &&
+    protocol.includes("message?.oneWay === true"),
+    "Could not verify adapter one-way request envelope field");
+  invariant(worker.includes("self.postMessage(planned.reply, planned.transfer)") &&
+    /const reply = \{ id: message\?\.id, ok: true, \.\.\.payload \};/.test(protocol),
     "Could not verify successful worker response envelope");
-  invariant(/self\.postMessage\(\{\s*id,\s*ok: false,\s*error:/s.test(worker),
+  invariant(worker.includes("buildWorkerErrorReply(") &&
+    /id: message\?\.id,\s*ok: false,\s*error: String\(error\)/s.test(protocol),
     "Could not verify failed worker response envelope");
   invariant(/\{ type: "detachedOglFrame", bitmap: data\.bitmap, width: data\.width, height: data\.height \}/
     .test(worker), "Could not verify detached OGL notification fields");
   invariant(/function postStatus\(message\)[\s\S]*?const text = String\(message\)[\s\S]*?self\.postMessage\(\{\s*type: "status",\s*message: text\s*\}\)/.test(worker),
     "Could not verify status notification fields");
   return {
-    requestEnvelopeFields: ["id", "type", "payload"],
+    requestEnvelopeFields: ["id", "type", "payload", "oneWay"],
     responseEnvelopeFields: ["id", "ok", "error"],
     requestTypes,
     notificationFields: {

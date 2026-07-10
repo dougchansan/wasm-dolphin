@@ -1,6 +1,7 @@
 import {
   DEFAULT_UPSTREAM_CORE_SHA256,
   DEFAULT_UPSTREAM_CORE_URL,
+  isOneWayWorkerRequestType,
   verifyUpstreamCoreWasm
 } from "./upstream-worker-protocol.js";
 import {
@@ -53,6 +54,7 @@ export class UpstreamWorkerAdapter {
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
+    legacyOneWayAck = false,
     oglPixelSab = null,
     oglMetaSab = null,
     oglSabWidth = 0,
@@ -89,6 +91,7 @@ export class UpstreamWorkerAdapter {
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
+    this.legacyOneWayAck = Boolean(legacyOneWayAck);
     this.oglPixelSab = oglPixelSab;
     this.oglMetaSab = oglMetaSab;
     this.oglSabWidth = oglSabWidth | 0;
@@ -96,6 +99,14 @@ export class UpstreamWorkerAdapter {
     this.worker = null;
     this.nextId = 1;
     this.pending = new Map();
+    this.workerTransportStats = {
+      schema: "wasm-dolphin.worker-transport.v1",
+      legacyOneWayAck: this.legacyOneWayAck,
+      oneWayRequestsPosted: 0,
+      requestMessagesPosted: 0,
+      unmatchedSuccessRepliesReceived: 0,
+      unmatchedErrorRepliesReceived: 0
+    };
     this.loaded = false;
     this.framePending = false;
     this.lastTelemetryRequestTime = 0;
@@ -217,6 +228,7 @@ export class UpstreamWorkerAdapter {
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
+      legacyOneWayAck: this.legacyOneWayAck,
       inputStateSab: this.inputStateSab,
       oglPixelSab: this.oglPixelSab,
       oglMetaSab: this.oglMetaSab,
@@ -549,6 +561,7 @@ export class UpstreamWorkerAdapter {
     const id = this.nextId;
     this.nextId += 1;
     recordTraffic(this.trafficStats.mainToWorker, "request", type, payload, transfer, this.collectMetrics);
+    this.workerTransportStats.requestMessagesPosted += 1;
 
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, type });
@@ -562,7 +575,18 @@ export class UpstreamWorkerAdapter {
     }
 
     recordTraffic(this.trafficStats.mainToWorker, "oneWay", type, payload, transfer, this.collectMetrics);
-    this.worker.postMessage({ type, payload }, transfer);
+    const oneWay = isOneWayWorkerRequestType(type);
+    if (oneWay) {
+      this.workerTransportStats.oneWayRequestsPosted += 1;
+    }
+    this.worker.postMessage(
+      oneWay ? { type, payload, oneWay: true } : { type, payload },
+      transfer
+    );
+  }
+
+  transportTelemetry() {
+    return { ...this.workerTransportStats };
   }
 
   drawDetachedOglBitmap(bitmap, width, height) {
@@ -650,6 +674,16 @@ export class UpstreamWorkerAdapter {
 
     if (message?.type === "frameUpdate" && message.payload) {
       this.applyFrame(message.payload);
+      return;
+    }
+
+    if (message?.id === undefined && message?.ok === true) {
+      this.workerTransportStats.unmatchedSuccessRepliesReceived += 1;
+      return;
+    }
+
+    if (message?.id === undefined && message?.ok === false) {
+      this.workerTransportStats.unmatchedErrorRepliesReceived += 1;
       return;
     }
 

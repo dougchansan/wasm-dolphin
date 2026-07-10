@@ -2,6 +2,9 @@ import {
   DEFAULT_UPSTREAM_CORE_SHA256,
   DEFAULT_UPSTREAM_CORE_URL,
   WORKERFS_MOUNT_DIR,
+  buildWorkerErrorReply,
+  isStrictOneWayWorkerRequest,
+  planWorkerSuccessReply,
   sanitizeDiscFileName,
   sha256Hex
 } from "./upstream-worker-protocol.js";
@@ -195,6 +198,20 @@ let coreBoot = {
   path: "",
   skippedReason: ""
 };
+let legacyOneWayAck = false;
+const workerTransportStats = {
+  schema: "wasm-dolphin.worker-transport.v1",
+  legacyOneWayAck: false,
+  requestsReceived: 0,
+  requestMessagesReceived: 0,
+  oneWayRequestsReceived: 0,
+  requestSuccessRepliesSent: 0,
+  requestErrorRepliesSent: 0,
+  oneWaySuccessRepliesSuppressed: 0,
+  oneWayLegacySuccessRepliesSent: 0,
+  oneWayErrorRepliesSent: 0,
+  estimatedOneWaySuccessReplyJsonBytesAvoided: 0
+};
 
 const MIN_FULL_BOOT_BYTES = 16 * 1024 * 1024;
 const LONG_PRESENTATION_FRAME_MS = 24;
@@ -281,6 +298,7 @@ function rendererDiagnosticsPayload() {
     emscriptenPrintErr: [...rendererDiagnostics.emscriptenPrintErr],
     statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
     fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
+    workerTransport: workerTransportTelemetry(),
   };
 }
 
@@ -303,22 +321,35 @@ self.addEventListener("message", async (event) => {
     }
     return;
   }
-  const { id, type, payload = {} } = data;
+  const { type, payload = {} } = data;
+  const oneWay = isStrictOneWayWorkerRequest(data);
+  workerTransportStats.requestsReceived += 1;
+  if (oneWay) {
+    workerTransportStats.oneWayRequestsReceived += 1;
+  } else {
+    workerTransportStats.requestMessagesReceived += 1;
+  }
 
   try {
     const result = await handleMessage(type, payload);
-    postResult(id, result);
+    postResult(data, result);
   } catch (error) {
     const errorName = error?.name || error?.constructor?.name || "Error";
     if (errorName === "LinkError" || errorName === "WebAssembly.LinkError") {
       recordRendererError("wasm-link-error", `${errorName}: ${error?.message || error}`);
     }
     postStatus(`${errorName}: ${error instanceof Error ? error.message : String(error)}`);
-    self.postMessage({
-      id,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
+    if (oneWay) {
+      workerTransportStats.oneWayErrorRepliesSent += 1;
+    } else {
+      workerTransportStats.requestErrorRepliesSent += 1;
+    }
+    self.postMessage(
+      buildWorkerErrorReply(
+        data,
+        error instanceof Error ? error.message : String(error)
+      )
+    );
   }
 });
 
@@ -326,6 +357,8 @@ async function handleMessage(type, payload) {
   switch (type) {
     case "load":
       causalMetricsEnabled = Boolean(payload.collectMetrics);
+      legacyOneWayAck = Boolean(payload.legacyOneWayAck);
+      workerTransportStats.legacyOneWayAck = legacyOneWayAck;
       if (payload.inputStateSab instanceof SharedArrayBuffer) {
         inputStateSabView = new Int32Array(payload.inputStateSab);
         lastInputStateGeneration = 0;
@@ -3086,15 +3119,35 @@ function readCoreTicksPerSecond() {
   return Number.isFinite(ticksPerSecond) && ticksPerSecond > 0 ? ticksPerSecond : 486000000;
 }
 
-function postResult(id, result) {
-  const { transfer = [], ...payload } = result ?? {};
+function postResult(request, result) {
+  const { transfer = [] } = result ?? {};
+  let replyResult = result ?? {};
   if (causalMetricsEnabled) {
-    payload.telemetryTransferBytes = transfer.reduce(
-      (total, value) => total + (Number(value?.byteLength) || 0),
-      0
-    );
+    replyResult = {
+      ...replyResult,
+      telemetryTransferBytes: transfer.reduce(
+        (total, value) => total + (Number(value?.byteLength) || 0),
+        0
+      )
+    };
   }
-  self.postMessage({ id, ok: true, ...payload }, transfer);
+  const planned = planWorkerSuccessReply(request, replyResult, { legacyOneWayAck });
+  if (planned.suppress) {
+    workerTransportStats.oneWaySuccessRepliesSuppressed += 1;
+    workerTransportStats.estimatedOneWaySuccessReplyJsonBytesAvoided +=
+      planned.estimatedReplyJsonBytes;
+    return;
+  }
+  if (planned.oneWay) {
+    workerTransportStats.oneWayLegacySuccessRepliesSent += 1;
+  } else {
+    workerTransportStats.requestSuccessRepliesSent += 1;
+  }
+  self.postMessage(planned.reply, planned.transfer);
+}
+
+function workerTransportTelemetry() {
+  return { ...workerTransportStats };
 }
 
 function readLastLoadedCheckpoint() {
