@@ -172,6 +172,8 @@
   "runtimeMethods": [
     "FS",
     "HEAPU8",
+    "PThread",
+    "UTF8ToString",
     "ccall",
     "cwrap"
   ],

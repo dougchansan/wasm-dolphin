@@ -51,10 +51,19 @@ The final target produces:
 commit above, verifies the fetched object, and checks it out detached. It never
 uses a moving branch head. `patch:upstream` verifies every active patch's
 canonical SHA-256, byte size, order, target repository, and base commit before
-applying it. Confirm the resulting root identity with:
+applying it. The root `HEAD` remains the pristine upstream base after patches
+are applied, so this command proves only the base commit:
 
 ```powershell
 git -C vendor/dolphin rev-parse HEAD
+```
+
+The durable patched identity is the virtual result tree. Re-running the patch
+command classifies the complete root and submodule status, rejects extra dirty
+or untracked paths, recomputes every result blob and tree, and reports:
+
+```text
+verified result tree 021ca35004bcb8bd1c4a7bf745c798e2874135e1
 ```
 
 The active lock contains six root snapshot patches and two patches applied in

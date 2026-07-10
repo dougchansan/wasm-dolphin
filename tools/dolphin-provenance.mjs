@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  mkdtempSync,
   readFileSync,
+  rmSync,
   statSync
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { join, relative, resolve, sep } from "node:path";
 
 export const SOURCE_LOCK_PATH = "provenance/dolphin-source.lock.json";
 export const CORE_ABI_PATH = "provenance/dolphin-core-abi-v1.json";
@@ -26,6 +29,14 @@ function normalizedPath(path) {
 
 export function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function gitBlobSha(bytes) {
+  const content = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  return createHash("sha1")
+    .update(`blob ${content.length}\0`)
+    .update(content)
+    .digest("hex");
 }
 
 export function sha256File(path) {
@@ -145,7 +156,8 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? process.cwd(),
     encoding: "utf8",
-    stdio: options.stdio ?? "pipe"
+    stdio: options.stdio ?? "pipe",
+    env: options.env ? { ...process.env, ...options.env } : process.env
   });
   if (result.error || result.status !== 0) {
     const detail = [result.stderr, result.stdout, result.error?.message].filter(Boolean).join("\n").trim();
@@ -158,8 +170,8 @@ function git(cwd, args, options = {}) {
   return run("git", args, { ...options, cwd });
 }
 
-function gitText(cwd, args) {
-  return git(cwd, args).stdout.trim();
+function gitText(cwd, args, options = {}) {
+  return git(cwd, args, options).stdout.trim();
 }
 
 export function assertExactCommit(expected, actual, label = "Dolphin checkout") {
@@ -190,8 +202,247 @@ export function verifyPatchRepositories(dolphinDir, lock) {
   }
 }
 
-function checkoutIsDirty(dolphinDir) {
-  return gitText(dolphinDir, ["status", "--porcelain=v1", "-uno"]).length > 0;
+function parsePorcelainStatus(output) {
+  const fields = output.split("\0");
+  const entries = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    if (!field) {
+      continue;
+    }
+    invariant(field.length >= 4 && field[2] === " ", `Malformed Git status entry: ${field}`);
+    const xy = field.slice(0, 2);
+    const path = normalizedPath(field.slice(3));
+    let originalPath = null;
+    if (/[RC]/.test(xy)) {
+      originalPath = normalizedPath(fields[++index] ?? "");
+    }
+    entries.push({ xy, path, originalPath });
+  }
+  return entries;
+}
+
+function repositoryStatus(directory, ignoreSubmodules = "none") {
+  const result = git(directory, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignored=matching",
+    `--ignore-submodules=${ignoreSubmodules}`
+  ]);
+  return parsePorcelainStatus(result.stdout);
+}
+
+function semanticStatus(entry) {
+  if (entry.xy === "??") {
+    return "A";
+  }
+  if (entry.xy === "!!") {
+    return "I";
+  }
+  const xy = entry.xy.toUpperCase();
+  invariant(!/[DRCU]/.test(xy) && !entry.originalPath,
+    `Unsupported checkout status ${entry.xy} for ${entry.path}`);
+  if (xy.includes("A")) {
+    return "A";
+  }
+  if (xy.includes("M") || xy.includes("T")) {
+    return "M";
+  }
+  throw new Error(`Unsupported checkout status ${entry.xy} for ${entry.path}`);
+}
+
+function statusMap(entries, label) {
+  const map = new Map();
+  for (const entry of entries) {
+    invariant(!map.has(entry.path), `Duplicate ${label} status path: ${entry.path}`);
+    map.set(entry.path, { ...entry, status: semanticStatus(entry) });
+  }
+  return map;
+}
+
+function assertStatusInventory(actualEntries, expected, label) {
+  const actual = statusMap(actualEntries, label);
+  const extras = [...actual.keys()].filter((path) => !expected.has(path));
+  const missing = [...expected.keys()].filter((path) => !actual.has(path));
+  const mismatched = [...expected.entries()]
+    .filter(([path, status]) => actual.has(path) && actual.get(path).status !== status)
+    .map(([path, status]) => `${path}:${actual.get(path).status}->${status}`);
+  invariant(extras.length === 0 && missing.length === 0 && mismatched.length === 0,
+    `${label} checkout status does not match the locked snapshot` +
+    `; extras=[${extras.join(", ")}]; missing=[${missing.join(", ")}]` +
+    `; status=[${mismatched.join(", ")}]`);
+  return actual;
+}
+
+function gitTreeEntry(directory, revision, path) {
+  const output = gitText(directory, ["ls-tree", revision, "--", path]);
+  if (!output) {
+    return null;
+  }
+  const match = output.match(/^(\d{6})\s+(\S+)\s+([0-9a-f]{40})\t/);
+  invariant(match, `Could not parse Git tree entry for ${path} at ${revision}`);
+  return { mode: match[1], type: match[2], blob: match[3] };
+}
+
+function actualWorktreeMode(directory, record, statusEntry) {
+  if (record.status === "A" && statusEntry.xy === "??") {
+    if (process.platform === "win32") {
+      return "100644";
+    }
+    return (statSync(resolve(directory, record.path)).mode & 0o111) === 0 ? "100644" : "100755";
+  }
+  const readMode = (args) => {
+    const output = gitText(directory, args);
+    if (!output) {
+      return null;
+    }
+    const line = output.split(/\r?\n/).at(-1);
+    const match = line.match(/^:\d{6} (\d{6}) [0-9a-f]+ [0-9a-f]+ [A-Z]/);
+    return match?.[1] ?? null;
+  };
+  return readMode(["diff", "--raw", "--no-abbrev", "--", record.path]) ??
+    readMode(["diff", "--cached", "--raw", "--no-abbrev", "--", record.path]) ??
+    gitTreeEntry(directory, "HEAD", record.path)?.mode;
+}
+
+function verifySnapshotRecords(directory, baseCommit, records, statuses, label) {
+  const actual = [];
+  for (const record of records) {
+    const base = gitTreeEntry(directory, baseCommit, record.path);
+    if (record.status === "A") {
+      invariant(record.baseBlob === null, `${label} added path has a base blob: ${record.path}`);
+      invariant(base === null, `${label} added path exists in the base tree: ${record.path}`);
+    } else {
+      invariant(base?.type === "blob", `${label} base path is not a blob: ${record.path}`);
+      invariant(base.blob === record.baseBlob, `${label} base blob mismatch: ${record.path}`);
+      invariant(base.mode === record.mode, `${label} base mode mismatch: ${record.path}`);
+    }
+
+    const absolute = resolve(directory, record.path);
+    invariant(existsSync(absolute) && statSync(absolute).isFile(),
+      `${label} snapshot file is missing: ${record.path}`);
+    const bytes = normalizedFileBytes(absolute, "lf-normalized");
+    const blob = gitBlobSha(bytes);
+    const sha256 = sha256Bytes(bytes);
+    const mode = actualWorktreeMode(directory, record, statuses.get(record.path));
+    invariant(blob === record.resultBlob,
+      `${label} result blob mismatch for ${record.path}: expected ${record.resultBlob}, got ${blob}`);
+    invariant(bytes.length === record.size,
+      `${label} snapshot size mismatch for ${record.path}: expected ${record.size}, got ${bytes.length}`);
+    invariant(sha256 === record.sha256, `${label} snapshot SHA-256 mismatch for ${record.path}`);
+    invariant(mode === record.mode,
+      `${label} snapshot mode mismatch for ${record.path}: expected ${record.mode}, got ${mode}`);
+    actual.push({ ...record, resultBlob: blob, mode });
+  }
+  return actual;
+}
+
+function virtualResultTree(directory, baseCommit, records) {
+  const temporary = mkdtempSync(join(tmpdir(), "dolphin-virtual-tree-"));
+  const index = join(temporary, "index");
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    git(directory, ["read-tree", baseCommit], { env });
+    for (const record of records) {
+      git(directory, [
+        "update-index",
+        "--add",
+        "--info-only",
+        "--cacheinfo",
+        `${record.mode},${record.resultBlob},${record.path}`
+      ], { env });
+    }
+    return gitText(directory, ["write-tree", "--missing-ok"], { env });
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+function allPatchRepositoriesInitialized(dolphinDir, lock) {
+  return Object.keys(lock.repositories).every((cwd) => {
+    const directory = cwd === "." ? dolphinDir : resolve(dolphinDir, cwd);
+    return existsSync(resolve(directory, ".git"));
+  });
+}
+
+function assertCheckoutPristine(dolphinDir, lock, { allowMissingSubmodules = false } = {}) {
+  const rootEntries = repositoryStatus(dolphinDir, "none");
+  invariant(rootEntries.length === 0,
+    `Refusing non-pristine Dolphin checkout; root status=[${rootEntries.map((entry) => entry.path).join(", ")}]`);
+  for (const cwd of Object.keys(lock.repositories).filter((path) => path !== ".")) {
+    const directory = resolve(dolphinDir, cwd);
+    if (!existsSync(resolve(directory, ".git"))) {
+      invariant(allowMissingSubmodules, `Missing patch repository checkout: ${cwd}`);
+      continue;
+    }
+    const entries = repositoryStatus(directory, "none");
+    invariant(entries.length === 0,
+      `Refusing non-pristine patch repository ${cwd}; status=[${entries.map((entry) => entry.path).join(", ")}]`);
+  }
+  return { state: "pristine" };
+}
+
+export function classifyLockedCheckout(dolphinDir, root = process.cwd()) {
+  const lock = loadSourceLock(root);
+  const manifest = loadVendorSnapshotManifest(root, lock);
+  verifyDolphinCheckout(dolphinDir, lock);
+  verifyPatchRepositories(dolphinDir, lock);
+
+  const rootEntries = repositoryStatus(dolphinDir, "none");
+  const submoduleEntries = new Map(
+    manifest.submodules.map((submodule) => [
+      submodule.cwd,
+      repositoryStatus(resolve(dolphinDir, submodule.cwd), "none")
+    ])
+  );
+  if (rootEntries.length === 0 && [...submoduleEntries.values()].every((entries) => entries.length === 0)) {
+    return {
+      state: "pristine",
+      rootTree: gitText(dolphinDir, ["rev-parse", `${lock.upstream.commit}^{tree}`]),
+      submoduleTrees: Object.fromEntries(manifest.submodules.map((submodule) => [
+        submodule.cwd,
+        gitText(resolve(dolphinDir, submodule.cwd), ["rev-parse", `${submodule.baseCommit}^{tree}`])
+      ]))
+    };
+  }
+
+  const expectedRoot = new Map(manifest.root.records.map((record) => [record.path, record.status]));
+  for (const submodule of manifest.submodules) {
+    expectedRoot.set(submodule.cwd, "M");
+  }
+  const rootStatuses = assertStatusInventory(rootEntries, expectedRoot, "root");
+  const rootRecords = verifySnapshotRecords(
+    dolphinDir,
+    manifest.root.baseCommit,
+    manifest.root.records,
+    rootStatuses,
+    "root"
+  );
+  const rootTree = virtualResultTree(dolphinDir, manifest.root.baseCommit, rootRecords);
+  invariant(rootTree === manifest.root.resultTree,
+    `Root virtual result tree mismatch: expected ${manifest.root.resultTree}, got ${rootTree}`);
+
+  const submoduleTrees = {};
+  for (const submodule of manifest.submodules) {
+    const entries = submoduleEntries.get(submodule.cwd);
+    const expected = new Map(submodule.records.map((record) => [record.path, record.status]));
+    const statuses = assertStatusInventory(entries, expected, submodule.cwd);
+    const directory = resolve(dolphinDir, submodule.cwd);
+    const records = verifySnapshotRecords(
+      directory,
+      submodule.baseCommit,
+      submodule.records,
+      statuses,
+      submodule.cwd
+    );
+    const tree = virtualResultTree(directory, submodule.baseCommit, records);
+    invariant(tree === submodule.resultTree,
+      `${submodule.cwd} virtual result tree mismatch: expected ${submodule.resultTree}, got ${tree}`);
+    submoduleTrees[submodule.cwd] = tree;
+  }
+  return { state: "snapshot", rootTree, submoduleTrees };
 }
 
 export function fetchPinnedDolphin({
@@ -216,9 +467,15 @@ export function fetchPinnedDolphin({
   }
 
   const currentHead = gitText(destination, ["rev-parse", "--verify", "HEAD"]);
+  let priorState = null;
+  if (!created) {
+    if (currentHead === lock.upstream.commit && allPatchRepositoriesInitialized(destination, lock)) {
+      priorState = classifyLockedCheckout(destination, root);
+    } else {
+      priorState = assertCheckoutPristine(destination, lock, { allowMissingSubmodules: true });
+    }
+  }
   if (created || currentHead !== lock.upstream.commit) {
-    invariant(created || !checkoutIsDirty(destination),
-      `Refusing to replace dirty Dolphin checkout at ${destination}`);
     git(destination, ["fetch", "--depth", "1", "origin", lock.upstream.commit], { stdio: "inherit" });
     const fetched = gitText(destination, ["rev-parse", "FETCH_HEAD^{commit}"]);
     assertExactCommit(lock.upstream.commit, fetched, "Fetched Dolphin object");
@@ -230,10 +487,17 @@ export function fetchPinnedDolphin({
   git(destination, ["checkout", "--detach", lock.upstream.commit], { stdio: "inherit" });
   verifyDolphinCheckout(destination, lock);
   if (updateSubmodules) {
-    git(destination, ["submodule", "update", "--init", "--recursive", "--depth", "1"], { stdio: "inherit" });
-    verifyPatchRepositories(destination, lock);
+    if (priorState?.state !== "snapshot") {
+      git(destination, ["submodule", "update", "--init", "--recursive", "--depth", "1"], { stdio: "inherit" });
+    }
+  } else {
+    invariant(Object.keys(lock.repositories).length === 1,
+      "Cannot verify a source lock with submodules when submodule update is disabled");
   }
-  return { destination, commit: lock.upstream.commit };
+  const finalState = classifyLockedCheckout(destination, root);
+  invariant(priorState?.state !== "snapshot" || finalState.state === "snapshot",
+    "Fetch changed an exact locked snapshot");
+  return { destination, commit: lock.upstream.commit, state: finalState.state };
 }
 
 export function applyPinnedPatches({
@@ -242,8 +506,15 @@ export function applyPinnedPatches({
 } = {}) {
   const lock = loadSourceLock(root);
   verifyPatchSeries(root, lock);
-  verifyDolphinCheckout(dolphinDir, lock);
-  verifyPatchRepositories(dolphinDir, lock);
+  const before = classifyLockedCheckout(dolphinDir, root);
+  if (before.state === "snapshot") {
+    return {
+      status: "already-applied",
+      count: lock.patches.length,
+      sha256: lock.patchSeriesSha256,
+      resultTree: before.rootTree
+    };
+  }
 
   const groups = [];
   for (const patch of lock.patches) {
@@ -257,43 +528,43 @@ export function applyPinnedPatches({
     }
   }
 
-  const decisions = [];
   for (const group of groups) {
     const directory = group.cwd === "." ? dolphinDir : resolve(dolphinDir, group.cwd);
     const check = spawnSync("git", ["-C", directory, "apply", "--unidiff-zero", "--check", ...group.paths], {
       encoding: "utf8",
       stdio: "pipe"
     });
-    if (check.status === 0) {
-      decisions.push({ ...group, directory, status: "apply" });
-      continue;
-    }
-    const reverse = spawnSync(
-      "git",
-      ["-C", directory, "apply", "--unidiff-zero", "--reverse", "--check", ...group.paths],
-      { encoding: "utf8", stdio: "pipe" }
-    );
-    if (reverse.status === 0) {
-      decisions.push({ ...group, directory, status: "already-applied" });
-      continue;
-    }
-    const detail = [check.stderr, reverse.stderr].filter(Boolean).join("\n").trim();
-    throw new Error(
-      `Locked patch group for ${group.cwd} is neither wholly applicable nor wholly applied` +
-      `${detail ? `:\n${detail}` : ""}`
-    );
+    invariant(check.status === 0,
+      `Locked patch group for ${group.cwd} does not apply to the pristine checkout` +
+      `${check.stderr ? `:\n${check.stderr.trim()}` : ""}`);
+    group.directory = directory;
   }
 
-  for (const decision of decisions) {
-    if (decision.status === "apply") {
-      git(decision.directory, ["apply", "--unidiff-zero", ...decision.paths], { stdio: "inherit" });
+  const applied = [];
+  let after;
+  try {
+    for (const group of groups) {
+      git(group.directory, ["apply", "--unidiff-zero", ...group.paths], { stdio: "inherit" });
+      applied.push(group);
     }
+    after = classifyLockedCheckout(dolphinDir, root);
+    invariant(after.state === "snapshot", "Patch application did not produce the exact locked snapshot");
+  } catch (error) {
+    for (const group of applied.reverse()) {
+      try {
+        git(group.directory, ["apply", "--unidiff-zero", "--reverse", ...group.paths]);
+      } catch {
+        // Preserve the original error; the caller must inspect a failed rollback.
+      }
+    }
+    throw error;
   }
-  const status = decisions.every((decision) => decision.status === "already-applied")
-    ? "already-applied"
-    : "applied";
-  verifyVendorSnapshotCheckout(dolphinDir, root);
-  return { status, count: lock.patches.length, sha256: lock.patchSeriesSha256 };
+  return {
+    status: "applied",
+    count: lock.patches.length,
+    sha256: lock.patchSeriesSha256,
+    resultTree: after.rootTree
+  };
 }
 
 function validateSnapshotRecord(record, label) {
@@ -304,6 +575,8 @@ function validateSnapshotRecord(record, label) {
   invariant(record.status === "A" || record.status === "M", `Invalid ${label} status`);
   invariant(/^\d{6}$/.test(record.mode), `Invalid ${label} mode`);
   invariant(record.baseBlob === null || GIT_SHA_PATTERN.test(record.baseBlob), `Invalid ${label} base blob`);
+  invariant((record.status === "A") === (record.baseBlob === null),
+    `${label} status/base-blob relationship is invalid`);
   invariant(GIT_SHA_PATTERN.test(record.resultBlob ?? ""), `Invalid ${label} result blob`);
   invariant(Number.isSafeInteger(record.size) && record.size >= 0, `Invalid ${label} size`);
   invariant(SHA256_PATTERN.test(record.sha256 ?? ""), `Invalid ${label} SHA-256`);
@@ -314,9 +587,12 @@ export function validateVendorSnapshotManifest(manifest, lock) {
   invariant(manifest.normalization === "git-blob-lf", "Unsupported vendor snapshot normalization");
   invariant(manifest.root?.baseCommit === lock.upstream.commit,
     "Vendor snapshot root base does not match the source lock");
-  invariant(GIT_SHA_PATTERN.test(manifest.root?.snapshotCommit ?? ""), "Invalid snapshot commit");
+  invariant(!Object.hasOwn(manifest.root, "snapshotCommit"),
+    "Vendor snapshot must not depend on an unavailable synthetic commit");
   invariant(GIT_SHA_PATTERN.test(manifest.root?.resultTree ?? ""), "Invalid snapshot root tree");
   invariant(Array.isArray(manifest.root?.records), "Missing vendor snapshot root records");
+  invariant(Number.isSafeInteger(manifest.root.changedPathCount) && manifest.root.changedPathCount >= 0,
+    "Invalid vendor snapshot changed-path count");
   invariant(manifest.root.records.length === manifest.root.changedPathCount,
     "Vendor snapshot changed-path count mismatch");
 
@@ -326,6 +602,8 @@ export function validateVendorSnapshotManifest(manifest, lock) {
     invariant(!rootPaths.has(record.path), `Duplicate root snapshot path: ${record.path}`);
     rootPaths.add(record.path);
   }
+  invariant(JSON.stringify([...rootPaths]) === JSON.stringify([...rootPaths].sort()),
+    "Root snapshot records must be sorted by path");
 
   invariant(Array.isArray(manifest.submodules), "Missing vendor snapshot submodules");
   const submoduleCwds = new Set();
@@ -345,6 +623,8 @@ export function validateVendorSnapshotManifest(manifest, lock) {
       invariant(!paths.has(record.path), `Duplicate ${submodule.cwd} snapshot path: ${record.path}`);
       paths.add(record.path);
     }
+    invariant(JSON.stringify([...paths]) === JSON.stringify([...paths].sort()),
+      `${submodule.cwd} snapshot records must be sorted by path`);
   }
   const expectedSubmodules = Object.keys(lock.repositories).filter((cwd) => cwd !== ".").sort();
   invariant(JSON.stringify([...submoduleCwds].sort()) === JSON.stringify(expectedSubmodules),
@@ -367,26 +647,9 @@ export function loadVendorSnapshotManifest(
 }
 
 export function verifyVendorSnapshotCheckout(dolphinDir, root = process.cwd()) {
-  const lock = loadSourceLock(root);
-  const manifest = loadVendorSnapshotManifest(root, lock);
-  const verifyRecords = (directory, records, label) => {
-    for (const record of records) {
-      const actual = fileRecord(record.path, directory, "lf-normalized");
-      invariant(actual.size === record.size,
-        `${label} snapshot size mismatch for ${record.path}: expected ${record.size}, got ${actual.size}`);
-      invariant(actual.sha256 === record.sha256,
-        `${label} snapshot SHA-256 mismatch for ${record.path}`);
-    }
-  };
-  verifyRecords(dolphinDir, manifest.root.records, "root");
-  for (const submodule of manifest.submodules) {
-    verifyRecords(resolve(dolphinDir, submodule.cwd), submodule.records, submodule.cwd);
-  }
-  return {
-    rootPaths: manifest.root.records.length,
-    submodulePaths: manifest.submodules.reduce((sum, item) => sum + item.records.length, 0),
-    resultTree: manifest.root.resultTree
-  };
+  const result = classifyLockedCheckout(dolphinDir, root);
+  invariant(result.state === "snapshot", "Dolphin checkout is pristine, not the locked snapshot");
+  return result;
 }
 
 function readUleb(bytes, cursor) {
@@ -512,12 +775,81 @@ export function inspectMemoryContract(root = process.cwd()) {
   };
 }
 
+function inspectRuntimeMethods(root, glueSource) {
+  const lock = loadSourceLock(root);
+  const activePatchText = lock.patches
+    .filter((entry) => entry.cwd === ".")
+    .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))
+    .join("\n");
+  const methods = new Set();
+  for (const list of activePatchText.matchAll(/-sEXPORTED_RUNTIME_METHODS=\[([^\]]+)\]/g)) {
+    for (const method of list[1].matchAll(/'([^']+)'/g)) {
+      methods.add(method[1]);
+    }
+  }
+  invariant(methods.size > 0, "Active patch series does not declare exported runtime methods");
+  const result = [...methods].sort();
+  for (const method of result) {
+    invariant(glueSource.includes(`Module["${method}"]=${method}`),
+      `Generated core does not expose declared runtime method ${method}`);
+  }
+  return result;
+}
+
+function inspectWorkerProtocol(root) {
+  const worker = readFileSync(resolve(root, "src/upstream-discio-worker.js"), "utf8");
+  const adapter = readFileSync(resolve(root, "src/upstream-worker-adapter.js"), "utf8");
+  const start = worker.indexOf("async function handleMessage(type, payload)");
+  const end = worker.indexOf("\nasync function loadCore(", start);
+  invariant(start >= 0 && end > start, "Could not isolate the upstream worker request switch");
+  const requestTypes = [...worker.slice(start, end).matchAll(/case "([^"]+)"/g)]
+    .map((match) => match[1])
+    .sort();
+  invariant(/const \{ id, type, payload = \{\} \} = data;/.test(worker),
+    "Could not verify worker request envelope fields");
+  invariant(adapter.includes("this.worker.postMessage({ id, type, payload }"),
+    "Could not verify adapter request envelope fields");
+  invariant(worker.includes("self.postMessage({ id, ok: true, ...payload }"),
+    "Could not verify successful worker response envelope");
+  invariant(/self\.postMessage\(\{\s*id,\s*ok: false,\s*error:/s.test(worker),
+    "Could not verify failed worker response envelope");
+  invariant(/\{ type: "detachedOglFrame", bitmap: data\.bitmap, width: data\.width, height: data\.height \}/
+    .test(worker), "Could not verify detached OGL notification fields");
+  invariant(/type: "status",\s*message: String\(message\)/s.test(worker),
+    "Could not verify status notification fields");
+  return {
+    requestEnvelopeFields: ["id", "type", "payload"],
+    responseEnvelopeFields: ["id", "ok", "error"],
+    requestTypes,
+    notificationFields: {
+      detachedOglFrame: ["type", "bitmap", "width", "height"],
+      status: ["type", "message"]
+    }
+  };
+}
+
+function memoryContractStatus(contract) {
+  const pages = [
+    contract.jsGlue.initialPages,
+    ...contract.wasmImports.flatMap((memory) => [memory.minimum, memory.maximum]),
+    ...contract.wrapperDynamicJitPages,
+    contract.activePatchSeries.initialPages
+  ];
+  const consistentPages = pages.every((value) => value === pages[0]);
+  const validSharedImports = contract.wasmImports.length > 0 &&
+    contract.wasmImports.every((memory) => memory.shared && !memory.memory64 && memory.maximum !== null);
+  return consistentPages && validSharedImports ? "consistent" : "mismatch";
+}
+
 export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_ABI_PATH) {
   const absolute = resolve(root, manifestPath);
   invariant(existsSync(absolute), `Missing core ABI manifest: ${manifestPath}`);
   const manifest = JSON.parse(readFileSync(absolute, "utf8"));
+  const lock = loadSourceLock(root);
   invariant(manifest.schemaVersion === 1, "Unsupported core manifest schema");
   invariant(manifest.abiVersion === 1, "Unsupported host/core ABI version");
+  invariant(manifest.upstreamCommit === lock.upstream.commit,
+    "Core ABI upstream commit does not match the source lock");
   invariant(Array.isArray(manifest.artifacts) && manifest.artifacts.length === 2,
     "Core ABI manifest must contain the JS and WASM artifacts");
   for (const artifact of manifest.artifacts) {
@@ -538,12 +870,23 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     JSON.stringify(actualMemory) === JSON.stringify(manifest.memoryContract),
     "Core memory contract does not match ABI v1"
   );
+  const actualMemoryStatus = memoryContractStatus(actualMemory);
+  invariant(manifest.memoryContractStatus === actualMemoryStatus,
+    `Core memory-contract status mismatch: expected ${actualMemoryStatus}`);
+  const actualRuntimeMethods = inspectRuntimeMethods(root, glue);
+  invariant(JSON.stringify(manifest.runtimeMethods) === JSON.stringify(actualRuntimeMethods),
+    "Generated core runtime methods do not match ABI v1");
+  const actualWorkerProtocol = inspectWorkerProtocol(root);
+  invariant(JSON.stringify(manifest.workerProtocol) === JSON.stringify(actualWorkerProtocol),
+    "Worker protocol fields do not match ABI v1");
   const wasmArtifact = manifest.artifacts.find((artifact) => artifact.path.endsWith(".wasm"));
   invariant(manifest.coreId === `sha256:${wasmArtifact.sha256}`, "Core ID must address the WASM content");
   return {
     abiVersion: manifest.abiVersion,
     coreId: manifest.coreId,
     exports: actualExports.length,
+    runtimeMethods: actualRuntimeMethods,
+    workerProtocol: actualWorkerProtocol,
     memoryContract: actualMemory
   };
 }
@@ -559,7 +902,7 @@ export function verifyDolphinProvenance(root = process.cwd()) {
     vendorSnapshot: {
       rootPaths: vendor.root.records.length,
       submodulePaths: vendor.submodules.reduce((sum, item) => sum + item.records.length, 0),
-      resultTree: vendor.root.resultTree,
+      declaredResultTree: vendor.root.resultTree,
       sha256: vendor.contentSha256
     },
     core

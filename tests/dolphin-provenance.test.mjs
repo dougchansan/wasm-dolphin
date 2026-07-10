@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,11 +13,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  applyPinnedPatches,
   assertExactCommit,
+  classifyLockedCheckout,
   fetchPinnedDolphin,
   fileRecord,
+  gitBlobSha,
   loadSourceLock,
   patchSeriesDigest,
+  sha256Bytes,
   validateVendorSnapshotManifest,
   verifyCoreAbiManifest,
   verifyDolphinProvenance,
@@ -29,11 +34,16 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function gitBuffer(cwd, ...args) {
+  return execFileSync("git", args, { cwd });
+}
+
 function initializeRepository(directory) {
   mkdirSync(directory, { recursive: true });
   git(directory, "init", "--quiet");
   git(directory, "config", "user.email", "provenance-test@example.invalid");
   git(directory, "config", "user.name", "Provenance Test");
+  git(directory, "config", "core.autocrlf", "false");
 }
 
 function commitFile(directory, name, contents, message) {
@@ -64,6 +74,153 @@ function writeMinimalLock(root, { repository, commit }) {
   lock.patchSeriesSha256 = patchSeriesDigest(lock.patches);
   mkdirSync(join(root, "provenance"), { recursive: true });
   writeFileSync(join(root, "provenance/dolphin-source.lock.json"), `${JSON.stringify(lock, null, 2)}\n`);
+  const snapshot = {
+    schemaVersion: 1,
+    normalization: "git-blob-lf",
+    root: {
+      baseCommit: commit,
+      resultTree: git(repository, "rev-parse", `${commit}^{tree}`),
+      changedPathCount: 0,
+      records: []
+    },
+    submodules: []
+  };
+  snapshot.contentSha256 = sha256Bytes(JSON.stringify({
+    root: snapshot.root,
+    submodules: snapshot.submodules
+  }));
+  writeFileSync(
+    join(root, "provenance/dolphin-vendor-snapshot-v1.json"),
+    `${JSON.stringify(snapshot, null, 2)}\n`
+  );
+}
+
+function treeEntry(directory, revision, path) {
+  const output = git(directory, "ls-tree", revision, "--", path);
+  if (!output) {
+    return null;
+  }
+  const match = output.match(/^(\d{6})\s+blob\s+([0-9a-f]{40})\t/);
+  assert.ok(match, `expected blob entry for ${path}`);
+  return { mode: match[1], blob: match[2] };
+}
+
+function stagedRecord(directory, baseCommit, path, status) {
+  const staged = git(directory, "ls-files", "--stage", "--", path);
+  const match = staged.match(/^(\d{6}) ([0-9a-f]{40}) \d\t/);
+  assert.ok(match, `expected staged entry for ${path}`);
+  const bytes = gitBuffer(directory, "cat-file", "blob", match[2]);
+  const base = treeEntry(directory, baseCommit, path);
+  return {
+    path,
+    status,
+    mode: match[1],
+    baseBlob: base?.blob ?? null,
+    resultBlob: gitBlobSha(bytes),
+    size: bytes.length,
+    sha256: sha256Bytes(bytes)
+  };
+}
+
+function snapshotDigest(snapshot) {
+  return sha256Bytes(JSON.stringify({ root: snapshot.root, submodules: snapshot.submodules }));
+}
+
+function createLockedPatchFixture() {
+  const root = mkdtempSync(join(tmpdir(), "dolphin-apply-"));
+  const dolphin = join(root, "vendor/dolphin");
+  const submodule = join(dolphin, "deps/sub");
+  initializeRepository(dolphin);
+  initializeRepository(submodule);
+  const submoduleBase = commitFile(submodule, "sub.txt", "sub base\n", "sub base");
+
+  writeFileSync(join(dolphin, ".gitignore"), "");
+  writeFileSync(join(dolphin, "root.txt"), "root base\n");
+  git(dolphin, "add", ".gitignore", "root.txt");
+  git(dolphin, "update-index", "--add", "--cacheinfo", `160000,${submoduleBase},deps/sub`);
+  git(dolphin, "commit", "--quiet", "-m", "root base");
+  const rootBase = git(dolphin, "rev-parse", "HEAD");
+
+  writeFileSync(join(submodule, "sub.txt"), "sub snapshot\n");
+  git(submodule, "add", "sub.txt");
+  const submoduleRecord = stagedRecord(submodule, submoduleBase, "sub.txt", "M");
+  const submoduleTree = git(submodule, "write-tree");
+  const submodulePatch = execFileSync(
+    "git",
+    ["diff", "--cached", "--binary", submoduleBase],
+    { cwd: submodule, encoding: "utf8" }
+  );
+  git(submodule, "reset", "--hard", "--quiet", submoduleBase);
+
+  writeFileSync(join(dolphin, "root.txt"), "root snapshot\n");
+  writeFileSync(join(dolphin, "added.txt"), "added snapshot\n");
+  git(dolphin, "add", "root.txt", "added.txt");
+  const rootRecords = [
+    stagedRecord(dolphin, rootBase, "added.txt", "A"),
+    stagedRecord(dolphin, rootBase, "root.txt", "M")
+  ];
+  const rootTree = git(dolphin, "write-tree");
+  const rootPatch = execFileSync(
+    "git",
+    ["diff", "--cached", "--binary", rootBase],
+    { cwd: dolphin, encoding: "utf8" }
+  );
+  git(dolphin, "reset", "--hard", "--quiet", rootBase);
+
+  const rootPatchPath = "patches/dolphin-wasm/snapshot/root.patch";
+  const submodulePatchPath = "patches/dolphin-wasm/submodules/sub.patch";
+  mkdirSync(dirname(join(root, rootPatchPath)), { recursive: true });
+  mkdirSync(dirname(join(root, submodulePatchPath)), { recursive: true });
+  writeFileSync(join(root, rootPatchPath), rootPatch);
+  writeFileSync(join(root, submodulePatchPath), submodulePatch);
+  const patches = [
+    {
+      order: 1,
+      cwd: ".",
+      hashMode: "lf-normalized",
+      ...fileRecord(rootPatchPath, root, "lf-normalized")
+    },
+    {
+      order: 2,
+      cwd: "deps/sub",
+      hashMode: "lf-normalized",
+      ...fileRecord(submodulePatchPath, root, "lf-normalized")
+    }
+  ];
+  const lock = {
+    schemaVersion: 1,
+    upstream: { repository: dolphin, commit: rootBase },
+    repositories: {
+      ".": { commit: rootBase },
+      "deps/sub": { commit: submoduleBase }
+    },
+    patches,
+    patchSeriesSha256: patchSeriesDigest(patches)
+  };
+  const snapshot = {
+    schemaVersion: 1,
+    normalization: "git-blob-lf",
+    root: {
+      baseCommit: rootBase,
+      resultTree: rootTree,
+      changedPathCount: rootRecords.length,
+      records: rootRecords
+    },
+    submodules: [{
+      cwd: "deps/sub",
+      baseCommit: submoduleBase,
+      resultTree: submoduleTree,
+      records: [submoduleRecord]
+    }]
+  };
+  snapshot.contentSha256 = snapshotDigest(snapshot);
+  mkdirSync(join(root, "provenance"), { recursive: true });
+  writeFileSync(join(root, "provenance/dolphin-source.lock.json"), `${JSON.stringify(lock, null, 2)}\n`);
+  writeFileSync(
+    join(root, "provenance/dolphin-vendor-snapshot-v1.json"),
+    `${JSON.stringify(snapshot, null, 2)}\n`
+  );
+  return { root, dolphin, submodule, snapshot };
 }
 
 test("committed Dolphin provenance and ABI manifests verify", () => {
@@ -117,11 +274,95 @@ test("ABI verification rejects an artifact hash mismatch", () => {
   assert.throws(() => verifyCoreAbiManifest(projectRoot, manifestPath), /SHA-256 mismatch/);
 });
 
+test("ABI verification rejects mutations to every declared contract", () => {
+  const original = JSON.parse(
+    readFileSync(join(projectRoot, "provenance/dolphin-core-abi-v1.json"), "utf8")
+  );
+  const mutations = [
+    [(manifest) => { manifest.upstreamCommit = "0".repeat(40); }, /upstream commit/],
+    [(manifest) => { manifest.runtimeMethods.pop(); }, /runtime methods/],
+    [(manifest) => { manifest.workerProtocol.requestTypes.pop(); }, /Worker protocol fields/],
+    [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/]
+  ];
+  const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-contract-"));
+  for (const [mutate, pattern] of mutations) {
+    const manifest = structuredClone(original);
+    mutate(manifest);
+    const manifestPath = join(temporary, `${Math.random()}.json`);
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    assert.throws(() => verifyCoreAbiManifest(projectRoot, manifestPath), pattern);
+  }
+});
+
+test("locked patches replay exactly, are idempotent, and reject every third checkout state", () => {
+  const fixture = createLockedPatchFixture();
+  assert.equal(classifyLockedCheckout(fixture.dolphin, fixture.root).state, "pristine");
+  const replay = applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin });
+  assert.equal(replay.status, "applied");
+  assert.equal(replay.resultTree, fixture.snapshot.root.resultTree);
+  const applied = classifyLockedCheckout(fixture.dolphin, fixture.root);
+  assert.equal(applied.state, "snapshot");
+  assert.equal(applied.rootTree, fixture.snapshot.root.resultTree);
+  assert.equal(
+    applied.submoduleTrees["deps/sub"],
+    fixture.snapshot.submodules[0].resultTree
+  );
+  const idempotent = applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin });
+  assert.equal(idempotent.status, "already-applied");
+  assert.equal(idempotent.resultTree, fixture.snapshot.root.resultTree);
+
+  writeFileSync(join(fixture.dolphin, ".gitignore"), "hostile-sentinel.tmp\n");
+  writeFileSync(join(fixture.dolphin, "hostile-sentinel.tmp"), "must not survive validation\n");
+  assert.throws(
+    () => applyPinnedPatches({ root: fixture.root, dolphinDir: fixture.dolphin }),
+    /checkout status does not match.*\.gitignore/s
+  );
+  writeFileSync(join(fixture.dolphin, ".gitignore"), "");
+  rmSync(join(fixture.dolphin, "hostile-sentinel.tmp"));
+
+  writeFileSync(join(fixture.submodule, "extra.tmp"), "extra\n");
+  assert.throws(
+    () => classifyLockedCheckout(fixture.dolphin, fixture.root),
+    /deps\/sub checkout status.*extra\.tmp/s
+  );
+  rmSync(join(fixture.submodule, "extra.tmp"));
+
+  const manifestPath = join(fixture.root, "provenance/dolphin-vendor-snapshot-v1.json");
+  const badTree = structuredClone(fixture.snapshot);
+  badTree.root.resultTree = "0".repeat(40);
+  badTree.contentSha256 = snapshotDigest(badTree);
+  writeFileSync(manifestPath, `${JSON.stringify(badTree, null, 2)}\n`);
+  assert.throws(
+    () => classifyLockedCheckout(fixture.dolphin, fixture.root),
+    /virtual result tree mismatch/
+  );
+
+  const badSubmoduleTree = structuredClone(fixture.snapshot);
+  badSubmoduleTree.submodules[0].resultTree = "0".repeat(40);
+  badSubmoduleTree.contentSha256 = snapshotDigest(badSubmoduleTree);
+  writeFileSync(manifestPath, `${JSON.stringify(badSubmoduleTree, null, 2)}\n`);
+  assert.throws(
+    () => classifyLockedCheckout(fixture.dolphin, fixture.root),
+    /deps\/sub virtual result tree mismatch/
+  );
+
+  writeFileSync(manifestPath, `${JSON.stringify(fixture.snapshot, null, 2)}\n`);
+  writeFileSync(join(fixture.dolphin, "root.txt"), "tampered snapshot\n");
+  assert.throws(
+    () => classifyLockedCheckout(fixture.dolphin, fixture.root),
+    /result blob mismatch/
+  );
+});
+
 test("pinned fetch ignores a moved default branch and checks out the locked commit", () => {
   const root = mkdtempSync(join(tmpdir(), "dolphin-fetch-"));
   const origin = join(root, "origin");
   initializeRepository(origin);
-  const pinned = commitFile(origin, "source.txt", "pinned\n", "pinned");
+  writeFileSync(join(origin, ".gitignore"), "");
+  writeFileSync(join(origin, "source.txt"), "pinned\n");
+  git(origin, "add", ".gitignore", "source.txt");
+  git(origin, "commit", "--quiet", "-m", "pinned");
+  const pinned = git(origin, "rev-parse", "HEAD");
   const moved = commitFile(origin, "source.txt", "moved\n", "moved");
   assert.notEqual(pinned, moved);
 
@@ -139,4 +380,31 @@ test("pinned fetch ignores a moved default branch and checks out the locked comm
   assert.equal(git(destination, "rev-parse", "HEAD"), pinned);
   assert.equal(readFileSync(join(destination, "source.txt"), "utf8").trim(), "pinned");
   assert.throws(() => assertExactCommit(pinned, moved), /commit mismatch/);
+
+  writeFileSync(join(destination, ".gitignore"), "hostile-sentinel.tmp\n");
+  writeFileSync(join(destination, "hostile-sentinel.tmp"), "hidden extra\n");
+  assert.throws(
+    () => fetchPinnedDolphin({
+      root: harness,
+      destination,
+      repository: origin,
+      updateSubmodules: false
+    }),
+    /checkout status does not match.*\.gitignore/s
+  );
+  assert.equal(git(destination, "rev-parse", "HEAD"), pinned);
+
+  const beforeSwitch = join(harness, "vendor/before-switch");
+  git(harness, "clone", "--quiet", origin, beforeSwitch);
+  writeFileSync(join(beforeSwitch, "untracked-before-switch.tmp"), "extra\n");
+  assert.throws(
+    () => fetchPinnedDolphin({
+      root: harness,
+      destination: beforeSwitch,
+      repository: origin,
+      updateSubmodules: false
+    }),
+    /Refusing non-pristine Dolphin checkout/
+  );
+  assert.equal(git(beforeSwitch, "rev-parse", "HEAD"), moved);
 });
