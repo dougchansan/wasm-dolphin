@@ -10,6 +10,7 @@ import {
 } from "./upstream-worker-protocol.js";
 import {
   requestedWgpuAtomicPassReplay,
+  requestedWgpuDeepReplayDiagnostics,
   requestedWgpuReplayDiagnostics
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -66,6 +67,7 @@ export class EmulatorHost {
     this.collectMetrics = requestedCollectMetrics();
     this.legacyOneWayAck = requestedLegacyOneWayAck(window.location.search);
     this.wgpuReplayDiagnostics = requestedWgpuReplayDiagnostics(window.location.search);
+    this.wgpuDeepReplayDiagnostics = requestedWgpuDeepReplayDiagnostics(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
@@ -269,6 +271,7 @@ export class EmulatorHost {
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,
             wgpuReplayDiagnostics: this.wgpuReplayDiagnostics,
+            wgpuDeepReplayDiagnostics: this.wgpuDeepReplayDiagnostics,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics

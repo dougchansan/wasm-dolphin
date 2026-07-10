@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   createWgpuReplayClassifier,
   requestedWgpuAtomicPassReplay,
+  requestedWgpuDeepReplayDiagnostics,
   requestedWgpuReplayDiagnostics,
   selectAtomicReplayLimit
 } from "../src/wgpu-replay-diagnostics.js";
@@ -50,25 +51,89 @@ test("classifier distinguishes draws, zero EFB, nonzero EFB, and present complet
   const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
   classifier.recordPassBegin({ framebufferId: 14, recordIndex: 1 });
   classifier.recordEfbClear({ framebufferId: 14, rgba: [0, 0, 0, 0] });
-  classifier.recordRealDraw({ framebufferId: 14, indexed: true, pipelineId: 79 });
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    indexed: true,
+    pipelineId: 79,
+    efb: true,
+    state: {
+      pipeline: { id: 79, resolved: true, colorFormat: "rgba8unorm", depthFormat: "depth32float" },
+      bindGroups: [31, 32, 33],
+      vertexBuffer: { id: 7, offset: 0 },
+      indexBuffer: { id: 8, format: "uint16", offset: 0 },
+      viewport: [0, 0, 640, 528, 0, 1],
+      scissor: [0, 0, 640, 528]
+    }
+  });
   classifier.recordPassEnd({ reason: "explicit", recordIndex: 8 });
   classifier.recordPresentCommand({ recordIndex: 9 });
   classifier.recordSubmission({ reason: "present", submitted: true });
-  classifier.recordEfbReadback({ framebufferId: 14, nonzeroBytes: 0, maxByte: 0 });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 0,
+    maxByte: 0,
+    presentSequence: 1
+  });
 
   let snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "EFB_DRAW_NO_MUTATION");
   assert.equal(snapshot.stages.firstRealDraw.status, "pass");
+  assert.equal(snapshot.stages.firstEfbDraw.status, "pass");
+  assert.equal(snapshot.stages.firstEfbDraw.pipelineId, 79);
+  assert.deepEqual(snapshot.stages.firstEfbDraw.state.bindGroups, [31, 32, 33]);
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.status, "pass");
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.pipelineId, 79);
   assert.equal(snapshot.stages.firstNonzeroEfb.status, "pending");
   assert.equal(snapshot.stages.presentSubmission.submittedCount, 1);
 
-  classifier.recordEfbReadback({ framebufferId: 14, nonzeroBytes: 12, maxByte: 255 });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 12,
+    maxByte: 255,
+    presentSequence: 871
+  });
   classifier.recordPresentCompletion({ completed: true });
   snapshot = classifier.snapshot();
   assert.equal(snapshot.classifier.code, "PASS");
   assert.equal(snapshot.stages.efbMutation.status, "pass");
   assert.equal(snapshot.stages.firstNonzeroEfb.status, "pass");
+  assert.equal(snapshot.stages.firstNonzeroEfb.presentSequence, 871);
+  assert.equal(snapshot.stages.firstNonzeroEfb.readbackOrdinal, 2);
   assert.equal(snapshot.stages.presentSubmission.completedCount, 1);
+});
+
+test("legacy deep replay probes are default-off with an explicit rollback", () => {
+  assert.equal(requestedWgpuDeepReplayDiagnostics(""), false);
+  assert.equal(requestedWgpuDeepReplayDiagnostics("?wgpudeepdiag=1"), true);
+  assert.equal(requestedWgpuDeepReplayDiagnostics("?wgpudeepdiag=0"), false);
+});
+
+test("first EFB draw evidence is immutable and remains bounded", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  assert.equal(classifier.needsFirstEfbDrawState(), true);
+
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    pipelineId: 22,
+    efb: true,
+    state: { pipeline: { id: 22 }, bindGroups: [1, 2, 3] }
+  });
+  assert.equal(classifier.needsFirstEfbDrawState(), false);
+  assert.equal(classifier.needsFirstEfbDrawState(true), true);
+  classifier.recordRealDraw({
+    framebufferId: 14,
+    pipelineId: 9001,
+    indexed: true,
+    efb: true,
+    state: { pipeline: { id: 9001 }, bindGroups: [4, 5, 6] }
+  });
+  assert.equal(classifier.needsFirstEfbDrawState(true), false);
+
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.stages.firstEfbDraw.pipelineId, 22);
+  assert.deepEqual(snapshot.stages.firstEfbDraw.state.bindGroups, [1, 2, 3]);
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.pipelineId, 9001);
+  assert.deepEqual(snapshot.stages.firstIndexedEfbDraw.state.bindGroups, [4, 5, 6]);
 });
 
 test("a pre-draw EFB sample cannot classify later draws as non-mutating", () => {
@@ -152,10 +217,15 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   ]);
 
   assert.match(host, /requestedWgpuReplayDiagnostics\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuDeepReplayDiagnostics\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
+  assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
   assert.match(worker, /wgpuReplayDiagnostics\s+\? createWgpuReplayClassifier\(\{ scope: "core-load" \}\)/);
+  assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
+  assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
+  assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
   assert.match(worker, /createWgpuReplayClassifier\(\{ scope: "load-state-file" \}\)/);
   assert.match(worker, /classifierGeneration === wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuReplayClassifier: wgpuReplayClassifier\?\.snapshot\(\) \?\? null/);

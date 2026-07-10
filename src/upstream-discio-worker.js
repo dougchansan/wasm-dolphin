@@ -110,6 +110,7 @@ let wgpuReplayClassifierGeneration = 0;
 let wgpuPresentCompletionProbeStarted = false;
 let wgpuClassifierEfbReadbackPending = false;
 let wgpuAtomicPassReplay = true;
+let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
 let inputLatencyDiagnostics = false;
@@ -695,6 +696,7 @@ async function loadCore({
   noJitCache = false,
   reportedCoreSelection = null,
   wgpuReplayDiagnostics = false,
+  wgpuDeepReplayDiagnostics: requestedWgpuDeepReplayDiagnostics = false,
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   oglSabEnabled = false
 } = {}) {
@@ -714,6 +716,7 @@ async function loadCore({
   wgpuPresentCompletionProbeStarted = false;
   wgpuClassifierEfbReadbackPending = false;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
+  wgpuDeepReplayDiagnostics = Boolean(requestedWgpuDeepReplayDiagnostics);
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
@@ -4673,6 +4676,8 @@ function drainWebGpuCmdRing() {
   let passH = 0;
   let passColorFmt = null;
   let passDepthFmt = null;
+  let passDepthId = 0;
+  let passLoadOp = "load";
   let passHasPipe = false;
   // §28j: per-pass bind-group validity. The fixed pipeline layout
   // declares 3 groups (l0/l1/l2); WebGPU requires ALL declared groups
@@ -4684,6 +4689,47 @@ function drainWebGpuCmdRing() {
   // which slots currently hold a valid bind group and SKIP draws that
   // aren't fully bound, so one bad draw no longer poisons the frame.
   const bgValid = [false, false, false];
+  const drawState = wgpuReplayClassifier ? {
+    bindGroups: [0, 0, 0],
+    dynamicOffsetCounts: [0, 0, 0],
+    vertexBuffer: null,
+    indexBuffer: null,
+    viewport: null,
+    scissor: null
+  } : null;
+  const captureFirstEfbDrawState = (indexed, args) => {
+    if (!wgpuReplayClassifier?.needsFirstEfbDrawState(indexed) ||
+        passFbId !== self._wgEfbColorId) {
+      return null;
+    }
+    const tpl = webGpuObjects.pipeTpl.get(self._wgCurPipe);
+    return {
+      pass: {
+        framebufferId: passFbId,
+        width: passW,
+        height: passH,
+        colorFormat: passColorFmt,
+        depthFormat: passDepthFmt,
+        depthTextureId: passDepthId,
+        loadOp: passLoadOp
+      },
+      pipeline: {
+        id: self._wgCurPipe >>> 0,
+        resolved: passHasPipe,
+        summary: tpl?.s28dbg ?? null,
+        primitive: tpl?.desc?.primitive ?? null,
+        colorTarget: tpl?.target ?? null,
+        depthStencil: tpl?.desc?.depthStencil ?? null
+      },
+      bindGroups: drawState.bindGroups.slice(),
+      dynamicOffsetCounts: drawState.dynamicOffsetCounts.slice(),
+      vertexBuffer: drawState.vertexBuffer ? { ...drawState.vertexBuffer } : null,
+      indexBuffer: drawState.indexBuffer ? { ...drawState.indexBuffer } : null,
+      viewport: drawState.viewport ? drawState.viewport.slice() : null,
+      scissor: drawState.scissor ? drawState.scissor.slice() : null,
+      draw: { indexed: Boolean(indexed), ...args }
+    };
+  };
   let errScope = false;
   // One-shot present-path diagnostic: per-pass tally of pipeline/bind/
   // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
@@ -4932,7 +4978,7 @@ function drainWebGpuCmdRing() {
             // is zero / fogf forces full fog at difficulty-select.
             // PixelShaderConstants is ~1536 bytes (VS ~4112, GS small);
             // the per-draw uniform ring writes the PS slice at that len.
-            if (len >= 1500 && len <= 1700) {
+            if (wgpuDeepReplayDiagnostics && len >= 1500 && len <= 1700) {
               self._wgFogN = (self._wgFogN || 0) + 1;
               if (self._wgFogN <= 6 || (self._wgFogN % 1500) === 0) {
                 const ib = new Int32Array(moduleInstance.HEAPU8.buffer,
@@ -4983,7 +5029,7 @@ function drainWebGpuCmdRing() {
             // the WRONG offset (byte 1280 = transformmatrices) so it was
             // NEVER verified. Correct C++ offsets (ConstantManager.h):
             // texmatrices@896, posttransformmatrices@2816.
-            if (len >= 4000 && len <= 4200) {
+            if (wgpuDeepReplayDiagnostics && len >= 4000 && len <= 4200) {
               if (!self._wgVsSnap || self._wgVsSnap.byteLength < len)
                 self._wgVsSnap = new Uint8Array(len);
               self._wgVsSnap.set(
@@ -5025,7 +5071,7 @@ function drainWebGpuCmdRing() {
             // §28-vtxdata: snapshot the vertex batch bytes from the
             // HEAP before they go to the GPU (this is the only window
             // to read them). Keyed by dst_offset; bounded to 64 batches.
-            if (bid === self._wgVtxBufId) {
+            if (wgpuDeepReplayDiagnostics && bid === self._wgVtxBufId) {
               if (!self._wgVbSnap) self._wgVbSnap = new Map();
               const dstOff = u32[recWord + 2] & ~3;
               const snap = new Uint8Array(len);
@@ -5111,6 +5157,8 @@ function drainWebGpuCmdRing() {
           const fbId = u32[recWord + 1];
           const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
           const depthId = u32[recWord + 7];
+          passDepthId = depthId;
+          passLoadOp = loadOp;
           // §28af: the producer emits SET_VIEWPORT immediately after
           // BEGIN_PASS (cached vp re-emit). Peek it to learn this
           // pass's reverse-Z BEFORE the depth attachment (whose
@@ -5242,6 +5290,14 @@ function drainWebGpuCmdRing() {
           }
           passHasPipe = false;
           bgValid[0] = bgValid[1] = bgValid[2] = false;  // §28j
+          if (drawState) {
+            drawState.bindGroups.fill(0);
+            drawState.dynamicOffsetCounts.fill(0);
+            drawState.vertexBuffer = null;
+            drawState.indexBuffer = null;
+            drawState.viewport = null;
+            drawState.scissor = null;
+          }
           passFbId = fbId;
           // The EFB colour pass is the only one with a depth
           // attachment (the fb=47 XFB has none) — track its id so the
@@ -5296,6 +5352,10 @@ function drainWebGpuCmdRing() {
             wgpuReplayClassifier?.recordMissingResource({ kind: "bind-group", id: bgId });
           }
           if (bgSlot < 3) bgValid[bgSlot] = !!(pass && bg);  // §28j
+          if (drawState && bgSlot < 3) {
+            drawState.bindGroups[bgSlot] = bgId;
+            drawState.dynamicOffsetCounts[bgSlot] = u32[recWord + 3];
+          }
           if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
               self._wgBgTex[bgId] != null &&
@@ -5327,7 +5387,12 @@ function drainWebGpuCmdRing() {
             wgpuReplayClassifier?.recordStateOutsidePass({ op: "set-vertex-buffer", recordIndex: read });
           }
           if (!b) wgpuReplayClassifier?.recordMissingResource({ kind: "vertex-buffer", id: bufferId });
-          if (pass && b) pass.setVertexBuffer(u32[recWord + 1], b, u32[recWord + 3]);
+          if (pass && b) {
+            const slot = u32[recWord + 1];
+            const offset = u32[recWord + 3];
+            pass.setVertexBuffer(slot, b, offset);
+            if (drawState) drawState.vertexBuffer = { slot, id: bufferId, offset };
+          }
           break;
         }
         case WGPU_CMD_OP_SET_INDEX_BUFFER: {
@@ -5338,8 +5403,10 @@ function drainWebGpuCmdRing() {
           }
           if (!b) wgpuReplayClassifier?.recordMissingResource({ kind: "index-buffer", id: bufferId });
           if (pass && b) {
-            pass.setIndexBuffer(b, u32[recWord + 2] === 1 ? "uint32" : "uint16",
-                                u32[recWord + 3]);
+            const format = u32[recWord + 2] === 1 ? "uint32" : "uint16";
+            const offset = u32[recWord + 3];
+            pass.setIndexBuffer(b, format, offset);
+            if (drawState) drawState.indexBuffer = { id: bufferId, format, offset };
           }
           break;
         }
@@ -5403,6 +5470,7 @@ function drainWebGpuCmdRing() {
             // below) since the viewport sense cannot carry it.
             if (mn > mx) { const t = mn; mn = mx; mx = t; }
             pass.setViewport(vx, vy, vw, vh, mn, mx);
+            if (drawState) drawState.viewport = [vx, vy, vw, vh, mn, mx];
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
@@ -5414,6 +5482,7 @@ function drainWebGpuCmdRing() {
             sw = Math.min(sw, passW - sx);
             sh = Math.min(sh, passH - sy);
             pass.setScissorRect(sx, sy, sw, sh);
+            if (drawState) drawState.scissor = [sx, sy, sw, sh];
           }
           break;
         case WGPU_CMD_OP_DRAW:
@@ -5430,7 +5499,12 @@ function drainWebGpuCmdRing() {
               framebufferId: passFbId,
               indexed: false,
               pipelineId: self._wgCurPipe,
-              efb: passFbId === self._wgEfbColorId
+              efb: passFbId === self._wgEfbColorId,
+              state: captureFirstEfbDrawState(false, {
+                vertexCount: u32[recWord + 1],
+                instanceCount: u32[recWord + 2],
+                firstVertex: u32[recWord + 3]
+              })
             });
           }
           else if (pass && passHasPipe) { webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1; }
@@ -5450,13 +5524,20 @@ function drainWebGpuCmdRing() {
               framebufferId: passFbId,
               indexed: true,
               pipelineId: self._wgCurPipe,
-              efb: passFbId === self._wgEfbColorId
+              efb: passFbId === self._wgEfbColorId,
+              state: captureFirstEfbDrawState(true, {
+                indexCount: u32[recWord + 1],
+                instanceCount: u32[recWord + 2],
+                firstIndex: u32[recWord + 3],
+                baseVertex: u32[recWord + 4]
+              })
             });
             if ((self._wgDi = (self._wgDi || 0) + 1) <= 5) {
               console.log(`[webgpu-exec] DRAW_INDEXED#${self._wgDi} ` +
                 `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
                 `firstIdx=${u32[recWord + 3]} baseVtx=${u32[recWord + 4]}`);
             }
+            if (!wgpuDeepReplayDiagnostics) break;
             // §28-vtxdata: dark-menu probe — for the menu textured
             // pipeline (stride 20, TexCoord0 @location(8) float32x2
             // @offset 12) read the uploaded per-vertex texcoord bytes.
@@ -5949,6 +6030,7 @@ function drainWebGpuCmdRing() {
                   { width: w, height: h, depthOrArrayLayers: 1 });
                 pending.push({ rb, bpr, w, h, framebufferId: cid,
                   isEfb: cid === self._wgEfbColorId,
+                  presentSequence: P,
                   classifierGeneration: wgpuReplayClassifierGeneration,
                   efbDrawCountAtEncode: cid === self._wgEfbColorId
                     ? wgpuReplayClassifier?.captureEfbDrawCount() ?? 0
@@ -5981,7 +6063,8 @@ function drainWebGpuCmdRing() {
                         framebufferId: p.framebufferId,
                         nonzeroBytes: nz,
                         maxByte: mx,
-                        drawCountAtEncode: p.efbDrawCountAtEncode
+                        drawCountAtEncode: p.efbDrawCountAtEncode,
+                        presentSequence: p.presentSequence
                       });
                       wgpuClassifierEfbReadbackPending = false;
                     }
@@ -6246,7 +6329,8 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   // attributes (esp. the TexCoord0 = @location(8) entry the menu VS
   // reads) vs the VS @location inputs to settle data-vs-layout for
   // the dark-content defect (§28an). Tag the texcoord attrs.
-  if (attrCount > 0 && (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 1200) {
+  if (wgpuDeepReplayDiagnostics && attrCount > 0 &&
+      (self._wgPcfgAttrN = (self._wgPcfgAttrN || 0) + 1) <= 1200) {
     const tc = attributes.filter((a) => a.shaderLocation >= 8 &&
       a.shaderLocation <= 15);
     console.log(`[webgpu-DIAG-attr] pcfg id=${pipelineId} vs=${vsId} fs=${fsId} ` +

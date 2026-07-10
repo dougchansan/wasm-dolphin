@@ -5,6 +5,10 @@ export function requestedWgpuReplayDiagnostics(search = globalThis.location?.sea
   return new URLSearchParams(search).get("wgpuclassify") === "1";
 }
 
+export function requestedWgpuDeepReplayDiagnostics(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpudeepdiag") === "1";
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }
@@ -84,11 +88,27 @@ export function createWgpuReplayClassifier({
     framebufferId: 0,
     pipelineId: 0
   };
+  const firstEfbDraw = {
+    status: "pending",
+    indexed: false,
+    framebufferId: 0,
+    pipelineId: 0,
+    state: null
+  };
+  const firstIndexedEfbDraw = {
+    status: "pending",
+    framebufferId: 0,
+    pipelineId: 0,
+    state: null
+  };
   const firstNonzeroEfb = {
     status: "pending",
     framebufferId: 0,
     nonzeroBytes: 0,
-    maxByte: 0
+    maxByte: 0,
+    presentSequence: 0,
+    readbackOrdinal: 0,
+    drawCountAtReadback: 0
   };
   const presentSubmission = {
     status: "pending",
@@ -144,7 +164,13 @@ export function createWgpuReplayClassifier({
     recordEvent("efb-clear", { framebufferId, rgba: rgba.slice(0, 4) });
   }
 
-  function recordRealDraw({ framebufferId = 0, indexed = false, pipelineId = 0, efb = false } = {}) {
+  function recordRealDraw({
+    framebufferId = 0,
+    indexed = false,
+    pipelineId = 0,
+    efb = false,
+    state = null
+  } = {}) {
     if (firstRealDraw.status !== "pass") {
       firstRealDraw.status = "pass";
       firstRealDraw.indexed = Boolean(indexed);
@@ -155,14 +181,39 @@ export function createWgpuReplayClassifier({
     if (efb || (framebufferId && framebufferId === efbMutation.framebufferId)) {
       efbMutation.framebufferId = framebufferId >>> 0;
       efbMutation.drawCount += 1;
+      if (firstEfbDraw.status !== "pass") {
+        firstEfbDraw.status = "pass";
+        firstEfbDraw.indexed = Boolean(indexed);
+        firstEfbDraw.framebufferId = framebufferId >>> 0;
+        firstEfbDraw.pipelineId = pipelineId >>> 0;
+        firstEfbDraw.state = state == null ? null : structuredClone(state);
+        recordEvent("first-efb-draw", {
+          framebufferId,
+          indexed: Boolean(indexed),
+          pipelineId
+        });
+      }
+      if (indexed && firstIndexedEfbDraw.status !== "pass") {
+        firstIndexedEfbDraw.status = "pass";
+        firstIndexedEfbDraw.framebufferId = framebufferId >>> 0;
+        firstIndexedEfbDraw.pipelineId = pipelineId >>> 0;
+        firstIndexedEfbDraw.state = state == null ? null : structuredClone(state);
+        recordEvent("first-indexed-efb-draw", { framebufferId, pipelineId });
+      }
     }
+  }
+
+  function needsFirstEfbDrawState(indexed = false) {
+    return firstEfbDraw.status !== "pass" ||
+      (indexed && firstIndexedEfbDraw.status !== "pass");
   }
 
   function recordEfbReadback({
     framebufferId = 0,
     nonzeroBytes = 0,
     maxByte = 0,
-    drawCountAtEncode = efbMutation.drawCount
+    drawCountAtEncode = efbMutation.drawCount,
+    presentSequence = 0
   } = {}) {
     efbMutation.framebufferId = framebufferId >>> 0;
     efbMutation.readbackCount += 1;
@@ -177,7 +228,17 @@ export function createWgpuReplayClassifier({
         firstNonzeroEfb.framebufferId = framebufferId >>> 0;
         firstNonzeroEfb.nonzeroBytes = nonzeroBytes;
         firstNonzeroEfb.maxByte = maxByte;
-        recordEvent("first-nonzero-efb", { framebufferId, nonzeroBytes, maxByte });
+        firstNonzeroEfb.presentSequence = presentSequence >>> 0;
+        firstNonzeroEfb.readbackOrdinal = efbMutation.readbackCount;
+        firstNonzeroEfb.drawCountAtReadback = drawCountAtEncode;
+        recordEvent("first-nonzero-efb", {
+          framebufferId,
+          nonzeroBytes,
+          maxByte,
+          presentSequence,
+          readbackOrdinal: efbMutation.readbackCount,
+          drawCountAtReadback: drawCountAtEncode
+        });
       }
     }
   }
@@ -236,6 +297,8 @@ export function createWgpuReplayClassifier({
         missingResources,
         efbMutation,
         firstRealDraw,
+        firstEfbDraw,
+        firstIndexedEfbDraw,
         firstNonzeroEfb,
         presentSubmission
       },
@@ -252,6 +315,7 @@ export function createWgpuReplayClassifier({
     recordMissingResource,
     recordEfbClear,
     recordRealDraw,
+    needsFirstEfbDrawState,
     recordEfbReadback,
     captureEfbDrawCount,
     needsPostDrawEfbReadback,

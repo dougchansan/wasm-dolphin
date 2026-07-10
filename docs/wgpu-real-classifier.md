@@ -19,14 +19,16 @@ recommended path.
 
 ## What it classifies
 
-The `wasm-dolphin.wgpu-replay-classifier.v1` payload records six ordered
+The `wasm-dolphin.wgpu-replay-classifier.v1` payload records bounded ordered
 checkpoints:
 
 1. pass atomicity, including a pass forcibly ended at a drain boundary;
 2. missing pipelines, bind groups, buffers, textures, or samplers;
 3. EFB clear, real draw, and readback mutation counts;
-4. the first real Dolphin draw submitted to a render pass;
-5. the first EFB readback containing a nonzero byte;
+4. the first EFB draw and first indexed EFB draw, including pipeline, bind
+   groups, vertex/index buffers, viewport, scissor, and draw arguments;
+5. the first EFB readback containing a nonzero byte, including its present
+   sequence and readback ordinal;
 6. present command submission and the first queue-completion result.
 
 Event storage and missing-resource ID samples are capped. Counters continue to
@@ -72,10 +74,30 @@ removed: renderer transport always installs, while cache broadcast, compile,
 and lazy-fill work remains disabled. A post-fix headed run with `nojitcache=1`
 registered the ring, replayed 8,323 atomic passes with no splits or outside-pass
 records, submitted 394,160 real EFB draws, and completed present submission.
-All nine bounded post-draw EFB readbacks were still zero, so the classifier
+All nine bounded post-draw EFB readbacks in that short run were zero, so it
 reported `EFB_DRAW_NO_MUTATION`; presentation and visual FPS remained zero.
-The next failure boundary is battle draw-to-EFB mutation, before XFB
-presentation. These diagnostics are not a performance qualification.
+That result was a time-bounded observation, not proof that no later draw could
+mutate the EFB. These diagnostics are not a performance qualification.
+
+A longer headed run on the same Ryzen 9 9950X3D/RDNA-4 machine later observed
+the EFB become nonzero at present sequence 871: 920,925 of 1,351,680 sampled
+bytes were nonzero. Later runs again ended with only zero samples. The original
+short-run classification was therefore too broad: commands and valid draws can
+mutate the EFB, but mutation timing is not deterministic and the visible canvas
+still does not show the game. The bounded state snapshot identifies the first
+EFB command as a utility `draw(3)` on pipeline 22 and the first indexed EFB
+draw as pipeline 420; both had resolved pipelines, all three bind groups, and
+no missing-resource or validation error. Treat the remaining problem as a
+load/replay/presentation correctness issue, not a proven permanent shader-draw
+failure. Raw values and hashes are packaged in
+`perf-results/wgpu-first-efb-2026-07-10.json`.
+
+Historical Day-28 shader/UV dumps and per-draw EFB maps are now default-off;
+they were still running in the replay hot path after their investigations had
+finished. Use `wgpudeepdiag=1` only to reproduce those probes. Two diagnostic
+15-second pairs moved replay cost per command in the favorable direction with
+the probes disabled, but the runs remain non-qualifying and do not establish a
+stable gameplay-performance gain.
 
 The classifier is the dynamic check for that condition. It does not establish
 that every black frame has the same cause: after pass atomicity is clean, use
