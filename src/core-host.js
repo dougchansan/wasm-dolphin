@@ -2,6 +2,10 @@ import { DolphinCoreAdapter, dolphinBundleAvailable } from "./dolphin-adapter.js
 import { buttonMaskFromPressed } from "./input.js";
 import { UpstreamMainThreadAdapter } from "./upstream-main-thread-adapter.js";
 import { UpstreamWorkerAdapter, upstreamBundleAvailable } from "./upstream-worker-adapter.js";
+import {
+  DEFAULT_UPSTREAM_CORE_URL,
+  requestedUpstreamCoreBuild
+} from "./upstream-worker-protocol.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 
 const DEMO_WIDTH = 320;
@@ -21,6 +25,12 @@ export class EmulatorHost {
 
     this.demo = null;
     this.coreKind = requestedCoreKind();
+    try {
+      this.upstreamCoreBuild = requestedUpstreamCoreBuild(window.location.search);
+    } catch (error) {
+      onStatus(`Invalid candidate core selector; using pinned baseline: ${error.message}`);
+      this.upstreamCoreBuild = requestedUpstreamCoreBuild("");
+    }
     this.videoBackend = requestedVideoBackend();
     this.cpuThread = requestedCpuThread(this.videoBackend);
     this.cpuCore = requestedCpuCore();
@@ -170,6 +180,8 @@ export class EmulatorHost {
     this.adapter =
       this.coreKind === "upstream" && this.usesMainThreadOgl
         ? new UpstreamMainThreadAdapter({
+            coreUrl: this.upstreamCoreBuild.coreUrl,
+            expectedCoreSha256: this.upstreamCoreBuild.sha256,
             onStatus,
             canvas,
             videoBackend: this.videoBackend,
@@ -188,6 +200,8 @@ export class EmulatorHost {
           })
         : this.coreKind === "upstream"
         ? new UpstreamWorkerAdapter({
+            coreUrl: this.upstreamCoreBuild.coreUrl,
+            expectedCoreSha256: this.upstreamCoreBuild.sha256,
             onStatus,
             // For OGL with oglproxy=worker, skip transferControlToOffscreen
             // entirely. The worker creates a standalone OffscreenCanvas for
@@ -338,8 +352,12 @@ export class EmulatorHost {
     return this.game;
   }
 
-  adapterAvailable() {
-    return this.coreKind === "upstream" ? upstreamBundleAvailable() : dolphinBundleAvailable();
+  async adapterAvailable() {
+    if (this.coreKind !== "upstream") return dolphinBundleAvailable();
+    if (await upstreamBundleAvailable(this.upstreamCoreBuild.coreUrl)) return true;
+    return this.upstreamCoreBuild.candidate
+      ? upstreamBundleAvailable(DEFAULT_UPSTREAM_CORE_URL)
+      : false;
   }
 
   start() {

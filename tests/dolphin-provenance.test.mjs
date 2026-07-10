@@ -10,13 +10,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   applyPinnedPatches,
   assertExactCommit,
   classifyLockedCheckout,
   fetchPinnedDolphin,
+  fetchPinnedExternalRepositories,
   fileRecord,
   gitBlobSha,
   loadSourceLock,
@@ -25,6 +26,7 @@ import {
   validateVendorSnapshotManifest,
   verifyCoreAbiManifest,
   verifyDolphinProvenance,
+  verifyExternalRepositories,
   verifyPatchSeries
 } from "../tools/dolphin-provenance.mjs";
 
@@ -226,7 +228,8 @@ function createLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 8);
+  assert.equal(result.patches.count, 9);
+  assert.equal(Object.keys(result.externalRepositories).length, 2);
   assert.equal(result.vendorSnapshot.rootPaths, 87);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
   assert.equal(result.core.abiVersion, 1);
@@ -490,4 +493,38 @@ test("pinned fetch ignores a moved default branch and checks out the locked comm
     /Refusing non-pristine Dolphin checkout/
   );
   assert.equal(git(beforeSwitch, "rev-parse", "HEAD"), moved);
+});
+
+test("pinned external source repositories are fetched and fail closed on drift", () => {
+  const root = mkdtempSync(join(tmpdir(), "dolphin-external-fetch-"));
+  const origin = join(root, "tool.git");
+  initializeRepository(origin);
+  const pinned = commitFile(origin, "tool.txt", "pinned tool\n", "pinned tool");
+
+  const harness = join(root, "harness");
+  const upstream = join(root, "upstream");
+  initializeRepository(upstream);
+  const upstreamCommit = commitFile(upstream, ".gitignore", "", "upstream");
+  writeMinimalLock(harness, { repository: upstream, commit: upstreamCommit });
+  const lockPath = join(harness, "provenance/dolphin-source.lock.json");
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  lock.externalRepositories = {
+    "External/tool": {
+      repository: pathToFileURL(origin).href,
+      commit: pinned
+    }
+  };
+  writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+
+  const dolphin = join(harness, "vendor/dolphin");
+  mkdirSync(dolphin, { recursive: true });
+  const fetched = fetchPinnedExternalRepositories(dolphin, loadSourceLock(harness));
+  assert.equal(git(join(dolphin, "External/tool"), "rev-parse", "HEAD"), pinned);
+  assert.match(fetched["External/tool"], /^[0-9a-f]{40}$/);
+
+  writeFileSync(join(dolphin, "External/tool/drift.tmp"), "drift\n");
+  assert.throws(
+    () => verifyExternalRepositories(dolphin, loadSourceLock(harness)),
+    /checkout status.*drift\.tmp/s
+  );
 });

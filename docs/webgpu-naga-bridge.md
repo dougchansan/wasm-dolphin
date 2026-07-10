@@ -70,12 +70,10 @@ The repository does **not** commit that patched vendored C++ tree:
 Do not infer from the committed Rust crate alone that a fresh, unpatched
 upstream checkout contains the C++ integration.
 
-At the time of this documentation pass, the local research tree contains the
-call in `Source/Core/VideoBackends/WebGPU/WebGPUShaderTranslator.cpp`, while
-the committed patch-runner manifest contains only the numbered `0001`-`0009`
-patches. A release/reproduction package must confirm that the complete WebGPU
-patch set is committed and included by `patch:upstream`; otherwise the Rust ABI
-is documented and built but the fresh-checkout C++ call site is still missing.
+The active source lock includes the translator call site in snapshot patch
+`0006-webgpu-backend.patch`. Provenance verification checks its file hash and
+the complete patched Git result tree, so a fresh `patch:upstream` replay cannot
+silently omit the bridge.
 
 ## Building the bridge
 
@@ -83,12 +81,17 @@ The crate's `.cargo/config.toml` rebuilds the standard library with atomics,
 bulk memory, and mutable globals so it can link into Dolphin's pthread/shared
 memory WebAssembly module.
 
+`npm run configure:upstream` verifies the pinned toolchain and then runs the
+equivalent of:
+
 ```powershell
-rustup toolchain install nightly --component rust-src
-rustup target add --toolchain nightly wasm32-unknown-emscripten
-Set-Location tools/naga-spirv-wgsl
-cargo +nightly build --release --target wasm32-unknown-emscripten
+cargo build --locked --release --target wasm32-unknown-emscripten
 ```
 
+The selected Cargo binary is the locked nightly toolchain, and `rust-src` is
+required because `.cargo/config.toml` uses nightly `build-std`. The precompiled
+target library is not used.
+
 The generated archive and Cargo build directory are ignored build products.
-Record the exact Rust and Naga versions with any reproducible core build.
+`Cargo.lock` is tracked and LF-normalized; the build record includes its hash,
+the Naga archive hash, and the exact Rust/Naga versions.

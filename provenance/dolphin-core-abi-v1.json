@@ -20,26 +20,38 @@
     {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
-      "size": 38114,
-      "sha256": "bcad7e80a20671db1b409a9b24aba3bd063be3a700f151380cd7abd41c0becc5"
+      "size": 38436,
+      "sha256": "f53463f6d3c32c2442d632c2319eb7e6c203388421d328711ada8b287004cc67"
+    },
+    {
+      "path": "src/core-host.js",
+      "hashMode": "lf-normalized",
+      "size": 47811,
+      "sha256": "f8028599d9115c8464fdee34bf13d6c5bef27b7573ecdccbfb8c59a13cdaffe9"
     },
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 262621,
-      "sha256": "fdfba2498c1e58cd2561e371fa4ea6ff9ac731934fe48711535b425d5007139d"
+      "size": 262998,
+      "sha256": "0b5572584b988d29ce0c6bb609a55a7be3b54af74aa01a6cfae2fc8884c00c5f"
+    },
+    {
+      "path": "src/upstream-main-thread-adapter.js",
+      "hashMode": "lf-normalized",
+      "size": 19934,
+      "sha256": "485310c49211101aee28fc39df18573e0bcfaaeab274b4c3485ea2f80db42ce8"
     },
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 25389,
-      "sha256": "2bd5bff4f3fb49e1958f340003863ebc4fe0e53c305b73f0c781f08f2d8da515"
+      "size": 26193,
+      "sha256": "c3beb6edf32d453d52222d07f49be19c939b8e25961fdc049bcc96dc89b6256c"
     },
     {
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
-      "size": 636,
-      "sha256": "59d28fac75de67c7f6148e346834e964bf8b2c4833b89ef77ea844f80dcfbf2b"
+      "size": 2661,
+      "sha256": "3002241219edefdb6270302790bb714fdaf256f0e7450cb66df2db4885529495"
     }
   ],
   "memoryContract": {

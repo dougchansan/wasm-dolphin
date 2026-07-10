@@ -15,7 +15,17 @@
       "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363"
     }
   },
-  "patchSeriesSha256": "aabf2eed72adda73399ac9d7c51ce3cb0ab61543c519b2c727937f69f70ba8b9",
+  "externalRepositories": {
+    "Externals/glslang/glslang/External/spirv-tools": {
+      "repository": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+      "commit": "7f2d9ee926f98fc77a3ed1e1e0f113b8c9c49458"
+    },
+    "Externals/glslang/glslang/External/spirv-tools/external/spirv-headers": {
+      "repository": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+      "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
+    }
+  },
+  "patchSeriesSha256": "c9449017e7acc9b6c6ab942292b874392890f7cd41c8326368e98bf40662a01e",
   "patches": [
     {
       "order": 1,
@@ -67,6 +77,14 @@
     },
     {
       "order": 7,
+      "cwd": ".",
+      "path": "patches/dolphin-wasm/snapshot/0007-hermetic-build-inputs.patch",
+      "hashMode": "lf-normalized",
+      "size": 4060,
+      "sha256": "268cd441f291d4ac26cdfdbc1820f69da7cd1c7a75eb902ed30536b47f4f42db"
+    },
+    {
+      "order": 8,
       "cwd": "Externals/SFML/SFML",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "hashMode": "lf-normalized",
@@ -74,7 +92,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 8,
+      "order": 9,
       "cwd": "Externals/xxhash/xxHash",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",

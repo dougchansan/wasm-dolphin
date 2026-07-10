@@ -1,4 +1,10 @@
-import { DEFAULT_UPSTREAM_CORE_URL, WORKERFS_MOUNT_DIR, sanitizeDiscFileName } from "./upstream-worker-protocol.js";
+import {
+  DEFAULT_UPSTREAM_CORE_SHA256,
+  DEFAULT_UPSTREAM_CORE_URL,
+  WORKERFS_MOUNT_DIR,
+  sanitizeDiscFileName,
+  sha256Hex
+} from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 
@@ -253,6 +259,7 @@ async function handleMessage(type, payload) {
       }
       await loadCore({
         coreUrl: payload.coreUrl,
+        expectedCoreSha256: payload.expectedCoreSha256,
         canvas: payload.canvas,
         videoBackend: payload.videoBackend,
         cpuThread: payload.cpuThread,
@@ -439,6 +446,7 @@ async function handleMessage(type, payload) {
 
 async function loadCore({
   coreUrl: nextCoreUrl = DEFAULT_UPSTREAM_CORE_URL,
+  expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256,
   canvas = null,
   videoBackend = "Software Renderer",
   cpuThread = false,
@@ -552,6 +560,14 @@ async function loadCore({
   };
   _bootMark("loadCore-entry");
   coreUrl = new URL(nextCoreUrl, self.location.href).href;
+  // Pre-fetch the wasm binary so we can both (a) hand it to Emscripten via
+  // wasmBinary (skips its internal fetch) and (b) fingerprint it for the
+  // JIT-cache cross-build invalidation. Single localhost fetch instead of
+  // a double-fetch + extra hash pass.
+  const _t_fetch = performance.now();
+  const { wasmBinary, fingerprint: buildFingerprint } =
+      await fetchWasmAndFingerprint(coreUrl, expectedCoreSha256);
+  console.log(`[boot-phase] fetchWasmAndFingerprint took ${(performance.now() - _t_fetch).toFixed(1)}ms (${(wasmBinary.byteLength / 1048576).toFixed(2)}MiB)`);
   const _t_import = performance.now();
   const imported = await import(coreUrl);
   console.log(`[boot-phase] import(coreUrl) took ${(performance.now() - _t_import).toFixed(1)}ms`);
@@ -560,15 +576,6 @@ async function loadCore({
   if (typeof factory !== "function") {
     throw new Error("Upstream Dolphin bundle did not expose createDolphinCore");
   }
-
-  // Pre-fetch the wasm binary so we can both (a) hand it to Emscripten via
-  // wasmBinary (skips its internal fetch) and (b) fingerprint it for the
-  // JIT-cache cross-build invalidation. Single localhost fetch instead of
-  // a double-fetch + extra hash pass.
-  const _t_fetch = performance.now();
-  const { wasmBinary, fingerprint: buildFingerprint } =
-      await fetchWasmAndFingerprint(coreUrl);
-  console.log(`[boot-phase] fetchWasmAndFingerprint took ${(performance.now() - _t_fetch).toFixed(1)}ms (${(wasmBinary.byteLength / 1048576).toFixed(2)}MiB)`);
   // Reconcile IDB cache against this build's fingerprint before we touch
   // the cache map. If the build changed since the previous session, clear
   // the stale modules so we don't carry forward dead entries forever.
@@ -856,7 +863,9 @@ function bindApi(module) {
 }
 
 async function mountFile(file) {
-  await loadCore(coreUrl);
+  if (!moduleInstance) {
+    throw new Error("Upstream core must be loaded before mounting a disc");
+  }
 
   if (!file) {
     throw new Error("No disc file was provided to the upstream worker");
@@ -3002,7 +3011,7 @@ function writeDolphinJitEntryToIdb(hash, bytes) {
     }
   }
 }
-async function fetchWasmAndFingerprint(coreUrlValue) {
+async function fetchWasmAndFingerprint(coreUrlValue, expectedSha256 = DEFAULT_UPSTREAM_CORE_SHA256) {
   // coreUrlValue points at the JS shim (dolphin-core-upstream.js). The
   // wasm sits beside it under the conventional name.
   const wasmUrl = new URL("dolphin-core-upstream.wasm", coreUrlValue).href;
@@ -3011,13 +3020,15 @@ async function fetchWasmAndFingerprint(coreUrlValue) {
   try {
     const resp = await fetch(wasmUrl);
     if (!resp.ok) {
-      postStatus(`jit-cache: wasm fetch returned ${resp.status} (no fingerprint)`);
-      return { wasmBinary: null, fingerprint: null };
+      throw new Error(`Core WASM fetch returned ${resp.status}`);
     }
     buffer = await resp.arrayBuffer();
   } catch (err) {
-    postStatus(`jit-cache: wasm fetch failed (${err?.message || err}); no fingerprint`);
-    return { wasmBinary: null, fingerprint: null };
+    throw new Error(`Core WASM fetch failed: ${err?.message || err}`);
+  }
+  const actualSha256 = await sha256Hex(buffer);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`Core WASM SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
   }
   // Stride-64 FNV-1a over the full wasm. 8MB / 64 = 128K iters ≈ 1ms.
   // Wasm files have distinct bytes throughout (code section, data section,
@@ -3029,7 +3040,7 @@ async function fetchWasmAndFingerprint(coreUrlValue) {
     h = Math.imul(h, 16777619);
   }
   fingerprint = ((h ^ view.length) >>> 0).toString(16) + ":" + view.length.toString(16);
-  return { wasmBinary: buffer, fingerprint };
+  return { wasmBinary: buffer, fingerprint, sha256: actualSha256 };
 }
 // Open IDB eagerly so loadCore() doesn't pay the open latency. Module load
 // is deferred until the build fingerprint is computed (after fetching the

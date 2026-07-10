@@ -1,34 +1,31 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { sha256File, verifyWasmToolchain } from "./wasm-toolchain.mjs";
 
 const root = process.cwd();
 const sourceDir = resolve(root, "vendor/dolphin");
 const buildDir = resolve(process.env.DOLPHIN_WASM_BUILD_DIR ?? resolve(root, "build/dolphin-wasm"));
 const bridgeSource = resolve(root, "core/upstream/dolphin_web_discio.cpp");
 const coreSource = resolve(root, "core/upstream/dolphin_web_core.cpp");
-const outputDir = resolve(root, "cores/dolphin");
-const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
-const appData = process.env.APPDATA ?? "";
-
-function findTool(command, fallbackPath) {
-  if (process.env[command.toUpperCase()] && existsSync(process.env[command.toUpperCase()])) {
-    return process.env[command.toUpperCase()];
-  }
-
-  return existsSync(fallbackPath) ? fallbackPath : command;
-}
+const outputDir = resolve(process.env.DOLPHIN_WASM_OUTPUT_DIR ?? resolve(root, "cores/dolphin"));
+const nagaDir = resolve(root, "tools/naga-spirv-wgsl");
+const nagaLibrary = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/naga_spirv_wgsl.a");
+const nagaLibraryAlternate = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/libnaga_spirv_wgsl.a");
+const jitCachePreJs = resolve(root, "tools/jit-cache-prejs.js");
+const wasmMemoryPages = 24576;
 
 function quoteShellArg(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   const isWindowsBatch = process.platform === "win32" && /\.(bat|cmd)$/i.test(command);
   const result = spawnSync(isWindowsBatch ? [command, ...args].map(quoteShellArg).join(" ") : command, isWindowsBatch ? [] : args, {
     encoding: "utf8",
     stdio: "inherit",
-    shell: isWindowsBatch
+    shell: isWindowsBatch,
+    ...options
   });
 
   if (result.error || result.status !== 0) {
@@ -42,9 +39,28 @@ if (!existsSync(resolve(sourceDir, "CMakeLists.txt"))) {
 }
 
 mkdirSync(buildDir, { recursive: true });
+mkdirSync(outputDir, { recursive: true });
 
-const emcmake = findTool("emcmake", resolve(home, "emsdk/upstream/emscripten/emcmake.bat"));
-const cmake = findTool("cmake", resolve(appData, "Python/Python312/Scripts/cmake.exe"));
+const toolchain = verifyWasmToolchain();
+const { emcc, emcmake, cmake, ninja, cargo, rustc } = toolchain.paths;
+const nagaEnvironment = {
+  ...process.env,
+  PATH: `${dirname(rustc)};${dirname(emcc)};${process.env.PATH ?? ""}`,
+  RUSTC: rustc,
+  CARGO: cargo
+};
+
+console.log("Building the pinned Naga SPIR-V to WGSL bridge");
+run(cargo, ["build", "--locked", "--release", "--target", toolchain.lock.rust.target], {
+  cwd: nagaDir,
+  env: nagaEnvironment
+});
+const resolvedNagaLibrary = existsSync(nagaLibrary) ? nagaLibrary : nagaLibraryAlternate;
+if (!existsSync(resolvedNagaLibrary)) {
+  console.error(`Pinned Naga build did not produce ${nagaLibrary} or ${nagaLibraryAlternate}`);
+  process.exit(1);
+}
+
 const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0";
 const cmakeArgs = [
   cmake,
@@ -53,6 +69,7 @@ const cmakeArgs = [
   "-B",
   buildDir,
   "-GNinja",
+  `-DCMAKE_MAKE_PROGRAM=${ninja}`,
   "-DCMAKE_BUILD_TYPE=Release",
   "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
   "-DUSE_SYSTEM_LIBS=OFF",
@@ -88,7 +105,10 @@ const cmakeArgs = [
   "-DWITH_AVX512VNNI=OFF",
   "-DWITH_VPCLMULQDQ=OFF",
   `-DCMAKE_C_FLAGS:STRING=${wasmCompileFlags}`,
-  `-DCMAKE_CXX_FLAGS:STRING=${wasmCompileFlags}`
+  `-DCMAKE_CXX_FLAGS:STRING=${wasmCompileFlags}`,
+  `-DDOLPHIN_WASM_NAGA_WGSL_LIB=${resolvedNagaLibrary}`,
+  `-DDOLPHIN_WASM_JIT_CACHE_PRE_JS=${jitCachePreJs}`,
+  `-DDOLPHIN_WASM_MEMORY_PAGES=${wasmMemoryPages}`
 ];
 
 if (existsSync(bridgeSource)) {
@@ -103,4 +123,20 @@ if (existsSync(coreSource)) {
 
 console.log(`Configuring upstream Dolphin for Emscripten in ${buildDir}`);
 run(emcmake, cmakeArgs);
+writeFileSync(resolve(buildDir, "wasm-dolphin-configure.json"), `${JSON.stringify({
+  schemaVersion: 1,
+  sourceDir,
+  buildDir,
+  outputDir,
+  bridgeSource,
+  coreSource,
+  nagaLibrary: resolvedNagaLibrary,
+  nagaLibrarySha256: sha256File(resolvedNagaLibrary),
+  jitCachePreJs,
+  wasmMemoryPages,
+  wasmCompileFlags,
+  cmakeArgs,
+  toolchainLockSha256: toolchain.hashes.lock,
+  cargoLockSha256: toolchain.hashes.cargoLock
+}, null, 2)}\n`);
 console.log("Configured. Probe targets with: cmake --build build/dolphin-wasm --target discio --parallel 8");

@@ -6,19 +6,20 @@ Emscripten/Ninja build, and writes the browser core into `cores/dolphin/`.
 
 ## Toolchain record
 
-Use Node.js **20.x through 24.x**. Before calling a new build reproducible,
-replace every remaining `TODO` with the exact value used for that build:
+The committed `provenance/wasm-toolchain.lock.json` pins the exact local
+toolchain used for the research core. `npm run verify:toolchain` rejects a
+version or executable hash mismatch before configuration.
 
 | Component | Version/revision |
 | --- | --- |
-| Node.js | `TODO: record exact version within 20.x-24.x` |
-| Emscripten SDK | `TODO: record emsdk/Emscripten version` |
-| CMake | `TODO: record CMake version` |
-| Ninja | `TODO: record Ninja version` |
-| Rust nightly | `TODO: record rustc version/date` |
+| Node.js | `24.12.0` |
+| Emscripten SDK | `5.0.7`; compiler `263db4cffa6f9fc2ec514a70abac81362ea41849`; emsdk `bafd64c26bdaf10bd829163d1575b50b759a72d8` |
+| CMake | `4.3.2` |
+| Ninja | `1.13.0.git.kitware.jobserver-pipe-1` |
+| Rust nightly | `1.97.0-nightly`; rustc `7c3c88f42ad444f4688b865591d84660be4ece2f` |
 | Rust target | `wasm32-unknown-emscripten` |
-| Naga | `26` (confirm from `tools/naga-spirv-wgsl/Cargo.toml`) |
-| Chrome | `TODO: record validation Chrome version` |
+| Naga | `26.0.0`, with the full Cargo graph locked |
+| Chrome | `149.0.7827.201` for headed diagnostics; record each performance run separately |
 | Upstream Dolphin commit | `e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1` |
 
 The Naga static library uses nightly Rust because its Emscripten pthread build
@@ -36,6 +37,7 @@ npm install
 npm test
 npm run check
 npm run verify:provenance
+npm run verify:toolchain
 npm run fetch:dolphin
 npm run patch:upstream
 npm run configure:upstream
@@ -46,6 +48,14 @@ The final target produces:
 
 - `cores/dolphin/dolphin-core-upstream.js`
 - `cores/dolphin/dolphin-core-upstream.wasm`
+- `cores/dolphin/dolphin-core-upstream.build.json`
+
+The build script also packages an ignored, content-addressed candidate under
+`build/core-candidates/<wasm-sha256>/`. It contains the JS, WASM, build record,
+source/ABI/vendor/toolchain locks, Cargo lock, and a manifest of file hashes.
+Use `?coreid=sha256:<wasm-sha256>` to test it. The browser checks the full WASM
+SHA-256 before execution and rolls a rejected candidate back to the pinned
+baseline before transferring the canvas.
 
 `fetch:dolphin` reads `provenance/dolphin-source.lock.json`, fetches the exact
 commit above, verifies the fetched object, and checks it out detached. It never
@@ -65,10 +75,10 @@ assume-unchanged and skip-worktree), recomputes every result blob and tree, and
 reports:
 
 ```text
-verified result tree 021ca35004bcb8bd1c4a7bf745c798e2874135e1
+verified result tree 894201c58d67cd65ce67892776f5ccf5c143663c
 ```
 
-The active lock contains six root snapshot patches and two patches applied in
+The active lock contains seven root snapshot patches and two patches applied in
 the pinned SFML and xxHash submodules. It captures the complete forensic delta,
 including the hardware-WebGPU/Naga call site. The older top-level
 `0001`-`0009` files remain research history and are not applied by the locked
@@ -91,17 +101,18 @@ WASM digest is always over raw bytes. ABI verification also checks the public
 Module exports and the 24,576-page (1.5 GiB) shared-memory contract in the JS
 glue, WASM import, C++ dynamic-JIT wrapper, and active patch series.
 
-This source freeze does not establish that a newly built core is byte-identical
-or behaviorally equivalent to the baked core. That requires the pinned
-toolchain and two-clean-build parity work described by the performance plan.
+Build success alone does not establish gameplay parity. Compare two independent
+build records with `npm run compare:core-builds -- <left> <right>`, then run the
+fixed Kirby-versus-Link save smoke on the candidate and on the default baseline.
 
 ## Known local assumptions
 
-The scripts are Windows-friendly and search common Windows locations for
-Emscripten and CMake. They should also work when `emcmake`, `cmake`, and
-`ninja` are on `PATH`. Environment overrides such as `CMAKE`, `EMCMAKE`,
-`DOLPHIN_WASM_BUILD_DIR`, and `BUILD_PARALLELISM` are supported where the
-corresponding scripts read them.
+The current lock is deliberately Windows x64-specific. Scripts resolve common
+Windows locations and accept `EMCC`, `EMCMAKE`, `CMAKE`, `NINJA`, `RUSTC`,
+`CARGO`, and `RUSTUP` overrides only when the selected file still matches the
+locked hash. `DOLPHIN_WASM_BUILD_DIR`, `DOLPHIN_WASM_OUTPUT_DIR`, and
+`BUILD_PARALLELISM` select isolated build/output locations without weakening
+the toolchain check.
 
 The Rust bridge archive is generated beneath
 `tools/naga-spirv-wgsl/target/` and is intentionally ignored. The patched
@@ -112,10 +123,10 @@ build record, not `vendor/dolphin/`.
 
 - [x] Record the upstream Dolphin commit.
 - [x] Confirm the complete upstream patch snapshot is committed and replayable.
-- [ ] Record the Emscripten version.
-- [ ] Record the Rust toolchain and Naga version.
+- [x] Record the Emscripten version and compiler/emsdk commits.
+- [x] Record the Rust toolchain, Naga version, and Cargo lock.
 - [x] Record the existing `.wasm` byte size and SHA-256 hash.
-- [ ] Record the Chrome version used for validation.
+- [x] Record the Chrome version used for the current headed diagnostics.
 - [ ] Rebuild twice in separate clean directories and establish parity.
 - [ ] Run `npm test` and `npm run check` from the recorded checkout.
 - [ ] Store measured gameplay evidence separately from build success.

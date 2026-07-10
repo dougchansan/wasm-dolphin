@@ -1,4 +1,8 @@
-import { DEFAULT_UPSTREAM_CORE_URL } from "./upstream-worker-protocol.js";
+import {
+  DEFAULT_UPSTREAM_CORE_SHA256,
+  DEFAULT_UPSTREAM_CORE_URL,
+  verifyUpstreamCoreWasm
+} from "./upstream-worker-protocol.js";
 
 const DEFAULT_WORKER_URL = new URL("./upstream-discio-worker.js", import.meta.url).href;
 
@@ -17,6 +21,7 @@ export async function upstreamBundleAvailable(coreUrl = DEFAULT_UPSTREAM_CORE_UR
 export class UpstreamWorkerAdapter {
   constructor({
     coreUrl = DEFAULT_UPSTREAM_CORE_URL,
+    expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256,
     workerUrl = DEFAULT_WORKER_URL,
     onStatus = () => {},
     canvas = null,
@@ -48,6 +53,8 @@ export class UpstreamWorkerAdapter {
     oglSabHeight = 0
   } = {}) {
     this.coreUrl = coreUrl;
+    this.expectedCoreSha256 = expectedCoreSha256;
+    this.coreCandidatePreflighted = false;
     this.workerUrl = workerUrl;
     this.onStatus = onStatus;
     this.canvas = canvas;
@@ -140,6 +147,18 @@ export class UpstreamWorkerAdapter {
       return;
     }
 
+    if (!this.coreCandidatePreflighted && this.coreUrl !== DEFAULT_UPSTREAM_CORE_URL) {
+      try {
+        await verifyUpstreamCoreWasm(this.coreUrl, this.expectedCoreSha256, window.location.href);
+        this.coreCandidatePreflighted = true;
+      } catch (error) {
+        this.onStatus(`Candidate core rejected; rolling back to pinned baseline: ${error.message}`);
+        this.coreUrl = DEFAULT_UPSTREAM_CORE_URL;
+        this.expectedCoreSha256 = DEFAULT_UPSTREAM_CORE_SHA256;
+        this.coreCandidatePreflighted = true;
+      }
+    }
+
     if (!this.worker) {
       const _t_worker = performance.now();
       console.log(`[boot-phase] new Worker(discio) at perf.now=${_t_worker.toFixed(1)}ms`);
@@ -155,6 +174,7 @@ export class UpstreamWorkerAdapter {
 
     const loadPayload = {
       coreUrl: new URL(this.coreUrl, window.location.href).href,
+      expectedCoreSha256: this.expectedCoreSha256,
       videoBackend: this.videoBackend,
       cpuThread: this.cpuThread,
       cpuCore: this.cpuCore,

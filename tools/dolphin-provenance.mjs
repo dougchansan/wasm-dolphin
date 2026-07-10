@@ -108,6 +108,17 @@ export function validateSourceLock(lock) {
   }
   invariant(lock.repositories["."]?.commit === lock.upstream.commit,
     "Root patch repository must use the pinned upstream commit");
+  invariant(lock.externalRepositories === undefined ||
+    (lock.externalRepositories && typeof lock.externalRepositories === "object"),
+  "Invalid external repository map");
+  for (const [cwd, repository] of Object.entries(lock.externalRepositories ?? {})) {
+    invariant(!cwd.startsWith("/") && !cwd.includes("..") && !cwd.includes("\\"),
+      `Invalid external repository cwd: ${cwd}`);
+    invariant(/^(?:https|file):\/\/[^\s]+\.git$/.test(repository?.repository ?? ""),
+      `Invalid external repository URL for ${cwd}`);
+    invariant(GIT_SHA_PATTERN.test(repository?.commit ?? ""),
+      `Invalid external repository commit for ${cwd}`);
+  }
   invariant(Array.isArray(lock.patches) && lock.patches.length > 0, "Patch lock is empty");
 
   const paths = new Set();
@@ -201,6 +212,70 @@ export function verifyPatchRepositories(dolphinDir, lock) {
     const head = gitText(directory, ["rev-parse", "HEAD"]);
     assertExactCommit(repository.commit, head, `Patch repository ${cwd}`);
   }
+}
+
+function externalDescendants(lock, cwd, dolphinDir, existingOnly = false) {
+  const prefix = `${cwd}/`;
+  const candidates = Object.keys(lock.externalRepositories ?? {})
+    .filter((candidate) => candidate.startsWith(prefix));
+  return candidates
+    .filter((candidate) => !candidates.some((parent) =>
+      parent !== candidate && candidate.startsWith(`${parent}/`)))
+    .map((candidate) => candidate.slice(prefix.length))
+    .filter((relativePath) => !existingOnly || existsSync(resolve(dolphinDir, cwd, relativePath)));
+}
+
+export function verifyExternalRepositories(dolphinDir, lock, { allowMissing = false } = {}) {
+  validateSourceLock(lock);
+  const result = {};
+  const entries = Object.entries(lock.externalRepositories ?? {})
+    .sort(([left], [right]) => left.split("/").length - right.split("/").length || left.localeCompare(right));
+  for (const [cwd, repository] of entries) {
+    const directory = resolve(dolphinDir, cwd);
+    if (!existsSync(resolve(directory, ".git"))) {
+      invariant(allowMissing, `Missing external repository checkout: ${cwd}`);
+      continue;
+    }
+    const origin = gitText(directory, ["remote", "get-url", "origin"]);
+    invariant(origin === repository.repository,
+      `External repository origin mismatch for ${cwd}: expected ${repository.repository}, got ${origin}`);
+    const head = gitText(directory, ["rev-parse", "HEAD"]);
+    assertExactCommit(repository.commit, head, `External repository ${cwd}`);
+    const expected = new Map(externalDescendants(lock, cwd, dolphinDir, true)
+      .map((path) => [`${path}/`, "I"]));
+    assertStatusInventory(repositoryStatus(directory, "none"), expected, `external ${cwd}`);
+    result[cwd] = gitText(directory, ["rev-parse", `${repository.commit}^{tree}`]);
+  }
+  return result;
+}
+
+export function fetchPinnedExternalRepositories(dolphinDir, lock) {
+  const entries = Object.entries(lock.externalRepositories ?? {})
+    .sort(([left], [right]) => left.split("/").length - right.split("/").length || left.localeCompare(right));
+  for (const [cwd, repository] of entries) {
+    const directory = resolve(dolphinDir, cwd);
+    const created = !existsSync(directory);
+    if (created) {
+      run("git", ["clone", "--filter=blob:none", "--no-checkout", repository.repository, directory], {
+        stdio: "inherit"
+      });
+    }
+    invariant(existsSync(resolve(directory, ".git")), `${directory} exists but is not a Git checkout`);
+    const origin = gitText(directory, ["remote", "get-url", "origin"]);
+    invariant(origin === repository.repository,
+      `External repository origin mismatch for ${cwd}: expected ${repository.repository}, got ${origin}`);
+    const current = gitText(directory, ["rev-parse", "--verify", "HEAD"]);
+    if (current !== repository.commit) {
+      if (!created) {
+        const expected = new Map(externalDescendants(lock, cwd, dolphinDir, true)
+          .map((path) => [`${path}/`, "I"]));
+        assertStatusInventory(repositoryStatus(directory, "none"), expected, `external ${cwd}`);
+      }
+      git(directory, ["fetch", "--depth", "1", "origin", repository.commit], { stdio: "inherit" });
+    }
+    git(directory, ["checkout", "--detach", repository.commit], { stdio: "inherit" });
+  }
+  return verifyExternalRepositories(dolphinDir, lock);
 }
 
 function parsePorcelainStatus(output) {
@@ -413,11 +488,18 @@ function assertCheckoutPristine(dolphinDir, lock, { allowMissingSubmodules = fal
   return { state: "pristine" };
 }
 
-export function classifyLockedCheckout(dolphinDir, root = process.cwd()) {
+export function classifyLockedCheckout(
+  dolphinDir,
+  root = process.cwd(),
+  { allowMissingExternalRepositories = false } = {}
+) {
   const lock = loadSourceLock(root);
   const manifest = loadVendorSnapshotManifest(root, lock);
   verifyDolphinCheckout(dolphinDir, lock);
   verifyPatchRepositories(dolphinDir, lock);
+  const externalTrees = verifyExternalRepositories(dolphinDir, lock, {
+    allowMissing: allowMissingExternalRepositories
+  });
 
   const rootEntries = repositoryStatus(dolphinDir, "none");
   const submoduleEntries = new Map(
@@ -433,7 +515,8 @@ export function classifyLockedCheckout(dolphinDir, root = process.cwd()) {
       submoduleTrees: Object.fromEntries(manifest.submodules.map((submodule) => [
         submodule.cwd,
         gitText(resolve(dolphinDir, submodule.cwd), ["rev-parse", `${submodule.baseCommit}^{tree}`])
-      ]))
+      ])),
+      externalTrees
     };
   }
 
@@ -471,7 +554,7 @@ export function classifyLockedCheckout(dolphinDir, root = process.cwd()) {
       `${submodule.cwd} virtual result tree mismatch: expected ${submodule.resultTree}, got ${tree}`);
     submoduleTrees[submodule.cwd] = tree;
   }
-  return { state: "snapshot", rootTree, submoduleTrees };
+  return { state: "snapshot", rootTree, submoduleTrees, externalTrees };
 }
 
 export function fetchPinnedDolphin({
@@ -499,7 +582,9 @@ export function fetchPinnedDolphin({
   let priorState = null;
   if (!created) {
     if (currentHead === lock.upstream.commit && allPatchRepositoriesInitialized(destination, lock)) {
-      priorState = classifyLockedCheckout(destination, root);
+      priorState = classifyLockedCheckout(destination, root, {
+        allowMissingExternalRepositories: true
+      });
     } else {
       priorState = assertCheckoutPristine(destination, lock, { allowMissingSubmodules: true });
     }
@@ -523,6 +608,7 @@ export function fetchPinnedDolphin({
     invariant(Object.keys(lock.repositories).length === 1,
       "Cannot verify a source lock with submodules when submodule update is disabled");
   }
+  fetchPinnedExternalRepositories(destination, lock);
   const finalState = classifyLockedCheckout(destination, root);
   invariant(priorState?.state !== "snapshot" || finalState.state === "snapshot",
     "Fetch changed an exact locked snapshot");
@@ -773,6 +859,7 @@ export function publicModuleExports(glueSource) {
 export function inspectMemoryContract(root = process.cwd()) {
   const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
   const wrapper = readFileSync(resolve(root, "core/upstream/dolphin_web_core.cpp"), "utf8");
+  const configure = readFileSync(resolve(root, "tools/configure-upstream-wasm.mjs"), "utf8");
   const lock = loadSourceLock(root);
   const activePatchText = lock.patches
     .filter((entry) => entry.cwd === ".")
@@ -781,14 +868,27 @@ export function inspectMemoryContract(root = process.cwd()) {
   const wasm = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.wasm"));
   const jsMatch = glue.match(/var INITIAL_MEMORY=Module\["INITIAL_MEMORY"\]\|\|(\d+)/);
   invariant(jsMatch, "Could not discover INITIAL_MEMORY in the generated JS glue");
-  const wrapperPages = [...wrapper.matchAll(/EmitU32Leb\(imports,\s*(\d+)\);/g)]
-    .map((match) => Number(match[1]))
-    .filter((value) => value >= 16384);
-  invariant(wrapperPages.length > 0, "Could not discover dynamic-JIT memory pages in the wrapper");
-  const patchMatches = [...activePatchText.matchAll(/-sINITIAL_MEMORY=(\d+)/g)]
-    .map((match) => Number(match[1]));
-  const patchMemoryBytes = [...new Set(patchMatches)];
-  invariant(patchMemoryBytes.length === 1, "Active patch series must declare exactly one INITIAL_MEMORY value");
+  const pageMatch = configure.match(/const wasmMemoryPages = (\d+);/);
+  invariant(pageMatch, "Configure script must define the WASM memory page count exactly once");
+  const memoryPages = Number(pageMatch[1]);
+  const wrapperReferences = [...wrapper.matchAll(
+    /EmitU32Leb\(imports,\s*DOLPHIN_WASM_SHARED_MEMORY_PAGES\);/g
+  )].length;
+  invariant(wrapperReferences === 4, "Dynamic-JIT wrapper must use the shared memory page constant four times");
+  invariant(
+    wrapper.includes("DOLPHIN_WASM_SHARED_MEMORY_PAGES = DOLPHIN_WASM_MEMORY_PAGES"),
+    "Dynamic-JIT wrapper memory constant is not supplied by CMake"
+  );
+  invariant(
+    activePatchText.includes('math(EXPR DOLPHIN_WASM_INITIAL_MEMORY_BYTES "${DOLPHIN_WASM_MEMORY_PAGES} * 65536")') &&
+      activePatchText.includes('"-sINITIAL_MEMORY=${DOLPHIN_WASM_INITIAL_MEMORY_BYTES}"'),
+    "Active patch series does not derive INITIAL_MEMORY from DOLPHIN_WASM_MEMORY_PAGES"
+  );
+  invariant(
+    activePatchText.includes("EmitU32Leb(imports, DOLPHIN_WASM_MEMORY_PAGES)"),
+    "Cached-interpreter JIT does not import the configured shared-memory size"
+  );
+  const initialMemoryBytes = memoryPages * 65536;
   return {
     wasmPageBytes: 65536,
     jsGlue: {
@@ -796,10 +896,10 @@ export function inspectMemoryContract(root = process.cwd()) {
       initialPages: Number(jsMatch[1]) / 65536
     },
     wasmImports: parseWasmMemoryImports(wasm),
-    wrapperDynamicJitPages: [...new Set(wrapperPages)].sort((a, b) => a - b),
+    wrapperDynamicJitPages: [memoryPages],
     activePatchSeries: {
-      initialMemoryBytes: patchMemoryBytes[0],
-      initialPages: patchMemoryBytes[0] / 65536
+      initialMemoryBytes,
+      initialPages: memoryPages
     }
   };
 }
@@ -928,6 +1028,8 @@ export function verifyDolphinProvenance(root = process.cwd()) {
   return {
     upstreamCommit: lock.upstream.commit,
     patches,
+    externalRepositories: Object.fromEntries(Object.entries(lock.externalRepositories ?? {})
+      .map(([cwd, repository]) => [cwd, repository.commit])),
     vendorSnapshot: {
       rootPaths: vendor.root.records.length,
       submodulePaths: vendor.submodules.reduce((sum, item) => sum + item.records.length, 0),

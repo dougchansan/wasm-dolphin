@@ -118,6 +118,11 @@ void DolphinWeb_RunGeneratedWasmVoidI32(const unsigned char*, int, int)
 
 namespace
 {
+#ifndef DOLPHIN_WASM_MEMORY_PAGES
+#error "DOLPHIN_WASM_MEMORY_PAGES must be supplied by the pinned CMake configuration"
+#endif
+constexpr std::uint32_t DOLPHIN_WASM_SHARED_MEMORY_PAGES = DOLPHIN_WASM_MEMORY_PAGES;
+
 void EmitU32Leb(std::vector<std::uint8_t>& bytes, std::uint32_t value)
 {
   do
@@ -198,8 +203,8 @@ std::vector<std::uint8_t> BuildStateAddImmediateModule(std::uint32_t dest_offset
   // values trigger LinkError("memory max 24576 > WASM binary max 16384") in
   // the JIT block compiler around frame 700. Keep both numbers in step
   // with INITIAL_MEMORY.
-  EmitU32Leb(imports, 24576);
-  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
@@ -353,8 +358,8 @@ std::vector<std::uint8_t> BuildPpcIntegerBlockModule(std::span<const UGeckoInstr
   imports.push_back(0x02);
   imports.push_back(0x03);
   // See INITIAL_MEMORY sync note above.
-  EmitU32Leb(imports, 24576);
-  EmitU32Leb(imports, 24576);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
+  EmitU32Leb(imports, DOLPHIN_WASM_SHARED_MEMORY_PAGES);
   EmitSection(bytes, 2, imports);
 
   EmitSection(bytes, 3, {0x01, 0x00});
