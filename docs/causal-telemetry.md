@@ -18,7 +18,7 @@ schema.
 | --- | --- |
 | `core` | frame, live worker-observed ticks/PC, tick rate, and CPU-thread after-load checkpoint generation/ticks/PC |
 | `softwareRaster` | source XFB count/dimensions/stride/hash/nonzero count, XFB interval/decode, video-output sync/publish/total, and software encode/convert/copy times |
-| `presentation` | backend, pacing, queue depth/target/limit/age/lag, underruns/drops, interval and FPS fields, plus structured JS capture/copy/draw/hash/present stage windows |
+| `presentation` | backend, pacing and fresh-frame route, immediate/queued/tick-repaint counts, queue current/high-water depth and last/average/max age, lag, underruns/drops, interval and FPS fields, plus structured JS capture/copy/draw/hash/present stage windows |
 | `webgpu` | command-ring registration, drain/empty/processed counts, drain duration, backlog/high-water, deferrals, and errors |
 | `workerTraffic` | request/one-way/response/notification counts, actual transferable bytes, estimated payload bytes, and per-type counts |
 | `audio` | worker mix duration/count/frames, pump gaps/skips, mix round-trip, observable schedule underrun/overrun, lead, and drift |
@@ -63,3 +63,9 @@ can still limit distinct frames. Likewise, a high presentation FPS does not
 mean commands reached the GPU; inspect command-ring processed counts/backlog
 and renderer errors. Audio presence does not prove smooth audio; pump gaps,
 schedule underruns, and mix round-trip time classify different failure modes.
+
+For `pacing=tick`, compare the default immediate route against
+`legacytickqueue=1` in complete interleaved blocks. Confirm
+`freshFrameDelivery`, the three delivery counters, queue depth high-water, and
+average/max queue age before attributing a latency or smoothness change to the
+queue removal.

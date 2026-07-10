@@ -50,14 +50,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 9912,
-      "sha256": "6a362d0f3bee17d42b5e0d62d0eb582229a90beb6b0d4096747b3ffd3174a6ae"
+      "size": 10789,
+      "sha256": "5b944479b7e29551e8324ecf8add7170674b3d3ccbbb1f914add0e15ca0765fe"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 51755,
-      "sha256": "6e73b8f7346d8d29a687c49c824c3359b535a5f158c163799f4ede65aaf9bab1"
+      "size": 51952,
+      "sha256": "8ab348585e66ec3d07051391f649bc5f96f1d99d4867e40886fa195c4bae88a6"
     },
     {
       "path": "src/main-profiler.js",
@@ -66,10 +66,16 @@
       "sha256": "9301ee171741924eeb07409d783858d44f85e2fea510cfc05c939e5df1b762a8"
     },
     {
+      "path": "src/presentation-pacing.js",
+      "hashMode": "lf-normalized",
+      "size": 480,
+      "sha256": "1f120148b0a715a0ed5e3df30af0eded2b276d5126868c67243a112d2ecbb198"
+    },
+    {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 291112,
-      "sha256": "0a4d9bf2b29d19529fc082c28b6ec7bfe26bef51da32100b281ba1530bfa565f"
+      "size": 293258,
+      "sha256": "f7ec55c858595eff19727de0370cbdd6fec1b729648e8f83113ae0311be0bc10"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -80,8 +86,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 32471,
-      "sha256": "153bc488161c28cd6a471e8f6dfd2da44283e95ef50d96b195b4dba080adc8e5"
+      "size": 32598,
+      "sha256": "4a23fcac6a9ef63200948f615b4c16c7253c33bc6633e24fdd64c83a498a315c"
     },
     {
       "path": "src/upstream-worker-protocol.js",

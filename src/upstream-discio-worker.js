@@ -20,6 +20,10 @@ import {
   createWgpuReplayClassifier,
   selectAtomicReplayLimit
 } from "./wgpu-replay-diagnostics.js";
+import {
+  FRESH_FRAME_DELIVERY,
+  freshFrameDeliveryForPacing
+} from "./presentation-pacing.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -169,6 +173,7 @@ let presentationQueueTarget = 4;
 let pacedPresentationPrimed = false;
 let pacedPresentationStartedAt = 0;
 let presentationPacingMode = "smooth";
+let legacyTickQueue = false;
 let inputStateSabView = null;
 let lastInputStateGeneration = 0;
 // Detached OGL mode: worker owns a standalone OffscreenCanvas for the GL
@@ -202,6 +207,13 @@ let presentationWindowUnderrunCount = 0;
 let presentationWindowDropCount = 0;
 let presentationFrameLag = 0;
 let presentationQueueAgeMs = 0;
+let presentationQueueAgeTotalMs = 0;
+let presentationQueueAgeSamples = 0;
+let presentationQueueAgeMaxMs = 0;
+let presentationQueueDepthHighWater = 0;
+let immediateFreshFrameCount = 0;
+let queuedFreshFrameCount = 0;
+let tickRepaintCount = 0;
 let lastCapturedCoreFrame = -1;
 let coreBoot = {
   attempted: false,
@@ -429,6 +441,7 @@ async function handleMessage(type, payload) {
         presentationScale: payload.presentationScale,
         presentationQueueSize: payload.presentationQueueSize,
         presentationPacing: payload.presentationPacing,
+        legacyTickQueue: payload.legacyTickQueue,
         presenterBackend: payload.presenterBackend,
         oglProxyMode: payload.oglProxyMode,
         oglTestClear: payload.oglTestClear,
@@ -649,6 +662,7 @@ async function loadCore({
   presentationScale = 1,
   presentationQueueSize = DEFAULT_PRESENTATION_QUEUE,
   presentationPacing = "smooth",
+  legacyTickQueue: requestedLegacyTickQueue = false,
   presenterBackend = "webgl",
   oglProxyMode = "proxy",
   oglTestClear = false,
@@ -922,6 +936,7 @@ async function loadCore({
   if (presentationPacing === "tick") presentationPacingMode = "tick";
   else if (presentationPacing === "direct") presentationPacingMode = "direct";
   else presentationPacingMode = "smooth";
+  legacyTickQueue = Boolean(requestedLegacyTickQueue);
   const _t_coreinit = performance.now();
   api.coreInit?.();
   console.log(`[boot-phase] api.coreInit() took ${(performance.now() - _t_coreinit).toFixed(1)}ms`);
@@ -1218,6 +1233,13 @@ function resetPresentationBuffer() {
   presentationWindowDropCount = 0;
   presentationFrameLag = 0;
   presentationQueueAgeMs = 0;
+  presentationQueueAgeTotalMs = 0;
+  presentationQueueAgeSamples = 0;
+  presentationQueueAgeMaxMs = 0;
+  presentationQueueDepthHighWater = 0;
+  immediateFreshFrameCount = 0;
+  queuedFreshFrameCount = 0;
+  tickRepaintCount = 0;
 }
 
 function readDetailedCoreStat(name, readStat) {
@@ -1478,7 +1500,7 @@ function framePayload() {
       videoStats,
       ppcProfileStats,
       `metrics:${collectMetrics ? "on" : "off"}`,
-      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}` +
+      `jit:${jitState} warm:${ppcWasmJitWarmupFrames} present ${renderBackend} signal:${frameSignalHeap ? "wait" : "poll"} mode:${presentationPacingMode} delivery:${freshFrameDeliveryForPacing(presentationPacingMode, legacyTickQueue)} legacytickqueue:${legacyTickQueue ? 1 : 0} fps:${presentationFps} raw:${presentationRawFps} loop:${presentationLoopFps} gap:${presentationP95IntervalMs}/${presentationMaxIntervalMs}ms long:${presentationLongFrameCount} queue:${frameQueue.length}/${presentationQueueLimit} qmax:${presentationQueueDepthHighWater} qage:${presentationQueueAgeMs.toFixed(1)}/${presentationQueueAgeMaxMs.toFixed(1)}ms fresh:${immediateFreshFrameCount}/${queuedFreshFrameCount} tickpaint:${tickRepaintCount} underrun:${presentationWindowUnderrunCount} drop:${presentationWindowDropCount} frames:${presentedFrame} visualfps:${visualChangeFps} visualsrc:${visualSampleSource} wd:${watchdogRecoveryCount}/${watchdogFireCount}` +
       // §28v: extra on-screen telemetry for the user's screenshots —
       // JIT cache size/new-compiles (compile-burst visibility) +
       // WebGPU executor draw/miss/skip counters (render-health: is
@@ -1545,6 +1567,8 @@ function maybeCreateCausalTelemetry(videoStats) {
     presentation: {
       backend: renderBackend,
       pacingMode: presentationPacingMode,
+      freshFrameDelivery: freshFrameDeliveryForPacing(presentationPacingMode, legacyTickQueue),
+      legacyTickQueue,
       presentedFrames: presentedFrame,
       fps: presentationFps,
       rawFps: presentationRawFps,
@@ -1554,6 +1578,14 @@ function maybeCreateCausalTelemetry(videoStats) {
       queueTarget: presentationQueueTarget,
       queueLimit: presentationQueueLimit,
       queueAgeMs: presentationQueueAgeMs,
+      queueAgeAverageMs: presentationQueueAgeSamples > 0
+        ? presentationQueueAgeTotalMs / presentationQueueAgeSamples
+        : 0,
+      queueAgeMaxMs: presentationQueueAgeMaxMs,
+      queueDepthHighWater: presentationQueueDepthHighWater,
+      immediateFreshFrameCount,
+      queuedFreshFrameCount,
+      tickRepaintCount,
       frameLag: presentationFrameLag,
       underrunCount: presentationUnderrunCount,
       droppedFrameCount: presentationDroppedFrameCount,
@@ -1635,6 +1667,7 @@ function startTickRepaintLoop() {
     } else if (renderContext) {
       drawFrameBytesToCanvas(_lastFrameWidth, _lastFrameHeight, tickBytes);
     }
+    tickRepaintCount += 1;
     lastPresentedAt = now;
   }, TICK_MS);
 }
@@ -1657,7 +1690,10 @@ function schedulePresentationLoop() {
   } else if (coreBoot.accepted && renderBackend === "ogl") {
     scheduleOglPresentationPoll();
   } else if (coreBoot.accepted && frameSignalHeap) {
-    if (presentationPacingMode !== "direct") {
+    if (
+      freshFrameDeliveryForPacing(presentationPacingMode, legacyTickQueue) ===
+      FRESH_FRAME_DELIVERY.QUEUED
+    ) {
       startPacedPresentation();
     }
     scheduleFrameSignalWait();
@@ -1831,10 +1867,14 @@ function runPresentationLoop() {
         // transferred it to the GPU pthread — that's what Day-3 hit and
         // why we couldn't make worker-mode painting work then.
         presentFrame(width, height, pointer, width * height * 4, oglFrameKey);
-      } else if (coreBoot.accepted && frameSignalHeap && presentationPacingMode === "direct") {
-        presentFrame(width, height, pointer, width * height * 4, coreFrame);
       } else if (coreBoot.accepted && frameSignalHeap) {
-        captureFrameForPacedPresentation(width, height, pointer, width * height * 4, coreFrame);
+        const delivery = freshFrameDeliveryForPacing(presentationPacingMode, legacyTickQueue);
+        if (delivery === FRESH_FRAME_DELIVERY.IMMEDIATE) {
+          if (coreFrame !== lastPresentedCoreFrame) immediateFreshFrameCount += 1;
+          presentFrame(width, height, pointer, width * height * 4, coreFrame);
+        } else {
+          captureFrameForPacedPresentation(width, height, pointer, width * height * 4, coreFrame);
+        }
       } else if (coreFrame !== lastPresentedCoreFrame) {
         presentFrame(width, height, pointer, width * height * 4, coreFrame);
       }
@@ -2102,6 +2142,8 @@ function captureFrameForPacedPresentation(width, height, pointer, length, coreFr
     height,
     width
   });
+  queuedFreshFrameCount += 1;
+  presentationQueueDepthHighWater = Math.max(presentationQueueDepthHighWater, frameQueue.length);
   lastCapturedCoreFrame = coreFrame;
   finishProfileSample("capture", captureStartedAt);
 }
@@ -2146,6 +2188,9 @@ function runPacedPresentation(timestamp = performance.now()) {
     if (queued) {
       presentationFrameLag = Math.max(0, lastCapturedCoreFrame - queued.coreFrame);
       presentationQueueAgeMs = Math.max(0, now - queued.capturedAt);
+      presentationQueueAgeTotalMs += presentationQueueAgeMs;
+      presentationQueueAgeSamples += 1;
+      presentationQueueAgeMaxMs = Math.max(presentationQueueAgeMaxMs, presentationQueueAgeMs);
       presentFrameBytes(queued.width, queued.height, queued.bytes, queued.coreFrame);
     } else {
       presentationUnderrunCount += 1;

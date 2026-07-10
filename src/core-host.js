@@ -14,6 +14,7 @@ import {
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
+import { legacyTickQueueRequested } from "./presentation-pacing.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -52,6 +53,7 @@ export class EmulatorHost {
     this.presentationQueueSize = requestedPresentationQueueSize();
     this.presenterBackend = requestedPresenterBackend();
     this.presentationPacing = requestedPresentationPacing(this.videoBackend);
+    this.legacyTickQueue = legacyTickQueueRequested(window.location.search);
     this.oglProxyMode = requestedOglProxyMode();
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
@@ -253,6 +255,7 @@ export class EmulatorHost {
             presentationQueueSize: this.presentationQueueSize,
             presenterBackend: this.presenterBackend,
             presentationPacing: this.presentationPacing,
+            legacyTickQueue: this.legacyTickQueue,
             oglProxyMode: this.oglProxyMode,
             oglTestClear: this.oglTestClear,
             fastSoftwareRaster: this.fastSoftwareRaster,

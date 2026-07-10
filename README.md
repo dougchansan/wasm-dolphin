@@ -136,9 +136,9 @@ instrumentation. Two knobs expose the tradeoff:
 #### Pacing
 
 `?pacing=` controls how the canvas is refreshed:
-`tick` (default; steady re-paint, smoothest scroll), `smooth` (paced queue), or
-`direct` (paint only on new unique frames). The WebGPU hardware backend uses
-`smooth`.
+`tick` (default; immediate fresh frames plus duplicate re-paints), `smooth`
+(paced queue), or `direct` (immediate fresh frames only). WebGPU hardware uses
+`smooth`; `legacytickqueue=1` restores the old queued `tick` route for rollback.
 
 #### Raster quality (`fastsw`)
 

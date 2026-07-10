@@ -48,6 +48,7 @@ export class UpstreamWorkerAdapter {
     presentationQueueSize = 2,
     presenterBackend = "webgl",
     presentationPacing = "smooth",
+    legacyTickQueue = false,
     oglProxyMode = "worker",
     oglTestClear = false,
     fastSoftwareRaster = 0,
@@ -92,6 +93,7 @@ export class UpstreamWorkerAdapter {
     this.presentationQueueSize = presentationQueueSize;
     this.presenterBackend = presenterBackend;
     this.presentationPacing = presentationPacing;
+    this.legacyTickQueue = Boolean(legacyTickQueue);
     this.oglProxyMode = oglProxyMode;
     this.oglTestClear = Boolean(oglTestClear);
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
@@ -234,6 +236,7 @@ export class UpstreamWorkerAdapter {
       presentationQueueSize: this.presentationQueueSize,
       presenterBackend: this.presenterBackend,
       presentationPacing: this.presentationPacing,
+      legacyTickQueue: this.legacyTickQueue,
       oglProxyMode: this.oglProxyMode,
       oglTestClear: this.oglTestClear,
       fastSoftwareRaster: this.fastSoftwareRaster,

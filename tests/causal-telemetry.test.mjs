@@ -23,6 +23,14 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.core.ticks, 123);
   assert.equal(value.core.loadedCheckpointTicks, null);
   assert.equal(value.presentation.queueDepth, 2);
+  assert.equal(value.presentation.freshFrameDelivery, "unknown");
+  assert.equal(value.presentation.legacyTickQueue, false);
+  assert.equal(value.presentation.immediateFreshFrameCount, 0);
+  assert.equal(value.presentation.queuedFreshFrameCount, 0);
+  assert.equal(value.presentation.tickRepaintCount, 0);
+  assert.equal(value.presentation.queueDepthHighWater, 0);
+  assert.equal(value.presentation.queueAgeAverageMs, 0);
+  assert.equal(value.presentation.queueAgeMaxMs, 0);
   assert.equal(value.presentation.js.capture.count, 0);
   assert.equal(value.audio.underrunCount, 0);
   assert.equal(value.input.ageLastMs, 0);
@@ -81,6 +89,18 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   const value = createCausalTelemetry({
     core: { ticks: 55 },
     softwareRaster: { encodeTotalMs: 1.25 },
+    presentation: {
+      freshFrameDelivery: "immediate",
+      legacyTickQueue: false,
+      immediateFreshFrameCount: 9,
+      queuedFreshFrameCount: 0,
+      tickRepaintCount: 4,
+      queueDepth: 0,
+      queueDepthHighWater: 0,
+      queueAgeMs: 0,
+      queueAgeAverageMs: 0,
+      queueAgeMaxMs: 0,
+    },
     webgpu: { backlogLast: 3 },
     input: { ageLastMs: 4 },
   });
@@ -88,6 +108,14 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalTelemetrySchemaVersion, CAUSAL_TELEMETRY_SCHEMA_VERSION);
   assert.equal(flat.causalCoreTicks, 55);
   assert.equal(flat.causalSoftwareEncodeMs, 1.25);
+  assert.equal(flat.causalFreshFrameDelivery, "immediate");
+  assert.equal(flat.causalLegacyTickQueue, false);
+  assert.equal(flat.causalImmediateFreshFrameCount, 9);
+  assert.equal(flat.causalQueuedFreshFrameCount, 0);
+  assert.equal(flat.causalTickRepaintCount, 4);
+  assert.equal(flat.causalPresentationQueueDepthHighWater, 0);
+  assert.equal(flat.causalPresentationQueueAgeAverageMs, 0);
+  assert.equal(flat.causalPresentationQueueAgeMaxMs, 0);
   assert.equal(flat.causalWgpuBacklog, 3);
   assert.equal(flat.causalInputAgeMs, 4);
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
