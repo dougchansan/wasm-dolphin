@@ -33,15 +33,22 @@ test("native rollback smoke rejects publication without advancing either ring", 
   assert.match(patch, /failed allocation did not reject the owning pass/);
 });
 
-test("native smoke exports remain explicitly pending until the core is rebuilt", async () => {
+test("native smoke exports are either pending rebuild or present in the core", async () => {
   const manifest = JSON.parse(
     await readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8")
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, [
+  const expected = [
     "_RunWebGpuCommandStreamGeometryParitySmoke",
     "_RunWebGpuCommandStreamGeometryRollbackSmoke",
     "_GetWebGpuCommandStreamGeometrySmokeError",
-  ]);
+  ];
+  for (const name of expected) {
+    assert.ok(
+      manifest.moduleExports.includes(name) ||
+        manifest.sourceOnlyExportsPendingRebuild.includes(name),
+      `${name} must be exported or explicitly pending a rebuild`
+    );
+  }
 
   const updater = await readFile(new URL("../tools/update-core-abi.mjs", import.meta.url), "utf8");
   assert.match(updater, /previous\.sourceOnlyExportsPendingRebuild/);

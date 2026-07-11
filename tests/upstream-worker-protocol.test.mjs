@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -24,6 +25,11 @@ test("upstream worker sanitizes disc names for WORKERFS paths", () => {
 });
 
 test("upstream core selection is content-addressed and defaults to the pinned baseline", () => {
+  const abi = JSON.parse(readFileSync(
+    new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url),
+    "utf8"
+  ));
+  assert.equal(`sha256:${DEFAULT_UPSTREAM_CORE_SHA256}`, abi.coreId);
   assert.deepEqual(requestedUpstreamCoreBuild(""), {
     coreId: `sha256:${DEFAULT_UPSTREAM_CORE_SHA256}`,
     sha256: DEFAULT_UPSTREAM_CORE_SHA256,
