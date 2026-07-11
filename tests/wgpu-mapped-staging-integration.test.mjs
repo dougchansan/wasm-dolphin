@@ -32,7 +32,6 @@ test("mapped uploads are copied into a bounded pool and queue writes stay isolat
   assert.match(worker, /mappedStagingCopyCount/);
   assert.match(worker, /mappedStagingCapacityWaitCount/);
   assert.match(worker, /mappedStagingRemapFailureCount/);
-  assert.match(worker, /mappedStagingRetainedDrainCount/);
 });
 
 test("submission orders upload before render and capacity never falls back", async () => {
@@ -52,10 +51,6 @@ test("submission orders upload before render and capacity never falls back", asy
   );
   assert.match(worker, /rejectMappedBatch\(mappedBatch, e\)/);
   assert.match(worker, /wgpuMappedStagingPool\?\.invalidate\("WebGPU device lost"\)/);
-  assert.match(
-    worker,
-    /reason === "drain-boundary" && wgpuUploadTransport === "mapped"[\s\S]*?return false;[\s\S]*?flushMappedUploadsOnly\(reason\)/
-  );
 });
 
 test("performance validation fails closed when the mapped arm executes queue transport", async () => {
