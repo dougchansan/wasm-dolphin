@@ -29,6 +29,7 @@
     "test:xfb-fastpaths": "node tools/test-xfb-fastpaths.mjs",
     "test:texture-hot-cases": "node tools/test-software-texture-hot-cases.mjs",
     "test:tev-hot-cases": "node tools/test-software-tev-hot-cases.mjs",
-    "validate:wgpu-ubo-screening": "node tools/validate-wgpu-ubo-screening.mjs"
+    "validate:wgpu-ubo-screening": "node tools/validate-wgpu-ubo-screening.mjs",
+    "validate:wgpu-upload-attribution": "node tools/validate-wgpu-upload-attribution.mjs"
   }
 }

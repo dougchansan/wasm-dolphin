@@ -1,9 +1,10 @@
 // Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// This module is the deterministic reference model for the C++ geometry upload
-// packet. It deliberately models layout and lifetime only; it does not imply
-// that the runtime implementation should allocate a temporary JS/C++ buffer.
+// This non-runtime module is the maintained conformance model for the C++
+// geometry upload packet. Unit tests use it to lock layout and lifetime rules;
+// it deliberately does not imply that production should allocate a temporary
+// JS/C++ buffer.
 
 export const WGPU_GEOMETRY_PACKET_MAX_OFFSET = 0xffffffff;
 

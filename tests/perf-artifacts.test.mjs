@@ -131,6 +131,36 @@ test("causal fairness reports audio, marker, and GPU decision failures", () => {
   assert.match(result.failures.join("\n"), /WGPU errors=1/);
 });
 
+test("causal fairness fails closed on missing decision counters", () => {
+  const baseline = {
+    causalAudioWorkerEmptyMixCount: 0,
+    causalAudioUnderruns: 0,
+    causalWgpuErrorCount: 0,
+    causalGpuCompletionFailedCount: 0,
+  };
+  const result = summarizeCausalFairness([baseline, { ...baseline, causalWgpuErrorCount: undefined }]);
+  assert.match(result.failures.join("\n"), /missing WGPU error counter delta/);
+});
+
+test("causal fairness fails closed when a decision counter resets", () => {
+  const baseline = {
+    causalAudioWorkerEmptyMixCount: 3,
+    causalAudioUnderruns: 2,
+    causalWgpuErrorCount: 1,
+    causalGpuCompletionFailedCount: 1,
+  };
+  const result = summarizeCausalFairness([
+    baseline,
+    {
+      ...baseline,
+      causalAudioUnderruns: 1,
+      causalGpuCompletionFailedCount: 0,
+    },
+  ]);
+  assert.match(result.failures.join("\n"), /reset WebAudio underrun counter delta=-1/);
+  assert.match(result.failures.join("\n"), /reset GPU completion error counter delta=-1/);
+});
+
 test("perf gate names presentation underruns explicitly and retains its compatibility alias", async () => {
   const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
   assert.match(source, /presentationUnderrun: maxRegex\(helperText, \/underrun:/);

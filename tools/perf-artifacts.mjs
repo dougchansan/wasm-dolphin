@@ -1100,6 +1100,24 @@ export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 
     requiredParityStages.every((name) => stageDeltas[name] === expected)
   );
   const failures = [];
+  const validateDecisionDelta = (label, value) => {
+    if (value === null) {
+      failures.push(`missing ${label} counter delta`);
+      return false;
+    }
+    if (value < 0) {
+      failures.push(`reset ${label} counter delta=${value}`);
+      return false;
+    }
+    return true;
+  };
+  validateDecisionDelta("audio empty-mix", audioDeltas.workerEmptyMixCount);
+  validateDecisionDelta("WebAudio underrun", audioDeltas.underrunCount);
+  for (const [name, value] of Object.entries(errorDeltas)) {
+    validateDecisionDelta(`input marker ${name}`, value);
+  }
+  validateDecisionDelta("WGPU error", gpuErrors.wgpuErrorCount);
+  validateDecisionDelta("GPU completion error", gpuErrors.gpuCompletionFailedCount);
   if (audioDeltas.workerEmptyMixCount > 0) {
     failures.push(`audio empty mixes=${audioDeltas.workerEmptyMixCount}`);
   }

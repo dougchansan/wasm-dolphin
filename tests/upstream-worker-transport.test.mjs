@@ -65,6 +65,51 @@ test("adapter accounts for legacy acknowledgements and preserved one-way errors"
   });
 });
 
+test("adapter forwards WebGPU runtime options in the load payload", async (t) => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { href: "http://127.0.0.1:8080/" } };
+  t.after(() => {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  let posted = null;
+  const adapter = new UpstreamWorkerAdapter({
+    wgpuReplayBudgetMs: 6,
+    wgpuPowerPreference: "low-power",
+    wgpuGeometryPack: true,
+    wgpuUploadArenaMiB: 64
+  });
+  adapter.worker = {
+    postMessage(message, transfer) {
+      posted = { message, transfer };
+      queueMicrotask(() => adapter.handleMessage({ id: message.id, ok: true }));
+    }
+  };
+
+  await adapter.load();
+
+  assert.equal(posted.message.type, "load");
+  assert.deepEqual(
+    {
+      wgpuReplayBudgetMs: posted.message.payload.wgpuReplayBudgetMs,
+      wgpuPowerPreference: posted.message.payload.wgpuPowerPreference,
+      wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
+      wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB
+    },
+    {
+      wgpuReplayBudgetMs: 6,
+      wgpuPowerPreference: "low-power",
+      wgpuGeometryPack: true,
+      wgpuUploadArenaMiB: 64
+    }
+  );
+  assert.deepEqual(posted.transfer, []);
+});
+
 test("candidate preflight rollback records requested and active core before canvas transfer", async (t) => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
