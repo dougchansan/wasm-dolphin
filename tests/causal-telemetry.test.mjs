@@ -11,6 +11,10 @@ import {
   parseCoreProfileTelemetry,
   stageWindowFromProfile,
 } from "../src/causal-telemetry.js";
+import {
+  WGPU_UPLOAD_ROLE,
+  createWgpuUploadAttribution,
+} from "../src/wgpu-upload-attribution.js";
 
 test("causal telemetry has a stable versioned shape", () => {
   const value = createCausalTelemetry({
@@ -37,6 +41,12 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.producerStateCacheEnabled, false);
   assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(value.webgpu.commandDroppedCount, 0);
+  assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
+  assert.equal(
+    value.webgpu.uploadAttribution.schema,
+    "wasm-dolphin.wgpu-upload-attribution.v1"
+  );
+  assert.deepEqual(value.webgpu.uploadAttribution.callsByRole, [0, 0, 0, 0, 0, 0]);
   assert.equal(value.softwareRaster.profileEnabled, false);
   assert.equal(value.softwareRaster.caseSampleSeed, 0);
   assert.equal(value.softwareRaster.rasterTraversalCount, 0);
@@ -425,6 +435,36 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.deepEqual(flat.causalWgpuProducerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(flat.causalWgpuCommandDroppedCount, 0);
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
+});
+
+test("upload attribution and verified-load timeout deltas flatten into CSV-safe fields", () => {
+  const uploads = createWgpuUploadAttribution();
+  uploads.recordUpload(WGPU_UPLOAD_ROLE.VERTEX, 1024, 256);
+  uploads.recordUpload(WGPU_UPLOAD_ROLE.INDEX, 64, 64);
+  uploads.recordPassBegin();
+  uploads.recordPassEnd();
+
+  const telemetry = createCausalTelemetry({
+    webgpu: {
+      uploadTimeoutCount: 5,
+      uploadTimeoutBoundaryVerified: true,
+      uploadTimeoutCountAtVerifiedLoad: 2,
+      uploadTimeoutCountBeforeVerifiedLoad: 2,
+      uploadTimeoutCountAfterVerifiedLoad: 3,
+      uploadAttribution: uploads.snapshot(),
+    },
+  });
+  const flat = flattenCausalTelemetry(telemetry);
+
+  assert.equal(flat.causalWgpuUploadTimeoutBoundaryVerified, true);
+  assert.equal(flat.causalWgpuUploadTimeoutCountAtVerifiedLoad, 2);
+  assert.equal(flat.causalWgpuUploadTimeoutCountAfterVerifiedLoad, 3);
+  assert.equal(flat.causalWgpuUploadTotalCalls, 2);
+  assert.equal(flat.causalWgpuUploadTotalBytes, 1088);
+  assert.deepEqual(flat.causalWgpuUploadCallsByRole, [0, 0, 0, 1, 1, 0]);
+  assert.equal(flat.causalWgpuUploadMaxPassCalls, 2);
+  assert.equal(flat.causalWgpuUploadMaxPassBytes, 1088);
+  assert.equal(flat.causalWgpuUploadMaxDestinationSpanBytes, 1024);
 });
 
 test("rebuilt core exports CPU-thread checkpoint capture before renderer resync", async () => {

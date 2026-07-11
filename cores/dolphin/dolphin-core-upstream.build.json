@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-10T23:48:24.455Z",
-  "coreId": "sha256:a239ee47209605f20f7c078f61567cd90d4adb9a718fc3dc71060a178d006995",
+  "createdAt": "2026-07-11T10:34:40.475Z",
+  "coreId": "sha256:a2f19894f3855a8adb281b709a8e0f72cc8a929aef9978a17aa9545a5e9e775e",
   "repository": {
-    "commit": "1560ba7d69435cebf583a0c41a0a3202f46deedd",
-    "status": ""
+    "commit": "67421e63d63bf567ce2517613c5cb37b19badc0f",
+    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M docs/causal-telemetry.md\n M package.json\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/causal-telemetry.js\n M src/upstream-discio-worker.js\n M tests/causal-telemetry.test.mjs\n M tests/wgpu-pass-transaction.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n?? patches/dolphin-wasm/snapshot/0022-webgpu-upload-role-attribution.patch\n?? src/wgpu-upload-attribution.js\n?? tests/wgpu-upload-attribution.test.mjs"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "ba2a234ff399ca1c0c83528f5ed52fd3390503d7a90b160eff935fc3df75ed93",
-    "vendorResultTree": "0bd2db2f04ac73efcc9d7f85ca088e23d772dbba",
-    "sourceLockSha256": "49f2b1520f47b8766dca3ef69fbd4cda2d49f06f8971f61a790cb1d478b55e61",
-    "vendorSnapshotSha256": "9254ad94e39ec0e3222b6efc4aa8a995a641ee08975930414b7b89190c81555f",
-    "localInputsSha256": "f98801d458da12c49c2720043d420c2fdf8f39dbf2f03f33e09e8379f94e5982",
+    "patchSeriesSha256": "945e7b090e92c3aa54ced49109d1a0650c3f1335a0767182d4dd6952b8802115",
+    "vendorResultTree": "9a05d18a53f4f947b5c84a30fe19c34f76b64ed4",
+    "sourceLockSha256": "a1961c2b4889b8bd601f43018d289077b2fe56cf4b7ee335df20341c4faad079",
+    "vendorSnapshotSha256": "4a8d01e1b9ad6fa18b7b6363c9f1eff2bbf639621c58d852fafe12031871ee60",
+    "localInputsSha256": "312d9e264f08a5c8498889947577bd8a8cde3bc7c5b2c3550b49d51e78acb073",
     "localInputs": [
       {
         "path": "core/upstream/dolphin_web_core.cpp",
@@ -22,13 +22,13 @@
       },
       {
         "path": "core/upstream/dolphin_web_discio.cpp",
-        "size": 46712,
+        "size": 46768,
         "sha256": "2815c46b414ff4b67a58cd55d714e1b41f9b38984023e5a0dca29a71d2a4206b",
         "hashMode": "lf-normalized"
       },
       {
         "path": "core/upstream/dolphin_web_raster_profile.h",
-        "size": 33969,
+        "size": 34085,
         "sha256": "cbd5bd078934d2a22b7220543e15f5d2185682c92953a7dc63e2e8663b932162",
         "hashMode": "lf-normalized"
       },
@@ -132,8 +132,8 @@
     },
     "wasm": {
       "path": "C:\\Users\\douglaswhittingham\\wasm-dolphin-final-opt\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12875582,
-      "sha256": "a239ee47209605f20f7c078f61567cd90d4adb9a718fc3dc71060a178d006995",
+      "size": 12875578,
+      "sha256": "a2f19894f3855a8adb281b709a8e0f72cc8a929aef9978a17aa9545a5e9e775e",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -150,7 +150,7 @@
       {
         "id": 3,
         "size": 12379,
-        "sha256": "0e00ff2d69d64af0edd59a24544d34a476ec0a4f6df91a5f908653b94b45f350"
+        "sha256": "1a47aa541912d23ffeef3b3a7f354a1f0f3c0029ef7a143e0198b66ab80950a5"
       },
       {
         "id": 4,
@@ -184,8 +184,8 @@
       },
       {
         "id": 10,
-        "size": 10383581,
-        "sha256": "22e840d023afe0f79ec87171c4ee82ad33ca9a369c951e584dbc187ac37ac4df"
+        "size": 10383577,
+        "sha256": "4bc9a86fd11f93ce06b5248cfe7ff6f156bbdd318c22a67398ef179c00378e5d"
       },
       {
         "id": 11,

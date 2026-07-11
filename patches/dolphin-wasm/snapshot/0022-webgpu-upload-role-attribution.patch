@@ -1,0 +1,166 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 1ff313d4be..2518723698 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -438,7 +438,8 @@ u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
+   return id;
+ }
+ 
+-bool WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len)
++bool WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len,
++                                           BufferUploadRole role)
+ {
+   if (!m_header || id == 0 || src_heap_ptr == 0 || len == 0)
+   {
+@@ -451,6 +452,7 @@ bool WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_
+   rec.arg.u[1] = dst_offset;
+   rec.arg.u[2] = src_heap_ptr;
+   rec.arg.u[3] = len;
++  rec.arg.u[4] = static_cast<u32>(role);
+   if (!Push(rec))
+   {
+     RollbackLastUpload(src_heap_ptr, len);
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index b22bb476d5..69569b8558 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -64,7 +64,7 @@ enum class CmdOp : u32
+   // Resource creation / upload.
+   //   CreateBuffer:   u0=id u1=size u2=usageFlags
+   CreateBuffer = 5,
+-  //   UploadBuffer:   u0=id u1=dstOffset u2=srcHeapPtr u3=len
++  //   UploadBuffer:   u0=id u1=dstOffset u2=srcHeapPtr u3=len u4=BufferUploadRole
+   //   (srcHeapPtr is an absolute wasm-heap offset into the upload
+   //   arena; the consumer queue.writeBuffers straight from there.)
+   UploadBuffer = 6,
+@@ -123,6 +123,20 @@ enum class CmdOp : u32
+   BlitTexture = 24,
+ };
+ 
++// Stable producer attribution for UploadBuffer records. The value is carried
++// in a previously unused payload word, so old consumers ignore it and
++// zero-initialized records from old producers classify as Unknown.
++enum class BufferUploadRole : u32
++{
++  Unknown = 0,
++  Ubo = 1,
++  Utility = 2,
++  Vertex = 3,
++  Index = 4,
++  TextureAdjacent = 5,
++  Count = 6,
++};
++
+ // Fixed-size record: opcode + 7 payload words (mix of f32/u32 read
+ // per-opcode). 32 bytes keeps slots cache-friendly and the ring
+ // index arithmetic trivial. Variable-length payloads (shader source,
+@@ -219,7 +233,8 @@ public:
+   u32 UploadAlloc(const void* data, size_t len, u32 align = 4);
+ 
+   u32 PushCreateBuffer(u32 size, u32 usage_flags);
+-  bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len);
++  bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len,
++                        BufferUploadRole role);
+   u32 PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 usage_flags, u32 layers = 1);
+   bool PushUploadTexture(u32 id, u32 src_heap_ptr, u32 bytes_per_row, u32 w, u32 h,
+                          u32 mip_level = 0, u32 layer = 0);
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index ced9eeb3d3..2a37096900 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1094,7 +1094,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   {
+     m_vs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
+-                   AllocUboSlice(&vsm.constants, sizeof(vsm.constants));
++                   AllocUboSlice(&vsm.constants, sizeof(vsm.constants), BufferUploadRole::Ubo);
+     if (ubo_cache_enabled && m_vs_off == kUboOffNone)
+       return false;
+     m_vs_publication_serial =
+@@ -1130,7 +1130,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   {
+     m_ps_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
+-                   AllocUboSlice(&psm.constants, sizeof(psm.constants));
++                   AllocUboSlice(&psm.constants, sizeof(psm.constants), BufferUploadRole::Ubo);
+     if (ubo_cache_enabled && m_ps_off == kUboOffNone)
+       return false;
+     m_ps_publication_serial =
+@@ -1192,7 +1192,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   {
+     m_gs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
+-                   AllocUboSlice(&gsm.constants, sizeof(gsm.constants));
++                   AllocUboSlice(&gsm.constants, sizeof(gsm.constants), BufferUploadRole::Ubo);
+     if (ubo_cache_enabled && m_gs_off == kUboOffNone)
+       return false;
+     m_gs_publication_serial =
+@@ -1532,13 +1532,13 @@ u32 WebGPUGfx::AcquireUboSlice(UboClass ubo_class, const void* data, u32 size)
+     return entry.offset;
+   }
+ 
+-  const u32 offset = AllocUboSlice(data, size);
++  const u32 offset = AllocUboSlice(data, size, BufferUploadRole::Ubo);
+   if (offset != kUboOffNone)
+     StoreUboSlice(ubo_class, data, size, offset, m_last_ubo_slice_serial);
+   return offset;
+ }
+ 
+-u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size)
++u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size, BufferUploadRole role)
+ {
+   if (m_ubo_ring == 0 || size == 0 || size > kUboSliceStride)
+   {
+@@ -1560,7 +1560,7 @@ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size)
+       InvalidateUboSlices();
+     return kUboOffNone;
+   }
+-  if (!m_cmd_stream.PushUploadBuffer(m_ubo_ring, off, src, size))
++  if (!m_cmd_stream.PushUploadBuffer(m_ubo_ring, off, src, size, role))
+   {
+     if (m_ubo_cache_active)
+       InvalidateUboSlices();
+@@ -1580,7 +1580,7 @@ void WebGPUGfx::UploadUtilityUniforms(const void* data, u32 size)
+   // PrepareDrawResources would otherwise invalidate the just-written offset
+   // and clear m_util_uniform_mode before the utility draw can bind it.
+   RefreshUboCacheState();
+-  const u32 off = AllocUboSlice(data, size);
++  const u32 off = AllocUboSlice(data, size, BufferUploadRole::Utility);
+   if (off == kUboOffNone)
+     return;
+   // The next recorded draw is a utility draw — group0/binding0's
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 0329a08e8a..1a825f3367 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -187,7 +187,7 @@ private:
+     Geometry = 2,
+     Count = 3
+   };
+-  u32 AllocUboSlice(const void* data, u32 size);
++  u32 AllocUboSlice(const void* data, u32 size, BufferUploadRole role);
+   u32 AcquireUboSlice(UboClass ubo_class, const void* data, u32 size);
+   bool RefreshUboCacheState();
+   bool IsUboSliceLive(u64 publication_serial) const;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index 5ed74ef2a6..eb5c3dc695 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -100,13 +100,15 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   if (vbytes != 0)
+   {
+     const u32 src = cs.UploadAlloc(m_base_buffer_pointer, vbytes, 4);
+-    if (src == 0 || !cs.PushUploadBuffer(m_vertex_buffer_id, voff, src, vbytes))
++    if (src == 0 ||
++        !cs.PushUploadBuffer(m_vertex_buffer_id, voff, src, vbytes, BufferUploadRole::Vertex))
+       return;
+   }
+   if (ibytes != 0)
+   {
+     const u32 src = cs.UploadAlloc(m_cpu_index_buffer.data(), ibytes, 4);
+-    if (src == 0 || !cs.PushUploadBuffer(m_index_buffer_id, ioff, src, ibytes))
++    if (src == 0 ||
++        !cs.PushUploadBuffer(m_index_buffer_id, ioff, src, ibytes, BufferUploadRole::Index))
+       return;
+   }
+ 

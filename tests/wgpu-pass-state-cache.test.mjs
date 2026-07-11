@@ -364,7 +364,9 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityEnd = gfxSource.indexOf("void WebGPUGfx::Draw(", utilityStart);
   const utilitySource = gfxSource.slice(utilityStart, utilityEnd);
   const utilityRefresh = utilitySource.indexOf("RefreshUboCacheState();");
-  const utilityAlloc = utilitySource.indexOf("AllocUboSlice(data, size)");
+  const utilityAlloc = utilitySource.indexOf(
+    "AllocUboSlice(data, size, BufferUploadRole::Utility)"
+  );
   const utilityArm = utilitySource.indexOf("m_util_uniform_mode = true");
   assert.ok(
     utilityStart >= 0 && utilityEnd > utilityStart &&

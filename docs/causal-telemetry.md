@@ -2,13 +2,17 @@
 
 `?metrics=1` exposes `window.__causalTelemetry` and includes the same object in
 `window.__lastFrameInfo.causalTelemetry`. The object has
-`schemaVersion: 2`; consumers must reject unknown versions rather than guessing
+`schemaVersion: 3`; consumers must reject unknown versions rather than guessing
 at field meanings. Existing `ppcWasmHelperStats` and `frameProfileStats`
 strings remain available for compatibility.
 
-Schema v2 adds metrics-gated software-raster phase and sampled stale-frame
-fields. See [Software raster phase profiling](software-raster-profiling.md) for
-sampling semantics and the required parity-rebuild handoff.
+Schema v2 added metrics-gated software-raster phase and sampled stale-frame
+fields. Schema v3 adds producer-tagged WGPU upload roles, fixed payload-size
+buckets, pass-associated upload-window high-water marks, and verified-save
+upload-timeout deltas. See
+[Software raster phase profiling](software-raster-profiling.md) for raster
+sampling semantics and [the WGPU upload coalescing plan](wgpu-upload-coalescing-plan.md)
+for the upload attribution contract.
 
 The performance gate writes the complete object to `samples.json` and each
 `sample` event in `events.jsonl`. `samples.csv` contains the JSON object plus
@@ -23,7 +27,7 @@ schema.
 | `core` | frame, live worker-observed ticks/PC, tick rate, and CPU-thread after-load checkpoint generation/ticks/PC |
 | `softwareRaster` | source XFB identity/timing, software encode/convert/copy, sampled traversal/TEV/texture phases, FIFO age/bytes, XFB and frame generation, and sampled stale-frame reuse |
 | `presentation` | backend, pacing and fresh-frame route, immediate/queued/tick-repaint counts, queue current/high-water depth and last/average/max age, lag, underruns/drops, interval and FPS fields, structured JS stage windows, and opt-in asynchronous GPU-completion samples |
-| `webgpu` | command-ring registration, drain/empty/processed counts, drain duration, backlog/high-water, atomic pass/drop/abort/oversize/upload-timeout counters, producer state-suppression counts, deferrals, and errors |
+| `webgpu` | command-ring registration, drain/empty/processed counts, drain duration, backlog/high-water, atomic pass/drop/abort/oversize/upload-timeout counters, verified-load timeout deltas, producer state-suppression counts, fixed upload-role/size attribution, pass-associated upload-window pressure, deferrals, and errors |
 | `workerTraffic` | request/one-way/response/notification counts, actual transferable bytes, estimated payload bytes, and per-type counts |
 | `audio` | worker mix duration/count/frames, pump gaps/skips, mix round-trip, observable schedule underrun/overrun, lead, and drift |
 | `input` | seqlock SAB/message generations, duplicate/stale/retry counts, worker applies, transport age, legacy next-distinct-frame bounds, and the exact-generation deterministic marker |
@@ -76,7 +80,7 @@ diagnosis. Older artifacts do not expose these functions; their generation is
 zero and validation retains the legacy behavior. Do not loosen the fixed
 Kirby-vs-Link checkpoint to hide a worker-thread tick discrepancy.
 
-The final `f7ce5672…` core and ABI manifest include these exports. Any future
+The current `a239ee47…` core and ABI manifest include these exports. Any future
 source-only change still requires a rebuild and ABI/provenance refresh before
 qualification.
 

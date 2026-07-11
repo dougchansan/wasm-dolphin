@@ -1,4 +1,6 @@
-export const CAUSAL_TELEMETRY_SCHEMA_VERSION = 2;
+import { createWgpuUploadAttribution } from "./wgpu-upload-attribution.js";
+
+export const CAUSAL_TELEMETRY_SCHEMA_VERSION = 3;
 
 const finite = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 const nullable = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
@@ -138,6 +140,11 @@ export function createCausalTelemetry(overrides = {}) {
         batchAbortCount: 0,
         batchOversizeCount: 0,
         uploadTimeoutCount: 0,
+        uploadTimeoutBoundaryVerified: false,
+        uploadTimeoutCountAtVerifiedLoad: 0,
+        uploadTimeoutCountBeforeVerifiedLoad: 0,
+        uploadTimeoutCountAfterVerifiedLoad: 0,
+        uploadAttribution: createWgpuUploadAttribution().snapshot({ enabled: false }),
       },
       workerTraffic: {
         mainToWorker: emptyTrafficDirection(),
@@ -498,6 +505,11 @@ export function flattenCausalTelemetry(value) {
     emptyInputPhotonOverheadTelemetry(),
     telemetry.input?.marker?.overhead ?? {}
   );
+  const uploadAttribution = deepMerge(
+    createWgpuUploadAttribution().snapshot({ enabled: false }),
+    telemetry.webgpu.uploadAttribution ?? {}
+  );
+  const uploadPassAssociation = uploadAttribution.passAssociation;
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -601,6 +613,36 @@ export function flattenCausalTelemetry(value) {
     causalWgpuBatchAbortCount: telemetry.webgpu.batchAbortCount,
     causalWgpuBatchOversizeCount: telemetry.webgpu.batchOversizeCount,
     causalWgpuUploadTimeoutCount: telemetry.webgpu.uploadTimeoutCount,
+    causalWgpuUploadTimeoutBoundaryVerified:
+      telemetry.webgpu.uploadTimeoutBoundaryVerified,
+    causalWgpuUploadTimeoutCountAtVerifiedLoad:
+      telemetry.webgpu.uploadTimeoutCountAtVerifiedLoad,
+    causalWgpuUploadTimeoutCountBeforeVerifiedLoad:
+      telemetry.webgpu.uploadTimeoutCountBeforeVerifiedLoad,
+    causalWgpuUploadTimeoutCountAfterVerifiedLoad:
+      telemetry.webgpu.uploadTimeoutCountAfterVerifiedLoad,
+    causalWgpuUploadAttributionSchema: uploadAttribution.schema,
+    causalWgpuUploadRoleOrder: uploadAttribution.roleOrder,
+    causalWgpuUploadSizeBucketLabels: uploadAttribution.sizeBucketLabels,
+    causalWgpuUploadTotalCalls: uploadAttribution.totalCalls,
+    causalWgpuUploadTotalBytes: uploadAttribution.totalBytes,
+    causalWgpuUploadMaxBytes: uploadAttribution.maxBytes,
+    causalWgpuUploadCallsByRole: uploadAttribution.callsByRole,
+    causalWgpuUploadBytesByRole: uploadAttribution.bytesByRole,
+    causalWgpuUploadMaxBytesByRole: uploadAttribution.maxBytesByRole,
+    causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
+    causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
+    causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,
+    causalWgpuUploadAbortedPassCount: uploadPassAssociation.abortedPassCount,
+    causalWgpuUploadIncompletePassCount: uploadPassAssociation.incompletePassCount,
+    causalWgpuUploadCurrentWindowCalls: uploadPassAssociation.currentWindowCalls,
+    causalWgpuUploadCurrentWindowBytes: uploadPassAssociation.currentWindowBytes,
+    causalWgpuUploadMaxPassCalls: uploadPassAssociation.maxCalls,
+    causalWgpuUploadMaxPassBytes: uploadPassAssociation.maxBytes,
+    causalWgpuUploadMaxDestinationSpanBytes:
+      uploadPassAssociation.maxDestinationSpanBytes,
+    causalWgpuUploadMaxDestinationSpanBytesByRole:
+      uploadPassAssociation.maxDestinationSpanBytesByRole,
     causalWorkerRequestCount: telemetry.workerTraffic.mainToWorker.requestCount,
     causalWorkerPostCount: telemetry.workerTraffic.mainToWorker.oneWayCount,
     causalWorkerTransferOutBytes: telemetry.workerTraffic.mainToWorker.transferBytes,

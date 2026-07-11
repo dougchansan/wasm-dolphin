@@ -550,6 +550,33 @@ test("worker reads the first completed EFB pass before later presents can clear 
   assert.match(worker, /recordFirstEfbPassReadback\(\{[\s\S]*?nonzeroColorBytes/);
 });
 
+test("worker publishes upload-role, pass-window, and verified-load attribution", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(worker, /createWgpuUploadAttribution/);
+  assert.match(worker, /const uploadRole = u32\[recWord \+ 5\]/);
+  assert.match(
+    worker,
+    /wgpuUploadAttribution\.recordUpload\([\s\S]*?uploadRole,[\s\S]*?uploadBytes/
+  );
+  assert.match(
+    worker,
+    /wgpuUploadAttribution\.recordUpload\([\s\S]*?WGPU_UPLOAD_ROLE\.TEXTURE_ADJACENT/
+  );
+  assert.match(worker, /wgpuUploadAttribution\.recordPassBegin\(\)/);
+  assert.match(worker, /wgpuUploadAttribution\.recordPassEnd\(\)/);
+  assert.match(worker, /uploadTimeoutCountBeforeLoad/);
+  assert.match(worker, /uploadTimeoutCountAfterVerifiedLoad/);
+  assert.match(worker, /wgpuUploadTimeoutBoundary/);
+  assert.match(
+    worker,
+    /wgpuUploadAttribution: wgpuUploadAttribution\.snapshot\(\{ enabled: causalMetricsEnabled \}\)/
+  );
+});
+
 function incrementingClock() {
   let value = 0;
   return () => ++value;

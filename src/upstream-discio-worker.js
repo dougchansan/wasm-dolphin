@@ -59,6 +59,10 @@ import {
   createWgpuPassStateCache,
   parseWgpuProducerStateStats
 } from "./wgpu-pass-state-cache.js";
+import {
+  WGPU_UPLOAD_ROLE,
+  createWgpuUploadAttribution
+} from "./wgpu-upload-attribution.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -151,6 +155,7 @@ let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
 let wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
+let wgpuUploadAttribution = createWgpuUploadAttribution();
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -456,6 +461,7 @@ function rendererDiagnosticsPayload() {
     workerTransport: workerTransportTelemetry(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
+    wgpuUploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
   };
 }
 
@@ -518,6 +524,7 @@ async function handleMessage(type, payload) {
       metricsDiagnostics = createMetricsDiagnostics();
       metricsDiagnostics.enabled = collectMetrics;
       wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
+      wgpuUploadAttribution = createWgpuUploadAttribution();
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
         enabled: gpuCompletionDiagnostics
@@ -684,6 +691,8 @@ async function handleMessage(type, payload) {
           return { loaded: false, error: `FS.writeFile: ${e?.message || e}` };
         }
       }
+      collectWebGpuProducerStateStats();
+      const uploadTimeoutCountBeforeLoad = webGpuCausalStats.uploadTimeoutCount;
       const loadRingBoundary = (wgpuReplayClassifier || wgpuLoadEpochFence)
         ? summarizeCurrentWgpuRing({ maxRecords: webGpuCmdRing?.capacity ?? 4096 })
         : null;
@@ -719,6 +728,18 @@ async function handleMessage(type, payload) {
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      collectWebGpuProducerStateStats();
+      const uploadTimeoutCountImmediatelyAfterLoad = webGpuCausalStats.uploadTimeoutCount;
+      const uploadTimeoutBoundaryVerified = rc === 1 && collectMetrics;
+      if (uploadTimeoutBoundaryVerified) {
+        webGpuCausalStats.uploadTimeoutBoundaryVerified = true;
+        webGpuCausalStats.uploadTimeoutCountAtVerifiedLoad = uploadTimeoutCountBeforeLoad;
+        webGpuCausalStats.uploadTimeoutCountBeforeVerifiedLoad = uploadTimeoutCountBeforeLoad;
+        webGpuCausalStats.uploadTimeoutCountAfterVerifiedLoad = Math.max(
+          0,
+          uploadTimeoutCountImmediatelyAfterLoad - uploadTimeoutCountBeforeLoad
+        );
+      }
       // The fixed battle state is the measurement boundary. Clear boot/menu
       // tuples after the core's existing post-load settle, then let the
       // harness's later first sample act as the battle-settle baseline.
@@ -739,6 +760,16 @@ async function handleMessage(type, payload) {
         `before='${beforeState}' after='${afterState}' ` +
         `frame=${api?.getFrame?.() ?? -1}`);
       return { loaded: rc === 1, rc, beforeState, afterState,
+               wgpuUploadTimeoutBoundary: {
+                 enabled: collectMetrics,
+                 verified: uploadTimeoutBoundaryVerified,
+                 beforeLoad: uploadTimeoutCountBeforeLoad,
+                 immediatelyAfterLoad: uploadTimeoutCountImmediatelyAfterLoad,
+                 afterLoadDelta: Math.max(
+                   0,
+                   uploadTimeoutCountImmediatelyAfterLoad - uploadTimeoutCountBeforeLoad
+                 ),
+               },
                ...framePayload() };
     }
     case "saveStateFile": {
@@ -1518,6 +1549,12 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.batchAbortCount = parsed.batchAbortCount;
     webGpuCausalStats.batchOversizeCount = parsed.batchOversizeCount;
     webGpuCausalStats.uploadTimeoutCount = parsed.uploadTimeoutCount;
+    if (webGpuCausalStats.uploadTimeoutBoundaryVerified) {
+      webGpuCausalStats.uploadTimeoutCountAfterVerifiedLoad = Math.max(
+        0,
+        parsed.uploadTimeoutCount - webGpuCausalStats.uploadTimeoutCountAtVerifiedLoad
+      );
+    }
     webGpuCausalStats.producerUboCacheEnabled = parsed.uboCacheEnabled;
     webGpuCausalStats.producerUboCacheMetricsEnabled = parsed.uboCacheMetricsEnabled;
     webGpuCausalStats.producerUboCacheClassOrder = parsed.uboCacheClassOrder;
@@ -1885,6 +1922,7 @@ function maybeCreateCausalTelemetry(videoStats) {
     webgpu: {
       ...webGpuCausalStats,
       replayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
+      uploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
@@ -5482,6 +5520,10 @@ const webGpuCausalStats = {
   batchAbortCount: 0,
   batchOversizeCount: 0,
   uploadTimeoutCount: 0,
+  uploadTimeoutBoundaryVerified: false,
+  uploadTimeoutCountAtVerifiedLoad: 0,
+  uploadTimeoutCountBeforeVerifiedLoad: 0,
+  uploadTimeoutCountAfterVerifiedLoad: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -5572,6 +5614,7 @@ function drainWebGpuCmdRing() {
     }
     const discardedRecords = (discardTo - read) >>> 0;
     if (discardedRecords > 0) {
+      if (causalMetricsEnabled) wgpuUploadAttribution.recordIncompletePass();
       publishWgpuReadIndex(ring, discardTo);
       wgpuReplayClassifier?.recordLoadFence({
         discardedRecords,
@@ -5869,6 +5912,13 @@ function drainWebGpuCmdRing() {
       }
       try { pass.end(); } catch (e) {}
       wgpuReplayClassifier?.recordPassEnd({ reason, recordIndex });
+      if (causalMetricsEnabled) {
+        if (reason === "explicit" || reason === "submit-present") {
+          wgpuUploadAttribution.recordPassEnd();
+        } else {
+          wgpuUploadAttribution.recordIncompletePass();
+        }
+      }
       pass = null;
       if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset(reason);
       flushPassDiag();
@@ -6013,6 +6063,7 @@ function drainWebGpuCmdRing() {
           const bufferId = u32[recWord + 1];
           const srcP = u32[recWord + 3];
           const uploadBytes = u32[recWord + 4];
+          const uploadRole = u32[recWord + 5];
           const stagedUpload = ring.stagedUploads?.get(read) ?? null;
           if (stagedUpload) {
             ring.stagedUploads.delete(read);
@@ -6175,6 +6226,11 @@ function drainWebGpuCmdRing() {
               }
               q.writeBuffer(buf, u32[recWord + 2] & ~3, uploadPayload);
               if (causalMetricsEnabled) {
+                wgpuUploadAttribution.recordUpload(
+                  uploadRole,
+                  uploadBytes,
+                  u32[recWord + 2] & ~3
+                );
                 wgpuReplayOpMetrics.recordQueueUpload(
                   WGPU_CMD_OP_UPLOAD_BUFFER,
                   uploadPayload.byteLength
@@ -6261,6 +6317,11 @@ function drainWebGpuCmdRing() {
                 { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
                 { width: w, height: h, depthOrArrayLayers: 1 });
               if (causalMetricsEnabled) {
+                wgpuUploadAttribution.recordUpload(
+                  WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT,
+                  uploadBytes,
+                  0
+                );
                 wgpuReplayOpMetrics.recordQueueUpload(
                   WGPU_CMD_OP_UPLOAD_TEXTURE,
                   uploadPayload.byteLength
@@ -6423,6 +6484,7 @@ function drainWebGpuCmdRing() {
             desc.depthStencilAttachment = ds;
           }
           pass = enc.beginRenderPass(desc);
+          if (causalMetricsEnabled) wgpuUploadAttribution.recordPassBegin();
           wgpuReplayClassifier?.recordPassBegin({ framebufferId: fbId, recordIndex: read });
           if (depthId && loadOp === "clear") {
             wgpuReplayClassifier?.recordEfbClear({
