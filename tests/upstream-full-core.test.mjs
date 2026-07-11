@@ -187,6 +187,26 @@ test("upstream full core executes native WebGPU geometry parity and rollback smo
   assert.equal(lastError(), "ok");
 });
 
+test("upstream full core executes native WebGPU dense UBO parity and rollback smokes", async (t) => {
+  if (!existsSync(coreJs) || !existsSync(coreWasm)) {
+    t.skip("upstream full core has not been built");
+    return;
+  }
+
+  const { default: createDolphinCore } = await import(coreJs);
+  const module = await createDolphinCore({
+    wasmBinary: readFileSync(coreWasm),
+    noInitialRun: true
+  });
+
+  const runParity = module.cwrap("RunWebGpuDenseUboPacketSmoke", "number", []);
+  const runRollback = module.cwrap("RunWebGpuDenseUboRollbackSmoke", "number", []);
+  const lastError = module.cwrap("GetWebGpuDenseUboSmokeError", "string", []);
+  assert.equal(runParity(), 0, lastError());
+  assert.equal(runRollback(), 0, lastError());
+  assert.equal(lastError(), "ok");
+});
+
 test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
   if (!existsSync(coreJs) || !existsSync(coreWasm)) {
     t.skip("upstream full core has not been built");
