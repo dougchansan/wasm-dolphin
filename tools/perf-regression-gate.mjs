@@ -818,6 +818,17 @@ function summarizeScenario(
       );
     }
   }
+  const requestedUboPack = scenario.params?.wgpuubopack;
+  if (requestedUboPack != null) {
+    const expectedUboPack = String(requestedUboPack) === "1";
+    const activeUboPack = final.causalTelemetry?.webgpu?.uboPackEnabled;
+    if (activeUboPack !== expectedUboPack) {
+      failures.push(
+        `WGPU UBO pack mismatch: requested=${expectedUboPack ? 1 : 0} ` +
+        `active=${activeUboPack == null ? "unavailable" : activeUboPack ? 1 : 0}`
+      );
+    }
+  }
   if (!String(final.mountNote || "").includes("Dolphin")) invalidReasons.push("Dolphin did not mount");
   if (consoleLines.some((line) => /\[probe-error\]/i.test(line)) && !invalidReasons.length) {
     invalidReasons.push("probe error was recorded");
