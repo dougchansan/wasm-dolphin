@@ -25,11 +25,14 @@ software rasterization is `fastsw=0`.
 The true WebGPU hardware renderer is selected with `video=wgpu`. It remains
 experimental and is not the recommended path. On the current validation
 machine it now reaches the direct-loaded Kirby-versus-Link battle, presents a
-changing game image, and an immediate post-pass readback proves that the first
-completed EFB pass mutates its target. It is still far from full speed: two
-JIT-off fixed-battle runs with bounded replay averaged about 68% game speed and
-30 submitted presents/s. Results remain GPU- and machine-dependent. Wii and
-broader GameCube compatibility are not the current focus.
+changing game image, and produces nonzero XFB/backbuffer readbacks. The first
+one-draw post-load EFB pass correctly restores the save's all-zero EFB; it is
+not the first gameplay draw and should not be forced to mutate that data. The
+path is still far from full speed. A clean fixed-work screen measured roughly
+49-52% throughput with diagnostics and exposed 594k-820k buffer-upload calls
+plus three upload-timeout/pass-abort events. Results remain GPU- and
+machine-dependent. Wii and broader GameCube compatibility are not the current
+focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |
@@ -43,4 +46,5 @@ broader GameCube compatibility are not the current focus.
 Record machine-specific evidence in
 [the latest Melee evidence package](perf-results/melee-performance-evidence-2026-07-10.md)
 and [software-raster phase result](perf-results/melee-software-raster-phases-2026-07-10.md)
+and [final optimization evidence](perf-results/melee-final-optimization-evidence-2026-07-10.md)
 rather than treating these status statements as universal benchmark results.

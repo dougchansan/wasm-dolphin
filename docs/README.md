@@ -21,6 +21,14 @@
 - [Performance audit (2026-07-10)](performance-audit-2026-07-10.md) — current
   bottleneck classification, five-priority follow-up, decisions, and rollback
   paths.
+- [Final optimization evidence](perf-results/melee-final-optimization-evidence-2026-07-10.md) —
+  clean TEV confirmation, rejected WGPU UBO screen, strict replay failures,
+  and the measured hardware upload bottleneck.
+- [Machine-readable final optimization evidence](perf-results/melee-final-optimization-evidence-2026-07-10.json) —
+  experiment identity, primary statistics, validation status, and decisions.
+- [WGPU upload coalescing plan](wgpu-upload-coalescing-plan.md) — scoped
+  geometry-packing refactor, lifetime invariants, tests, promotion gate, and
+  rollback.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
   CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
   deterministic 32×32 input-marker results.
@@ -46,7 +54,8 @@
 - [WebGPU Naga bridge](webgpu-naga-bridge.md) — SPIR-V-to-WGSL ABI, ownership,
   failure handling, and patched C++ integration.
 - [True WebGPU replay classifier](wgpu-real-classifier.md) — bounded pass,
-  resource, EFB-mutation, draw, and present diagnostics for `video=wgpu`.
+  resource, pass-local EFB output, draw, and present diagnostics for
+  `video=wgpu`.
 - [Historical first-EFB WGPU evidence](perf-results/wgpu-first-efb-2026-07-10.json) —
   older present-time draw state and nonzero observations retained for context.
 - [WGPU replay epoch evidence](perf-results/wgpu-replay-epoch-2026-07-10.json) —

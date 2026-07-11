@@ -112,7 +112,8 @@ before/after mutation test.
 
 Consequences:
 
-- A correct draw that writes zeros to a zero target is labeled no mutation.
+- A correct draw that writes zeros to a zero target receives the legacy
+  no-mutation classifier label.
 - A nonzero post-pass target proves nonzero output, but without a baseline it
   does not by itself prove which draw changed a byte.
 - The older zero-error 120-draw smoke remains useful evidence that the WGPU

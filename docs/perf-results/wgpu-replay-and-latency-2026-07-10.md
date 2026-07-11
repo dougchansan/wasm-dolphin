@@ -16,7 +16,7 @@ Kirby-versus-Link battle save; none stopped at character select.
 The matching machine-readable record is
 [`wgpu-replay-and-latency-2026-07-10.json`](wgpu-replay-and-latency-2026-07-10.json).
 
-## EFB mutation classification
+## Historical nonzero EFB output
 
 The previous classifier read the EFB at a later present boundary, where a
 subsequent clear could erase earlier work. A new opt-in readback now runs
@@ -24,10 +24,14 @@ immediately after the first completed EFB pass containing a draw.
 
 That pass targeted texture 14, contained 108 draws, and returned 182,949
 nonzero color bytes out of 1,351,680 sampled bytes (`max=255`). The classifier
-reported `FIRST_EFB_PASS_MUTATED`. This proves that the completed hardware EFB
-pass mutates its target. It does not assign the mutation to one individual
-draw. Raw output:
+reported the legacy code `FIRST_EFB_PASS_MUTATED`. Without a retained pre-pass
+baseline, this proves nonzero output after the completed hardware pass, not a
+before/after mutation. It does not assign output to one individual draw. Raw output:
 `.omx/next/candidate-c-wgpu-first-efb-pass-1`.
+
+The later direct-save classifier observes an earlier one-draw save-restore
+pass whose source and output are correctly all zero. See
+[the post-load restore classification](wgpu-post-load-restore-classification-2026-07-10.md).
 
 The visible battle also rendered correctly after the legacy tick/show-image
 paths stopped overwriting the WGPU-owned canvas. The earlier green/checker
@@ -126,8 +130,9 @@ run, but did not improve cadence; median paired game-speed and presentation
 changes were −0.77 points and −0.47 FPS. GPU p95 also worsened in two pairs.
 `wgpustatecache` therefore remains default-off.
 
-Five arms sampled a legitimate one-draw post-load EFB pass with no mutation,
-so this six-run set misses the strict first-pass classifier gate and is not a
-performance promotion. The separate corrected smoke and third cache-on arm
-did prove completed-pass mutation. Full run records are in
-[the next-program package](melee-next-program-2026-07-10.md).
+Five arms sampled a legitimate one-draw post-load EFB pass with all-zero
+output, so this six-run set misses the strict first-pass classifier gate and
+is not a performance promotion. The separate corrected smoke and third
+cache-on arm produced nonzero completed-pass output. No arm retained a
+pre-pass baseline, so neither result is before/after mutation proof. Full run
+records are in [the next-program package](melee-next-program-2026-07-10.md).

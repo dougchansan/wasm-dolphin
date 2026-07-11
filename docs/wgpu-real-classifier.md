@@ -24,7 +24,7 @@ checkpoints:
 
 1. pass atomicity, including a pass forcibly ended at a drain boundary;
 2. missing pipelines, bind groups, buffers, textures, or samplers;
-3. EFB clear, real draw, and readback mutation counts;
+3. EFB clear, real draw, and nonzero-readback observations;
 4. the first EFB draw and first indexed EFB draw, including pipeline, bind
    groups, vertex/index buffers, viewport, scissor, and draw arguments;
 5. an immediate readback after the first completed EFB pass containing a draw,
@@ -49,21 +49,22 @@ protocol must own that release point.
 Present-time EFB readbacks are encoded at `SUBMIT_PRESENT`. A later clear can
 therefore legitimately precede those samples. The classifier now also performs
 one opt-in copy immediately after the first completed EFB pass that contains a
-draw. That pass-local sample proves whether the completed pass mutated its
-target, but does not attribute the mutation to one individual draw.
+draw. That pass-local sample proves only whether the output contains nonzero
+bytes. Without a pre-pass baseline and source comparison, it does not prove
+that the pass mutated the target.
 
 | Classifier code | Meaning |
 | --- | --- |
 | `PASS_SPLIT_AT_DRAIN` | The consumer ended an open render pass because its current ring snapshot ended. |
 | `MISSING_RESOURCES` | At least one replay record referenced a resource absent from the consumer maps. |
-| `EFB_DRAW_NO_MUTATION` | A real EFB draw executed, but the sampled EFB readback remained all zero. |
+| `EFB_DRAW_NO_MUTATION` | Legacy name: a real EFB draw executed, but the sampled EFB readback remained all zero; this is not a before/after mutation test. |
 | `WAITING_FOR_DRAW` | No fully bound real draw has executed yet. |
 | `WAITING_FOR_EFB_READBACK` | A draw executed, but the bounded EFB readback checkpoint has not completed. |
 | `WAITING_FOR_POST_DRAW_EFB_READBACK` | The available EFB sample predates the observed draws. |
 | `WAITING_FOR_FIRST_EFB_PASS_READBACK` | The first completed EFB-pass copy is submitted but not mapped. |
-| `FIRST_EFB_PASS_MUTATED` | The immediate completed-pass sample contains nonzero color bytes. |
-| `FIRST_EFB_PASS_NO_MUTATION` | The immediate completed-pass sample contains no color bytes. |
-| `FIRST_EFB_PASS_NO_MUTATION_LATER_PRESENT_MUTATION` | The first pass was zero but a later present-time EFB sample changed. |
+| `FIRST_EFB_PASS_MUTATED` | Legacy name: the immediate completed-pass sample contains nonzero color bytes. |
+| `FIRST_EFB_PASS_NO_MUTATION` | Legacy name: the immediate completed-pass sample contains no color bytes. |
+| `FIRST_EFB_PASS_NO_MUTATION_LATER_PRESENT_MUTATION` | Legacy name: the first pass was zero but a later present-time EFB sample was nonzero. |
 | `FIRST_EFB_PASS_READBACK_ERROR` | The immediate copy, submit, or map failed. |
 | `PASS` | A nonzero EFB readback and a completed present submission were both observed. |
 
@@ -94,14 +95,14 @@ and show-image listeners together with the optional JIT cache. That coupling is
 removed: renderer transport always installs, while cache work remains
 optional.
 
-The later upload-watermark rebuild changed the rendering diagnosis. A headed
-run against the direct-loaded Kirby/Link battle sampled the first completed EFB
-pass immediately: texture 14 contained 182,949 nonzero color bytes out of
-1,351,680. The latest final smoke observed that result after 120 draws and the classifier reported
-`FIRST_EFB_PASS_MUTATED`. The visible canvas also showed the changing battle
-once legacy tick/show-image repaint paths stopped overwriting the WGPU-owned
-canvas. Earlier zero-at-present samples were therefore insufficient to claim a
-permanent shader/draw failure.
+The later upload-watermark rebuild changed the rendering diagnosis. An older
+headed run sampled 182,949 nonzero color bytes after a completed 120-draw EFB
+pass, and the canvas showed the changing battle once legacy repaint paths
+stopped overwriting the WGPU-owned canvas. The current direct-save run starts
+with a different one-draw utility pass: Dolphin restores the save's all-zero
+EFB color/depth, so a zero result is correct. The classifier's historical
+`MUTATED` names describe nonzero output, not a before/after proof. See
+[the post-load restore classification](perf-results/wgpu-post-load-restore-classification-2026-07-10.md).
 
 Historical Day-28 shader/UV dumps and per-draw EFB maps are now default-off;
 they were still running in the replay hot path after their investigations had
@@ -112,7 +113,8 @@ stable gameplay-performance gain.
 
 The classifier is the dynamic check for that condition. It does not establish
 that every black frame has the same cause: after pass atomicity is clean, use
-the missing-resource and EFB-mutation stages to identify the next failure.
+the missing-resource and pass-local nonzero-output stages to identify the next
+failure.
 
 ## Upload lifetime and replay backlog
 
@@ -147,6 +149,15 @@ Three final balanced pairs cut commands/s 39.75% and backlog high-water 38.62%,
 but did not improve game or presentation cadence. The cache therefore remains
 default-off. This is a record-volume diagnostic, not a performance promotion.
 
+The later clean UBO-cache screen exposed the remaining cost more directly:
+593,660-819,806 buffer uploads and 833-1,161 MiB per eight emulated seconds.
+Upload replay consumed 4.47-5.28 seconds, and three of eight runs exhausted the
+watermark wait and aborted one pass. `wgpuubocache=1` suppressed 219-269 MiB
+per cache-on run but produced contradictory block effects, so it also remains
+default-off. The next renderer branch should combine vertex/index streaming
+uploads under the lifetime invariants in
+[the upload coalescing plan](wgpu-upload-coalescing-plan.md).
+
 Machine-readable current evidence is in
 `perf-results/wgpu-replay-and-latency-2026-07-10.json`. The older
 `wgpu-first-efb` and `wgpu-replay-epoch` files remain historical diagnostics,
@@ -162,6 +173,7 @@ not current status.
 | `wgpuloadfence=1` | Discard a pre-load incomplete pass through its first end marker | Off |
 | `wgpupump=0` | Disable frequent replay polling and the 16,384-record credit window | On for `video=wgpu` |
 | `wgpustatecache=1` | Suppress exact successfully-published stable state records | Off |
+| `wgpuubocache=1` | Reuse exact live producer UBO slices | Off |
 | `wgpudetached=1` | Send GPU-completed worker-canvas bitmaps to the main canvas | Off |
 
 ## Validation discipline

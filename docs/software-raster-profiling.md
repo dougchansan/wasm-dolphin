@@ -173,7 +173,7 @@ does not prove EFB/XFB or browser-frame parity, and no headed browser A/B has
 yet measured its performance effect. Do not claim a cadence gain until those
 runs are complete. Rollback is patch `0017`; no URL flag is introduced.
 
-## Exact TEV hot cases: parity measured, speed unproven
+## Exact TEV hot cases: parity proven, throughput result non-promotable
 
 Two headed `fastsw=1`, `metrics=1`, `ppcprof=1` captures loaded the exact
 Kirby-versus-Link save directly and used independent sparse-case seeds. Those
@@ -205,14 +205,26 @@ shadowed pixels with zero mismatches. These are same-pixel register-parity
 checks. They are not a browser performance comparison or a retained
 byte-for-byte EFB/XFB comparison.
 
-A separate dirty `speed=unlimited`, metrics-off screen was internally
-inconsistent: its two balanced block effects were -0.0966% and +32.3755%.
-The timed windows advanced different emulated horizons, the bootstrap interval
-crossed zero, and the result was neither statistically accepted nor
-qualification-eligible. No TEV speed gain is claimed. See
-[the measured TEV and CoreTiming report](perf-results/melee-tev-core-timing-evidence-2026-07-10.md)
-for run identity, raw paths, shadow counters, workload drift, and timing
-limitations.
+The earlier dirty, fixed-wall-time screen was rejected because each arm
+advanced a different emulated horizon. The replacement harness measures the
+wall time needed to complete exactly eight emulated core seconds. Its clean
+two-block screen produced a `+6.7479%` median signal, followed by a clean
+10-block confirmation whose median fixed-work throughput effect was
+`+4.9546%`, with a 95% block-bootstrap interval of
+`[+1.5631%, +9.4837%]` and permutation `p=0.0390625`.
+
+The primary comparison reached `STATISTICAL_GATE_PASS`, but the overall gate
+remained `NON_QUALIFYING` and `promotable=false`: four of 40 runs fell below
+the preregistered 50-FPS minimum presentation target. Screenshots were visibly
+correct battle frames, but different emulated endpoints are not byte-for-byte
+EFB/XFB parity. `swtevfast` therefore remains default-off. This is a
+machine-specific throughput result, not a claimed unique-visual-FPS gain or a
+default-safe optimization.
+
+See [the final optimization evidence](perf-results/melee-final-optimization-evidence-2026-07-10.md)
+for the clean comparison and
+[the TEV/CoreTiming report](perf-results/melee-tev-core-timing-evidence-2026-07-10.md)
+for exact tuple selection, shadow counters, and the rejected dirty precursor.
 
 `sampledStaleFrameRatio` is based on the existing sparse visual hash, so it is
 a classification of sampled output, not a cryptographic equality check.

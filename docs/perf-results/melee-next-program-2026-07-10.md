@@ -70,9 +70,10 @@ Raw output: `.omx/next/final-correlated-slices/software-hybrid-1/`.
 
 ## Atomic hardware-WGPU smoke
 
-The corrected final smoke proved that a real completed EFB pass mutates its
-target: 182,949 nonzero color bytes out of 1,351,680 after 120 draws. The XFB
-and backbuffer were also nonzero and 21/21 sampled canvas hashes changed.
+The corrected final smoke proved nonzero output after a real completed EFB
+pass: 182,949 nonzero color bytes out of 1,351,680 after 120 draws. It did not
+retain a pre-pass baseline and therefore does not prove before/after mutation.
+The XFB and backbuffer were also nonzero and 21/21 sampled canvas hashes changed.
 
 | Metric | Result |
 | --- | ---: |
@@ -115,11 +116,12 @@ in two of three pairs. The cache therefore remains default-off behind
 `wgpustatecache=1`.
 
 This A/B is non-qualifying for performance promotion for an additional reason:
-the opt-in classifier sampled a legitimate one-draw post-load EFB pass with no
-color mutation in five arms. A separate final smoke and the third cache-on arm
-did prove completed-pass mutation; all A/B arms had nonzero downstream XFB and
-backbuffer content. The command-volume result is useful diagnostic evidence,
-not permission to change the default.
+the opt-in classifier sampled a legitimate one-draw post-load EFB pass with
+all-zero output in five arms. A separate final smoke and the third cache-on arm
+produced nonzero completed-pass output; all A/B arms had nonzero downstream XFB
+and backbuffer content. No arm retained a pre-pass baseline, so neither the
+zero nor nonzero result is before/after mutation proof. The command-volume
+result is useful diagnostic evidence, not permission to change the default.
 
 Raw summaries: `.omx/next/final-wgpu-state-cache-ab/`.
 

@@ -184,7 +184,7 @@
       "drainTotalMs": -194.78999894857407,
       "gpuCompletionP95Ms": 21.450000017881393
     },
-    "decision": "Keep wgpustatecache default-off. Command/backlog reduction is real, but cadence did not improve and five arms missed the strict first-pass-mutation classifier gate."
+    "decision": "Keep wgpustatecache default-off. Command/backlog reduction is real, but cadence did not improve and five arms produced all-zero output at the strict first-pass classifier checkpoint. No arm retained a pre-pass baseline, so this is not before/after mutation proof."
   },
   "inputMarker32": {
     "status": "accepted-browser-canvas-diagnostic",
