@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  attemptRetainedWgpuUpload,
   createWgpuMappedStagingPool,
   submitWgpuUploadBeforeRender,
 } from "../src/wgpu-mapped-staging-pool.js";
@@ -158,7 +159,9 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     pendingUploads: 1,
     activeBatches: 0,
     bufferUploads: 1,
+    bufferUploadsCoalesced: 0,
     textureUploads: 0,
+    copyCommandsEncoded: 1,
     logicalBytes: 8,
     stagedBytes: 8,
     capacityMisses: 2,
@@ -170,6 +173,26 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     remapFailures: 0,
     invalidations: 0,
   });
+});
+
+test("coalesces adjacent copies to the same buffer without changing byte order", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 1, slotSize: 32 });
+  const destination = { name: "stream" };
+  pool.stageBuffer({
+    data: Uint8Array.of(1, 2, 3, 4), destination, destinationOffset: 8,
+  });
+  pool.stageBuffer({
+    data: Uint8Array.of(5, 6, 7, 8), destination, destinationOffset: 12,
+  });
+  const batch = pool.seal();
+  assert.equal(batch.commandBuffer.copies.length, 1);
+  assert.deepEqual(batch.commandBuffer.copies[0].slice(0, 6), [
+    "buffer", fake.buffers[0], 0, destination, 8, 8,
+  ]);
+  assert.equal(pool.snapshot().bufferUploads, 2);
+  assert.equal(pool.snapshot().bufferUploadsCoalesced, 1);
+  assert.equal(pool.snapshot().copyCommandsEncoded, 1);
 });
 
 test("submits upload before render and remaps slots only after acceptance", async () => {
@@ -251,4 +274,27 @@ test("rejects invalid copy layouts rather than corrupting adjacent destinations"
     sourceBytesPerRow: 4,
   }), /every requested row/);
   assert.equal(pool.snapshot().pendingUploads, 0);
+});
+
+test("retained ring bytes survive a capacity miss and retry byte-identically", () => {
+  const retainedBytes = Uint8Array.of(9, 7, 5, 3);
+  const stagedUploads = new Map([[41, { kind: "buffer", data: retainedBytes }]]);
+  const seen = [];
+  let attempt = 0;
+  const stage = (data) => {
+    seen.push([...data]);
+    attempt += 1;
+    return attempt === 1
+      ? { ok: false, reason: "no-capacity" }
+      : { ok: true, slot: 0 };
+  };
+
+  const first = attemptRetainedWgpuUpload({ stagedUploads, recordIndex: 41, stage });
+  assert.equal(first.accepted, false);
+  assert.equal(stagedUploads.get(41).data, retainedBytes);
+
+  const second = attemptRetainedWgpuUpload({ stagedUploads, recordIndex: 41, stage });
+  assert.equal(second.accepted, true);
+  assert.equal(stagedUploads.has(41), false);
+  assert.deepEqual(seen, [[9, 7, 5, 3], [9, 7, 5, 3]]);
 });

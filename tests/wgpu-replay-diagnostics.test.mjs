@@ -18,6 +18,7 @@ import {
   requestedWgpuPowerPreference,
   requestedWgpuGeometryPack,
   requestedWgpuUploadArenaMiB,
+  requestedWgpuUploadTransport,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   selectAtomicReplayLimit,
@@ -601,6 +602,13 @@ test("WGPU upload arena accepts only the independent 64 MiB screening arm", () =
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=64"), 64);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=064"), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=128"), 32);
+});
+
+test("mapped upload transport is opt-in and queue remains the reference", () => {
+  assert.equal(requestedWgpuUploadTransport(""), "queue");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=queue"), "queue");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=mapped"), "mapped");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=MAPped"), "queue");
 });
 
 test("WGPU replay budget accepts only literal 4 ms and 6 ms screening arms", () => {

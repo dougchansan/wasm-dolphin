@@ -50,7 +50,9 @@ export function createWgpuMappedStagingPool({
   const activeBatches = new Set();
   const metrics = {
     bufferUploads: 0,
+    bufferUploadsCoalesced: 0,
     textureUploads: 0,
+    copyCommandsEncoded: 0,
     logicalBytes: 0,
     stagedBytes: 0,
     capacityMisses: 0,
@@ -75,13 +77,22 @@ export function createWgpuMappedStagingPool({
     if (!allocation.ok) return allocation;
 
     allocation.slot.mappedBytes.set(bytes, allocation.offset);
-    allocation.slot.records.push({
-      kind: "buffer",
-      sourceOffset: allocation.offset,
-      size: bytes.byteLength,
-      destination,
-      destinationOffset,
-    });
+    const previous = allocation.slot.records.at(-1);
+    if (previous?.kind === "buffer" && previous.destination === destination &&
+        previous.sourceOffset + previous.size === allocation.offset &&
+        previous.destinationOffset + previous.size === destinationOffset) {
+      previous.size += bytes.byteLength;
+      metrics.bufferUploadsCoalesced += 1;
+    } else {
+      allocation.slot.records.push({
+        kind: "buffer",
+        sourceOffset: allocation.offset,
+        size: bytes.byteLength,
+        destination,
+        destinationOffset,
+      });
+      metrics.copyCommandsEncoded += 1;
+    }
     metrics.bufferUploads += 1;
     metrics.logicalBytes += bytes.byteLength;
     metrics.stagedBytes += bytes.byteLength;
@@ -145,6 +156,7 @@ export function createWgpuMappedStagingPool({
       copySize: { width, height, depthOrArrayLayers },
     });
     metrics.textureUploads += 1;
+    metrics.copyCommandsEncoded += 1;
     metrics.logicalBytes += sourceBytesPerRow * height * depthOrArrayLayers;
     metrics.stagedBytes += packedSize;
     return success(
@@ -316,6 +328,24 @@ export function submitWgpuUploadBeforeRender({
     throw error;
   }
   return pool.acceptSubmission(batch);
+}
+
+export function attemptRetainedWgpuUpload({
+  stagedUploads,
+  recordIndex,
+  stage,
+} = {}) {
+  if (!(stagedUploads instanceof Map) || typeof stage !== "function") {
+    throw new TypeError("stagedUploads and stage callback are required");
+  }
+  const retained = stagedUploads.get(recordIndex);
+  if (!retained) return Object.freeze({ found: false, accepted: false, result: null });
+  const result = stage(retained.data);
+  if (!result?.ok) {
+    return Object.freeze({ found: true, accepted: false, result });
+  }
+  stagedUploads.delete(recordIndex);
+  return Object.freeze({ found: true, accepted: true, result });
 }
 
 function encodeRecord(encoder, sourceBuffer, record) {

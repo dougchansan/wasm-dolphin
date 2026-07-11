@@ -67,6 +67,10 @@ import {
 } from "./wgpu-upload-attribution.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 import {
+  attemptRetainedWgpuUpload,
+  createWgpuMappedStagingPool
+} from "./wgpu-mapped-staging-pool.js";
+import {
   WGPU_CONSUMER_ERROR_DEVICE_LOST,
   WGPU_CONSUMER_ERROR_SUBMIT,
   WGPU_CONSUMER_ERROR_UNKNOWN,
@@ -164,6 +168,13 @@ let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuGeometryPackEnabled = false;
 let wgpuUploadArenaMiB = 32;
+let wgpuUploadTransport = "queue";
+let wgpuMappedStagingPool = null;
+let wgpuMappedRemapPromises = new Set();
+let wgpuMappedCapacityBlocked = false;
+let wgpuMappedCapacityBlockedAt = 0;
+const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
+const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
@@ -927,6 +938,7 @@ async function loadCore({
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
+  wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -957,6 +969,12 @@ async function loadCore({
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
+  wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
+  wgpuMappedStagingPool?.invalidate("core reloaded");
+  wgpuMappedStagingPool = null;
+  wgpuMappedRemapPromises = new Set();
+  wgpuMappedCapacityBlocked = false;
+  wgpuMappedCapacityBlockedAt = 0;
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -976,6 +994,7 @@ async function loadCore({
   webGpuCausalStats.replayBudgetEnabled = wgpuReplayBudgetMs > 0;
   webGpuCausalStats.replayBudgetMs = wgpuReplayBudgetMs;
   webGpuCausalStats.replayWindowRecords = WGPU_REPLAY_WINDOW_RECORDS;
+  webGpuCausalStats.uploadTransport = wgpuUploadTransport;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   softwareTevHotCaseMode = (Number(requestedSoftwareTevHotCaseMode) || 0) & 3;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
@@ -2001,6 +2020,7 @@ function maybeCreateCausalTelemetry(videoStats) {
     },
     webgpu: {
       ...webGpuCausalStats,
+      mappedStaging: wgpuMappedStagingPool?.snapshot() ?? null,
       backlogSampleP95: wgpuBacklogSampleP95(),
       replayPumpWakeDelayAverageMs: webGpuCausalStats.replayPumpWakeCount > 0
         ? webGpuCausalStats.replayPumpWakeDelayTotalMs /
@@ -5131,7 +5151,10 @@ function startWgpuReplayPump() {
     } else {
       webGpuCausalStats.replayPumpEmptyPollCount += 1;
     }
-    scheduleWgpuReplayPump(pump, write === read ? 4 : 0);
+    scheduleWgpuReplayPump(
+      pump,
+      write === read || wgpuMappedCapacityBlocked ? 4 : 0
+    );
   };
   scheduleWgpuReplayPump(pump, 0);
 }
@@ -5156,6 +5179,9 @@ function cancelWgpuReplayPump() {
 }
 
 function clearWgpuReplayStateAfterDeviceLoss() {
+  wgpuMappedStagingPool?.invalidate("WebGPU device lost");
+  wgpuMappedCapacityBlocked = false;
+  wgpuMappedCapacityBlockedAt = 0;
   if (webGpuCmdRing) {
     webGpuCmdRing.heldReplayStart = null;
     webGpuCmdRing.stagedUploads?.clear();
@@ -5164,6 +5190,64 @@ function clearWgpuReplayStateAfterDeviceLoss() {
     webGpuCmdRing.stagedScanCursor = null;
   }
   wgpuPassStateCache.reset("device-lost");
+}
+
+function ensureWgpuMappedStagingPool(device) {
+  if (wgpuUploadTransport !== "mapped") return null;
+  if (!wgpuMappedStagingPool) {
+    wgpuMappedStagingPool = createWgpuMappedStagingPool({
+      device,
+      slotCount: WGPU_MAPPED_STAGING_SLOT_COUNT,
+      slotSize: WGPU_MAPPED_STAGING_SLOT_BYTES,
+      // MAP_WRITE | COPY_SRC and GPUMapMode.WRITE. Passing the numeric
+      // values keeps the worker test seam independent of WebGPU globals.
+      bufferUsage: 0x0002 | 0x0004,
+      mapMode: 0x0002,
+      watchDeviceLoss: false,
+    });
+  }
+  return wgpuMappedStagingPool;
+}
+
+function trackWgpuMappedRemap(remapPromise) {
+  const tracked = Promise.resolve(remapPromise).then((ok) => {
+    if (!ok) {
+      webGpuCausalStats.mappedStagingRemapFailureCount += 1;
+      markWgpuReplayFatal(
+        "staging-remap",
+        wgpuMappedStagingPool?.snapshot().lastError || "mapped staging remap failed"
+      );
+    }
+    return ok;
+  }, (error) => {
+    webGpuCausalStats.mappedStagingRemapFailureCount += 1;
+    wgpuMappedStagingPool?.invalidate(error);
+    markWgpuReplayFatal("staging-remap", error?.message || error);
+    return false;
+  }).finally(() => {
+    wgpuMappedRemapPromises.delete(tracked);
+    if (wgpuMappedCapacityBlocked) {
+      const waitedMs = Math.max(0, performance.now() - wgpuMappedCapacityBlockedAt);
+      webGpuCausalStats.mappedStagingCapacityWaitTotalMs += waitedMs;
+      webGpuCausalStats.mappedStagingCapacityWaitMaxMs = Math.max(
+        webGpuCausalStats.mappedStagingCapacityWaitMaxMs,
+        waitedMs
+      );
+      wgpuMappedCapacityBlocked = false;
+      wgpuMappedCapacityBlockedAt = 0;
+    }
+    if (!wgpuReplayFatal && webGpuCmdRing) startWgpuReplayPump();
+  });
+  wgpuMappedRemapPromises.add(tracked);
+  return tracked;
+}
+
+function markWgpuMappedCapacityWait() {
+  webGpuCausalStats.mappedStagingCapacityWaitCount += 1;
+  if (!wgpuMappedCapacityBlocked) {
+    wgpuMappedCapacityBlocked = true;
+    wgpuMappedCapacityBlockedAt = performance.now();
+  }
 }
 
 function markWgpuReplayFatal(scope, detail) {
@@ -5794,6 +5878,16 @@ const webGpuCausalStats = {
   uploadTimeoutCountBeforeVerifiedLoad: 0,
   uploadTimeoutCountAfterVerifiedLoad: 0,
   queueSubmissionCount: 0,
+  uploadTransport: "queue",
+  mappedStagingCopyCount: 0,
+  mappedStagingCopyBytes: 0,
+  mappedStagingCopyTotalMs: 0,
+  mappedStagingCopyMaxMs: 0,
+  mappedStagingCapacityWaitCount: 0,
+  mappedStagingCapacityWaitTotalMs: 0,
+  mappedStagingCapacityWaitMaxMs: 0,
+  mappedStagingRemapFailureCount: 0,
+  mappedStagingUnsafeCapacityCount: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -5892,6 +5986,10 @@ function drainWebGpuCmdRing(source = "presentation") {
   if (wgpuReplayFatal) return;
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
+  if (wgpuUploadTransport === "mapped" && wgpuMappedCapacityBlocked &&
+      wgpuMappedRemapPromises.size > 0) {
+    return;
+  }
   const normalizedSource = source === "pump" ? "pump" : "presentation";
   const collectReplayMetrics = causalMetricsEnabled || wgpuReplayBudgetMs > 0;
   if (collectReplayMetrics) {
@@ -6105,6 +6203,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     };
   };
   let errScope = false;
+  let mappedCapacityHold = false;
   // One-shot present-path diagnostic: per-pass tally of pipeline/bind/
   // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
   // passes — tells us whether the present/XFB-copy draw actually runs.
@@ -6206,14 +6305,66 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     return enc;
   };
+  const acceptMappedBatch = (batch) => {
+    if (!batch) return;
+    trackWgpuMappedRemap(wgpuMappedStagingPool.acceptSubmission(batch));
+  };
+  const rejectMappedBatch = (batch, error) => {
+    if (!batch) return;
+    try {
+      wgpuMappedStagingPool.rejectSubmission(batch, error);
+    } catch {
+      wgpuMappedStagingPool.invalidate(error);
+    }
+  };
+  const sealMappedBatch = () => {
+    if (wgpuUploadTransport !== "mapped") return null;
+    try {
+      return ensureWgpuMappedStagingPool(dev).seal();
+    } catch (error) {
+      markWgpuReplayFatal("staging-seal", error?.message || error);
+      return null;
+    }
+  };
+  const flushMappedUploadsOnly = (reason = "staging-capacity") => {
+    const batch = sealMappedBatch();
+    if (!batch || wgpuReplayFatal) return false;
+    try {
+      q.submit([batch.commandBuffer]);
+      gpuCompletionTracker.recordSubmittedWork(q, "hardware-upload-staging");
+      if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
+      wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
+      acceptMappedBatch(batch);
+      return true;
+    } catch (error) {
+      rejectMappedBatch(batch, error);
+      recordRendererError("submit-error", error?.message || error);
+      markWgpuReplayFatal("submit-error", error?.message || error);
+      wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error });
+      return false;
+    }
+  };
   const submitEnc = (reason = "drain-boundary") => {
-    if (!enc) return false;
+    if (!enc) {
+      // Upload-only drains still have to seal and submit their mapped batch,
+      // but callers use the return value to decide whether a render/present
+      // command buffer was submitted.
+      flushMappedUploadsOnly(reason);
+      return false;
+    }
+    const mappedBatch = sealMappedBatch();
+    if (wgpuReplayFatal) return false;
     let submitted = false;
     try {
-      q.submit([enc.finish()]);
+      const renderCommandBuffer = enc.finish();
+      q.submit(mappedBatch
+        ? [mappedBatch.commandBuffer, renderCommandBuffer]
+        : [renderCommandBuffer]);
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
+      acceptMappedBatch(mappedBatch);
       submitted = true;
     } catch (e) {
+      rejectMappedBatch(mappedBatch, e);
       recordRendererError("submit-error", e?.message || e);
       markWgpuReplayFatal("submit-error", e?.message || e);
       wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error: e });
@@ -6448,7 +6599,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const uploadBytes = u32[recWord + 4];
           const uploadRole = u32[recWord + 5];
           const stagedUpload = ring.stagedUploads?.get(read) ?? null;
-          if (stagedUpload) {
+          if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(
               0,
@@ -6458,7 +6609,10 @@ function drainWebGpuCmdRing(source = "presentation") {
           const buf = webGpuObjects.buffers.get(bufferId);
           const len = (uploadBytes + 3) & ~3;
           const uploadSource = stagedUpload?.data ??
-            new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len);
+            (uploadBytes === len
+              ? new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len)
+              : copyWgpuUploadPayload(heap, srcP, uploadBytes, true));
+          let mappedStageAccepted = false;
           try {
             if (!buf) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-buffer", id: bufferId });
@@ -6595,6 +6749,54 @@ function drainWebGpuCmdRing(source = "presentation") {
               if (self._wgVbSnap.size > 64)
                 self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
             }
+              if (wgpuUploadTransport === "mapped") {
+                const stageStartedAt = performance.now();
+                const stage = (data) => ensureWgpuMappedStagingPool(dev).stageBuffer({
+                  data,
+                  destination: buf,
+                  destinationOffset: u32[recWord + 2] & ~3,
+                });
+                const retainedAttempt = stagedUpload
+                  ? attemptRetainedWgpuUpload({
+                      stagedUploads: ring.stagedUploads,
+                      recordIndex: read,
+                      stage,
+                    })
+                  : null;
+                const staged = retainedAttempt?.result ?? stage(uploadSource);
+                const stageElapsedMs = performance.now() - stageStartedAt;
+                webGpuCausalStats.mappedStagingCopyCount += staged.ok ? 1 : 0;
+                webGpuCausalStats.mappedStagingCopyBytes += staged.ok ? len : 0;
+                webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                  webGpuCausalStats.mappedStagingCopyMaxMs,
+                  stageElapsedMs
+                );
+                if (!staged.ok) {
+                  mappedCapacityHold = true;
+                  if (staged.reason === "no-capacity") {
+                    markWgpuMappedCapacityWait();
+                  } else {
+                    webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+                    markWgpuReplayFatal("staging-capacity", staged.reason);
+                  }
+                  break;
+                }
+                mappedStageAccepted = true;
+                if (retainedAttempt?.accepted) {
+                  ring.stagedUploadBytes = Math.max(
+                    0,
+                    ring.stagedUploadBytes - stagedUpload.data.byteLength
+                  );
+                }
+                if (causalMetricsEnabled) {
+                  wgpuUploadAttribution.recordUpload(
+                    uploadRole,
+                    uploadBytes,
+                    u32[recWord + 2] & ~3
+                  );
+                }
+              } else {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
@@ -6631,11 +6833,24 @@ function drainWebGpuCmdRing(source = "presentation") {
                   uploadPayload.byteLength
                 );
               }
+              }
             }
           } finally {
             // heapCopy/q.writeBuffer have synchronously detached this upload
             // from shared wasm memory, so the producer may now recycle it.
-            if (!stagedUpload) releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+            if (wgpuUploadTransport !== "mapped") {
+              if (!stagedUpload) releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+            } else if (mappedStageAccepted || !buf) {
+              if (!mappedStageAccepted && stagedUpload) {
+                ring.stagedUploads.delete(read);
+                ring.stagedUploadBytes = Math.max(
+                  0,
+                  ring.stagedUploadBytes - stagedUpload.data.byteLength
+                );
+              } else if (!stagedUpload) {
+                releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+              }
+            }
           }
           break;
         }
@@ -6661,7 +6876,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const h = u32[recWord + 5];
           const uploadBytes = Math.imul(bpr, h) >>> 0;
           const stagedUpload = ring.stagedUploads?.get(read) ?? null;
-          if (stagedUpload) {
+          if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(
               0,
@@ -6671,6 +6886,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const t = webGpuObjects.textures.get(textureId);
           const uploadSource = stagedUpload?.data ??
             new Uint8Array(moduleInstance.HEAPU8.buffer, src, uploadBytes);
+          let mappedStageAccepted = false;
           try {
             if (!t) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
@@ -6693,6 +6909,58 @@ function drainWebGpuCmdRing(source = "presentation") {
                 `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
+              if (wgpuUploadTransport === "mapped") {
+                const stageStartedAt = performance.now();
+                const stage = (data) => ensureWgpuMappedStagingPool(dev).stageTexture({
+                  data,
+                  destination: t.tex,
+                  sourceBytesPerRow: bpr,
+                  sourceRowsPerImage: h,
+                  mipLevel: u32[recWord + 6],
+                  origin: { x: 0, y: 0, z: uz },
+                  copySize: { width: w, height: h, depthOrArrayLayers: 1 },
+                });
+                const retainedAttempt = stagedUpload
+                  ? attemptRetainedWgpuUpload({
+                      stagedUploads: ring.stagedUploads,
+                      recordIndex: read,
+                      stage,
+                    })
+                  : null;
+                const staged = retainedAttempt?.result ?? stage(uploadSource);
+                const stageElapsedMs = performance.now() - stageStartedAt;
+                webGpuCausalStats.mappedStagingCopyCount += staged.ok ? 1 : 0;
+                webGpuCausalStats.mappedStagingCopyBytes += staged.ok ? uploadBytes : 0;
+                webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                  webGpuCausalStats.mappedStagingCopyMaxMs,
+                  stageElapsedMs
+                );
+                if (!staged.ok) {
+                  mappedCapacityHold = true;
+                  if (staged.reason === "no-capacity") {
+                    markWgpuMappedCapacityWait();
+                  } else {
+                    webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+                    markWgpuReplayFatal("staging-capacity", staged.reason);
+                  }
+                  break;
+                }
+                mappedStageAccepted = true;
+                if (retainedAttempt?.accepted) {
+                  ring.stagedUploadBytes = Math.max(
+                    0,
+                    ring.stagedUploadBytes - stagedUpload.data.byteLength
+                  );
+                }
+                if (causalMetricsEnabled) {
+                  wgpuUploadAttribution.recordUpload(
+                    WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT,
+                    uploadBytes,
+                    0
+                  );
+                }
+              } else {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
@@ -6722,10 +6990,23 @@ function drainWebGpuCmdRing(source = "presentation") {
                   uploadPayload.byteLength
                 );
               }
+              }
             }
           } finally {
             // queue.writeTexture consumes the local heapCopy synchronously.
-            if (!stagedUpload) releaseWgpuUploadPayload(ring, src, uploadBytes);
+            if (wgpuUploadTransport !== "mapped") {
+              if (!stagedUpload) releaseWgpuUploadPayload(ring, src, uploadBytes);
+            } else if (mappedStageAccepted || !t) {
+              if (!mappedStageAccepted && stagedUpload) {
+                ring.stagedUploads.delete(read);
+                ring.stagedUploadBytes = Math.max(
+                  0,
+                  ring.stagedUploadBytes - stagedUpload.data.byteLength
+                );
+              } else if (!stagedUpload) {
+                releaseWgpuUploadPayload(ring, src, uploadBytes);
+              }
+            }
           }
           break;
         }
@@ -8000,6 +8281,11 @@ function drainWebGpuCmdRing(source = "presentation") {
       }
     } catch (e) {
       webGpuCausalStats.errorCount += 1;
+      if (wgpuUploadTransport === "mapped" &&
+          (op === WGPU_CMD_OP_UPLOAD_BUFFER || op === WGPU_CMD_OP_UPLOAD_TEXTURE)) {
+        wgpuMappedStagingPool?.invalidate(e);
+        markWgpuReplayFatal("staging-copy", e?.message || e);
+      }
       if (!self._webGpuExecErr) {
         self._webGpuExecErr = true;
         console.log(`[webgpu-exec] op=${op} threw: ${e?.message || e}`);
@@ -8009,6 +8295,31 @@ function drainWebGpuCmdRing(source = "presentation") {
       wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
     }
     if (wgpuReplayFatal) break;
+    if (mappedCapacityHold) {
+      // The current upload record is deliberately still owned by the ring.
+      // A completed pass/encoder may be submitted ahead of the retry. An
+      // open render pass cannot survive the asynchronous mapAsync wait, so
+      // failing closed is the only ordering-safe response in that case.
+      if (pass) {
+        webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+        markWgpuReplayFatal(
+          "staging-capacity",
+          "mapped staging capacity exhausted inside an atomic render pass"
+        );
+      } else {
+        const flushed = enc
+          ? submitEnc("staging-capacity")
+          : flushMappedUploadsOnly("staging-capacity");
+        if (!flushed && wgpuMappedRemapPromises.size === 0) {
+          webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+          markWgpuReplayFatal(
+            "staging-capacity",
+            "mapped staging capacity exhausted without a remap path"
+          );
+        }
+      }
+      break;
+    }
     read = (read + 1) >>> 0;
     if (wgpuReplayBudgetMs > 0) {
       if (op === WGPU_CMD_OP_BEGIN_PASS) protocolPassDepth += 1;
@@ -8025,8 +8336,10 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
   }
   if (wgpuReplayBudgetMs > 0) replayLimit = read;
-  endPass("drain-boundary", read);
-  submitEnc("drain-boundary");
+  if (!wgpuReplayFatal) {
+    endPass("drain-boundary", read);
+    submitEnc("drain-boundary");
+  }
   const stopReason = deferBeginPass
     ? "deferred-begin"
     : read === write

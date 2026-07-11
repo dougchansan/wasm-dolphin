@@ -293,6 +293,14 @@ export function requestedWgpuUploadArenaMiB(
   return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
 }
 
+export function requestedWgpuUploadTransport(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpuuploadtransport") === "mapped"
+    ? "mapped"
+    : "queue";
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }
