@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:4d60e9ed17ce699d1c6b3317c6f07552175f4c768d1d6f3fcb41b1062a3aa7fd",
+  "coreId": "sha256:60070a57adba29003c81ee86956026ad4c1dee31a3d6ea3c802f1266e1292262",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 262287,
-      "sha256": "e7baa341e84d15cafdc507841a83d25365a1efd685d7762e3a900aed1eb8cf1e"
+      "size": 262758,
+      "sha256": "fa10445c12e44832da39d1adb2658081f7768aa62466b9410ea5f7fcb3017b1d"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12877649,
-      "sha256": "4d60e9ed17ce699d1c6b3317c6f07552175f4c768d1d6f3fcb41b1062a3aa7fd"
+      "size": 12881747,
+      "sha256": "60070a57adba29003c81ee86956026ad4c1dee31a3d6ea3c802f1266e1292262"
     }
   ],
   "contractSources": [
@@ -182,11 +182,7 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [
-    "_RunWebGpuCommandStreamGeometryParitySmoke",
-    "_RunWebGpuCommandStreamGeometryRollbackSmoke",
-    "_GetWebGpuCommandStreamGeometrySmokeError"
-  ],
+  "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",
@@ -247,6 +243,7 @@
     "_GetRootEntryPath",
     "_GetRootEntrySize",
     "_GetVideoStats",
+    "_GetWebGpuCommandStreamGeometrySmokeError",
     "_GetWebGpuStateCacheStats",
     "_LoadCoreState",
     "_LoadState",
@@ -269,6 +266,8 @@
     "_RunPpcWasmSinglePrecisionArithmeticSmoke",
     "_RunPpcWasmStateAddiSmoke",
     "_RunWasmJitSmoke",
+    "_RunWebGpuCommandStreamGeometryParitySmoke",
+    "_RunWebGpuCommandStreamGeometryRollbackSmoke",
     "_SaveCoreState",
     "_SaveState",
     "_SaveStateFile",
