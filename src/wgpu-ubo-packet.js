@@ -34,7 +34,7 @@ export function planDenseUboPacket({
     relativeOffsets[index] = packetSize;
     packetSize += classes[index].byteLength;
   }
-  packetSize = alignUp(packetSize, 4);
+  packetSize = alignUp(packetSize, alignment);
   if (packetSize === 0) {
     return { changeMask: mask, start: cursor, end: cursor, packetSize: 0,
       relativeOffsets, destinationOffsets: [null, null, null] };

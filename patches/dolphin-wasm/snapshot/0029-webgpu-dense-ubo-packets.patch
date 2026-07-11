@@ -24,7 +24,7 @@ index 473a8e0..9acc9c2 100644
  
  target_link_libraries(videowebgpu
 diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
-index 3cd07f7..00574dd 100644
+index 3cd07f7..a7d0d7f 100644
 --- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
 +++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
 @@ -17,6 +17,7 @@ namespace
@@ -80,11 +80,11 @@ index 3cd07f7..00574dd 100644
    CmdRingHeader header{};
    CmdRecord slots[32]{};
 -  alignas(16) u8 upload[256]{};
-+  alignas(16) u8 upload[1024]{};
++  alignas(16) u8 upload[8192]{};
    WebGPUCommandStream stream;
  
    CommandStreamSmokeFixture()
-@@ -1229,4 +1263,134 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuCommandStreamGeometrySmokeE
+@@ -1229,4 +1263,147 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuCommandStreamGeometrySmokeE
  {
    return s_geometry_smoke_error;
  }
@@ -176,11 +176,24 @@ index 3cd07f7..00574dd 100644
 +  const DenseUboPacketPlan actual_plan = PlanDenseUboPacket(0, 32768, actual, 7);
 +  if (!actual_plan.valid || actual_plan.relative_offsets[0] != 1792 ||
 +      actual_plan.relative_offsets[1] != 0 || actual_plan.relative_offsets[2] != 1536 ||
-+      actual_plan.packet_size != 5904)
++      actual_plan.packet_size != 6144 ||
++      (actual_plan.destination_end % kDenseUboAlignment) != 0)
 +    return FailDenseUboSmoke(308, "actual-size PS/GS/VS layout differs");
++  CommandStreamSmokeFixture actual_fixture;
++  const u32 actual_src = actual_fixture.stream.UploadAllocUboPacket(actual_plan, actual);
++  if (actual_src == 0)
++    return FailDenseUboSmoke(309, "actual-size packet allocation failed");
++  const u8* actual_bytes = reinterpret_cast<const u8*>(static_cast<uintptr_t>(actual_src));
++  const u32 actual_payload_end =
++      actual_plan.relative_offsets[0] + static_cast<u32>(actual_vs.size());
++  for (u32 offset = actual_payload_end; offset < actual_plan.packet_size; ++offset)
++  {
++    if (actual_bytes[offset] != 0)
++      return FailDenseUboSmoke(310, "actual-size packet tail is not zero");
++  }
 +  if (!ShouldUseDenseUboPackets(true, false) || ShouldUseDenseUboPackets(true, true) ||
 +      ShouldUseDenseUboPackets(false, false))
-+    return FailDenseUboSmoke(309, "cache fallback predicate differs");
++    return FailDenseUboSmoke(311, "cache fallback predicate differs");
 +  return 0;
 +}
 +
@@ -388,10 +401,10 @@ index a8b7921..2fb9152 100644
      // DIAG one-shot: is the VS UBO actually populated? Dump dirty +
 diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
 new file mode 100644
-index 0000000..dce16d3
+index 0000000..a570493
 --- /dev/null
 +++ b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,102 @@
 +// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +
@@ -465,9 +478,12 @@ index 0000000..dce16d3
 +    plan.valid = true;
 +    return plan;
 +  }
-+  if (packet_size > std::numeric_limits<u32>::max() - 3u)
++  if (packet_size > std::numeric_limits<u32>::max() - (kDenseUboAlignment - 1))
 +    return plan;
-+  packet_size = AlignDenseUbo(packet_size, 4);
++  // The next utility or legacy allocation begins at destination_end. Align
++  // the whole owned interval, not only individual class starts, so every
++  // later dynamic offset inherits WebGPU's 256-byte requirement.
++  packet_size = AlignDenseUbo(packet_size, kDenseUboAlignment);
 +  if (packet_size > ring_size)
 +    return plan;
 +

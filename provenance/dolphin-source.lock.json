@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "b2b3b18c642f99842855e5a61b79d6569323a3b480c9b3278dcb48a74ad5dfb0",
+  "patchSeriesSha256": "0b993c7d73a8809c25975b0048372d68680e7a9cc76a30a3fc56e51900b3375d",
   "patches": [
     {
       "order": 1,
@@ -256,8 +256,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0029-webgpu-dense-ubo-packets.patch",
-      "size": 25042,
-      "sha256": "afda8bd5cbe0bb4163ac963c60ce1c350dba51939faea332d42799a95b5eb3d3"
+      "size": 26015,
+      "sha256": "7cad97c580f0ebbe47d388e1bcaafe08cf2a1595f9bcc33f3ede81b35378324b"
     },
     {
       "order": 30,

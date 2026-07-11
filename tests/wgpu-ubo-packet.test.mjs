@@ -24,6 +24,7 @@ test("dense UBO planner preserves all eight masks, alignment, bytes, and zero ga
     const source = buildDenseUboSourcePacket(plan, payloads);
     const destination = new Uint8Array(4096).fill(0xcd);
     replayDenseUboUpload(destination, plan, source);
+    assert.equal(plan.end % 256, 0, `mask ${mask} must publish an aligned ownership end`);
 
     for (let index = 0; index < 3; index += 1) {
       const changed = (mask & (1 << index)) !== 0;
@@ -61,11 +62,11 @@ test("dense UBO physical order minimizes padding while offsets stay VS/PS/GS ind
   const actual = [new Uint8Array(4112), new Uint8Array(1536), new Uint8Array(64)];
   const plan = planDenseUboPacket({ cursor: 0, ringSize: 32768, payloads: actual, changeMask: 7 });
   assert.deepEqual(plan.relativeOffsets, [1792, 0, 1536]);
-  assert.equal(plan.packetSize, 5904);
+  assert.equal(plan.packetSize, 6144);
 
   const vsPs = planDenseUboPacket({ cursor: 0, ringSize: 32768, payloads: actual, changeMask: 3 });
   assert.deepEqual(vsPs.relativeOffsets, [1536, 0, null]);
-  assert.equal(vsPs.packetSize, 5648, "PS followed by VS has no 256-byte inter-class gap");
+  assert.equal(vsPs.packetSize, 5888, "PS followed by VS has no inter-class gap and an aligned tail");
 });
 
 test("wgpuubopack is default-off and explicitly selectable", () => {
