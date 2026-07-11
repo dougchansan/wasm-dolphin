@@ -173,11 +173,6 @@ export function createCausalTelemetry(overrides = {}) {
         stageBudgetYieldCount: 0,
         stageCopyDeadlineOverrunCount: 0,
         stageCopyDeadlineOverrunMaxMs: 0,
-        queueReliefStageCount: 0,
-        queueReliefStagedUploadCount: 0,
-        queueReliefStagedBytes: 0,
-        queueReliefStageLimitCount: 0,
-        queueReliefStageIncompleteCount: 0,
         deferredBeginPassCount: 0,
         errorCount: 0,
         producerStateCacheEnabled: false,
@@ -812,13 +807,6 @@ export function flattenCausalTelemetry(value) {
     causalWgpuQueueReliefWaitAudioActivityTotal: queueRelief.waitAudioActivityTotal,
     causalWgpuQueueReliefWaitInputActivityTotal: queueRelief.waitInputActivityTotal,
     causalWgpuQueueReliefWaitHostActivityTotal: queueRelief.waitHostActivityTotal,
-    causalWgpuQueueReliefStageCount: telemetry.webgpu.queueReliefStageCount,
-    causalWgpuQueueReliefStagedUploadCount:
-      telemetry.webgpu.queueReliefStagedUploadCount,
-    causalWgpuQueueReliefStagedBytes: telemetry.webgpu.queueReliefStagedBytes,
-    causalWgpuQueueReliefStageLimitCount: telemetry.webgpu.queueReliefStageLimitCount,
-    causalWgpuQueueReliefStageIncompleteCount:
-      telemetry.webgpu.queueReliefStageIncompleteCount,
     causalWgpuUploadArenaRingHandoffBytes:
       telemetry.webgpu.uploadArenaRingHandoffBytes,
     causalWgpuUploadArenaRingHandoffExpectedBytes:
