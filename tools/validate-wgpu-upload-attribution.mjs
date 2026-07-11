@@ -331,6 +331,27 @@ function validateBackend(manifest, summary, addIssue, runId) {
     check(safeCounter(webgpu[field]) === 0, "QUALIFYING_WEBGPU_COUNTER",
       `${field}=${webgpu[field]} expected 0`, addIssue, runId);
   }
+  if (webgpu.producerUploadArenaAvailable === true) {
+    for (const field of ["producerUploadArenaFallbackCount",
+      "producerUploadArenaLateRejectCount", "uploadArenaRingHandoffMismatchCount"]) {
+      check(safeCounter(webgpu[field]) === 0, "QUALIFYING_WEBGPU_COUNTER",
+        `${field}=${webgpu[field]} expected 0`, addIssue, runId);
+    }
+    const params = new URL(manifest.benchmark?.url || "http://invalid/").searchParams;
+    const expectedArenaBytes = params.get("wgpuuploadmb") === "64"
+      ? 64 * 1024 * 1024
+      : 32 * 1024 * 1024;
+    check(webgpu.producerUploadArenaRequestedBytes === expectedArenaBytes &&
+        webgpu.producerUploadArenaConfiguredBytes === expectedArenaBytes &&
+        webgpu.uploadArenaRingHandoffBytes === expectedArenaBytes &&
+        webgpu.uploadArenaRingHandoffExpectedBytes === expectedArenaBytes &&
+        webgpu.uploadArenaRingHandoffMismatch === false,
+      "UPLOAD_ARENA_IDENTITY",
+      `arena expected=${expectedArenaBytes} requested=${webgpu.producerUploadArenaRequestedBytes} ` +
+        `configured=${webgpu.producerUploadArenaConfiguredBytes} ` +
+        `handoff=${webgpu.uploadArenaRingHandoffBytes}`,
+      addIssue, runId);
+  }
   check(Array.isArray(renderer.errors) && renderer.errors.length === 0,
     "RENDERER_ERROR", `Renderer errors: ${JSON.stringify(renderer.errors)}`, addIssue, runId);
   check(Array.isArray(renderer.emscriptenPrintErr) && renderer.emscriptenPrintErr.length === 0,

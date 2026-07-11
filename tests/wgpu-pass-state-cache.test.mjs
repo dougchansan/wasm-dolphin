@@ -16,7 +16,8 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       "wgstate:1 pipe:4 bg:5,6,7 vb:8 ib:9 wgdrop:0 " +
       "wgbabort:10 wgboversize:11 wguploadto:12 " +
       "wgubo:1 wgubometrics:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
-      "usupcall:22,23,24 usupbyte:25,26,27 wggeom:1 wggeomepoch:28"
+      "usupcall:22,23,24 usupbyte:25,26,27 wggeom:1 wggeomepoch:28 " +
+      "wgarena:67108864,67108864,29,30,31,33554432"
     ),
     {
       enabled: true,
@@ -37,7 +38,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboUploadCallsSuppressed: [22, 23, 24],
       uboUploadBytesSuppressed: [25, 26, 27],
       geometryPackEnabled: true,
-      geometryPackEpoch: 28
+      geometryPackEpoch: 28,
+      uploadArenaRequestedBytes: 67108864,
+      uploadArenaConfiguredBytes: 67108864,
+      uploadArenaFallbackCount: 29,
+      uploadArenaLateRejectCount: 30,
+      uploadArenaWrapCount: 31,
+      uploadArenaInflightHighWaterBytes: 33554432
     }
   );
   assert.deepEqual(
@@ -63,7 +70,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboUploadCallsSuppressed: [0, 0, 0],
       uboUploadBytesSuppressed: [0, 0, 0],
       geometryPackEnabled: false,
-      geometryPackEpoch: 0
+      geometryPackEpoch: 0,
+      uploadArenaRequestedBytes: 0,
+      uploadArenaConfiguredBytes: 0,
+      uploadArenaFallbackCount: 0,
+      uploadArenaLateRejectCount: 0,
+      uploadArenaWrapCount: 0,
+      uploadArenaInflightHighWaterBytes: 0
     }
   );
   assert.equal(parseWgpuProducerStateStats("wgstate:1 pipe:4"), null);

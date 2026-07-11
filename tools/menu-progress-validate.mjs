@@ -178,6 +178,7 @@ if (process.env.SMEARCOMPILE) url.searchParams.set("smearcompile", process.env.S
 if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.FASTMEMHOIST);
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPUCOMPLETE);
+if (process.env.WGPUUPLOADMB) url.searchParams.set("wgpuuploadmb", process.env.WGPUUPLOADMB);
 if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
 if (process.env.INPUTREADBACK) url.searchParams.set("inputreadback", process.env.INPUTREADBACK);
 for (const [environmentName, queryName] of [

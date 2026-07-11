@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "36b8ad4fd664046460c0f1c7e28fd768f0e346892a616e3d36032051438029c0",
+  "patchSeriesSha256": "0f5967252bded0c1a481e0c5859a18e9654b9360673985660d53693aa63cb64b",
   "patches": [
     {
       "order": 1,
@@ -213,6 +213,14 @@
     },
     {
       "order": 24,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0024-webgpu-upload-arena-size.patch",
+      "size": 14632,
+      "sha256": "0286fc81ec9d567073785d7f9c26b460bd1c723dd4feaef940d668416540f1d4"
+    },
+    {
+      "order": 25,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -220,7 +228,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 25,
+      "order": 26,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

@@ -12,6 +12,7 @@ export function parseWgpuProducerStateStats(text = "") {
   const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
     .exec(normalized);
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
+  const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   return {
     enabled: match[1] === "1",
     pipelineRecordsSuppressed: Number(match[2]),
@@ -31,7 +32,13 @@ export function parseWgpuProducerStateStats(text = "") {
     uboUploadCallsSuppressed: numericTriple(ubo, 12),
     uboUploadBytesSuppressed: numericTriple(ubo, 15),
     geometryPackEnabled: geometry?.[1] === "1",
-    geometryPackEpoch: Number(geometry?.[2] || 0)
+    geometryPackEpoch: Number(geometry?.[2] || 0),
+    uploadArenaRequestedBytes: Number(arena?.[1] || 0),
+    uploadArenaConfiguredBytes: Number(arena?.[2] || 0),
+    uploadArenaFallbackCount: Number(arena?.[3] || 0),
+    uploadArenaLateRejectCount: Number(arena?.[4] || 0),
+    uploadArenaWrapCount: Number(arena?.[5] || 0),
+    uploadArenaInflightHighWaterBytes: Number(arena?.[6] || 0)
   };
 }
 

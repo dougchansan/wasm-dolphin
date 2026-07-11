@@ -13,6 +13,7 @@ import {
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
   requestedWgpuGeometryPack,
+  requestedWgpuUploadArenaMiB,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   selectAtomicReplayLimit,
@@ -560,6 +561,14 @@ test("geometry upload packing is default-off with an explicit boolean override",
   assert.equal(requestedWgpuGeometryPack("", true), true);
   assert.equal(requestedWgpuGeometryPack("?wgpugeompack=1"), true);
   assert.equal(requestedWgpuGeometryPack("?wgpugeompack=0", true), false);
+});
+
+test("WGPU upload arena accepts only the independent 64 MiB screening arm", () => {
+  assert.equal(requestedWgpuUploadArenaMiB(""), 32);
+  assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=32"), 32);
+  assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=64"), 64);
+  assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=064"), 32);
+  assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=128"), 32);
 });
 
 test("worker publishes upload-role, pass-window, and verified-load attribution", async () => {

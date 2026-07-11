@@ -166,6 +166,46 @@ test("legacy four-word headers are not acknowledged or modified", () => {
   assert.deepEqual([...headerI32], [0, 0, 0, 0]);
 });
 
+test("host plumbing preserves the 32 MiB held-stage cap while screening a 64 MiB arena", async () => {
+  const [host, adapter, worker] = await Promise.all([
+    readFile(new URL("../src/core-host.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/upstream-worker-adapter.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(host, /requestedWgpuUploadArenaMiB\(window\.location\.search\)/);
+  assert.match(host, /wgpuUploadArenaMiB: this\.wgpuUploadArenaMiB/);
+  assert.match(adapter, /wgpuUploadArenaMiB: this\.wgpuUploadArenaMiB/);
+  assert.match(worker,
+    /setWebGpuUploadArenaMiB\?\.\(wgpuUploadArenaMiB, collectMetrics \? 1 : 0\)/);
+  assert.match(worker,
+    /case "reset":[\s\S]*?setWebGpuUploadArenaMiB\?\.\(wgpuUploadArenaMiB, collectMetrics \? 1 : 0\)/);
+  assert.match(worker,
+    /case "loadState":[\s\S]*?setWebGpuUploadArenaMiB[\s\S]*?loadState[\s\S]*?setWebGpuUploadArenaMiB/);
+  assert.match(worker,
+    /api\.loadStateFile\(path\)[\s\S]*?setTimeout\(r, 1200\)[\s\S]*?setWebGpuUploadArenaMiB/);
+  assert.match(worker, /const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 \* 1024 \* 1024/);
+  assert.match(worker, /uploadArenaRingHandoffMismatch/);
+});
+
+test("the arena-size patch freezes configuration before handoff and exports metrics", async () => {
+  const patch = await readFile(new URL(
+    "../patches/dolphin-wasm/snapshot/0024-webgpu-upload-arena-size.patch",
+    import.meta.url
+  ), "utf8");
+
+  assert.match(patch, /kDefaultUploadArenaBytes = 32u \* 1024u \* 1024u/);
+  assert.match(patch, /kLargeUploadArenaBytes = 64u \* 1024u \* 1024u/);
+  assert.match(patch, /ConfigureUploadArenaMiB\(u32 mib, bool metrics_enabled\)/);
+  assert.match(patch, /m_upload_allocation_finalized\.load\(std::memory_order_acquire\)/);
+  assert.match(patch, /m_upload_late_reject_count\.fetch_add/);
+  assert.match(patch, /requested_upload_bytes == kLargeUploadArenaBytes/);
+  assert.match(patch, /m_upload_fallback_count\.fetch_add/);
+  assert.match(patch, /SetWebGpuUploadArenaMiB\(int mib, int metrics_enabled\)/);
+  assert.match(patch, /wgarena:/);
+  assert.match(patch, /'_SetWebGpuUploadArenaMiB'/);
+});
+
 test("the locked source patch blocks upload-arena overwrite", async () => {
   const patch = await readFile(new URL(
     "../patches/dolphin-wasm/snapshot/0011-webgpu-upload-watermark.patch",

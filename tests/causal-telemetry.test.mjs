@@ -41,6 +41,8 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.producerStateCacheEnabled, false);
   assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(value.webgpu.commandDroppedCount, 0);
+  assert.equal(value.webgpu.producerUploadArenaConfiguredBytes, 0);
+  assert.equal(value.webgpu.uploadArenaRingHandoffMismatch, false);
   assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
   assert.equal(
     value.webgpu.uploadAttribution.schema,

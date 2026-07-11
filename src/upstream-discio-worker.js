@@ -152,6 +152,7 @@ let wgpuAtomicPassReplay = true;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuGeometryPackEnabled = false;
+let wgpuUploadArenaMiB = 32;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
@@ -604,6 +605,7 @@ async function handleMessage(type, payload) {
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
         wgpuGeometryPack: payload.wgpuGeometryPack,
+        wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -637,6 +639,7 @@ async function handleMessage(type, payload) {
       return framePayload();
     case "reset":
       api?.reset();
+      api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
@@ -647,9 +650,11 @@ async function handleMessage(type, payload) {
     case "saveState":
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
+      api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       const loaded = Boolean(api?.loadState(payload.slot | 0));
+      api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
@@ -725,6 +730,7 @@ async function handleMessage(type, payload) {
           (loadRingBoundary?.summary?.openPassDepth > 0 || hasHeldReplay);
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
+      api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       const rc = api.loadStateFile(path) | 0;
@@ -732,6 +738,7 @@ async function handleMessage(type, payload) {
       // step the core) — wait real wall-clock time so the restore
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
+      api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
@@ -898,6 +905,7 @@ async function loadCore({
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
+  wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -927,6 +935,7 @@ async function loadCore({
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
+  wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -1183,6 +1192,7 @@ async function loadCore({
     `setPpcWasmJitEnabled(${ppcWasmJitTier === "mixed" ? 2 : 1}))`);
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
+  api.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
   api.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -1264,6 +1274,15 @@ function bindApi(module) {
     setWebGpuGeometryPackEnabled:
       typeof module._SetWebGpuGeometryPackEnabled === "function"
         ? (enabled) => ccall("SetWebGpuGeometryPackEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
+    setWebGpuUploadArenaMiB:
+      typeof module._SetWebGpuUploadArenaMiB === "function"
+        ? (mib, metrics) => ccall(
+            "SetWebGpuUploadArenaMiB",
+            null,
+            ["number", "number"],
+            [Number(mib) === 64 ? 64 : 32, metrics ? 1 : 0]
+          )
         : null,
     getWebGpuStateCacheStats: optionalCwrap("GetWebGpuStateCacheStats", "string", []),
     setCpuOverclock:
@@ -1581,6 +1600,13 @@ function collectWebGpuProducerStateStats() {
       parsed.uboUploadBytesSuppressed;
     webGpuCausalStats.producerGeometryPackEnabled = parsed.geometryPackEnabled;
     webGpuCausalStats.producerGeometryPackEpoch = parsed.geometryPackEpoch;
+    webGpuCausalStats.producerUploadArenaRequestedBytes = parsed.uploadArenaRequestedBytes;
+    webGpuCausalStats.producerUploadArenaConfiguredBytes = parsed.uploadArenaConfiguredBytes;
+    webGpuCausalStats.producerUploadArenaFallbackCount = parsed.uploadArenaFallbackCount;
+    webGpuCausalStats.producerUploadArenaLateRejectCount = parsed.uploadArenaLateRejectCount;
+    webGpuCausalStats.producerUploadArenaWrapCount = parsed.uploadArenaWrapCount;
+    webGpuCausalStats.producerUploadArenaInflightHighWaterBytes =
+      parsed.uploadArenaInflightHighWaterBytes;
   }
   return text;
 }
@@ -1945,6 +1971,7 @@ function maybeCreateCausalTelemetry(videoStats) {
       geometryPackEnabled: wgpuGeometryPackEnabled,
       producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
       producerGeometryPackAvailable: Boolean(api?.setWebGpuGeometryPackEnabled),
+      producerUploadArenaAvailable: Boolean(api?.setWebGpuUploadArenaMiB),
       producerStateCacheEnabled:
         wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
       consumerStateCacheEnabled: wgpuConsumerStateCacheEnabled,
@@ -4821,6 +4848,21 @@ function handleWebGpuCmdRing(event) {
   };
   if (uploadWatermarkProtocol) enableWgpuUploadWatermark(webGpuCmdRing);
   publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
+  collectWebGpuProducerStateStats();
+  const requestedArenaBytes = wgpuUploadArenaMiB * 1024 * 1024;
+  const expectedArenaBytes = webGpuCausalStats.producerUploadArenaConfiguredBytes ||
+    requestedArenaBytes;
+  webGpuCausalStats.uploadArenaRingHandoffBytes = webGpuCmdRing.uploadSize;
+  webGpuCausalStats.uploadArenaRingHandoffExpectedBytes = expectedArenaBytes;
+  webGpuCausalStats.uploadArenaRingHandoffMismatch =
+    webGpuCmdRing.uploadSize !== expectedArenaBytes;
+  if (webGpuCausalStats.uploadArenaRingHandoffMismatch) {
+    webGpuCausalStats.uploadArenaRingHandoffMismatchCount += 1;
+    recordRendererError(
+      "webgpu-upload-arena-handoff",
+      `ring upload bytes=${webGpuCmdRing.uploadSize} expected=${expectedArenaBytes}`
+    );
+  }
   postStatus(
     `webgpu-cmd-ring: registered (cap=${data.capacity} upload=${
       (webGpuCmdRing.uploadSize / 1048576) | 0}MB) — GPU command bridge live`
@@ -5534,6 +5576,18 @@ const webGpuCausalStats = {
   producerUboCacheExpired: [0, 0, 0],
   producerUboUploadCallsSuppressed: [0, 0, 0],
   producerUboUploadBytesSuppressed: [0, 0, 0],
+  producerGeometryPackEnabled: false,
+  producerGeometryPackEpoch: 0,
+  producerUploadArenaRequestedBytes: 0,
+  producerUploadArenaConfiguredBytes: 0,
+  producerUploadArenaFallbackCount: 0,
+  producerUploadArenaLateRejectCount: 0,
+  producerUploadArenaWrapCount: 0,
+  producerUploadArenaInflightHighWaterBytes: 0,
+  uploadArenaRingHandoffBytes: 0,
+  uploadArenaRingHandoffExpectedBytes: 0,
+  uploadArenaRingHandoffMismatch: false,
+  uploadArenaRingHandoffMismatchCount: 0,
   commandDroppedCount: 0,
   batchAbortCount: 0,
   batchOversizeCount: 0,

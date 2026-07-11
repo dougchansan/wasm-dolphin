@@ -183,6 +183,12 @@ export function requestedWgpuGeometryPack(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuUploadArenaMiB(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }

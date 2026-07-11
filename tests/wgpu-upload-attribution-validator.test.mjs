@@ -101,6 +101,14 @@ test("attribution validator rejects producer and replay qualification failures",
     webgpu.uploadTimeoutCountAfterVerifiedLoad = 1;
     webgpu.batchAbortCount = 1;
     webgpu.commandDroppedCount = 2;
+    webgpu.producerUploadArenaAvailable = true;
+    webgpu.producerUploadArenaRequestedBytes = 64 * 1024 * 1024;
+    webgpu.producerUploadArenaConfiguredBytes = 32 * 1024 * 1024;
+    webgpu.producerUploadArenaFallbackCount = 1;
+    webgpu.uploadArenaRingHandoffBytes = 32 * 1024 * 1024;
+    webgpu.uploadArenaRingHandoffExpectedBytes = 64 * 1024 * 1024;
+    webgpu.uploadArenaRingHandoffMismatch = true;
+    webgpu.uploadArenaRingHandoffMismatchCount = 1;
   });
   const manifestPath = path.join(fixture.runDir, "manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -114,7 +122,7 @@ test("attribution validator rejects producer and replay qualification failures",
   const result = await validateWgpuUploadAttribution({ outDir: fixture.root });
   assert.equal(result.ok, false);
   for (const code of ["QUALIFYING_WEBGPU_COUNTER", "MISSING_RESOURCE", "PASS_ATOMICITY",
-    "PRESENT_ERROR", "RENDERER_ERROR"]) {
+    "PRESENT_ERROR", "RENDERER_ERROR", "UPLOAD_ARENA_IDENTITY"]) {
     assert.ok(result.issues.some((issue) => issue.code === code), code);
   }
 });

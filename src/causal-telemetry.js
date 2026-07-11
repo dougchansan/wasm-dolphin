@@ -136,6 +136,16 @@ export function createCausalTelemetry(overrides = {}) {
         producerBindGroupRecordsSuppressed: [0, 0, 0],
         producerVertexBufferRecordsSuppressed: 0,
         producerIndexBufferRecordsSuppressed: 0,
+        producerUploadArenaRequestedBytes: 0,
+        producerUploadArenaConfiguredBytes: 0,
+        producerUploadArenaFallbackCount: 0,
+        producerUploadArenaLateRejectCount: 0,
+        producerUploadArenaWrapCount: 0,
+        producerUploadArenaInflightHighWaterBytes: 0,
+        uploadArenaRingHandoffBytes: 0,
+        uploadArenaRingHandoffExpectedBytes: 0,
+        uploadArenaRingHandoffMismatch: false,
+        uploadArenaRingHandoffMismatchCount: 0,
         commandDroppedCount: 0,
         batchAbortCount: 0,
         batchOversizeCount: 0,
@@ -609,6 +619,26 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerVertexBufferRecordsSuppressed,
     causalWgpuProducerIndexBufferRecordsSuppressed:
       telemetry.webgpu.producerIndexBufferRecordsSuppressed,
+    causalWgpuUploadArenaRequestedBytes:
+      telemetry.webgpu.producerUploadArenaRequestedBytes,
+    causalWgpuUploadArenaConfiguredBytes:
+      telemetry.webgpu.producerUploadArenaConfiguredBytes,
+    causalWgpuUploadArenaFallbackCount:
+      telemetry.webgpu.producerUploadArenaFallbackCount,
+    causalWgpuUploadArenaLateRejectCount:
+      telemetry.webgpu.producerUploadArenaLateRejectCount,
+    causalWgpuUploadArenaWrapCount:
+      telemetry.webgpu.producerUploadArenaWrapCount,
+    causalWgpuUploadArenaInflightHighWaterBytes:
+      telemetry.webgpu.producerUploadArenaInflightHighWaterBytes,
+    causalWgpuUploadArenaRingHandoffBytes:
+      telemetry.webgpu.uploadArenaRingHandoffBytes,
+    causalWgpuUploadArenaRingHandoffExpectedBytes:
+      telemetry.webgpu.uploadArenaRingHandoffExpectedBytes,
+    causalWgpuUploadArenaRingHandoffMismatch:
+      telemetry.webgpu.uploadArenaRingHandoffMismatch,
+    causalWgpuUploadArenaRingHandoffMismatchCount:
+      telemetry.webgpu.uploadArenaRingHandoffMismatchCount,
     causalWgpuCommandDroppedCount: telemetry.webgpu.commandDroppedCount,
     causalWgpuBatchAbortCount: telemetry.webgpu.batchAbortCount,
     causalWgpuBatchOversizeCount: telemetry.webgpu.batchOversizeCount,
