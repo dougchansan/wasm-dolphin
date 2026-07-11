@@ -41,6 +41,8 @@
   role timing, packing screen, and cache no-go.
 - [WGPU queue-relief results](perf-results/melee-wgpu-queue-relief-2026-07-11.md) —
   rejected asynchronous-relief smokes and second-GPU limitation.
+- [WGPU mapped-staging smoke](perf-results/melee-wgpu-mapped-staging-2026-07-11.md) —
+  corrected single-arm mechanism evidence and the invalidated prior A/B.
 - [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
   removed experiment, safety invariants, and next architecture.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
