@@ -63,5 +63,5 @@ test("standalone native harness invokes both parity modes and rollback", async (
   assert.match(harness, /RunWebGpuCommandStreamGeometryParitySmoke\(0\)/);
   assert.match(harness, /RunWebGpuCommandStreamGeometryParitySmoke\(1\)/);
   assert.match(harness, /RunWebGpuCommandStreamGeometryRollbackSmoke\(\)/);
-  assert.match(harness, /GetWebGpuCommandStreamGeometrySmokeError\(\)/);
+  assert.match(harness, /GetWebGpuCommandStreamGeometrySmokeError/);
 });

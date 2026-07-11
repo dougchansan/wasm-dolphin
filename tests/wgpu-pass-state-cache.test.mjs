@@ -15,7 +15,7 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
     parseWgpuProducerStateStats(
       "wgstate:1 pipe:4 bg:5,6,7 vb:8 ib:9 wgdrop:0 " +
       "wgbabort:10 wgboversize:11 wguploadto:12 " +
-      "wgubo:1 wgubometrics:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
+      "wgubo:1 wgubometrics:1 wgubopack:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
       "usupcall:22,23,24 usupbyte:25,26,27 " +
       "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
       "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
@@ -33,6 +33,7 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadTimeoutCount: 12,
       uboCacheEnabled: true,
       uboCacheMetricsEnabled: true,
+      uboPackEnabled: true,
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [13, 14, 15],
       uboCacheHits: [16, 17, 18],
@@ -72,6 +73,7 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadTimeoutCount: 0,
       uboCacheEnabled: false,
       uboCacheMetricsEnabled: false,
+      uboPackEnabled: false,
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [0, 0, 0],
       uboCacheHits: [0, 0, 0],

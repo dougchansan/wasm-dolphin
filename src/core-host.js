@@ -22,7 +22,8 @@ import {
   requestedWgpuGeometryPack,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
-  requestedWgpuUboCache
+  requestedWgpuUboCache,
+  requestedWgpuUboPack
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
@@ -99,6 +100,7 @@ export class EmulatorHost {
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
+    this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
     this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
@@ -324,6 +326,7 @@ export class EmulatorHost {
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
+            wgpuUboPack: this.wgpuUboPack,
             wgpuGeometryPack: this.wgpuGeometryPack,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,

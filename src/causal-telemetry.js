@@ -187,6 +187,7 @@ export function createCausalTelemetry(overrides = {}) {
         producerUploadArenaWrapCount: 0,
         producerUploadArenaInflightHighWaterBytes: 0,
         producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+        producerUboPackEnabled: false,
         producerUboPacketEligibleCount: 0,
         producerUboPacketTheoreticalCallsRemoved: 0,
         producerUboPacketPayloadBytes: 0,
@@ -723,6 +724,7 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUploadArenaInflightHighWaterBytes,
     causalWgpuProducerUboChangeMaskHistogram:
       telemetry.webgpu.producerUboChangeMaskHistogram,
+    causalWgpuProducerUboPackEnabled: telemetry.webgpu.producerUboPackEnabled,
     causalWgpuProducerUboPacketEligibleCount:
       telemetry.webgpu.producerUboPacketEligibleCount,
     causalWgpuProducerUboPacketTheoreticalCallsRemoved:

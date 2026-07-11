@@ -56,14 +56,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 43506,
-      "sha256": "7a86be72377b13286fa92d71888f608b2352b7f0ea970ad9ee3c142168879f5f"
+      "size": 43624,
+      "sha256": "f5599614716557f8fa42871dec6ac7cc3abd888d37f760e25a8ec22f4b356f08"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 55665,
-      "sha256": "cfe96baa1c7905db376af33eeead5ddf9c20319f07dc087a34ea264ed5e3cfed"
+      "size": 55801,
+      "sha256": "783a02f982a77e7e2d90a71e719d96596ca3dcffb041bc74c9d5e1ee03ad48bd"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -110,8 +110,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 391969,
-      "sha256": "62c03294971ae338798702563ae7398f5a0a52e8dbf0ea1721d85356e7206958"
+      "size": 393125,
+      "sha256": "f1a518fbad9e36e504ef9a03f2c86c2f824934e65d2535b88410ad0e6c6addab"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -122,8 +122,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 36618,
-      "sha256": "3e765237549af4ff4b2a9e3523ff56c46db09e603e8c07b1cc47e6cf9e114dfe"
+      "size": 36725,
+      "sha256": "9d0209b209b21c6c2b87417daccb6100fae0a6fe6ae3ce98bc39e943b0cec049"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -134,14 +134,14 @@
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 13160,
-      "sha256": "681cf420c5b83aab19983c322b91527520151e1276e31437b3e532ec6c9d8cd3"
+      "size": 13282,
+      "sha256": "563d35d151779f43fa90b7d8fad7fe6069ad8d64aeec4e34c36b6c793b668482"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 32848,
-      "sha256": "e5a57aa9d95dc21b9812acb95e31398e597c86357841b1e93fb2efc62ff4349f"
+      "size": 33135,
+      "sha256": "0cd1e1683381a8de91d29e0bfdac974a16b9059443d363f1e33fabf4eae9ee1c"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -182,7 +182,12 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [],
+  "sourceOnlyExportsPendingRebuild": [
+    "_GetWebGpuDenseUboSmokeError",
+    "_RunWebGpuDenseUboPacketSmoke",
+    "_RunWebGpuDenseUboRollbackSmoke",
+    "_SetWebGpuUboPackEnabled"
+  ],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",

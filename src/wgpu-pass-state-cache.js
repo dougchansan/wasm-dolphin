@@ -9,10 +9,11 @@ export function parseWgpuProducerStateStats(text = "") {
   const match = /\bwgstate:(\d+)\s+pipe:(\d+)\s+bg:(\d+),(\d+),(\d+)\s+vb:(\d+)\s+ib:(\d+)\s+wgdrop:(\d+)(?:\s+wgbabort:(\d+)\s+wgboversize:(\d+)\s+wguploadto:(\d+))?/i
     .exec(normalized);
   if (!match) return null;
-  const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
+  const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?(?:\s+wgubopack:\d+)?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
     .exec(normalized);
   const uboPacket = /\bumask:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\s+upack:(\d+),(\d+),(\d+),(\d+)\s+ucpucall:(\d+),(\d+),(\d+)\s+ucpuns:(\d+),(\d+),(\d+)/i
     .exec(normalized);
+  const denseUbo = /\bwgubopack:(\d+)/i.exec(normalized);
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   return {
@@ -27,6 +28,7 @@ export function parseWgpuProducerStateStats(text = "") {
     uploadTimeoutCount: Number(match[11] || 0),
     uboCacheEnabled: ubo?.[1] === "1",
     uboCacheMetricsEnabled: ubo?.[2] === "1",
+    uboPackEnabled: denseUbo?.[1] === "1",
     uboCacheClassOrder: ["vs", "ps", "gs"],
     uboCacheLookups: numericTriple(ubo, 3),
     uboCacheHits: numericTriple(ubo, 6),

@@ -1,0 +1,493 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index a22ee38..cf8b2b4 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuUploadArenaMiB','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuUploadArenaMiB','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/CMakeLists.txt b/Source/Core/VideoBackends/WebGPU/CMakeLists.txt
+index 473a8e0..9acc9c2 100644
+--- a/Source/Core/VideoBackends/WebGPU/CMakeLists.txt
++++ b/Source/Core/VideoBackends/WebGPU/CMakeLists.txt
+@@ -11,6 +11,7 @@ add_library(videowebgpu
+   WebGPUVertexManager.h
+   WebGPUTexture.cpp
+   WebGPUTexture.h
++  WebGPUUboPacket.h
+ )
+ 
+ target_link_libraries(videowebgpu
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 3cd07f7..00574dd 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -17,6 +17,7 @@ namespace
+ {
+ std::atomic<u64> s_dropped_record_count{0};
+ const char* s_geometry_smoke_error = "ok";
++const char* s_dense_ubo_smoke_error = "ok";
+ }
+ 
+ u64 GetWebGpuCommandDroppedRecordCount()
+@@ -614,6 +615,39 @@ UploadPacket WebGPUCommandStream::UploadAllocTwoSegments(const void* first, size
+   return packet;
+ }
+ 
++u32 WebGPUCommandStream::UploadAllocUboPacket(
++    const DenseUboPacketPlan& plan,
++    const std::array<DenseUboClass, kDenseUboClassCount>& classes)
++{
++  if (!plan.valid || plan.packet_size == 0)
++  {
++    PoisonPass();
++    return 0;
++  }
++  const u32 ptr = ReserveUpload(plan.packet_size, 16);
++  if (ptr == 0)
++    return 0;
++
++  u8* const destination = reinterpret_cast<u8*>(static_cast<uintptr_t>(ptr));
++  std::memset(destination, 0, plan.packet_size);
++  for (u32 index = 0; index < classes.size(); ++index)
++  {
++    if ((plan.change_mask & (1u << index)) == 0)
++      continue;
++    const DenseUboClass& ubo = classes[index];
++    const u32 offset = plan.relative_offsets[index];
++    if (ubo.data == nullptr || ubo.size == 0 || offset > plan.packet_size ||
++        ubo.size > plan.packet_size - offset)
++    {
++      RollbackLastUpload(ptr, plan.packet_size);
++      PoisonPass();
++      return 0;
++    }
++    std::memcpy(destination + offset, ubo.data, ubo.size);
++  }
++  return ptr;
++}
++
+ void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
+ {
+   // UploadAlloc is immediately followed by its upload-record Push on the
+@@ -1084,7 +1118,7 @@ struct CommandStreamSmokeFixture
+ {
+   CmdRingHeader header{};
+   CmdRecord slots[32]{};
+-  alignas(16) u8 upload[256]{};
++  alignas(16) u8 upload[1024]{};
+   WebGPUCommandStream stream;
+ 
+   CommandStreamSmokeFixture()
+@@ -1229,4 +1263,134 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuCommandStreamGeometrySmokeE
+ {
+   return s_geometry_smoke_error;
+ }
++
++namespace
++{
++int FailDenseUboSmoke(int code, const char* message)
++{
++  s_dense_ubo_smoke_error = message;
++  return code;
++}
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuDenseUboPacketSmoke()
++{
++  s_dense_ubo_smoke_error = "ok";
++  std::array<u8, 37> vs{};
++  std::array<u8, 73> ps{};
++  std::array<u8, 19> gs{};
++  for (u32 index = 0; index < vs.size(); ++index)
++    vs[index] = static_cast<u8>(0x10 + index);
++  for (u32 index = 0; index < ps.size(); ++index)
++    ps[index] = static_cast<u8>(0x40 + index);
++  for (u32 index = 0; index < gs.size(); ++index)
++    gs[index] = static_cast<u8>(0x90 + index);
++  const std::array<DenseUboClass, 3> classes = {
++      DenseUboClass{vs.data(), static_cast<u32>(vs.size())},
++      DenseUboClass{ps.data(), static_cast<u32>(ps.size())},
++      DenseUboClass{gs.data(), static_cast<u32>(gs.size())}};
++
++  for (u32 mask = 0; mask < 8; ++mask)
++  {
++    const DenseUboPacketPlan plan = PlanDenseUboPacket(256, 4096, classes, mask);
++    if (!plan.valid)
++      return FailDenseUboSmoke(301, "mask plan rejected");
++    if (mask == 0)
++    {
++      if (plan.packet_size != 0)
++        return FailDenseUboSmoke(302, "empty mask allocated bytes");
++      continue;
++    }
++
++    CommandStreamSmokeFixture fixture;
++    const u32 src = fixture.stream.UploadAllocUboPacket(plan, classes);
++    if (src == 0 || !fixture.stream.PushUploadBuffer(41, plan.destination_start, src,
++                                                     plan.packet_size, BufferUploadRole::Ubo))
++      return FailDenseUboSmoke(303, "packet allocation/publication failed");
++    const u8* bytes = reinterpret_cast<const u8*>(static_cast<uintptr_t>(src));
++    for (u32 offset = 0; offset < plan.packet_size; ++offset)
++    {
++      bool payload_byte = false;
++      for (u32 index = 0; index < classes.size(); ++index)
++      {
++        if ((mask & (1u << index)) == 0)
++          continue;
++        const u32 begin = plan.relative_offsets[index];
++        if (offset >= begin && offset < begin + classes[index].size)
++        {
++          const u8* expected = static_cast<const u8*>(classes[index].data);
++          if (bytes[offset] != expected[offset - begin])
++            return FailDenseUboSmoke(304, "packet payload differs");
++          payload_byte = true;
++          break;
++        }
++      }
++      if (!payload_byte && bytes[offset] != 0)
++        return FailDenseUboSmoke(305, "packet alignment gap is not zero");
++    }
++    for (u32 index = 0; index < classes.size(); ++index)
++    {
++      if ((mask & (1u << index)) != 0 &&
++          (plan.destination_offsets[index] % kDenseUboAlignment) != 0)
++        return FailDenseUboSmoke(306, "dynamic offset is not 256-byte aligned");
++    }
++    if (fixture.header.write.load(std::memory_order_acquire) != 1 ||
++        fixture.slots[0].op != static_cast<u32>(CmdOp::UploadBuffer) ||
++        fixture.slots[0].arg.u[1] != plan.destination_start ||
++        fixture.slots[0].arg.u[3] != plan.packet_size)
++      return FailDenseUboSmoke(307, "packet did not publish exactly one upload");
++  }
++
++  std::array<u8, 4112> actual_vs{};
++  std::array<u8, 1536> actual_ps{};
++  std::array<u8, 64> actual_gs{};
++  const std::array<DenseUboClass, 3> actual = {
++      DenseUboClass{actual_vs.data(), static_cast<u32>(actual_vs.size())},
++      DenseUboClass{actual_ps.data(), static_cast<u32>(actual_ps.size())},
++      DenseUboClass{actual_gs.data(), static_cast<u32>(actual_gs.size())}};
++  const DenseUboPacketPlan actual_plan = PlanDenseUboPacket(0, 32768, actual, 7);
++  if (!actual_plan.valid || actual_plan.relative_offsets[0] != 1792 ||
++      actual_plan.relative_offsets[1] != 0 || actual_plan.relative_offsets[2] != 1536 ||
++      actual_plan.packet_size != 5904)
++    return FailDenseUboSmoke(308, "actual-size PS/GS/VS layout differs");
++  if (!ShouldUseDenseUboPackets(true, false) || ShouldUseDenseUboPackets(true, true) ||
++      ShouldUseDenseUboPackets(false, false))
++    return FailDenseUboSmoke(309, "cache fallback predicate differs");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuDenseUboRollbackSmoke()
++{
++  s_dense_ubo_smoke_error = "ok";
++  std::array<u8, 32> vs{};
++  std::array<u8, 48> ps{};
++  std::array<u8, 16> gs{};
++  const std::array<DenseUboClass, 3> classes = {
++      DenseUboClass{vs.data(), static_cast<u32>(vs.size())},
++      DenseUboClass{ps.data(), static_cast<u32>(ps.size())},
++      DenseUboClass{gs.data(), static_cast<u32>(gs.size())}};
++  const DenseUboPacketPlan plan = PlanDenseUboPacket(512, 4096, classes, 7);
++  CommandStreamSmokeFixture fixture;
++  const u32 src = fixture.stream.UploadAllocUboPacket(plan, classes);
++  if (src == 0)
++    return FailDenseUboSmoke(401, "rollback setup allocation failed");
++  WebGPUCommandStreamTestPeer::FailConsumer(fixture.stream, 0x55424F50u);
++  if (fixture.stream.PushUploadBuffer(42, plan.destination_start, src, plan.packet_size,
++                                      BufferUploadRole::Ubo))
++    return FailDenseUboSmoke(402, "failed consumer accepted packet");
++  if (WebGPUCommandStreamTestPeer::UploadWrite(fixture.stream) != 0 ||
++      fixture.header.write.load(std::memory_order_acquire) != 0)
++    return FailDenseUboSmoke(403, "failed packet did not roll back both rings");
++
++  auto invalid = classes;
++  invalid[1].data = nullptr;
++  if (PlanDenseUboPacket(512, 4096, invalid, 2).valid)
++    return FailDenseUboSmoke(404, "invalid class plan unexpectedly succeeded");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuDenseUboSmokeError()
++{
++  return s_dense_ubo_smoke_error;
++}
+ }  // namespace WebGPU
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 633319a..d5c05b4 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -8,6 +8,7 @@
+ #include <vector>
+ 
+ #include "Common/CommonTypes.h"
++#include "VideoBackends/WebGPU/WebGPUUboPacket.h"
+ 
+ // Day-27: cross-thread command ring for the WebGPU *hardware*
+ // renderer.
+@@ -256,6 +257,9 @@ public:
+   UploadPacket UploadAllocTwoSegments(const void* first, size_t first_len, const void* second,
+                                       size_t second_len, u32 second_align = 4,
+                                       u32 packet_align = 4);
++  u32 UploadAllocUboPacket(
++      const DenseUboPacketPlan& plan,
++      const std::array<DenseUboClass, kDenseUboClassCount>& classes);
+ 
+   u32 PushCreateBuffer(u32 size, u32 usage_flags);
+   bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len,
+@@ -436,4 +440,7 @@ WebGPUCommandStream& GetCommandStream();
+ extern "C" int RunWebGpuCommandStreamGeometryParitySmoke(int indexed);
+ extern "C" int RunWebGpuCommandStreamGeometryRollbackSmoke();
+ extern "C" const char* GetWebGpuCommandStreamGeometrySmokeError();
++extern "C" int RunWebGpuDenseUboPacketSmoke();
++extern "C" int RunWebGpuDenseUboRollbackSmoke();
++extern "C" const char* GetWebGpuDenseUboSmokeError();
+ }  // namespace WebGPU
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index a8b7921..2fb9152 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -68,6 +68,7 @@ std::atomic<u64> s_ubo_packet_payload_bytes{0};
+ std::atomic<u64> s_ubo_packet_aligned_bytes{0};
+ std::atomic<u64> s_ubo_prepare_cpu_calls[3]{};
+ std::atomic<u64> s_ubo_prepare_cpu_ns[3]{};
++std::atomic<bool> s_ubo_packet_enabled{false};
+ std::atomic<bool> s_geometry_upload_pack_enabled{false};
+ std::atomic<u64> s_geometry_upload_pack_epoch{0};
+ }
+@@ -98,6 +99,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled(int enabled)
+   InvalidateGeometryUploadPack();
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUboPackEnabled(int enabled)
++{
++  s_ubo_packet_enabled.store(enabled != 0, std::memory_order_relaxed);
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUploadArenaMiB(int mib, int metrics_enabled)
+ {
+   GetCommandStream().ConfigureUploadArenaMiB(static_cast<u32>(mib), metrics_enabled != 0);
+@@ -174,6 +180,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " wgubo:" << (s_ubo_cache_enabled.load(std::memory_order_relaxed) ? 1 : 0)
+       << " wgubometrics:"
+       << (s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " wgubopack:"
++      << (ShouldUseDenseUboPackets(
++              s_ubo_packet_enabled.load(std::memory_order_relaxed),
++              s_ubo_cache_enabled.load(std::memory_order_relaxed)) ? 1 : 0)
+       << " ulook:" << s_ubo_cache_lookups[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_cache_lookups[1].load(std::memory_order_relaxed) << ","
+       << s_ubo_cache_lookups[2].load(std::memory_order_relaxed)
+@@ -1096,6 +1106,8 @@ bool WebGPUGfx::PrepareDrawResources()
+ {
+   auto& system = Core::System::GetInstance();
+   const bool ubo_cache_enabled = RefreshUboCacheState();
++  const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
++      s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
+   u32 ubo_change_mask = 0;
+   std::array<u32, 3> ubo_payload_sizes{};
+ 
+@@ -1115,6 +1127,92 @@ bool WebGPUGfx::PrepareDrawResources()
+   if (m_ubo_ring == 0 || m_ssbo_bbox == 0 || m_dummy_tex == 0)
+     return false;
+ 
++  // Dense packets are deliberately incompatible with the independent-class
++  // UBO cache. Plan all three classes before touching renderer-visible state,
++  // reserve one monotonically owned destination interval, and publish every
++  // offset/serial/dirty/shadow field only after the single upload record is
++  // accepted. A failed allocation or PushUploadBuffer therefore leaves the
++  // entire draw preparation transaction unchanged.
++  if (dense_ubo_enabled)
++  {
++    auto& dense_vsm = system.GetVertexShaderManager();
++    auto& dense_psm = system.GetPixelShaderManager();
++    auto& dense_gsm = system.GetGeometryShaderManager();
++    static_assert(sizeof(dense_vsm.constants) <= sizeof(m_vs_shadow));
++    static_assert(sizeof(dense_psm.constants) <= sizeof(m_ps_shadow));
++    static_assert(sizeof(dense_gsm.constants) <= sizeof(m_gs_shadow));
++
++    const bool dense_vs_changed =
++        dense_vsm.dirty || m_vs_off == kUboOffNone || !m_vs_shadow_valid ||
++        std::memcmp(m_vs_shadow.data(), &dense_vsm.constants, sizeof(dense_vsm.constants)) != 0;
++    const bool dense_ps_changed =
++        dense_psm.dirty || m_ps_off == kUboOffNone || !m_ps_shadow_valid ||
++        std::memcmp(m_ps_shadow.data(), &dense_psm.constants, sizeof(dense_psm.constants)) != 0;
++    const bool dense_gs_changed =
++        dense_gsm.dirty || m_gs_off == kUboOffNone || !m_gs_shadow_valid ||
++        std::memcmp(m_gs_shadow.data(), &dense_gsm.constants, sizeof(dense_gsm.constants)) != 0;
++    ubo_change_mask = (dense_vs_changed ? 1u : 0u) | (dense_ps_changed ? 2u : 0u) |
++                      (dense_gs_changed ? 4u : 0u);
++    ubo_payload_sizes = {dense_vs_changed ? static_cast<u32>(sizeof(dense_vsm.constants)) : 0u,
++                         dense_ps_changed ? static_cast<u32>(sizeof(dense_psm.constants)) : 0u,
++                         dense_gs_changed ? static_cast<u32>(sizeof(dense_gsm.constants)) : 0u};
++
++    if (ubo_change_mask != 0)
++    {
++      const std::array<DenseUboClass, 3> classes = {
++          DenseUboClass{&dense_vsm.constants, static_cast<u32>(sizeof(dense_vsm.constants))},
++          DenseUboClass{&dense_psm.constants, static_cast<u32>(sizeof(dense_psm.constants))},
++          DenseUboClass{&dense_gsm.constants, static_cast<u32>(sizeof(dense_gsm.constants))}};
++      const DenseUboPacketPlan plan =
++          PlanDenseUboPacket(m_ubo_ring_off, kUboRingSize, classes, ubo_change_mask);
++      if (!plan.valid)
++      {
++        m_cmd_stream.FailRequiredPublication();
++        return false;
++      }
++      const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
++                                      emscripten_get_now() : 0.0;
++      const u32 src = m_cmd_stream.UploadAllocUboPacket(plan, classes);
++      if (src == 0 ||
++          !m_cmd_stream.PushUploadBuffer(m_ubo_ring, plan.destination_start, src,
++                                         plan.packet_size, BufferUploadRole::Ubo))
++        return false;
++
++      // Transaction commit begins here. No renderer-visible UBO state is
++      // changed above this point.
++      m_ubo_ring_off = plan.destination_end;
++      const u64 publication_serial = ++m_ubo_publication_serial;
++      m_last_ubo_slice_serial = publication_serial;
++      if (dense_vs_changed)
++      {
++        m_vs_off = plan.destination_offsets[0];
++        m_vs_publication_serial = publication_serial;
++        dense_vsm.dirty = false;
++        std::memcpy(m_vs_shadow.data(), &dense_vsm.constants, sizeof(dense_vsm.constants));
++        m_vs_shadow_valid = true;
++        RecordUboPrepareCpu(0, cpu_start_ms);
++      }
++      if (dense_ps_changed)
++      {
++        m_ps_off = plan.destination_offsets[1];
++        m_ps_publication_serial = publication_serial;
++        dense_psm.dirty = false;
++        std::memcpy(m_ps_shadow.data(), &dense_psm.constants, sizeof(dense_psm.constants));
++        m_ps_shadow_valid = true;
++        RecordUboPrepareCpu(1, cpu_start_ms);
++      }
++      if (dense_gs_changed)
++      {
++        m_gs_off = plan.destination_offsets[2];
++        m_gs_publication_serial = publication_serial;
++        dense_gsm.dirty = false;
++        std::memcpy(m_gs_shadow.data(), &dense_gsm.constants, sizeof(dense_gsm.constants));
++        m_gs_shadow_valid = true;
++        RecordUboPrepareCpu(2, cpu_start_ms);
++      }
++    }
++  }
++
+   auto& vsm = system.GetVertexShaderManager();
+   {
+     // DIAG one-shot: is the VS UBO actually populated? Dump dirty +
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
+new file mode 100644
+index 0000000..dce16d3
+--- /dev/null
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
+@@ -0,0 +1,99 @@
++// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <array>
++#include <limits>
++
++#include "Common/CommonTypes.h"
++
++namespace WebGPU
++{
++constexpr u32 kDenseUboAlignment = 256;
++constexpr u32 kDenseUboClassCount = 3;
++
++struct DenseUboClass
++{
++  const void* data = nullptr;
++  u32 size = 0;
++};
++
++struct DenseUboPacketPlan
++{
++  std::array<u32, kDenseUboClassCount> relative_offsets{};
++  std::array<u32, kDenseUboClassCount> destination_offsets{};
++  u32 change_mask = 0;
++  u32 destination_start = 0;
++  u32 destination_end = 0;
++  u32 packet_size = 0;
++  bool valid = false;
++};
++
++constexpr u32 AlignDenseUbo(u32 value, u32 alignment)
++{
++  return (value + alignment - 1) & ~(alignment - 1);
++}
++
++inline DenseUboPacketPlan PlanDenseUboPacket(
++    u32 cursor, u32 ring_size, const std::array<DenseUboClass, kDenseUboClassCount>& classes,
++    u32 change_mask)
++{
++  DenseUboPacketPlan plan{};
++  plan.relative_offsets.fill(std::numeric_limits<u32>::max());
++  plan.destination_offsets.fill(std::numeric_limits<u32>::max());
++  plan.change_mask = change_mask & 7u;
++
++  // Logical class indices are VS, PS, GS. Physical PS, GS, VS order reduces
++  // alignment padding for Dolphin's real 4112/1536/64-byte blocks.
++  constexpr std::array<u32, 3> order = {1, 2, 0};
++  u32 packet_size = 0;
++  for (const u32 index : order)
++  {
++    if ((plan.change_mask & (1u << index)) == 0)
++      continue;
++    const DenseUboClass& ubo = classes[index];
++    if (ubo.data == nullptr || ubo.size == 0)
++      return plan;
++    if (packet_size > std::numeric_limits<u32>::max() - (kDenseUboAlignment - 1))
++      return plan;
++    packet_size = AlignDenseUbo(packet_size, kDenseUboAlignment);
++    if (ubo.size > std::numeric_limits<u32>::max() - packet_size)
++      return plan;
++    plan.relative_offsets[index] = packet_size;
++    packet_size += ubo.size;
++  }
++
++  if (packet_size == 0)
++  {
++    plan.destination_start = cursor;
++    plan.destination_end = cursor;
++    plan.valid = true;
++    return plan;
++  }
++  if (packet_size > std::numeric_limits<u32>::max() - 3u)
++    return plan;
++  packet_size = AlignDenseUbo(packet_size, 4);
++  if (packet_size > ring_size)
++    return plan;
++
++  u32 start = AlignDenseUbo(cursor, kDenseUboAlignment);
++  if (start > ring_size || packet_size > ring_size - start)
++    start = 0;
++  plan.destination_start = start;
++  plan.destination_end = start + packet_size;
++  plan.packet_size = packet_size;
++  for (u32 index = 0; index < classes.size(); ++index)
++  {
++    if ((plan.change_mask & (1u << index)) != 0)
++      plan.destination_offsets[index] = start + plan.relative_offsets[index];
++  }
++  plan.valid = true;
++  return plan;
++}
++
++constexpr bool ShouldUseDenseUboPackets(bool requested, bool ubo_cache_enabled)
++{
++  return requested && !ubo_cache_enabled;
++}
++}  // namespace WebGPU

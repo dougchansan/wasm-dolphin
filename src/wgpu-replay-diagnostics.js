@@ -293,6 +293,16 @@ export function requestedWgpuUploadArenaMiB(
   return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
 }
 
+export function requestedWgpuUboPack(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpuubopack");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
 export function requestedWgpuUploadTransport(
   search = globalThis.location?.search ?? ""
 ) {
