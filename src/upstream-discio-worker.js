@@ -5889,6 +5889,7 @@ const webGpuCausalStats = {
   mappedStagingCapacityWaitMaxMs: 0,
   mappedStagingRemapFailureCount: 0,
   mappedStagingUnsafeCapacityCount: 0,
+  mappedStagingRetainedDrainCount: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -6347,9 +6348,17 @@ function drainWebGpuCmdRing(source = "presentation") {
   };
   const submitEnc = (reason = "drain-boundary") => {
     if (!enc) {
-      // Upload-only drains still have to seal and submit their mapped batch,
-      // but callers use the return value to decide whether a render/present
-      // command buffer was submitted.
+      // A producer publication boundary is not a GPU ordering boundary.
+      // Retain mapped uploads across ordinary drains so a partial resource
+      // prefix does not consume one whole staging slot and queue submission.
+      // The bounded pool still flushes on actual capacity pressure, and
+      // explicit present/other boundaries keep their upload-only submission.
+      if (reason === "drain-boundary" && wgpuUploadTransport === "mapped") {
+        if ((wgpuMappedStagingPool?.snapshot().pendingUploads ?? 0) > 0) {
+          webGpuCausalStats.mappedStagingRetainedDrainCount += 1;
+        }
+        return false;
+      }
       flushMappedUploadsOnly(reason);
       return false;
     }
