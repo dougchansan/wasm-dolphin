@@ -67,6 +67,7 @@ export class UpstreamWorkerAdapter {
     wgpuDetachedPresenter = false,
     wgpuLoadEpochFence = false,
     wgpuReplayPump = false,
+    wgpuReplayBudgetMs = 0,
     wgpuAtomicPassReplay = true,
     wgpuStateCache = false,
     wgpuUboCache = false,
@@ -130,6 +131,9 @@ export class UpstreamWorkerAdapter {
     this.wgpuDetachedPresenter = Boolean(wgpuDetachedPresenter);
     this.wgpuLoadEpochFence = Boolean(wgpuLoadEpochFence);
     this.wgpuReplayPump = Boolean(wgpuReplayPump);
+    this.wgpuReplayBudgetMs = [4, 6].includes(Number(wgpuReplayBudgetMs))
+      ? Number(wgpuReplayBudgetMs)
+      : 0;
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.wgpuStateCache = Boolean(wgpuStateCache);
     this.wgpuUboCache = Boolean(wgpuUboCache);
@@ -293,6 +297,7 @@ export class UpstreamWorkerAdapter {
       wgpuDetachedPresenter: this.wgpuDetachedPresenter,
       wgpuLoadEpochFence: this.wgpuLoadEpochFence,
       wgpuReplayPump: this.wgpuReplayPump,
+      wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       wgpuStateCache: this.wgpuStateCache,
       wgpuUboCache: this.wgpuUboCache,

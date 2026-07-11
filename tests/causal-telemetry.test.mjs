@@ -316,7 +316,23 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         inFlight: 1,
       },
     },
-    webgpu: { backlogLast: 3 },
+    webgpu: {
+      backlogLast: 3,
+      backlogSampleP95: 12,
+      backlogSampleAverage: 6.5,
+      backlogAfterLast: 2,
+      backlogNonzeroAgeMaxMs: 44,
+      replayBudgetMs: 4,
+      replayBudgetYieldCount: 7,
+      replayBudgetAtomicOverrunMaxMs: 1.5,
+      replayBudgetStopReasons: { "time-budget": 7 },
+      drainDurationHistogram: [1, 2, 3, 4, 0, 0, 0, 0],
+      drainCommandHistogram: [0, 1, 2, 3, 4, 0, 0, 0],
+      replayPumpWakeDelayAverageMs: 0.75,
+      replayPumpWakeDelayMaxMs: 2.5,
+      stageBudgetYieldCount: 5,
+      stageCopyDeadlineOverrunMaxMs: 0.4,
+    },
     input: {
       ageLastMs: 4,
       mainGeneration: 7,
@@ -407,6 +423,20 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalGpuCompletionP95Ms, 4.5);
   assert.equal(flat.causalGpuCompletionInFlight, 1);
   assert.equal(flat.causalWgpuBacklog, 3);
+  assert.equal(flat.causalWgpuBacklogSampleP95, 12);
+  assert.equal(flat.causalWgpuBacklogSampleAverage, 6.5);
+  assert.equal(flat.causalWgpuBacklogAfter, 2);
+  assert.equal(flat.causalWgpuBacklogNonzeroAgeMaxMs, 44);
+  assert.equal(flat.causalWgpuReplayBudgetMs, 4);
+  assert.equal(flat.causalWgpuReplayBudgetYieldCount, 7);
+  assert.equal(flat.causalWgpuReplayBudgetAtomicOverrunMaxMs, 1.5);
+  assert.equal(flat.causalWgpuReplayBudgetStopReasons["time-budget"], 7);
+  assert.deepEqual(flat.causalWgpuDrainDurationHistogram, [1, 2, 3, 4, 0, 0, 0, 0]);
+  assert.deepEqual(flat.causalWgpuDrainCommandHistogram, [0, 1, 2, 3, 4, 0, 0, 0]);
+  assert.equal(flat.causalWgpuReplayPumpWakeDelayAverageMs, 0.75);
+  assert.equal(flat.causalWgpuReplayPumpWakeDelayMaxMs, 2.5);
+  assert.equal(flat.causalWgpuStageBudgetYieldCount, 5);
+  assert.equal(flat.causalWgpuStageCopyDeadlineOverrunMaxMs, 0.4);
   assert.equal(flat.causalInputAgeMs, 4);
   assert.equal(flat.causalInputGeneration, 7);
   assert.equal(flat.causalInputVisibleEnabled, true);

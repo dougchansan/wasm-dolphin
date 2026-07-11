@@ -323,6 +323,13 @@ function validateBackend(manifest, summary, addIssue, runId) {
   check(renderer.fallback == null && renderer.coreSelection?.fallbackReason == null,
     "BACKEND_FALLBACK", "Renderer/core fallback is active", addIssue, runId);
   const webgpu = summary.final?.causalTelemetry?.webgpu || {};
+  const params = new URL(manifest.benchmark?.url || "http://invalid/").searchParams;
+  const replayBudgetParam = params.get("wgpureplayms");
+  const expectedReplayBudgetMs = replayBudgetParam === "4"
+    ? 4
+    : replayBudgetParam === "6"
+      ? 6
+      : 0;
   check(webgpu.registered === true && summary.final?.causalTelemetry?.presentation?.backend === "webgpu",
     "BACKEND_TELEMETRY", "Final telemetry does not identify registered real WebGPU", addIssue, runId);
   for (const field of ["uploadTimeoutCountBeforeVerifiedLoad", "uploadTimeoutCountAfterVerifiedLoad",
@@ -337,7 +344,6 @@ function validateBackend(manifest, summary, addIssue, runId) {
       check(safeCounter(webgpu[field]) === 0, "QUALIFYING_WEBGPU_COUNTER",
         `${field}=${webgpu[field]} expected 0`, addIssue, runId);
     }
-    const params = new URL(manifest.benchmark?.url || "http://invalid/").searchParams;
     const expectedArenaBytes = params.get("wgpuuploadmb") === "64"
       ? 64 * 1024 * 1024
       : 32 * 1024 * 1024;
@@ -350,6 +356,18 @@ function validateBackend(manifest, summary, addIssue, runId) {
       `arena expected=${expectedArenaBytes} requested=${webgpu.producerUploadArenaRequestedBytes} ` +
         `configured=${webgpu.producerUploadArenaConfiguredBytes} ` +
         `handoff=${webgpu.uploadArenaRingHandoffBytes}`,
+      addIssue, runId);
+  }
+  if (replayBudgetParam != null) {
+    check(expectedReplayBudgetMs > 0 && webgpu.replayBudgetEnabled === true &&
+        safeCounter(webgpu.replayBudgetMs) === expectedReplayBudgetMs,
+      "REPLAY_BUDGET_IDENTITY",
+      `wgpureplayms=${replayBudgetParam} enabled=${webgpu.replayBudgetEnabled} ` +
+        `telemetryMs=${webgpu.replayBudgetMs}`,
+      addIssue, runId);
+    check(safeCounter(webgpu.replayBudgetStopReasons?.["record-window"]) === 0,
+      "REPLAY_BUDGET_HARD_CAP",
+      `record-window stops=${webgpu.replayBudgetStopReasons?.["record-window"]}`,
       addIssue, runId);
   }
   check(Array.isArray(renderer.errors) && renderer.errors.length === 0,

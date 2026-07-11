@@ -188,6 +188,23 @@ test("host plumbing preserves the 32 MiB held-stage cap while screening a 64 MiB
   assert.match(worker, /uploadArenaRingHandoffMismatch/);
 });
 
+test("budgeted replay keeps upload staging ordered, deadline-aware, and resumable", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(worker, /function stageHeldWgpuUploads\([\s\S]*?deadlineMs/);
+  assert.match(worker, /performance\.now\(\) >= deadlineMs/);
+  assert.match(worker, /ring\.stagedScanCursor = index/);
+  assert.match(worker, /stageBudgetYieldCount/);
+  assert.match(worker, /stageCopyDeadlineOverrunCount/);
+  assert.match(worker,
+    /publishedPassEnd === null\) \{\s+budgetStopReason = "deferred-begin";/);
+  assert.match(worker, /drainWebGpuCmdRing\("presentation"\)/);
+  assert.match(worker, /drainWebGpuCmdRing\("pump"\)/);
+  assert.match(worker, /wgpuReplayYieldPending/);
+});
+
 test("the arena-size patch freezes configuration before handoff and exports metrics", async () => {
   const patch = await readFile(new URL(
     "../patches/dolphin-wasm/snapshot/0024-webgpu-upload-arena-size.patch",
@@ -230,7 +247,7 @@ test("the locked source patch blocks upload-arena overwrite", async () => {
   assert.match(worker, /enableWgpuUploadWatermark\(webGpuCmdRing\)/);
   const replayLoop = worker.indexOf("while (read !== replayLimit)");
   const stagedSuffix = worker.lastIndexOf(
-    "stageHeldWgpuUploads(ring, replayLimit, write, u32, heap)"
+    "stageHeldWgpuUploads(ring, replayLimit, write, u32, heap,"
   );
   assert.ok(replayLoop >= 0 && stagedSuffix > replayLoop,
     "held suffix uploads must be staged after the replayable prefix");

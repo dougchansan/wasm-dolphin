@@ -56,14 +56,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 35457,
-      "sha256": "9edbe11a0d7bb2756119f83339ff12a0c4a8871e7f086306670f547cfa386aa9"
+      "size": 38311,
+      "sha256": "02d041d1287d461409655159d475ce7351fbadd4c86a9b51919587b4d212c498"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 55142,
-      "sha256": "f7a2978908d0057cd89edbce30359fbe752b16e842ebf132ab6ef6c4967f4c36"
+      "size": 55313,
+      "sha256": "002a8a36502876a9edcf5ed87c1395f6b95ce6a7d24c6b55b5af2546c319c60b"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -110,8 +110,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 363588,
-      "sha256": "8ad9f446ad06a41664111505b24c362196d320970bf638e83e5a98d99d89db23"
+      "size": 375343,
+      "sha256": "7896481d76f19fb46d8b036a4932b9f92dc7a7b20f300f5134d534353dbe70fb"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -122,8 +122,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 36031,
-      "sha256": "843a6038e5abac8d699658f9067ce0d70da14d893577b6c0693beff45dbd3939"
+      "size": 36230,
+      "sha256": "059d08741ddf06a95edd53755aa30b8d9266b7a9e4bcfa7122f9335abc20560a"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -140,8 +140,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 29589,
-      "sha256": "0d54456f7c2d95789c86f7bfc19e6ca3cd23de305ae6f9457a760c54607d4f7d"
+      "size": 32437,
+      "sha256": "efd84f803ac6f3ec6f4f8380b2b510ab2d96d515c6539eb33ceb540ff2a562c0"
     },
     {
       "path": "src/wgpu-upload-attribution.js",

@@ -127,6 +127,24 @@ test("attribution validator rejects producer and replay qualification failures",
   }
 });
 
+test("attribution validator enforces replay-budget identity and a zero hard-cap count", async (t) => {
+  const fixture = await makeFixture(t);
+  const manifestPath = path.join(fixture.runDir, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.benchmark.url = "http://127.0.0.1/?video=wgpu&wgpureplayms=4";
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await mutateFinalAndLastSample(fixture, (webgpu) => {
+    webgpu.replayBudgetEnabled = false;
+    webgpu.replayBudgetMs = 6;
+    webgpu.replayBudgetStopReasons = { "record-window": 1 };
+  });
+
+  const result = await validateWgpuUploadAttribution({ outDir: fixture.root });
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => issue.code === "REPLAY_BUDGET_IDENTITY"));
+  assert.ok(result.issues.some((issue) => issue.code === "REPLAY_BUDGET_HARD_CAP"));
+});
+
 test("attribution validator rejects a missing raw artifact", async (t) => {
   const fixture = await makeFixture(t);
   await unlink(path.join(fixture.runDir, "events.jsonl"));

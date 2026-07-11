@@ -6,12 +6,15 @@ import {
   WGPU_REPLAY_OP_NAMES,
   createWgpuReplayOpMetrics,
   createWgpuReplayClassifier,
+  createWgpuReplayBudgetGate,
+  findPublishedAtomicPassEnd,
   requestedWgpuAtomicPassReplay,
   requestedWgpuDeepReplayDiagnostics,
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
+  requestedWgpuReplayBudgetMs,
   requestedWgpuGeometryPack,
   requestedWgpuUploadArenaMiB,
   requestedWgpuStateCache,
@@ -497,6 +500,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuGeometryPack\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuReplayBudgetMs\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
@@ -506,6 +510,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
   assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
+  assert.match(adapter, /wgpuReplayBudgetMs: this\.wgpuReplayBudgetMs/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
@@ -516,6 +521,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
   assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
+  assert.match(worker, /wgpuReplayBudgetMs: payload\.wgpuReplayBudgetMs/);
   assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
   assert.match(worker, /setWebGpuGeometryPackEnabled\?\.\(wgpuGeometryPackEnabled \? 1 : 0\)/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
@@ -534,7 +540,8 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   );
   assert.match(worker, /wgpuReplayOpMetrics\.recordUploadCopy\(/);
   assert.match(worker, /wgpuReplayOpMetrics\.recordQueueUpload\(/);
-  assert.match(worker, /const replayLimit = wgpuAtomicPassReplay\s+\? selectAtomicReplayLimit/);
+  assert.match(worker,
+    /let replayLimit = wgpuReplayBudgetMs > 0[\s\S]*?: wgpuAtomicPassReplay[\s\S]*?selectAtomicReplayLimit/);
   assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
   assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);
   assert.match(worker, /Atomics\.load\(ring\.headerI32, 3\)/);
@@ -542,6 +549,13 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /scheduleDetachedWgpuBitmap\(q\)/);
   assert.match(worker, /while \(read !== replayLimit\)/);
   assert.match(worker, /endPass\("drain-boundary", read\)/);
+  assert.match(worker, /WGPU_REPLAY_BUDGET_CHECK_RECORDS = 32/);
+  assert.match(worker, /replayBudgetAtomicContinuationCount/);
+  assert.match(worker, /drainDurationHistogram/);
+  assert.match(worker, /drainCommandHistogram/);
+  assert.match(worker, /backlogIntegralRecordMs/);
+  assert.match(worker, /backlogSampleP95: wgpuBacklogSampleP95\(\)/);
+  assert.match(worker, /updateWgpuBacklogState\(backlogAfter, performance\.now\(\)\)/);
 });
 
 test("worker reads the first completed EFB pass before later presents can clear it", async () => {
@@ -581,6 +595,76 @@ test("WGPU upload arena accepts only the independent 64 MiB screening arm", () =
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=64"), 64);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=064"), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=128"), 32);
+});
+
+test("WGPU replay budget accepts only literal 4 ms and 6 ms screening arms", () => {
+  assert.equal(requestedWgpuReplayBudgetMs(""), 0);
+  assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=4"), 4);
+  assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=6"), 6);
+  assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=04"), 0);
+  assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=8"), 0);
+});
+
+test("budget gate checks every 32 records and yields only outside an atomic pass", () => {
+  let now = 100;
+  const gate = createWgpuReplayBudgetGate({ budgetMs: 4, now: () => now });
+  gate.beginDrain();
+  now = 105;
+  assert.equal(gate.check({ processed: 31, passDepth: 0 }).checked, false);
+  assert.equal(gate.check({ processed: 32, passDepth: 1 }).shouldYield, false);
+  assert.equal(gate.snapshot().atomicContinuationCount, 1);
+  now = 108;
+  const afterEnd = gate.check({ processed: 35, passDepth: 0, force: true });
+  assert.equal(afterEnd.shouldYield, true);
+  assert.equal(afterEnd.reason, "time-budget");
+  assert.equal(gate.snapshot().deadlineReached, true);
+  assert.equal(gate.snapshot().atomicOverrunCompleted, true);
+  assert.equal(gate.snapshot().atomicOverrunMs, 4);
+});
+
+test("budget gate checks a pass boundary before starting a new atomic pass", () => {
+  let now = 100;
+  const gate = createWgpuReplayBudgetGate({ budgetMs: 4, now: () => now });
+  gate.beginDrain();
+  now = 105;
+  const beforeBegin = gate.check({ processed: 3, passDepth: 0, force: true });
+  assert.equal(beforeBegin.shouldYield, true);
+  assert.equal(beforeBegin.reason, "time-budget");
+  assert.equal(gate.snapshot().atomicOverrunCompleted, false);
+});
+
+test("published atomic pass lookup rejects every incomplete pass suffix", () => {
+  const complete = [12, 16, 20, 21, 22];
+  const incomplete = [12, 16, 20];
+  assert.equal(findPublishedAtomicPassEnd({
+    begin: 0,
+    write: complete.length,
+    opAt: (index) => complete[index],
+  }), 4);
+  assert.equal(findPublishedAtomicPassEnd({
+    begin: 0,
+    write: incomplete.length,
+    opAt: (index) => incomplete[index],
+  }), null);
+  const wrappedBegin = 0xFFFFFFFE;
+  const wrappedOps = new Map([
+    [0xFFFFFFFE, 12],
+    [0xFFFFFFFF, 20],
+    [0, 21],
+  ]);
+  assert.equal(findPublishedAtomicPassEnd({
+    begin: wrappedBegin,
+    write: 1,
+    opAt: (index) => wrappedOps.get(index),
+  }), 1);
+});
+
+test("disabled budget gate never samples the clock or changes legacy decisions", () => {
+  let calls = 0;
+  const gate = createWgpuReplayBudgetGate({ budgetMs: 0, now: () => ++calls });
+  gate.beginDrain();
+  assert.equal(gate.check({ processed: 65536, passDepth: 0, force: true }).shouldYield, false);
+  assert.equal(calls, 0);
 });
 
 test("worker publishes upload-role, pass-window, and verified-load attribution", async () => {
