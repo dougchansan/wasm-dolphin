@@ -16,6 +16,7 @@ import {
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuReplayBudgetMs,
+  requestedWgpuPowerPreference,
   requestedWgpuReplayDiagnostics,
   requestedWgpuStateCache,
   requestedWgpuGeometryPack,
@@ -94,6 +95,7 @@ export class EmulatorHost {
       this.videoBackend === "WebGPU-Real"
     );
     this.wgpuReplayBudgetMs = requestedWgpuReplayBudgetMs(window.location.search);
+    this.wgpuPowerPreference = requestedWgpuPowerPreference(window.location.search);
     this.wgpuQueueRelief = requestedWgpuQueueRelief(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
@@ -318,6 +320,7 @@ export class EmulatorHost {
             wgpuLoadEpochFence: this.wgpuLoadEpochFence,
             wgpuReplayPump: this.wgpuReplayPump,
             wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
+            wgpuPowerPreference: this.wgpuPowerPreference,
             wgpuQueueRelief: this.wgpuQueueRelief,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,

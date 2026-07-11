@@ -180,6 +180,14 @@ export function requestedWgpuReplayBudgetMs(
   return value === "4" ? 4 : value === "6" ? 6 : 0;
 }
 
+export function requestedWgpuPowerPreference(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpupower") === "low"
+    ? "low-power"
+    : "high-performance";
+}
+
 export function createWgpuReplayBudgetGate({
   budgetMs = 0,
   checkIntervalRecords = 32,

@@ -15,6 +15,7 @@ import {
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
   requestedWgpuReplayBudgetMs,
+  requestedWgpuPowerPreference,
   requestedWgpuGeometryPack,
   requestedWgpuUploadArenaMiB,
   requestedWgpuStateCache,
@@ -603,6 +604,12 @@ test("WGPU replay budget accepts only literal 4 ms and 6 ms screening arms", () 
   assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=6"), 6);
   assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=04"), 0);
   assert.equal(requestedWgpuReplayBudgetMs("?wgpureplayms=8"), 0);
+});
+
+test("WGPU power preference is high-performance unless low is explicit", () => {
+  assert.equal(requestedWgpuPowerPreference(""), "high-performance");
+  assert.equal(requestedWgpuPowerPreference("?wgpupower=low"), "low-power");
+  assert.equal(requestedWgpuPowerPreference("?wgpupower=high"), "high-performance");
 });
 
 test("budget gate checks every 32 records and yields only outside an atomic pass", () => {

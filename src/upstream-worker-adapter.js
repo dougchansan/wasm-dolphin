@@ -68,6 +68,7 @@ export class UpstreamWorkerAdapter {
     wgpuLoadEpochFence = false,
     wgpuReplayPump = false,
     wgpuReplayBudgetMs = 0,
+    wgpuPowerPreference = "high-performance",
     wgpuQueueRelief = false,
     wgpuAtomicPassReplay = true,
     wgpuStateCache = false,
@@ -135,6 +136,9 @@ export class UpstreamWorkerAdapter {
     this.wgpuReplayBudgetMs = [4, 6].includes(Number(wgpuReplayBudgetMs))
       ? Number(wgpuReplayBudgetMs)
       : 0;
+    this.wgpuPowerPreference = wgpuPowerPreference === "low-power"
+      ? "low-power"
+      : "high-performance";
     this.wgpuQueueRelief = Boolean(wgpuQueueRelief);
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.wgpuStateCache = Boolean(wgpuStateCache);
@@ -300,6 +304,7 @@ export class UpstreamWorkerAdapter {
       wgpuLoadEpochFence: this.wgpuLoadEpochFence,
       wgpuReplayPump: this.wgpuReplayPump,
       wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
+      wgpuPowerPreference: this.wgpuPowerPreference,
       wgpuQueueRelief: this.wgpuQueueRelief,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       wgpuStateCache: this.wgpuStateCache,

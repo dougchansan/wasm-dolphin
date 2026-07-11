@@ -177,6 +177,7 @@ let wgpuLoadFenceActive = false;
 let wgpuReplayPumpEnabled = false;
 let wgpuReplayPumpTimer = null;
 let wgpuReplayBudgetMs = 0;
+let wgpuPowerPreference = "high-performance";
 let wgpuReplayYieldPending = false;
 let wgpuQueueReliefRequested = false;
 let wgpuQueueReliefHostActivity = 0;
@@ -612,6 +613,7 @@ async function handleMessage(type, payload) {
         wgpuLoadEpochFence: payload.wgpuLoadEpochFence,
         wgpuReplayPump: payload.wgpuReplayPump,
         wgpuReplayBudgetMs: payload.wgpuReplayBudgetMs,
+        wgpuPowerPreference: payload.wgpuPowerPreference,
         wgpuQueueRelief: payload.wgpuQueueRelief,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuStateCache: payload.wgpuStateCache,
@@ -923,6 +925,7 @@ async function loadCore({
   wgpuLoadEpochFence: requestedWgpuLoadEpochFence = false,
   wgpuReplayPump: requestedWgpuReplayPump = false,
   wgpuReplayBudgetMs: requestedWgpuReplayBudgetMs = 0,
+  wgpuPowerPreference: requestedWgpuPowerPreference = "high-performance",
   wgpuQueueRelief: requestedWgpuQueueRelief = false,
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   wgpuStateCache: requestedWgpuStateCache = false,
@@ -971,6 +974,9 @@ async function loadCore({
   wgpuReplayBudgetMs = [4, 6].includes(Number(requestedWgpuReplayBudgetMs))
     ? Number(requestedWgpuReplayBudgetMs)
     : 0;
+  wgpuPowerPreference = requestedWgpuPowerPreference === "low-power"
+    ? "low-power"
+    : "high-performance";
   wgpuReplayYieldPending = false;
   wgpuQueueReliefRequested = Boolean(requestedWgpuQueueRelief) &&
     wgpuReplayPumpEnabled;
@@ -3475,7 +3481,7 @@ async function createWebGpuPresenter(canvas) {
     throw new Error("navigator.gpu is not available in this worker");
   }
 
-  const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
+  const adapter = await gpu.requestAdapter({ powerPreference: wgpuPowerPreference });
   if (!adapter) {
     throw new Error("high-performance WebGPU adapter request returned null");
   }
