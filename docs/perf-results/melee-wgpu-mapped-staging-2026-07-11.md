@@ -57,6 +57,28 @@ not a valid unique-frame measure here. The run was also qualification-ineligible
 because its locked build record described generated artifacts as dirty rather
 than a clean, provenance-verified build.
 
+## Rolled-back tuning smokes
+
+Two subsequent single-run changes tried to reduce mapped-staging pressure.
+Neither improved the original smoke, neither was a qualifying benchmark, and
+both were rolled back.
+
+| Configuration | Commit tested | Game speed % | Core FPS | Wall s | Copy commands | Batches | Capacity waits | Max wait ms | Audio underruns | Input parity | Remap / unsafe errors | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
+| 3×16 MiB, immediate flush | `e3a60518` | 71.60195660035636 | 43.00055582855915 | 11.325434999994934 | 540,621 | 2,121 | 86 | 878.8450000062585 | 0 | Pass | 0 / 0 | Reference smoke; NO-GO |
+| 2×32 MiB, immediate flush | `c78ef805` | 68.96289904744087 | 41.40137697914956 | 11.738739999994635 | 382,841 | 2,105 | 49 | 263.47999999672174 | 2 | Pass | 0 / 0 | Rolled back; NO-GO |
+| 3×16 MiB, retained partial-drain uploads | `66ae27bb` | 69.26502517740828 | 41.56419644944262 | 11.861169999994338 | 352,846 | 1,029 | 69 | 2561.015000000596 | 2 | Pass | 0 / 0 | Rolled back; NO-GO |
+
+The 2×32 MiB layout reduced the number and worst duration of capacity waits but
+also reduced fixed-work throughput. Retaining uploads across partial producer
+drains cut copy-command and batch counts further, yet produced the worst maximum
+wait and again reduced throughput. Both tuning runs added two audio underruns;
+their six-event input-marker sequences still passed parity.
+
+These are descriptive single smokes across different commits, not a paired
+effect estimate. The current code is restored to three 16 MiB staging slots
+with immediate upload flushing; the rejected retention behavior is absent.
+
 ## Invalid prior comparison, retained descriptively
 
 The prior report labelled four runs as queue (A) and four as mapped (B), but
