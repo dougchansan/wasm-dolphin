@@ -36,6 +36,7 @@ import {
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
   summarizeCausalFairness,
+  summarizePostLoadInputDelivery,
   summarizeFixedEmulatedWork,
   summarizeComparison,
   summarizeJitMetrics,
@@ -48,6 +49,7 @@ import {
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
 const FIXED_WORK_POLL_INTERVAL_MS = 100;
+const INPUT_MARKER_POLL_INTERVAL_MS = 10;
 
 await main().catch((error) => {
   console.error(`[perf-gate] ${error.stack || error.message}`);
@@ -77,6 +79,11 @@ async function main() {
     { durationSeconds }
   );
   const postLoadInputScriptCanonical = serializePostLoadInputScript(postLoadInputScript);
+  const inputMaxLatenessMs = numberEnv("PERF_INPUT_MAX_LATENESS_MS", 100);
+  const inputMarkerTimeoutMs = numberEnv("PERF_INPUT_MARKER_TIMEOUT_MS", 2500);
+  if (inputMaxLatenessMs < 0 || inputMarkerTimeoutMs <= 0) {
+    throw new Error("Input lateness must be non-negative and marker timeout must be positive");
+  }
   const settleSeconds = numberEnv("SETTLE_SECONDS", 2);
   const tolerance = cli.tolerance ?? numberEnv("PERF_DROP_TOLERANCE", 0.05);
   const strict = cli.strict || process.env.PERF_STRICT === "1";
@@ -123,6 +130,8 @@ async function main() {
       corePath,
       durationSeconds,
       headed,
+      inputMarkerTimeoutMs,
+      inputMaxLatenessMs,
       outDir,
       postLoadInputScript,
       postLoadInputScriptCanonical,
@@ -393,6 +402,11 @@ async function runScenario(scenario, context) {
     manifest.benchmark.inputScriptScheduleOrigin = context.postLoadInputScript.length
       ? "after-first-timed-sample"
       : null;
+    manifest.benchmark.inputMaxLatenessMs = context.inputMaxLatenessMs;
+    manifest.benchmark.inputMarkerTimeoutMs = context.inputMarkerTimeoutMs;
+    manifest.benchmark.inputMarkerDispatchPolicy = context.postLoadInputScript.length
+      ? "one-in-flight-through-marker-completion"
+      : null;
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
@@ -536,9 +550,14 @@ async function runScenario(scenario, context) {
 
       if (action.type === "input") {
         const dispatchStartedSeconds = elapsedSeconds;
+        const markerBaseline = await readInputMarkerBarrierState(page);
         if (action.event.action === "down") await page.keyboard.down(action.event.key);
         else await page.keyboard.up(action.event.key);
         const deliveredSeconds = (Date.now() - startedAt) / 1000;
+        const markerBarrier = await waitForInputMarkerCompletion(page, markerBaseline, {
+          pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
+          timeoutMs: context.inputMarkerTimeoutMs,
+        });
         inputEvents.push({
           action: action.event.action,
           key: action.event.key,
@@ -548,6 +567,7 @@ async function runScenario(scenario, context) {
           deliveredSeconds,
           latenessMs: Math.max(0, deliveredSeconds * 1000 - action.atMs),
           afterBaselineSample: samples.length > 0,
+          markerBarrier,
         });
         inputIndex += 1;
         continue;
@@ -635,14 +655,11 @@ async function runScenario(scenario, context) {
   });
   invalidReasons.push(...softwareRasterInstrumentation.failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
-  if (inputEvents.length !== context.postLoadInputScript.length) {
-    invalidReasons.push(
-      `post-load input delivered ${inputEvents.length}/${context.postLoadInputScript.length} events`
-    );
-  }
-  if (inputEvents.some((event) => !event.afterBaselineSample)) {
-    invalidReasons.push("post-load input was delivered before the timed baseline sample");
-  }
+  const postLoadInputDelivery = summarizePostLoadInputDelivery(inputEvents, {
+    expectedCount: context.postLoadInputScript.length,
+    maxLatenessMs: context.inputMaxLatenessMs,
+  });
+  invalidReasons.push(...postLoadInputDelivery.failures);
   if (fixedEmulatedWork.enabled && fixedEmulatedWork.deltasValid !== true) {
     invalidReasons.push("fixed emulated work did not produce valid non-negative tick/frame/time deltas");
   }
@@ -677,6 +694,7 @@ async function runScenario(scenario, context) {
     scheduledEventCount: context.postLoadInputScript.length,
     deliveredEventCount: inputEvents.length,
     events: inputEvents,
+    delivery: postLoadInputDelivery,
   };
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
@@ -1133,6 +1151,55 @@ function fixedWorkObservation(value) {
     coreTicks: Number(value?.coreTicks),
     frame: Number(value?.frame),
     observedAtMs: Number(value?.observedAtMs),
+  };
+}
+
+async function readInputMarkerBarrierState(page) {
+  return page.evaluate(() => {
+    const info = window.__lastFrameInfo || {};
+    const telemetry = info.causalTelemetry || window.__causalTelemetry || null;
+    const marker = telemetry?.input?.marker || null;
+    return {
+      available: marker?.enabled === true,
+      appliedCount: Number(marker?.appliedCount) || 0,
+      completedCount: Number(marker?.markerCompletedCount) || 0,
+      supersededCount: Number(marker?.supersededCount) || 0,
+      generationMismatchCount: Number(marker?.generationMismatchCount) || 0,
+      generationUnavailableCount: Number(marker?.generationUnavailableCount) || 0,
+    };
+  });
+}
+
+async function waitForInputMarkerCompletion(page, baseline, { pollIntervalMs, timeoutMs }) {
+  if (baseline?.available !== true) {
+    return { available: false, completed: false, waitedMs: 0, baseline, final: baseline };
+  }
+  const startedAt = Date.now();
+  let final = baseline;
+  while (Date.now() - startedAt < timeoutMs) {
+    await page.waitForTimeout(pollIntervalMs);
+    final = await readInputMarkerBarrierState(page);
+    if (
+      final.available === true &&
+      final.appliedCount > baseline.appliedCount &&
+      final.completedCount > baseline.completedCount
+    ) {
+      return {
+        available: true,
+        completed: true,
+        waitedMs: Date.now() - startedAt,
+        baseline,
+        final,
+      };
+    }
+  }
+  return {
+    available: true,
+    completed: false,
+    waitedMs: Date.now() - startedAt,
+    timeoutMs,
+    baseline,
+    final,
   };
 }
 

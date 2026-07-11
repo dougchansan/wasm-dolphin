@@ -37,6 +37,7 @@ import {
   serializePostLoadInputScript,
   summarizeFixedEmulatedWork,
   summarizeCausalFairness,
+  summarizePostLoadInputDelivery,
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
@@ -81,9 +82,45 @@ test("causal fairness uses timed counter deltas and enforces marker parity", () 
   assert.equal(result.audio.deltas.workerMixCount, 10);
   assert.equal(result.audio.deltas.workerEmptyMixCount, 0);
   assert.equal(result.audio.deltas.underrunCount, 0);
+  assert.equal(result.audio.counterWindow.baseline.underrunCount, 2);
+  assert.equal(result.audio.counterWindow.final.underrunCount, 2);
+  assert.equal(result.audio.counterWindow.excludedBeforeTimedBaseline.underrunCount, 2);
   assert.equal(result.audio.extrema.pumpGapMaxMs, 8);
   assert.equal(result.inputMarker.parityPassed, true);
   assert.deepEqual(result.failures, []);
+});
+
+test("post-load input delivery keeps marker serialization separate from lateness failures", () => {
+  const onTime = {
+    afterBaselineSample: true,
+    latenessMs: 12,
+    markerBarrier: { available: true, completed: true, waitedMs: 24 },
+  };
+  assert.deepEqual(
+    summarizePostLoadInputDelivery([onTime], { expectedCount: 1, maxLatenessMs: 100 }).failures,
+    []
+  );
+
+  const delayed = summarizePostLoadInputDelivery([
+    { ...onTime, latenessMs: 335 },
+    {
+      afterBaselineSample: true,
+      latenessMs: 137,
+      markerBarrier: { available: true, completed: false, waitedMs: 2500 },
+    },
+  ], { expectedCount: 2, maxLatenessMs: 100 });
+  assert.equal(delayed.lateEventCount, 2);
+  assert.equal(delayed.maxObservedLatenessMs, 335);
+  assert.equal(delayed.markerBarrierTimeoutCount, 1);
+  assert.match(delayed.failures.join("\n"), /lateness exceeded 100ms/);
+  assert.match(delayed.failures.join("\n"), /completion barrier timed out/);
+
+  const unavailable = summarizePostLoadInputDelivery([
+    { afterBaselineSample: false, latenessMs: 0, markerBarrier: { available: false } },
+  ], { expectedCount: 2 });
+  assert.match(unavailable.failures.join("\n"), /delivered 1\/2/);
+  assert.match(unavailable.failures.join("\n"), /before the timed baseline/);
+  assert.match(unavailable.failures.join("\n"), /barrier unavailable/);
 });
 
 test("causal fairness reports audio, marker, and GPU decision failures", () => {

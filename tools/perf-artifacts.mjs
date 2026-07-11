@@ -117,6 +117,65 @@ export function serializePostLoadInputScript(events) {
   return events.map((event) => `${event.action}:${event.second}:${event.key}`).join(",");
 }
 
+export function summarizePostLoadInputDelivery(
+  events = [],
+  { expectedCount = 0, maxLatenessMs = 100 } = {}
+) {
+  const expected = Math.max(0, Math.trunc(Number(expectedCount) || 0));
+  const latenessLimit = Number(maxLatenessMs);
+  if (!Number.isFinite(latenessLimit) || latenessLimit < 0) {
+    throw new Error("Post-load input maximum lateness must be a non-negative number");
+  }
+  const delivered = (events || []).filter(Boolean);
+  const lateEvents = delivered.filter((event) => Number(event.latenessMs) > latenessLimit);
+  const missingLatenessCount = delivered.filter(
+    (event) => !Number.isFinite(Number(event.latenessMs))
+  ).length;
+  const beforeBaselineCount = delivered.filter((event) => event.afterBaselineSample !== true).length;
+  const markerBarrierUnavailableCount = delivered.filter(
+    (event) => event.markerBarrier?.available !== true
+  ).length;
+  const markerBarrierTimeoutCount = delivered.filter(
+    (event) => event.markerBarrier?.available === true && event.markerBarrier.completed !== true
+  ).length;
+  const failures = [];
+  if (delivered.length !== expected) {
+    failures.push(`post-load input delivered ${delivered.length}/${expected} events`);
+  }
+  if (beforeBaselineCount > 0) {
+    failures.push(`post-load input delivered ${beforeBaselineCount} events before the timed baseline sample`);
+  }
+  if (missingLatenessCount > 0) {
+    failures.push(`post-load input missing lateness for ${missingLatenessCount} events`);
+  }
+  if (lateEvents.length > 0) {
+    failures.push(
+      `post-load input dispatch lateness exceeded ${latenessLimit}ms for ${lateEvents.length} events ` +
+      `(max=${Math.max(...lateEvents.map((event) => Number(event.latenessMs))).toFixed(1)}ms)`
+    );
+  }
+  if (markerBarrierUnavailableCount > 0) {
+    failures.push(`input marker completion barrier unavailable for ${markerBarrierUnavailableCount} events`);
+  }
+  if (markerBarrierTimeoutCount > 0) {
+    failures.push(`input marker completion barrier timed out for ${markerBarrierTimeoutCount} events`);
+  }
+  return {
+    expectedCount: expected,
+    deliveredCount: delivered.length,
+    maxAllowedLatenessMs: latenessLimit,
+    maxObservedLatenessMs: delivered.length
+      ? Math.max(...delivered.map((event) => Number(event.latenessMs) || 0))
+      : 0,
+    lateEventCount: lateEvents.length,
+    missingLatenessCount,
+    beforeBaselineCount,
+    markerBarrierUnavailableCount,
+    markerBarrierTimeoutCount,
+    failures,
+  };
+}
+
 export function selectNextPostLoadBenchmarkAction({
   sampleIndex,
   totalSamples,
@@ -1086,6 +1145,12 @@ export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 
   const mapDeltas = (fields) => Object.fromEntries(
     Object.entries(fields).map(([name, field]) => [name, delta(field)])
   );
+  const mapValues = (source, fields) => Object.fromEntries(
+    Object.entries(fields).map(([name, field]) => {
+      const value = Number(source[field]);
+      return [name, Number.isFinite(value) ? value : null];
+    })
+  );
   const audioDeltas = mapDeltas(audioCounterFields);
   const stageDeltas = mapDeltas(stageFields);
   const errorDeltas = mapDeltas(errorFields);
@@ -1142,6 +1207,12 @@ export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 
     sampleCount: timed.length,
     audio: {
       deltas: audioDeltas,
+      counterWindow: {
+        boundary: "first-timed-sample-to-final-timed-sample",
+        baseline: mapValues(first, audioCounterFields),
+        final: mapValues(last, audioCounterFields),
+        excludedBeforeTimedBaseline: mapValues(first, audioCounterFields),
+      },
       extrema: {
         ...Object.fromEntries(
           Object.entries(audioMaximumFields).map(([name, field]) => [name, maximum(field)])
