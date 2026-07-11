@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-11T11:34:05.447Z",
+  "createdAt": "2026-07-11T11:37:03.557Z",
   "coreId": "sha256:151b3bf6fc7b70839ecfc197c9aa8a64d2d27452cfe36300841d7b03b1de50c5",
   "repository": {
-    "commit": "6241a31955f8311bf9368cab9a33078512e4d72d",
-    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/causal-telemetry.js\n M src/core-host.js\n M src/upstream-discio-worker.js\n M src/upstream-worker-adapter.js\n M src/wgpu-pass-state-cache.js\n M src/wgpu-replay-diagnostics.js\n M tests/causal-telemetry.test.mjs\n M tests/wgpu-pass-state-cache.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n M tests/wgpu-upload-attribution-validator.test.mjs\n M tests/wgpu-upload-watermark.test.mjs\n M tools/menu-progress-validate.mjs\n M tools/perf-regression-gate.mjs\n M tools/validate-wgpu-upload-attribution.mjs\n?? patches/dolphin-wasm/snapshot/0024-webgpu-upload-arena-size.patch"
+    "commit": "d55491d20169f82b09b1b4f1746f5b8058d8f141",
+    "status": ""
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
