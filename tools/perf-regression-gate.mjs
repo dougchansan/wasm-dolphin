@@ -808,6 +808,16 @@ function summarizeScenario(
   if (scenario.thresholds.requireNoGlError && metrics.maxGlError !== "0x0") {
     invalidReasons.push(`GL error ${metrics.maxGlError}`);
   }
+  const requestedUploadTransport = scenario.params?.wgpuuploadtransport;
+  if (requestedUploadTransport) {
+    const activeUploadTransport = final.causalTelemetry?.webgpu?.uploadTransport;
+    if (activeUploadTransport !== requestedUploadTransport) {
+      failures.push(
+        `WGPU upload transport mismatch: requested=${requestedUploadTransport} ` +
+        `active=${activeUploadTransport ?? "unavailable"}`
+      );
+    }
+  }
   if (!String(final.mountNote || "").includes("Dolphin")) invalidReasons.push("Dolphin did not mount");
   if (consoleLines.some((line) => /\[probe-error\]/i.test(line)) && !invalidReasons.length) {
     invalidReasons.push("probe error was recorded");
@@ -862,7 +872,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "wgpugeompack", "wgpuuploadmb", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "wgpugeompack", "wgpuuploadmb", "wgpuuploadtransport", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

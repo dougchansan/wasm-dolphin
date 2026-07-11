@@ -52,3 +52,10 @@ test("submission orders upload before render and capacity never falls back", asy
   assert.match(worker, /rejectMappedBatch\(mappedBatch, e\)/);
   assert.match(worker, /wgpuMappedStagingPool\?\.invalidate\("WebGPU device lost"\)/);
 });
+
+test("performance validation fails closed when the mapped arm executes queue transport", async () => {
+  const gate = await readSource("../tools/perf-regression-gate.mjs");
+  assert.match(gate, /"wgpuuploadtransport"/);
+  assert.match(gate, /WGPU upload transport mismatch: requested=/);
+  assert.match(gate, /final\.causalTelemetry\?\.webgpu\?\.uploadTransport/);
+});
