@@ -41,6 +41,33 @@ test("WGPU UBO validator rejects cache-off hits", async (t) => {
   assert.ok(result.issues.some((issue) => issue.runId === run.runId && issue.code === "UBO_CACHE_OFF_HIT"));
 });
 
+test("WGPU UBO validator accepts a fresh helper snapshot ahead of causal telemetry", async (t) => {
+  const fixture = await makeFixture(t);
+  const run = fixture.tasks.find((task) => task.params.wgpuubocache === "1");
+  const summaryPath = path.join(fixture.root, run.runId, "summary.json");
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  summary.final.helper = helperStats(true, [12, 22, 32], [6, 11, 16]);
+  await writeFile(summaryPath, JSON.stringify(summary));
+
+  const result = await validateWgpuUboScreening({ outDir: fixture.root, configPath });
+  assert.equal(result.ok, true);
+});
+
+test("WGPU UBO validator rejects a helper snapshot behind causal telemetry", async (t) => {
+  const fixture = await makeFixture(t);
+  const run = fixture.tasks.find((task) => task.params.wgpuubocache === "1");
+  const summaryPath = path.join(fixture.root, run.runId, "summary.json");
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  summary.final.helper = helperStats(true, [9, 20, 30], [5, 10, 15]);
+  await writeFile(summaryPath, JSON.stringify(summary));
+
+  const result = await validateWgpuUboScreening({ outDir: fixture.root, configPath });
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some(
+    (issue) => issue.runId === run.runId && issue.code === "UBO_COUNTER_REGRESSION"
+  ));
+});
+
 test("WGPU UBO validator rejects zero-color presentation readback", async (t) => {
   const fixture = await makeFixture(t);
   const run = fixture.tasks[0];

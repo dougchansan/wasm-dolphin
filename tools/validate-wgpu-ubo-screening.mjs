@@ -321,8 +321,15 @@ function validateUboCache({ expected, summary, samples, issue }) {
       helper.batchOversizeCount === Number(webgpu.batchOversizeCount) &&
       helper.uploadTimeoutCount === Number(webgpu.uploadTimeoutCount),
     "REPLAY_COUNTER_DISAGREEMENT", "Helper and causal replay-error counters disagree", issue);
-  check(helper !== null && arraysEqual(helper.uboCacheLookups, lookups) && arraysEqual(helper.uboCacheHits, hits),
-    "UBO_COUNTER_DISAGREEMENT", "Helper and causal UBO counters disagree", issue);
+  // Helper text is refreshed every frame, while causal telemetry is retained
+  // for up to one sampling interval. The helper may therefore be newer, but
+  // monotonic producer counters must never trail the retained causal sample.
+  check(helper !== null &&
+      arraysAtLeast(helper.uboCacheLookups, lookups) &&
+      arraysAtLeast(helper.uboCacheHits, hits) &&
+      arraysAtLeast(helper.uboUploadCallsSuppressed, callsSuppressed) &&
+      arraysAtLeast(helper.uboUploadBytesSuppressed, bytesSuppressed),
+    "UBO_COUNTER_REGRESSION", "Fresh helper UBO counters trail causal telemetry", issue);
 
   for (let index = 0; index < 3; index += 1) {
     check(hits[index] <= lookups[index],
@@ -485,8 +492,9 @@ function numericTriple(value) {
   return [0, 1, 2].map((index) => Number(value?.[index] || 0));
 }
 
-function arraysEqual(left, right) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+function arraysAtLeast(fresh, retained) {
+  return fresh.length === retained.length &&
+    fresh.every((value, index) => Number(value) >= Number(retained[index]));
 }
 
 function sum(values) {
