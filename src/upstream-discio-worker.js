@@ -641,6 +641,7 @@ async function handleMessage(type, payload) {
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
+        wgpuUboPack: payload.wgpuUboPack,
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,

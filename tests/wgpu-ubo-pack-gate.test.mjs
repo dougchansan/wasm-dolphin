@@ -15,3 +15,13 @@ test("performance validation fails closed when the requested UBO packet mode is 
   assert.match(gate, /final\.causalTelemetry\?\.webgpu\?\.uboPackEnabled/);
   assert.match(gate, /WGPU UBO pack mismatch: requested=/);
 });
+
+test("the disc worker forwards the requested UBO packet mode into core loading", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(worker, /wgpuUboPack: payload\.wgpuUboPack/);
+  assert.match(worker, /wgpuUboPack: requestedWgpuUboPack = false/);
+  assert.match(worker, /wgpuUboPackEnabled = Boolean\(requestedWgpuUboPack\)/);
+});
