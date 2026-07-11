@@ -22,6 +22,7 @@ import {
   requestedWgpuUploadArenaMiB,
   requestedWgpuUboCache
 } from "./wgpu-replay-diagnostics.js";
+import { requestedWgpuQueueRelief } from "./wgpu-queue-relief.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
@@ -93,6 +94,7 @@ export class EmulatorHost {
       this.videoBackend === "WebGPU-Real"
     );
     this.wgpuReplayBudgetMs = requestedWgpuReplayBudgetMs(window.location.search);
+    this.wgpuQueueRelief = requestedWgpuQueueRelief(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
@@ -316,6 +318,7 @@ export class EmulatorHost {
             wgpuLoadEpochFence: this.wgpuLoadEpochFence,
             wgpuReplayPump: this.wgpuReplayPump,
             wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
+            wgpuQueueRelief: this.wgpuQueueRelief,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
