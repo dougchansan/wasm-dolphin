@@ -1,5 +1,5 @@
-export const WGPU_QUEUE_RELIEF_UPLOAD_CALLS = 8192;
-export const WGPU_QUEUE_RELIEF_UPLOAD_BYTES = 16 * 1024 * 1024;
+export const WGPU_QUEUE_RELIEF_UPLOAD_CALLS = 1024;
+export const WGPU_QUEUE_RELIEF_UPLOAD_BYTES = 2 * 1024 * 1024;
 
 export function requestedWgpuQueueRelief(
   search = globalThis.location?.search ?? ""

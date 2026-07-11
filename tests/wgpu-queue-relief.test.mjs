@@ -13,8 +13,8 @@ test("queue relief request is literal and default-off", () => {
   assert.equal(requestedWgpuQueueRelief(""), false);
   assert.equal(requestedWgpuQueueRelief("?wgpuqueuewait=1"), true);
   assert.equal(requestedWgpuQueueRelief("?wgpuqueuewait=true"), false);
-  assert.equal(WGPU_QUEUE_RELIEF_UPLOAD_CALLS, 8192);
-  assert.equal(WGPU_QUEUE_RELIEF_UPLOAD_BYTES, 16 * 1024 * 1024);
+  assert.equal(WGPU_QUEUE_RELIEF_UPLOAD_CALLS, 1024);
+  assert.equal(WGPU_QUEUE_RELIEF_UPLOAD_BYTES, 2 * 1024 * 1024);
 });
 
 test("disabled helper preserves the inert path", () => {

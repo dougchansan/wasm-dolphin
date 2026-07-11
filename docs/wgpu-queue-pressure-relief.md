@@ -19,10 +19,12 @@ Outer 4/6 ms replay budgets cannot interrupt a single synchronous queue call.
 `wgpuqueuewait=1` enables asynchronous pressure relief. The default remains
 off. The experiment arms after either:
 
-- 8,192 successful queue upload calls, or
-- 16 MiB of successful queue upload payloads.
+- 1,024 successful queue upload calls, or
+- 2 MiB of successful queue upload payloads.
 
-Both thresholds are below the first measured backpressure cliff.
+The initial 8,192-call/16-MiB smoke still accumulated one 1.88-second startup
+fence. The tighter thresholds are intended to drain before that cliff rather
+than merely converting it into a long asynchronous wait.
 
 When armed, replay continues through the current atomic render pass. At the
 next safe pass/submission boundary it submits encoded work, publishes the
