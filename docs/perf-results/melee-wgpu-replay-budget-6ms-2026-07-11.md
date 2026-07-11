@@ -4,7 +4,7 @@
 
 **NO-GO. Do not promote `wgpureplayms=6`.** The candidate improved mean fixed-work game speed by only 0.096 percentage points (0.145% relative), below the 1% screening threshold and within the observed run scatter. Both ABBA blocks were invalid, every run failed the audio and input gates, and the recurrent roughly 1.7-second `GPUQueue.writeBuffer` stall remained. The comparison is therefore infrastructure-inconclusive, not evidence of a performance win.
 
-The default/fixed 16 KiB replay policy remains the reference. A new screen should wait until the audio/input validity failures are resolved or the upload-staging architecture changes.
+The default fixed 16K-record replay window remains the reference. A new screen should wait until the audio/input validity failures are resolved or the upload-staging architecture changes.
 
 ## Fixed fixture and environment
 
@@ -25,7 +25,7 @@ The harness manifests report `isoVerified`, `saveStateVerified`, `saveStateLoade
 
 All values below are descriptive because there were zero valid blocks.
 
-| Metric | Fixed 16 KiB (n=4) | 6 ms (n=4) | 6 ms minus reference |
+| Metric | Fixed 16K records (n=4) | 6 ms (n=4) | 6 ms minus reference |
 | --- | ---: | ---: | ---: |
 | Fixed-work game speed, mean | 66.422094% | 66.518270% | +0.096175 pp (+0.144794%) |
 | Fixed-work game speed, median | 66.726096% | 66.608028% | -0.118068 pp |
