@@ -49,6 +49,55 @@ test("packed geometry uploads retain their own stable producer role", () => {
   assert.equal(snapshot.bytesByRole[WGPU_UPLOAD_ROLE.GEOMETRY], 320);
 });
 
+test("queue.writeBuffer CPU time is attributed by role with bounded slow evidence", () => {
+  const metrics = createWgpuUploadAttribution();
+  metrics.recordQueueWrite(WGPU_UPLOAD_ROLE.UBO, 1536, 1700, {
+    backlogRecords: 912,
+    submissionCount: 17,
+    passDepth: 0,
+    staged: true,
+  });
+  metrics.recordQueueWrite(WGPU_UPLOAD_ROLE.VERTEX, 4096, 4.5, {
+    backlogRecords: 64,
+    submissionCount: 18,
+    passDepth: 1,
+  });
+
+  const queueWrite = metrics.snapshot().queueWrite;
+  assert.equal(queueWrite.totalCalls, 2);
+  assert.equal(queueWrite.totalMs, 1704.5);
+  assert.equal(queueWrite.maxMs, 1700);
+  assert.equal(queueWrite.callsByRole[WGPU_UPLOAD_ROLE.UBO], 1);
+  assert.equal(queueWrite.totalMsByRole[WGPU_UPLOAD_ROLE.UBO], 1700);
+  assert.equal(queueWrite.maxMsByRole[WGPU_UPLOAD_ROLE.VERTEX], 4.5);
+  assert.equal(queueWrite.slowEventObservedCount, 1);
+  assert.deepEqual(queueWrite.slowEvents[0], {
+    sequence: 1,
+    role: WGPU_UPLOAD_ROLE.UBO,
+    roleName: "ubo",
+    bytes: 1536,
+    durationMs: 1700,
+    backlogRecords: 912,
+    submissionCount: 17,
+    passDepth: 0,
+    staged: true,
+  });
+});
+
+test("queue.writeBuffer retains only the 32 longest >20ms events", () => {
+  const metrics = createWgpuUploadAttribution();
+  for (let index = 0; index < 40; index += 1) {
+    metrics.recordQueueWrite(WGPU_UPLOAD_ROLE.UBO, 256, 21 + index);
+  }
+  metrics.recordQueueWrite(WGPU_UPLOAD_ROLE.UBO, 256, 20);
+
+  const queueWrite = metrics.snapshot().queueWrite;
+  assert.equal(queueWrite.slowEventObservedCount, 40);
+  assert.equal(queueWrite.slowEvents.length, 32);
+  assert.equal(queueWrite.slowEvents[0].durationMs, 60);
+  assert.equal(queueWrite.slowEvents.at(-1).durationMs, 29);
+});
+
 test("WGPU upload attribution records roles, byte maxima, and exact bucket edges", () => {
   const metrics = createWgpuUploadAttribution();
   const sizes = [64, 65, 256, 257, 1024, 1025, 4096, 4097, 16384, 16385, 65536, 65537];

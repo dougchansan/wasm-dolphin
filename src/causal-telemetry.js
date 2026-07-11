@@ -186,6 +186,14 @@ export function createCausalTelemetry(overrides = {}) {
         producerUploadArenaLateRejectCount: 0,
         producerUploadArenaWrapCount: 0,
         producerUploadArenaInflightHighWaterBytes: 0,
+        producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+        producerUboPacketEligibleCount: 0,
+        producerUboPacketTheoreticalCallsRemoved: 0,
+        producerUboPacketPayloadBytes: 0,
+        producerUboPacketAlignedBytes: 0,
+        producerUboPrepareCpuCalls: [0, 0, 0],
+        producerUboPrepareCpuNs: [0, 0, 0],
+        queueSubmissionCount: 0,
         uploadArenaRingHandoffBytes: 0,
         uploadArenaRingHandoffExpectedBytes: 0,
         uploadArenaRingHandoffMismatch: false,
@@ -581,6 +589,7 @@ export function flattenCausalTelemetry(value) {
     telemetry.webgpu.uploadAttribution ?? {}
   );
   const uploadPassAssociation = uploadAttribution.passAssociation;
+  const queueWrite = uploadAttribution.queueWrite;
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -712,6 +721,19 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUploadArenaWrapCount,
     causalWgpuUploadArenaInflightHighWaterBytes:
       telemetry.webgpu.producerUploadArenaInflightHighWaterBytes,
+    causalWgpuProducerUboChangeMaskHistogram:
+      telemetry.webgpu.producerUboChangeMaskHistogram,
+    causalWgpuProducerUboPacketEligibleCount:
+      telemetry.webgpu.producerUboPacketEligibleCount,
+    causalWgpuProducerUboPacketTheoreticalCallsRemoved:
+      telemetry.webgpu.producerUboPacketTheoreticalCallsRemoved,
+    causalWgpuProducerUboPacketPayloadBytes:
+      telemetry.webgpu.producerUboPacketPayloadBytes,
+    causalWgpuProducerUboPacketAlignedBytes:
+      telemetry.webgpu.producerUboPacketAlignedBytes,
+    causalWgpuProducerUboPrepareCpuCalls: telemetry.webgpu.producerUboPrepareCpuCalls,
+    causalWgpuProducerUboPrepareCpuNs: telemetry.webgpu.producerUboPrepareCpuNs,
+    causalWgpuQueueSubmissionCount: telemetry.webgpu.queueSubmissionCount,
     causalWgpuUploadArenaRingHandoffBytes:
       telemetry.webgpu.uploadArenaRingHandoffBytes,
     causalWgpuUploadArenaRingHandoffExpectedBytes:
@@ -741,6 +763,14 @@ export function flattenCausalTelemetry(value) {
     causalWgpuUploadCallsByRole: uploadAttribution.callsByRole,
     causalWgpuUploadBytesByRole: uploadAttribution.bytesByRole,
     causalWgpuUploadMaxBytesByRole: uploadAttribution.maxBytesByRole,
+    causalWgpuQueueWriteTotalCalls: queueWrite.totalCalls,
+    causalWgpuQueueWriteTotalMs: queueWrite.totalMs,
+    causalWgpuQueueWriteMaxMs: queueWrite.maxMs,
+    causalWgpuQueueWriteCallsByRole: queueWrite.callsByRole,
+    causalWgpuQueueWriteTotalMsByRole: queueWrite.totalMsByRole,
+    causalWgpuQueueWriteMaxMsByRole: queueWrite.maxMsByRole,
+    causalWgpuQueueWriteSlowEventObservedCount: queueWrite.slowEventObservedCount,
+    causalWgpuQueueWriteSlowEvents: queueWrite.slowEvents,
     causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
     causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
     causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,

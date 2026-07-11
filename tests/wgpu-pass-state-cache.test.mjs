@@ -16,7 +16,9 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       "wgstate:1 pipe:4 bg:5,6,7 vb:8 ib:9 wgdrop:0 " +
       "wgbabort:10 wgboversize:11 wguploadto:12 " +
       "wgubo:1 wgubometrics:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
-      "usupcall:22,23,24 usupbyte:25,26,27 wggeom:1 wggeomepoch:28 " +
+      "usupcall:22,23,24 usupbyte:25,26,27 " +
+      "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
+      "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
       "wgarena:67108864,67108864,29,30,31,33554432"
     ),
     {
@@ -37,6 +39,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheExpired: [19, 20, 21],
       uboUploadCallsSuppressed: [22, 23, 24],
       uboUploadBytesSuppressed: [25, 26, 27],
+      uboChangeMaskHistogram: [1, 2, 3, 4, 5, 6, 7, 8],
+      uboPacketEligibleCount: 9,
+      uboPacketTheoreticalCallsRemoved: 10,
+      uboPacketPayloadBytes: 11,
+      uboPacketAlignedBytes: 12,
+      uboPrepareCpuCalls: [13, 14, 15],
+      uboPrepareCpuNs: [16, 17, 18],
       geometryPackEnabled: true,
       geometryPackEpoch: 28,
       uploadArenaRequestedBytes: 67108864,
@@ -69,6 +78,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheExpired: [0, 0, 0],
       uboUploadCallsSuppressed: [0, 0, 0],
       uboUploadBytesSuppressed: [0, 0, 0],
+      uboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+      uboPacketEligibleCount: 0,
+      uboPacketTheoreticalCallsRemoved: 0,
+      uboPacketPayloadBytes: 0,
+      uboPacketAlignedBytes: 0,
+      uboPrepareCpuCalls: [0, 0, 0],
+      uboPrepareCpuNs: [0, 0, 0],
       geometryPackEnabled: false,
       geometryPackEpoch: 0,
       uploadArenaRequestedBytes: 0,

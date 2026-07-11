@@ -11,6 +11,8 @@ export function parseWgpuProducerStateStats(text = "") {
   if (!match) return null;
   const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
     .exec(normalized);
+  const uboPacket = /\bumask:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\s+upack:(\d+),(\d+),(\d+),(\d+)\s+ucpucall:(\d+),(\d+),(\d+)\s+ucpuns:(\d+),(\d+),(\d+)/i
+    .exec(normalized);
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   return {
@@ -31,6 +33,13 @@ export function parseWgpuProducerStateStats(text = "") {
     uboCacheExpired: numericTriple(ubo, 9),
     uboUploadCallsSuppressed: numericTriple(ubo, 12),
     uboUploadBytesSuppressed: numericTriple(ubo, 15),
+    uboChangeMaskHistogram: numericValues(uboPacket, 1, 8),
+    uboPacketEligibleCount: Number(uboPacket?.[9] || 0),
+    uboPacketTheoreticalCallsRemoved: Number(uboPacket?.[10] || 0),
+    uboPacketPayloadBytes: Number(uboPacket?.[11] || 0),
+    uboPacketAlignedBytes: Number(uboPacket?.[12] || 0),
+    uboPrepareCpuCalls: numericTriple(uboPacket, 13),
+    uboPrepareCpuNs: numericTriple(uboPacket, 16),
     geometryPackEnabled: geometry?.[1] === "1",
     geometryPackEpoch: Number(geometry?.[2] || 0),
     uploadArenaRequestedBytes: Number(arena?.[1] || 0),
@@ -48,6 +57,12 @@ function numericTriple(match, start) {
     Number(match?.[start + 1] || 0),
     Number(match?.[start + 2] || 0)
   ];
+}
+
+function numericValues(match, start, count) {
+  return Array.from({ length: count }, (_, index) =>
+    Number(match?.[start + index] || 0)
+  );
 }
 
 export function createWgpuPassStateCache() {

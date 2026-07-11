@@ -43,6 +43,8 @@ const SIZE_BUCKET_UPPER_BOUNDS = Object.freeze([
 
 const ROLE_COUNT = WGPU_UPLOAD_ROLE_NAMES.length;
 const BUCKET_COUNT = WGPU_UPLOAD_SIZE_BUCKET_LABELS.length;
+const SLOW_QUEUE_WRITE_THRESHOLD_MS = 20;
+const SLOW_QUEUE_WRITE_EVENT_LIMIT = 32;
 
 // Uploads are commonly published before BEGIN_PASS. A window therefore starts
 // immediately after the previous END/abort/incomplete boundary. Pre-BEGIN
@@ -57,6 +59,9 @@ export function createWgpuUploadAttribution() {
   const windowMinDestinationByRole = new Float64Array(ROLE_COUNT);
   const windowMaxDestinationEndByRole = new Float64Array(ROLE_COUNT);
   const maxDestinationSpanBytesByRole = new Float64Array(ROLE_COUNT);
+  const queueWriteCallsByRole = new Float64Array(ROLE_COUNT);
+  const queueWriteTotalMsByRole = new Float64Array(ROLE_COUNT);
+  const queueWriteMaxMsByRole = new Float64Array(ROLE_COUNT);
 
   let totalCalls = 0;
   let totalBytes = 0;
@@ -70,6 +75,12 @@ export function createWgpuUploadAttribution() {
   let maxPassCalls = 0;
   let maxPassBytes = 0;
   let maxDestinationSpanBytes = 0;
+  let queueWriteTotalCalls = 0;
+  let queueWriteTotalMs = 0;
+  let queueWriteMaxMs = 0;
+  let slowQueueWriteObservedCount = 0;
+  let queueWriteSequence = 0;
+  const slowQueueWriteEvents = [];
 
   resetWindow();
 
@@ -99,6 +110,37 @@ export function createWgpuUploadAttribution() {
       windowMaxDestinationEndByRole[roleIndex],
       offset + byteCount
     );
+    return roleIndex;
+  }
+
+  function recordQueueWrite(role, bytes, durationMs, context = {}) {
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    const byteCount = finiteNonnegative(bytes);
+    const elapsedMs = finiteNonnegative(durationMs);
+    queueWriteTotalCalls += 1;
+    queueWriteTotalMs += elapsedMs;
+    queueWriteMaxMs = Math.max(queueWriteMaxMs, elapsedMs);
+    queueWriteCallsByRole[roleIndex] += 1;
+    queueWriteTotalMsByRole[roleIndex] += elapsedMs;
+    queueWriteMaxMsByRole[roleIndex] = Math.max(
+      queueWriteMaxMsByRole[roleIndex], elapsedMs
+    );
+    queueWriteSequence += 1;
+
+    if (elapsedMs > SLOW_QUEUE_WRITE_THRESHOLD_MS) {
+      slowQueueWriteObservedCount += 1;
+      retainSlowQueueWriteEvent({
+        sequence: queueWriteSequence,
+        role: roleIndex,
+        roleName: WGPU_UPLOAD_ROLE_NAMES[roleIndex],
+        bytes: byteCount,
+        durationMs: elapsedMs,
+        backlogRecords: finiteNonnegative(context.backlogRecords),
+        submissionCount: finiteNonnegative(context.submissionCount),
+        passDepth: finiteNonnegative(context.passDepth),
+        staged: Boolean(context.staged),
+      });
+    }
     return roleIndex;
   }
 
@@ -154,6 +196,9 @@ export function createWgpuUploadAttribution() {
     bucketCallsByRole.fill(0);
     bucketBytesByRole.fill(0);
     maxDestinationSpanBytesByRole.fill(0);
+    queueWriteCallsByRole.fill(0);
+    queueWriteTotalMsByRole.fill(0);
+    queueWriteMaxMsByRole.fill(0);
     totalCalls = 0;
     totalBytes = 0;
     maxBytes = 0;
@@ -163,6 +208,12 @@ export function createWgpuUploadAttribution() {
     maxPassCalls = 0;
     maxPassBytes = 0;
     maxDestinationSpanBytes = 0;
+    queueWriteTotalCalls = 0;
+    queueWriteTotalMs = 0;
+    queueWriteMaxMs = 0;
+    slowQueueWriteObservedCount = 0;
+    queueWriteSequence = 0;
+    slowQueueWriteEvents.length = 0;
     resetWindow();
   }
 
@@ -181,6 +232,20 @@ export function createWgpuUploadAttribution() {
       maxBytesByRole: Array.from(maxBytesByRole),
       bucketCallsByRole: snapshotBuckets(bucketCallsByRole),
       bucketBytesByRole: snapshotBuckets(bucketBytesByRole),
+      queueWrite: {
+        thresholdMs: SLOW_QUEUE_WRITE_THRESHOLD_MS,
+        slowEventLimit: SLOW_QUEUE_WRITE_EVENT_LIMIT,
+        totalCalls: queueWriteTotalCalls,
+        totalMs: queueWriteTotalMs,
+        maxMs: queueWriteMaxMs,
+        callsByRole: Array.from(queueWriteCallsByRole),
+        totalMsByRole: Array.from(queueWriteTotalMsByRole),
+        maxMsByRole: Array.from(queueWriteMaxMsByRole),
+        slowEventObservedCount: slowQueueWriteObservedCount,
+        slowEvents: slowQueueWriteEvents
+          .map((event) => ({ ...event }))
+          .sort((left, right) => right.durationMs - left.durationMs),
+      },
       passAssociation: {
         definition: "uploads-after-previous-boundary-through-following-end-pass",
         preBeginUploadsFoldIntoFollowingPass: true,
@@ -206,8 +271,26 @@ export function createWgpuUploadAttribution() {
     windowMaxDestinationEndByRole.fill(0);
   }
 
+  function retainSlowQueueWriteEvent(event) {
+    if (slowQueueWriteEvents.length < SLOW_QUEUE_WRITE_EVENT_LIMIT) {
+      slowQueueWriteEvents.push(event);
+      return;
+    }
+    let shortestIndex = 0;
+    for (let index = 1; index < slowQueueWriteEvents.length; index += 1) {
+      if (slowQueueWriteEvents[index].durationMs <
+          slowQueueWriteEvents[shortestIndex].durationMs) {
+        shortestIndex = index;
+      }
+    }
+    if (event.durationMs > slowQueueWriteEvents[shortestIndex].durationMs) {
+      slowQueueWriteEvents[shortestIndex] = event;
+    }
+  }
+
   return {
     recordUpload,
+    recordQueueWrite,
     recordPassBegin,
     recordPassEnd,
     recordPassAbort,

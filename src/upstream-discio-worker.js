@@ -1612,6 +1612,14 @@ function collectWebGpuProducerStateStats() {
       parsed.uboUploadCallsSuppressed;
     webGpuCausalStats.producerUboUploadBytesSuppressed =
       parsed.uboUploadBytesSuppressed;
+    webGpuCausalStats.producerUboChangeMaskHistogram = parsed.uboChangeMaskHistogram;
+    webGpuCausalStats.producerUboPacketEligibleCount = parsed.uboPacketEligibleCount;
+    webGpuCausalStats.producerUboPacketTheoreticalCallsRemoved =
+      parsed.uboPacketTheoreticalCallsRemoved;
+    webGpuCausalStats.producerUboPacketPayloadBytes = parsed.uboPacketPayloadBytes;
+    webGpuCausalStats.producerUboPacketAlignedBytes = parsed.uboPacketAlignedBytes;
+    webGpuCausalStats.producerUboPrepareCpuCalls = parsed.uboPrepareCpuCalls;
+    webGpuCausalStats.producerUboPrepareCpuNs = parsed.uboPrepareCpuNs;
     webGpuCausalStats.producerGeometryPackEnabled = parsed.geometryPackEnabled;
     webGpuCausalStats.producerGeometryPackEpoch = parsed.geometryPackEpoch;
     webGpuCausalStats.producerUploadArenaRequestedBytes = parsed.uploadArenaRequestedBytes;
@@ -5696,6 +5704,13 @@ const webGpuCausalStats = {
   producerUboCacheExpired: [0, 0, 0],
   producerUboUploadCallsSuppressed: [0, 0, 0],
   producerUboUploadBytesSuppressed: [0, 0, 0],
+  producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+  producerUboPacketEligibleCount: 0,
+  producerUboPacketTheoreticalCallsRemoved: 0,
+  producerUboPacketPayloadBytes: 0,
+  producerUboPacketAlignedBytes: 0,
+  producerUboPrepareCpuCalls: [0, 0, 0],
+  producerUboPrepareCpuNs: [0, 0, 0],
   producerGeometryPackEnabled: false,
   producerGeometryPackEpoch: 0,
   producerUploadArenaRequestedBytes: 0,
@@ -5716,6 +5731,7 @@ const webGpuCausalStats = {
   uploadTimeoutCountAtVerifiedLoad: 0,
   uploadTimeoutCountBeforeVerifiedLoad: 0,
   uploadTimeoutCountAfterVerifiedLoad: 0,
+  queueSubmissionCount: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -6139,6 +6155,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error: e });
     }
     if (submitted) {
+      if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
       wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
       if (reason === "present" && wgpuReplayClassifier &&
           !wgpuPresentCompletionProbeStarted) {
@@ -6526,8 +6543,20 @@ function drainWebGpuCmdRing(source = "presentation") {
                   );
                 }
               }
+              const queueWriteStartedAt = causalMetricsEnabled ? performance.now() : 0;
               q.writeBuffer(buf, u32[recWord + 2] & ~3, uploadPayload);
               if (causalMetricsEnabled) {
+                wgpuUploadAttribution.recordQueueWrite(
+                  uploadRole,
+                  uploadBytes,
+                  performance.now() - queueWriteStartedAt,
+                  {
+                    backlogRecords: (replayLimit - read) >>> 0,
+                    submissionCount: webGpuCausalStats.queueSubmissionCount,
+                    passDepth: protocolPassDepth,
+                    staged: Boolean(stagedUpload),
+                  }
+                );
                 wgpuUploadAttribution.recordUpload(
                   uploadRole,
                   uploadBytes,

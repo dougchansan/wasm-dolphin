@@ -56,8 +56,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 41831,
-      "sha256": "f0bd1f95000401199d77b2187807c98a1abef2b1c7299f6f9e0c6a81926b5014"
+      "size": 43506,
+      "sha256": "7a86be72377b13286fa92d71888f608b2352b7f0ea970ad9ee3c142168879f5f"
     },
     {
       "path": "src/core-host.js",
@@ -110,8 +110,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 375343,
-      "sha256": "7896481d76f19fb46d8b036a4932b9f92dc7a7b20f300f5134d534353dbe70fb"
+      "size": 376909,
+      "sha256": "0c9413221450469e0d476030f1422f606fcf30b372bca9648af95223be6dd1a1"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 12419,
-      "sha256": "30e3f1a2ac1ea3c4ecaace06773c041557ea6bfb5be5d9b655075d490b6a73b7"
+      "size": 13160,
+      "sha256": "681cf420c5b83aab19983c322b91527520151e1276e31437b3e532ec6c9d8cd3"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
@@ -146,8 +146,8 @@
     {
       "path": "src/wgpu-upload-attribution.js",
       "hashMode": "lf-normalized",
-      "size": 6865,
-      "sha256": "18fa91c2b7485785b7c5a94a46c20d7bf1da2d15063715a2a8602b7c24b8e813"
+      "size": 10024,
+      "sha256": "03aa5509bbcb8a8418ae98305e94c2201a06d4a7a6fb028051ee4a0ce11972ae"
     },
     {
       "path": "src/wgpu-upload-watermark.js",
