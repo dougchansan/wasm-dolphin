@@ -173,14 +173,8 @@ let wgpuMappedStagingPool = null;
 let wgpuMappedRemapPromises = new Set();
 let wgpuMappedCapacityBlocked = false;
 let wgpuMappedCapacityBlockedAt = 0;
-// Hardware-WGPU averages well under 1 MiB of staged data per queue submit,
-// while GPU completion can trail by dozens of submits. A few oversized slots
-// waste mapped capacity because an entire slot remains unavailable until its
-// submission finishes. Keep the pool bounded at 64 MiB, but divide it into
-// enough 2 MiB slots to cover the measured 1.35 MiB maximum single upload and
-// the observed completion backlog.
-const WGPU_MAPPED_STAGING_SLOT_COUNT = 32;
-const WGPU_MAPPED_STAGING_SLOT_BYTES = 2 * 1024 * 1024;
+const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
+const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();

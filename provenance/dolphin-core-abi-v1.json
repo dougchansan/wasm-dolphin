@@ -110,8 +110,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 392392,
-      "sha256": "34a1a27ae6b509067add544aa6b3b57549d8b8c27e9b0678895daf58084275d6"
+      "size": 391969,
+      "sha256": "62c03294971ae338798702563ae7398f5a0a52e8dbf0ea1721d85356e7206958"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
