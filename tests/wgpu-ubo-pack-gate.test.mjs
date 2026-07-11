@@ -11,6 +11,7 @@ test("performance validation fails closed when the requested UBO packet mode is 
     "utf8"
   );
   assert.match(gate, /scenario\.params\?\.wgpuubopack/);
+  assert.match(gate, /"wgpuubocache", "wgpuubopack", "wgpugeompack"/);
   assert.match(gate, /final\.causalTelemetry\?\.webgpu\?\.uboPackEnabled/);
   assert.match(gate, /WGPU UBO pack mismatch: requested=/);
 });
