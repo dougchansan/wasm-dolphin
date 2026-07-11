@@ -164,7 +164,7 @@ test("worker publishes the actual consumed index and uses 16K only as a work bud
   );
   const publishBody = /function publishWgpuReadIndex\([\s\S]*?\n\}/.exec(worker)?.[0] ?? "";
 
-  assert.match(publishBody, /Atomics\.store\(ring\.headerI32, 1, normalized \| 0\)/);
+  assert.match(publishBody, /publishWgpuRingProgress\(ring, 1, normalized\)/);
   assert.doesNotMatch(publishBody, /capacity\s*-\s*WGPU_REPLAY_WINDOW_RECORDS/);
   assert.match(worker,
     /selectAtomicReplayLimit\(\{[\s\S]*?maxRecords:\s*WGPU_REPLAY_WINDOW_RECORDS/);

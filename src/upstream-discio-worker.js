@@ -66,6 +66,14 @@ import {
   createWgpuUploadAttribution
 } from "./wgpu-upload-attribution.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
+import {
+  WGPU_CONSUMER_ERROR_DEVICE_LOST,
+  WGPU_CONSUMER_ERROR_SUBMIT,
+  WGPU_CONSUMER_ERROR_UNKNOWN,
+  enableWgpuNonDroppingBackpressure,
+  failWgpuRingConsumer,
+  publishWgpuRingProgress
+} from "./wgpu-ring-backpressure.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -4686,9 +4694,10 @@ async function startLazyJitCacheFill() {
 // backend. Day-27 implements the transport + OP_CLEAR; the full
 // AbstractGfx opcode set layers on next.
 //
-// Header layout (CmdRingHeader, 16 bytes @ headerPtr):
+// Header layout (CmdRingHeader, protocol-dependent @ headerPtr):
 //   [0] u32 write (atomic)  [1] u32 read (atomic)
 //   [2] u32 capacity        [3] u32 upload_read (atomic byte watermark)
+//   [4] u32 protocol_flags  [5] u32 consumer_state [6] u32 consumer_error
 // Slot layout (CmdRecord, 32 bytes @ slotsPtr + i*32):
 //   [0] u32 op   [1..7] 7 words (f32/u32 per opcode)
 const WGPU_CMD_OP_NOP = 0;
@@ -4885,7 +4894,9 @@ function handleWebGpuCmdRing(event) {
   }
   const uploadWatermarkProtocol = Number(data.protocolVersion) >= 2 &&
     Number(data.headerWords) >= 5;
-  const headerWords = uploadWatermarkProtocol ? 5 : 4;
+  const nonDroppingProtocol = Number(data.protocolVersion) >= 3 &&
+    Number(data.headerWords) >= 7;
+  const headerWords = nonDroppingProtocol ? 7 : uploadWatermarkProtocol ? 5 : 4;
   webGpuCmdRing = {
     headerI32: new Int32Array(heap.buffer, data.headerPtr, headerWords),
     headerU32: new Uint32Array(heap.buffer, data.headerPtr, headerWords),
@@ -4899,6 +4910,7 @@ function handleWebGpuCmdRing(event) {
     uploadBase: (data.uploadPtr >>> 0) || 0,
     uploadSize: (data.uploadSize >>> 0) || 0,
     uploadWatermarkEnabled: false,
+    protocolV3Enabled: false,
     stagedUploads: new Map(),
     stagedUploadBytes: 0,
     heldReplayStart: null,
@@ -4906,6 +4918,7 @@ function handleWebGpuCmdRing(event) {
     stagedScanCursor: null
   };
   if (uploadWatermarkProtocol) enableWgpuUploadWatermark(webGpuCmdRing);
+  if (nonDroppingProtocol) enableWgpuNonDroppingBackpressure(webGpuCmdRing);
   publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
   collectWebGpuProducerStateStats();
   const requestedArenaBytes = wgpuUploadArenaMiB * 1024 * 1024;
@@ -5090,7 +5103,7 @@ function publishWgpuReadIndex(ring, readIndex) {
   // subtracted capacity-16K here, which made the producer treat already
   // consumed slots as occupied and reduced a 262K ring to an effective 16K.
   // WGPU_REPLAY_WINDOW_RECORDS is a per-drain work budget, not a reservation.
-  Atomics.store(ring.headerI32, 1, normalized | 0);
+  publishWgpuRingProgress(ring, 1, normalized);
 }
 
 function startWgpuReplayPump() {
@@ -5156,6 +5169,12 @@ function clearWgpuReplayStateAfterDeviceLoss() {
 function markWgpuReplayFatal(scope, detail) {
   if (wgpuReplayFatal) return false;
   wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
+  const errorCode = scope === "device-lost"
+    ? WGPU_CONSUMER_ERROR_DEVICE_LOST
+    : scope === "submit-error"
+      ? WGPU_CONSUMER_ERROR_SUBMIT
+      : WGPU_CONSUMER_ERROR_UNKNOWN;
+  failWgpuRingConsumer(webGpuCmdRing, errorCode);
   return true;
 }
 

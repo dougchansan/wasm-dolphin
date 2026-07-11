@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "13f2b4a98e2d8617ceb3881084ec668dda1f7ec3169a1068ca96f99320529785",
+  "patchSeriesSha256": "121c129e627c9b45f0fb1b09a8469d15ab2b4dc6fa820f4e22277d1bc154fd6d",
   "patches": [
     {
       "order": 1,
@@ -237,6 +237,14 @@
     },
     {
       "order": 27,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0027-webgpu-ring-protocol-v3.patch",
+      "size": 11668,
+      "sha256": "a8772add7f3588af0eed6f856817a77542fb630a3eb91df2df69ceeb63cb2a92"
+    },
+    {
+      "order": 28,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -244,7 +252,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 28,
+      "order": 29,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
