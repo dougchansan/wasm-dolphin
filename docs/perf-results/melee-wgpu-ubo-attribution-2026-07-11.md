@@ -72,7 +72,8 @@ larger liveness refactor, not an immediate optimization.
 Do not promote `wgpuubocache=1`; it reduced calls but did not remove the long
 queue stall or improve speed repeatably.
 
-The next experiment should make queue pressure asynchronous: stop draining at
-a safe pass boundary before the next upload, wait for GPU queue completion
-without blocking the worker event loop, then resume. This directly targets
-audio/input starvation while retaining the current renderer as rollback.
+The next architecture should move replay to a dedicated renderer worker with
+bounded, non-dropping producer backpressure, or use a bounded mapped staging
+pool with per-submission completion tracking. The attempted asynchronous
+same-worker relief path was rejected after timeout, abort/drop, audio, and
+input failures.

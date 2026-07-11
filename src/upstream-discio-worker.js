@@ -3462,7 +3462,7 @@ async function createWebGpuPresenter(canvas) {
 
   const adapter = await gpu.requestAdapter({ powerPreference: wgpuPowerPreference });
   if (!adapter) {
-    throw new Error("high-performance WebGPU adapter request returned null");
+    throw new Error(`WebGPU adapter request (${wgpuPowerPreference}) returned null`);
   }
 
   let adapterInfo = adapter.info || null;

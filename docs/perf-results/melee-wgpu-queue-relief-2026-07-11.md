@@ -18,6 +18,10 @@ negative result.
 | Work | Eight emulated seconds; same 12 input transitions |
 | Historical flag | `wgpuqueuewait=1` (removed) |
 
+A separate smoke requested `wgpupower=low`, but Chrome still reported the same
+`rdna-4` adapter. This does not count as second-GPU coverage; a distinct adapter
+or machine remains required for that validation.
+
 ## Results
 
 | Variant | Game speed | Max queue write | Max drain | Queue wait max | Timeout/abort/drop | Audio/input |
@@ -35,13 +39,17 @@ Raw output:
 - `.omx/wgpu-no-lag/item-9-queue-relief-2mb-smoke/`
 - `.omx/wgpu-no-lag/item-9-queue-relief-continuous-stage/`
 
+Those machine-local raw directories are gitignored and are not part of the
+repository. The committed companion JSON preserves the aggregate measurements
+and decision; it is not a substitute for the raw event streams.
+
 Every run reached the fixed emulated-work target and retained nonzero rendering
 evidence. The measurements are diagnostic, not a balanced promotion campaign.
 
 ## Interpretation
 
-Asynchronous queue relief proves that browser upload backpressure is the main
-hardware-WGPU throughput limiter: removing synchronous `writeBuffer` stalls
+These diagnostic smokes strongly implicate browser upload backpressure as the
+main observed hardware-WGPU throughput limiter: removing synchronous `writeBuffer` stalls
 raised measured speed from roughly 66% to 76–81% and reduced drain maxima to
 12–58 ms. GPU-completion p95 also fell as low as 7–136 ms depending on the
 variant.

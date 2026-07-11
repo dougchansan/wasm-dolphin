@@ -29,6 +29,20 @@
 - [WGPU upload coalescing plan](wgpu-upload-coalescing-plan.md) — scoped
   geometry-packing refactor, lifetime invariants, tests, promotion gate, and
   rollback.
+- [WGPU upload attribution results](perf-results/melee-wgpu-upload-attribution-2026-07-11.md) —
+  conserved role/opcode accounting and artifact hashes for the direct battle.
+- [WGPU geometry-packing results](perf-results/melee-wgpu-geometry-pack-2026-07-11.md) —
+  balanced default-off screen and no-promotion decision.
+- [WGPU upload-arena results](perf-results/melee-wgpu-upload-arena-2026-07-11.md) —
+  32/64 MiB screen and retained 32 MiB default.
+- [WGPU replay-budget results](perf-results/melee-wgpu-replay-budget-2026-07-11.md) —
+  atomic 4/6 ms scheduling evidence and indivisible-stall finding.
+- [WGPU UBO attribution results](perf-results/melee-wgpu-ubo-attribution-2026-07-11.md) —
+  role timing, packing screen, and cache no-go.
+- [WGPU queue-relief results](perf-results/melee-wgpu-queue-relief-2026-07-11.md) —
+  rejected asynchronous-relief smokes and second-GPU limitation.
+- [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
+  removed experiment, safety invariants, and next architecture.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
   CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
   deterministic 32×32 input-marker results.

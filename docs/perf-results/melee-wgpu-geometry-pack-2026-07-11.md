@@ -53,4 +53,3 @@ of realtime hardware rendering. Rollback is `wgpugeompack=0`.
 
 Before confirmation: classify the zero-EFB evidence, remove the remaining
 watermark timeout/abort, and rerun the same preregistered balanced design.
-

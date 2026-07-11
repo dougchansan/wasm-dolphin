@@ -502,6 +502,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuGeometryPack\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuReplayBudgetMs\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuPowerPreference\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
@@ -512,6 +513,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
   assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
   assert.match(adapter, /wgpuReplayBudgetMs: this\.wgpuReplayBudgetMs/);
+  assert.match(adapter, /wgpuPowerPreference: this\.wgpuPowerPreference/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
@@ -523,6 +525,9 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
   assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
   assert.match(worker, /wgpuReplayBudgetMs: payload\.wgpuReplayBudgetMs/);
+  assert.match(worker, /wgpuPowerPreference: payload\.wgpuPowerPreference/);
+  assert.match(worker, /gpu\.requestAdapter\(\{ powerPreference: wgpuPowerPreference \}\)/);
+  assert.match(worker, /WebGPU adapter request \(\$\{wgpuPowerPreference\}\) returned null/);
   assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
   assert.match(worker, /setWebGpuGeometryPackEnabled\?\.\(wgpuGeometryPackEnabled \? 1 : 0\)/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);

@@ -36,6 +36,6 @@
   "decision": {
     "uboPacketization": "no-go",
     "uboCacheDefault": "remain-off",
-    "next": "default-off asynchronous GPU queue-pressure relief at safe replay boundaries"
+    "next": "dedicated renderer worker with bounded producer backpressure, or bounded mapped staging with per-submission completion tracking"
   }
 }
