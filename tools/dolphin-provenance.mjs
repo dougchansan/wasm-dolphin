@@ -1061,12 +1061,18 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     invariant(/^_[A-Za-z0-9_]+$/.test(name), `Invalid pending source-only export ${name}`);
     invariant(!actualExports.includes(name), `Pending source-only export is already in the core artifact: ${name}`);
     const symbol = name.slice(1);
-    const keepalive = new RegExp(`EMSCRIPTEN_KEEPALIVE[\\s\\S]{0,120}\\b${symbol}\\s*\\(`)
-      .test(contractSourceText);
+    const keepalivePattern = new RegExp(
+      `EMSCRIPTEN_KEEPALIVE[\\s\\S]{0,120}\\b${symbol}\\s*\\(`
+    );
+    const keepalive = keepalivePattern.test(contractSourceText) ||
+      keepalivePattern.test(activePatchText);
     invariant(activePatchText.includes(`'${name}'`) || keepalive,
       `Pending source-only export is neither in the patch export list nor kept alive: ${name}`);
-    invariant(new RegExp(`\\b${symbol}\\s*\\(`).test(contractSourceText),
-      `Pending source-only export is absent from the ABI contract sources: ${name}`);
+    invariant(
+      new RegExp(`\\b${symbol}\\s*\\(`).test(contractSourceText) ||
+        new RegExp(`\\b${symbol}\\s*\\(`).test(activePatchText),
+      `Pending source-only export is absent from the ABI contract sources and patch set: ${name}`
+    );
   }
   const actualMemory = inspectMemoryContract(root);
   invariant(

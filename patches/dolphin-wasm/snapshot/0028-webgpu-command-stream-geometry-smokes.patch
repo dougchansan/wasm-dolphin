@@ -1,0 +1,230 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 01688b2f71..3cd07f7384 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -16,6 +16,7 @@ namespace WebGPU
+ namespace
+ {
+ std::atomic<u64> s_dropped_record_count{0};
++const char* s_geometry_smoke_error = "ok";
+ }
+ 
+ u64 GetWebGpuCommandDroppedRecordCount()
+@@ -1042,4 +1043,190 @@ WebGPUCommandStream& GetCommandStream()
+   static WebGPUCommandStream s_stream;
+   return s_stream;
+ }
++
++struct WebGPUCommandStreamTestPeer
++{
++  static void Initialize(WebGPUCommandStream& stream, CmdRingHeader& header, CmdRecord* slots,
++                         u32 capacity, u8* upload, u32 upload_size)
++  {
++    header.write.store(0, std::memory_order_relaxed);
++    header.read.store(0, std::memory_order_relaxed);
++    header.capacity = capacity;
++    header.upload_read.store(0, std::memory_order_relaxed);
++    header.protocol_flags.store(0, std::memory_order_relaxed);
++    header.consumer_state.store(0, std::memory_order_relaxed);
++    header.consumer_error.store(0, std::memory_order_relaxed);
++    std::memset(slots, 0, sizeof(CmdRecord) * capacity);
++    std::memset(upload, 0xCD, upload_size);
++    stream.m_header = &header;
++    stream.m_slots = slots;
++    stream.m_capacity = capacity;
++    stream.m_upload_base = upload;
++    stream.m_upload_size = upload_size;
++    stream.m_upload_write = 0;
++  }
++
++  static u32 UploadWrite(const WebGPUCommandStream& stream) { return stream.m_upload_write; }
++
++  static void FailConsumer(WebGPUCommandStream& stream, u32 error)
++  {
++    stream.m_header->protocol_flags.store(kProtocolUploadWatermark |
++                                              kProtocolNonDroppingBackpressure,
++                                          std::memory_order_release);
++    stream.m_header->consumer_error.store(error, std::memory_order_release);
++    stream.m_header->consumer_state.store(kConsumerStateFailed, std::memory_order_release);
++  }
++};
++
++namespace
++{
++struct CommandStreamSmokeFixture
++{
++  CmdRingHeader header{};
++  CmdRecord slots[32]{};
++  alignas(16) u8 upload[256]{};
++  WebGPUCommandStream stream;
++
++  CommandStreamSmokeFixture()
++  {
++    WebGPUCommandStreamTestPeer::Initialize(stream, header, slots, 32, upload, sizeof(upload));
++  }
++};
++
++int FailGeometrySmoke(int code, const char* message)
++{
++  s_geometry_smoke_error = message;
++  return code;
++}
++
++bool CheckDrawSuffix(const CommandStreamSmokeFixture& fixture, bool indexed, u32 buffer_id,
++                     u32 index_offset)
++{
++  const u32 write = fixture.header.write.load(std::memory_order_acquire);
++  const u32 draw_records = indexed ? 5u : 4u;
++  if (write < draw_records)
++    return false;
++  const CmdRecord* const records = &fixture.slots[write - draw_records];
++  if (records[0].op != static_cast<u32>(CmdOp::BeginPass) ||
++      records[1].op != static_cast<u32>(CmdOp::SetVertexBuffer) ||
++      records[1].arg.u[1] != buffer_id || records[1].arg.u[2] != 0)
++    return false;
++  if (indexed)
++  {
++    return records[2].op == static_cast<u32>(CmdOp::SetIndexBuffer) &&
++           records[2].arg.u[0] == buffer_id && records[2].arg.u[1] == 0 &&
++           records[2].arg.u[2] == index_offset &&
++           records[3].op == static_cast<u32>(CmdOp::DrawIndexed) &&
++           records[3].arg.u[0] == 6 && records[3].arg.u[1] == 1 &&
++           records[3].arg.u[2] == 2 && records[3].arg.u[3] == 3 &&
++           records[4].op == static_cast<u32>(CmdOp::EndPass);
++  }
++  return records[2].op == static_cast<u32>(CmdOp::Draw) && records[2].arg.u[0] == 6 &&
++         records[2].arg.u[1] == 1 && records[2].arg.u[2] == 2 &&
++         records[3].op == static_cast<u32>(CmdOp::EndPass);
++}
++
++bool EmitDraw(CommandStreamSmokeFixture& fixture, bool indexed, u32 buffer_id, u32 index_offset)
++{
++  if (!fixture.stream.PushBeginPass(7, 0.25f, 0.5f, 0.75f, 1.0f, 1, 8) ||
++      !fixture.stream.PushSetVertexBuffer(0, buffer_id, 0))
++    return false;
++  if (indexed && !fixture.stream.PushSetIndexBuffer(buffer_id, 0, index_offset))
++    return false;
++  const bool draw_ok = indexed ? fixture.stream.PushDrawIndexed(6, 1, 2, 3) :
++                                 fixture.stream.PushDraw(6, 1, 2);
++  return draw_ok && fixture.stream.PushEndPass();
++}
++}  // namespace
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuCommandStreamGeometryParitySmoke(int indexed)
++{
++  s_geometry_smoke_error = "ok";
++  constexpr u8 vertices[] = {0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76};
++  constexpr u8 indices[] = {0x00, 0x01, 0x02, 0x02, 0x03, 0x00};
++  const bool use_indices = indexed != 0;
++
++  CommandStreamSmokeFixture legacy;
++  const u32 legacy_vertex = legacy.stream.UploadAlloc(vertices, sizeof(vertices), 4);
++  if (legacy_vertex == 0 ||
++      !legacy.stream.PushUploadBuffer(11, 0, legacy_vertex, sizeof(vertices),
++                                      BufferUploadRole::Vertex))
++    return FailGeometrySmoke(101, "legacy vertex allocation/publication failed");
++  u32 legacy_index = 0;
++  if (use_indices)
++  {
++    legacy_index = legacy.stream.UploadAlloc(indices, sizeof(indices), 4);
++    if (legacy_index == 0 ||
++        !legacy.stream.PushUploadBuffer(12, 0, legacy_index, sizeof(indices),
++                                        BufferUploadRole::Index))
++      return FailGeometrySmoke(102, "legacy index allocation/publication failed");
++  }
++
++  CommandStreamSmokeFixture packed;
++  const UploadPacket packet = packed.stream.UploadAllocTwoSegments(
++      vertices, sizeof(vertices), use_indices ? indices : nullptr,
++      use_indices ? sizeof(indices) : 0, 4, 4);
++  if (packet.src_heap_ptr == 0 || packet.second_offset != 8 ||
++      packet.total_size != (use_indices ? 16u : 8u))
++    return FailGeometrySmoke(103, "packed allocation layout mismatch");
++  if (std::memcmp(reinterpret_cast<const void*>(static_cast<uintptr_t>(legacy_vertex)),
++                  reinterpret_cast<const void*>(static_cast<uintptr_t>(packet.src_heap_ptr)),
++                  sizeof(vertices)) != 0 ||
++      *(reinterpret_cast<const u8*>(static_cast<uintptr_t>(packet.src_heap_ptr)) + 7) != 0)
++    return FailGeometrySmoke(104, "packed vertex bytes or alignment padding differ");
++  if (use_indices &&
++      std::memcmp(reinterpret_cast<const void*>(static_cast<uintptr_t>(legacy_index)),
++                  reinterpret_cast<const u8*>(static_cast<uintptr_t>(packet.src_heap_ptr)) +
++                      packet.second_offset,
++                  sizeof(indices)) != 0)
++    return FailGeometrySmoke(105, "packed index bytes differ");
++  if (!packed.stream.PushUploadBuffer(21, 0, packet.src_heap_ptr, packet.total_size,
++                                      BufferUploadRole::Geometry))
++    return FailGeometrySmoke(106, "packed geometry publication failed");
++
++  if (!EmitDraw(legacy, use_indices, 11, 0) ||
++      !CheckDrawSuffix(legacy, use_indices, 11, 0))
++    return FailGeometrySmoke(107, "legacy draw command suffix mismatch");
++  if (!EmitDraw(packed, use_indices, 21, use_indices ? packet.second_offset : 0) ||
++      !CheckDrawSuffix(packed, use_indices, 21, use_indices ? packet.second_offset : 0))
++    return FailGeometrySmoke(108, "packed draw command suffix mismatch");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuCommandStreamGeometryRollbackSmoke()
++{
++  s_geometry_smoke_error = "ok";
++  constexpr u8 payload[] = {1, 3, 5, 7, 9, 11, 13};
++  CommandStreamSmokeFixture fixture;
++  const UploadPacket packet = fixture.stream.UploadAllocTwoSegments(payload, sizeof(payload),
++                                                                    nullptr, 0, 4, 4);
++  if (packet.src_heap_ptr == 0)
++    return FailGeometrySmoke(201, "rollback setup allocation failed");
++  const u32 write_before = WebGPUCommandStreamTestPeer::UploadWrite(fixture.stream);
++  if (write_before != packet.total_size)
++    return FailGeometrySmoke(202, "rollback setup write position mismatch");
++
++  WebGPUCommandStreamTestPeer::FailConsumer(fixture.stream, 0x534D4F4Bu);
++  if (fixture.stream.PushUploadBuffer(31, 0, packet.src_heap_ptr, packet.total_size,
++                                      BufferUploadRole::Geometry))
++    return FailGeometrySmoke(203, "publication unexpectedly succeeded after consumer failure");
++  if (WebGPUCommandStreamTestPeer::UploadWrite(fixture.stream) != 0)
++    return FailGeometrySmoke(204, "failed publication did not roll back upload allocation");
++  if (fixture.header.write.load(std::memory_order_acquire) != 0)
++    return FailGeometrySmoke(205, "failed publication advanced the command ring");
++
++  CommandStreamSmokeFixture invalid;
++  if (invalid.stream.UploadAlloc(nullptr, sizeof(payload), 4) != 0)
++    return FailGeometrySmoke(206, "invalid allocation unexpectedly succeeded");
++  if (invalid.stream.PushBeginPass(1, 0, 0, 0, 1, 0, 0))
++    return FailGeometrySmoke(207, "failed allocation did not reject the owning pass");
++  if (invalid.header.write.load(std::memory_order_acquire) != 0)
++    return FailGeometrySmoke(208, "rejected pass became visible to the consumer");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuCommandStreamGeometrySmokeError()
++{
++  return s_geometry_smoke_error;
++}
+ }  // namespace WebGPU
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 94145ed6c2..633319abf3 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -361,6 +361,8 @@ public:
+   u32 AllocId() { return m_next_id++; }
+ 
+ private:
++  friend struct WebGPUCommandStreamTestPeer;
++
+   bool ProtocolV3Active() const;
+   bool ConsumerFailed() const;
+   bool WaitForRingSpace(u32 write, u32 count);
+@@ -425,4 +427,13 @@ private:
+ // one video pthread. A process-global accessor avoids threading a
+ // reference through VideoCommon. EnsureRing() is idempotent.
+ WebGPUCommandStream& GetCommandStream();
++
++// Native wasm regression seams. These execute the real command-stream upload,
++// publication, pass-staging, and rollback methods against an isolated tiny
++// ring; they do not require a browser GPU device or mutate the live stream.
++// Return 0 on success, otherwise a stable error code described by
++// GetWebGpuCommandStreamGeometrySmokeError().
++extern "C" int RunWebGpuCommandStreamGeometryParitySmoke(int indexed);
++extern "C" int RunWebGpuCommandStreamGeometryRollbackSmoke();
++extern "C" const char* GetWebGpuCommandStreamGeometrySmokeError();
+ }  // namespace WebGPU

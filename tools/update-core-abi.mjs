@@ -24,6 +24,7 @@ const contractSources = previous.contractSources.map((source) => ({
   ...(source.hashMode ? { hashMode: source.hashMode } : {}),
 }));
 const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
+const moduleExports = publicModuleExports(glue);
 const memoryContract = inspectMemoryContract(root);
 const runtimeMethods = inspectRuntimeMethods(lock, glue);
 const manifest = {
@@ -34,8 +35,9 @@ const manifest = {
   contractSources,
   memoryContract,
   memoryContractStatus: memoryContractStatus(memoryContract),
-  sourceOnlyExportsPendingRebuild: [],
-  moduleExports: publicModuleExports(glue),
+  sourceOnlyExportsPendingRebuild: (previous.sourceOnlyExportsPendingRebuild ?? [])
+    .filter((name) => !moduleExports.includes(name)),
+  moduleExports,
   runtimeMethods,
 };
 
