@@ -5717,6 +5717,11 @@ const webGpuCausalStats = {
   heldUploadStagedHighWaterBytes: 0,
   heldUploadStageLimitCount: 0,
   heldUploadScanCount: 0,
+  queueReliefStageCount: 0,
+  queueReliefStagedUploadCount: 0,
+  queueReliefStagedBytes: 0,
+  queueReliefStageLimitCount: 0,
+  queueReliefStageIncompleteCount: 0,
   producerStateCacheEnabled: false,
   producerPipelineRecordsSuppressed: 0,
   producerBindGroupRecordsSuppressed: [0, 0, 0],
@@ -8063,8 +8068,22 @@ function drainWebGpuCmdRing(source = "presentation") {
         )) {
       endPass("queue-relief", read);
       submitEnc("queue-relief");
+      const stagedCountBeforeRelief = webGpuCausalStats.heldUploadStagedCount;
+      const stagedBytesBeforeRelief = webGpuCausalStats.heldUploadStagedBytes;
+      const stageLimitBeforeRelief = webGpuCausalStats.heldUploadStageLimitCount;
+      stageHeldWgpuUploads(ring, read, write, u32, heap);
+      webGpuCausalStats.queueReliefStageCount += 1;
+      webGpuCausalStats.queueReliefStagedUploadCount +=
+        webGpuCausalStats.heldUploadStagedCount - stagedCountBeforeRelief;
+      webGpuCausalStats.queueReliefStagedBytes +=
+        webGpuCausalStats.heldUploadStagedBytes - stagedBytesBeforeRelief;
+      webGpuCausalStats.queueReliefStageLimitCount +=
+        webGpuCausalStats.heldUploadStageLimitCount - stageLimitBeforeRelief;
       publishWgpuReadIndex(ring, read);
-      queueReliefYielded = beginWgpuQueueReliefWait(q, ring, write, read);
+      const suffixStaged = ring.stagedScanCursor === (write >>> 0);
+      if (!suffixStaged) webGpuCausalStats.queueReliefStageIncompleteCount += 1;
+      queueReliefYielded = suffixStaged &&
+        beginWgpuQueueReliefWait(q, ring, write, read);
       if (queueReliefYielded) break;
     }
     if (wgpuReplayBudgetMs > 0) {

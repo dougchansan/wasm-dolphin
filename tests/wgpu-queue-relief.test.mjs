@@ -120,10 +120,32 @@ test("queue relief is query-gated, pump-dependent, and exported to benchmark art
   assert.match(adapter, /wgpuQueueRelief: this\.wgpuQueueRelief/);
   assert.match(worker, /Boolean\(requestedWgpuQueueRelief\)[\s\S]*?wgpuReplayPumpEnabled/);
   assert.match(worker, /shouldRelieveAtBoundary/);
-  assert.match(worker, /publishWgpuReadIndex\(ring, read\)[\s\S]*?beginWgpuQueueReliefWait/);
+  assert.match(
+    worker,
+    /stageHeldWgpuUploads\(ring, read, write, u32, heap\)[\s\S]*?publishWgpuReadIndex\(ring, read\)[\s\S]*?beginWgpuQueueReliefWait/
+  );
   assert.match(worker, /!queueReliefYielded[\s\S]*?stageHeldWgpuUploads/);
   assert.match(worker, /Promise\.resolve\(completion\)/);
   assert.match(menu, /WGPUQUEUEWAIT[\s\S]*?wgpuqueuewait/);
   assert.match(gate, /"wgpuqueuewait"/);
   assert.match(telemetry, /causalWgpuQueueReliefWaitP95Ms/);
+});
+
+test("queue relief suffix staging copies and acknowledges without touching GPUQueue", async () => {
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+  const stageStart = worker.indexOf("function stageHeldWgpuUploads(");
+  const stageEnd = worker.indexOf("function publishWgpuReadIndex(", stageStart);
+  assert.ok(stageStart >= 0 && stageEnd > stageStart);
+  const staging = worker.slice(stageStart, stageEnd);
+  assert.match(staging, /copyWgpuUploadPayload/);
+  assert.match(staging, /releaseWgpuUploadPayload/);
+  assert.doesNotMatch(
+    staging,
+    /\.writeBuffer\(|\.writeTexture\(|\.submit\(|onSubmittedWorkDone\(/
+  );
+  assert.match(worker, /suffixStaged[\s\S]*?beginWgpuQueueReliefWait/);
+  assert.match(worker, /queueReliefStageIncompleteCount/);
 });
