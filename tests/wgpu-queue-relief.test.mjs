@@ -122,7 +122,7 @@ test("queue relief is query-gated, pump-dependent, and exported to benchmark art
   assert.match(worker, /shouldRelieveAtBoundary/);
   assert.match(
     worker,
-    /stageHeldWgpuUploads\(ring, read, write, u32, heap\)[\s\S]*?publishWgpuReadIndex\(ring, read\)[\s\S]*?beginWgpuQueueReliefWait/
+    /stageWgpuQueueReliefSuffix\(ring, write, read\)[\s\S]*?publishWgpuReadIndex\(ring, read\)[\s\S]*?beginWgpuQueueReliefWait/
   );
   assert.match(worker, /!queueReliefYielded[\s\S]*?stageHeldWgpuUploads/);
   assert.match(worker, /Promise\.resolve\(completion\)/);
@@ -148,4 +148,9 @@ test("queue relief suffix staging copies and acknowledges without touching GPUQu
   );
   assert.match(worker, /suffixStaged[\s\S]*?beginWgpuQueueReliefWait/);
   assert.match(worker, /queueReliefStageIncompleteCount/);
+  assert.match(worker, /WGPU_QUEUE_RELIEF_MAX_STAGED_UPLOAD_BYTES = 256 \* 1024 \* 1024/);
+  assert.match(
+    worker,
+    /phase === "waiting"[\s\S]*?stageWgpuQueueReliefSuffix\(ring, waitingWrite, waitingRead\)/
+  );
 });
