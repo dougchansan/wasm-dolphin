@@ -4735,7 +4735,6 @@ const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
-const WGPU_QUEUE_RELIEF_MAX_STAGED_UPLOAD_BYTES = 256 * 1024 * 1024;
 const WGPU_REPLAY_BUDGET_CHECK_RECORDS = 32;
 const WGPU_DRAIN_DURATION_BUCKET_BOUNDS_MS = Object.freeze([2, 4, 6, 8, 12, 20, 50]);
 const WGPU_DRAIN_COMMAND_BUCKET_BOUNDS = Object.freeze([0, 32, 128, 512, 2048, 8192, 16384]);
@@ -4983,10 +4982,7 @@ function stageHeldWgpuUploads(
   writeIndex,
   u32,
   heap,
-  {
-    deadlineMs = Number.POSITIVE_INFINITY,
-    maxStagedBytes = null,
-  } = {}
+  { deadlineMs = Number.POSITIVE_INFINITY } = {}
 ) {
   if (!ring?.uploadWatermarkEnabled || startIndex === writeIndex) return;
   const startedAt = performance.now();
@@ -5035,12 +5031,10 @@ function stageHeldWgpuUploads(
       kind = "texture";
     }
     if (kind) {
-      const stagedByteLimit = maxStagedBytes == null
-        ? Math.min(
-            WGPU_MAX_STAGED_UPLOAD_BYTES,
-            ring.uploadSize || WGPU_MAX_STAGED_UPLOAD_BYTES
-          )
-        : Math.max(0, Number(maxStagedBytes) || 0);
+      const stagedByteLimit = Math.min(
+        WGPU_MAX_STAGED_UPLOAD_BYTES,
+        ring.uploadSize || WGPU_MAX_STAGED_UPLOAD_BYTES
+      );
       const paddedBytes = kind === "buffer" ? (bytes + 3) & ~3 : bytes;
       if (ring.stagedUploadBytes + paddedBytes > stagedByteLimit) {
         webGpuCausalStats.heldUploadStageLimitCount += 1;
@@ -5888,29 +5882,6 @@ function currentWgpuQueueReliefSample(ring = webGpuCmdRing, write = null, read =
   };
 }
 
-function stageWgpuQueueReliefSuffix(ring, write, read) {
-  const module = moduleInstance;
-  const heap = module?.HEAPU8;
-  if (!ring || !heap) return false;
-  const u32 = new Uint32Array(heap.buffer);
-  const stagedCountBefore = webGpuCausalStats.heldUploadStagedCount;
-  const stagedBytesBefore = webGpuCausalStats.heldUploadStagedBytes;
-  const stageLimitBefore = webGpuCausalStats.heldUploadStageLimitCount;
-  stageHeldWgpuUploads(ring, read, write, u32, heap, {
-    maxStagedBytes: WGPU_QUEUE_RELIEF_MAX_STAGED_UPLOAD_BYTES,
-  });
-  webGpuCausalStats.queueReliefStageCount += 1;
-  webGpuCausalStats.queueReliefStagedUploadCount +=
-    webGpuCausalStats.heldUploadStagedCount - stagedCountBefore;
-  webGpuCausalStats.queueReliefStagedBytes +=
-    webGpuCausalStats.heldUploadStagedBytes - stagedBytesBefore;
-  webGpuCausalStats.queueReliefStageLimitCount +=
-    webGpuCausalStats.heldUploadStageLimitCount - stageLimitBefore;
-  const complete = ring.stagedScanCursor === (write >>> 0);
-  if (!complete) webGpuCausalStats.queueReliefStageIncompleteCount += 1;
-  return complete;
-}
-
 function beginWgpuQueueReliefWait(queue, ring, write, read) {
   const token = wgpuQueueRelief.beginWait(
     currentWgpuQueueReliefSample(ring, write, read)
@@ -5954,13 +5925,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
   const normalizedSource = source === "pump" ? "pump" : "presentation";
-  if (wgpuQueueReliefRequested && wgpuQueueRelief.snapshot().phase === "waiting") {
-    const waitingWrite = Atomics.load(ring.headerI32, 0) >>> 0;
-    const waitingRead = currentWgpuReadIndex(ring);
-    stageWgpuQueueReliefSuffix(ring, waitingWrite, waitingRead);
-    wgpuQueueRelief.suppress(normalizedSource);
-    return;
-  }
+  if (wgpuQueueReliefRequested && wgpuQueueRelief.suppress(normalizedSource)) return;
   const collectReplayMetrics = causalMetricsEnabled || wgpuReplayBudgetMs > 0;
   if (collectReplayMetrics) {
     webGpuCausalStats.replayBudgetSourceCounts[normalizedSource] += 1;
@@ -8109,8 +8074,20 @@ function drainWebGpuCmdRing(source = "presentation") {
         )) {
       endPass("queue-relief", read);
       submitEnc("queue-relief");
-      const suffixStaged = stageWgpuQueueReliefSuffix(ring, write, read);
+      const stagedCountBeforeRelief = webGpuCausalStats.heldUploadStagedCount;
+      const stagedBytesBeforeRelief = webGpuCausalStats.heldUploadStagedBytes;
+      const stageLimitBeforeRelief = webGpuCausalStats.heldUploadStageLimitCount;
+      stageHeldWgpuUploads(ring, read, write, u32, heap);
+      webGpuCausalStats.queueReliefStageCount += 1;
+      webGpuCausalStats.queueReliefStagedUploadCount +=
+        webGpuCausalStats.heldUploadStagedCount - stagedCountBeforeRelief;
+      webGpuCausalStats.queueReliefStagedBytes +=
+        webGpuCausalStats.heldUploadStagedBytes - stagedBytesBeforeRelief;
+      webGpuCausalStats.queueReliefStageLimitCount +=
+        webGpuCausalStats.heldUploadStageLimitCount - stageLimitBeforeRelief;
       publishWgpuReadIndex(ring, read);
+      const suffixStaged = ring.stagedScanCursor === (write >>> 0);
+      if (!suffixStaged) webGpuCausalStats.queueReliefStageIncompleteCount += 1;
       queueReliefYielded = suffixStaged &&
         beginWgpuQueueReliefWait(q, ring, write, read);
       if (queueReliefYielded) break;
