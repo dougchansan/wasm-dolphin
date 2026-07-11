@@ -1038,6 +1038,123 @@ export function summarizeTimedMetricWindows(samples, steadyAfterSeconds) {
   };
 }
 
+export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 } = {}) {
+  const timed = (samples || []).filter(Boolean);
+  const first = timed[0] || {};
+  const last = timed.at(-1) || {};
+  const delta = (field) => {
+    const before = Number(first[field]);
+    const after = Number(last[field]);
+    return Number.isFinite(before) && Number.isFinite(after) ? after - before : null;
+  };
+  const maximum = (field) => {
+    const values = timed.map((sample) => Number(sample[field])).filter(Number.isFinite);
+    return values.length ? Math.max(...values) : null;
+  };
+  const audioCounterFields = {
+    workerMixCount: "causalAudioWorkerMixCount",
+    workerRequestedFrames: "causalAudioWorkerRequestedFrames",
+    workerReturnedFrames: "causalAudioWorkerReturnedFrames",
+    workerEmptyMixCount: "causalAudioWorkerEmptyMixCount",
+    pumpCount: "causalAudioPumpCount",
+    pumpPendingSkipCount: "causalAudioPumpPendingSkipCount",
+    pumpMissCount: "causalAudioPumpMissCount",
+    underrunCount: "causalAudioUnderruns",
+    overrunCount: "causalAudioOverruns",
+  };
+  const audioMaximumFields = {
+    workerMixMaxMs: "causalAudioWorkerMixMaxMs",
+    pumpGapMaxMs: "causalAudioPumpGapMaxMs",
+    mixRoundTripMaxMs: "causalAudioMixRoundTripMaxMs",
+  };
+  const stageFields = {
+    applied: "causalInputMarkerAppliedCount",
+    polled: "causalInputMarkerExactCorePollCount",
+    armed: "causalInputMarkerArmedCount",
+    submitted: "causalInputMarkerSubmittedCount",
+    completed: "causalInputMarkerCompletedCount",
+  };
+  const errorFields = {
+    supersededCount: "causalInputMarkerSupersededCount",
+    supersededArmedCount: "causalInputMarkerSupersededArmedCount",
+    droppedInFlightCount: "causalInputMarkerDroppedInFlightCount",
+    generationMismatchCount: "causalInputMarkerGenerationMismatchCount",
+    generationUnavailableCount: "causalInputMarkerGenerationUnavailableCount",
+    expiredCount: "causalInputMarkerExpiredCount",
+    expiredInFlightCount: "causalInputMarkerExpiredInFlightCount",
+  };
+  const mapDeltas = (fields) => Object.fromEntries(
+    Object.entries(fields).map(([name, field]) => [name, delta(field)])
+  );
+  const audioDeltas = mapDeltas(audioCounterFields);
+  const stageDeltas = mapDeltas(stageFields);
+  const errorDeltas = mapDeltas(errorFields);
+  const gpuErrors = {
+    wgpuErrorCount: delta("causalWgpuErrorCount"),
+    gpuCompletionFailedCount: delta("causalGpuCompletionFailedCount"),
+  };
+  const expected = Math.max(0, Math.trunc(Number(expectedInputEvents) || 0));
+  const requiredParityStages = ["applied", "polled", "submitted", "completed"];
+  const parityPassed = expected === 0 || (
+    last.causalInputMarkerEnabled === true &&
+    requiredParityStages.every((name) => stageDeltas[name] === expected)
+  );
+  const failures = [];
+  if (audioDeltas.workerEmptyMixCount > 0) {
+    failures.push(`audio empty mixes=${audioDeltas.workerEmptyMixCount}`);
+  }
+  if (audioDeltas.underrunCount > 0) {
+    failures.push(`new WebAudio underruns=${audioDeltas.underrunCount}`);
+  }
+  if (!parityPassed) {
+    failures.push(
+      `input marker parity expected=${expected} applied=${stageDeltas.applied} ` +
+      `polled=${stageDeltas.polled} armed=${stageDeltas.armed} ` +
+      `submitted=${stageDeltas.submitted} completed=${stageDeltas.completed}`
+    );
+  }
+  for (const [name, value] of Object.entries(errorDeltas)) {
+    if (value > 0) failures.push(`input marker ${name}=${value}`);
+  }
+  if (gpuErrors.wgpuErrorCount > 0) failures.push(`WGPU errors=${gpuErrors.wgpuErrorCount}`);
+  if (gpuErrors.gpuCompletionFailedCount > 0) {
+    failures.push(`GPU completion errors=${gpuErrors.gpuCompletionFailedCount}`);
+  }
+  return {
+    sampleCount: timed.length,
+    audio: {
+      deltas: audioDeltas,
+      extrema: {
+        ...Object.fromEntries(
+          Object.entries(audioMaximumFields).map(([name, field]) => [name, maximum(field)])
+        ),
+        scheduleLeadMinSeconds: summarizeNumeric(
+          timed.map((sample) => sample.causalAudioScheduleLeadSeconds)
+        )?.min ?? null,
+        scheduleLeadMaxSeconds: maximum("causalAudioScheduleLeadSeconds"),
+        scheduleDriftMinSeconds: summarizeNumeric(
+          timed.map((sample) => sample.causalAudioScheduleDriftSeconds)
+        )?.min ?? null,
+        scheduleDriftMaxSeconds: maximum("causalAudioScheduleDriftSeconds"),
+      },
+    },
+    inputMarker: {
+      expectedCount: expected,
+      enabled: last.causalInputMarkerEnabled === true,
+      stageDeltas,
+      errorDeltas,
+      final: {
+        pendingGeneration: Number(last.causalInputMarkerPendingGeneration) || 0,
+        activeGeneration: Number(last.causalInputMarkerActiveGeneration) || 0,
+        inFlightCount: Number(last.causalInputMarkerInFlightCount) || 0,
+      },
+      parityPassed,
+    },
+    gpuErrors,
+    failures,
+  };
+}
+
 export function classifyGateOutcome({
   failureCount = 0,
   qualificationEligible = false,

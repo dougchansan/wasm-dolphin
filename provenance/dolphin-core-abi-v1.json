@@ -56,8 +56,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 38311,
-      "sha256": "02d041d1287d461409655159d475ce7351fbadd4c86a9b51919587b4d212c498"
+      "size": 41831,
+      "sha256": "f0bd1f95000401199d77b2187807c98a1abef2b1c7299f6f9e0c6a81926b5014"
     },
     {
       "path": "src/core-host.js",
