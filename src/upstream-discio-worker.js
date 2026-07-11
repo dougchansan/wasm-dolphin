@@ -5997,9 +5997,9 @@ function drainWebGpuCmdRing() {
 
       // Present-time EFB sampling can be invalidated by a later clear.  When
       // the classifier is enabled, submit exactly one readback immediately
-      // after the first completed EFB pass that contained a draw.  Keeping
-      // the copy in this encoder proves whether that pass itself mutated its
-      // target without changing normal (classifier-off) replay behavior.
+      // after the first completed EFB pass that contained an indexed draw.
+      // Non-indexed utility triangles can legitimately leave the sampled EFB
+      // clear and must not consume the one-shot mutation proof.
       if (wgpuReplayClassifier?.beginFirstEfbPassReadback({
         framebufferId: endedFramebufferId,
         passEndRecordIndex: recordIndex,

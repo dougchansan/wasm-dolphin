@@ -297,7 +297,7 @@ test("an immediate first completed EFB pass readback is independent of present-t
 
 test("a nonzero immediate first EFB pass readback proves pass mutation", () => {
   const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
-  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 79, efb: true });
+  classifier.recordRealDraw({ framebufferId: 14, indexed: true, pipelineId: 79, efb: true });
   assert.equal(classifier.beginFirstEfbPassReadback({
     framebufferId: 14,
     passEndRecordIndex: 21
@@ -321,7 +321,7 @@ test("a nonzero immediate first EFB pass readback proves pass mutation", () => {
 
 test("an immediate first EFB pass readback error is classified explicitly", () => {
   const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
-  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 79, efb: true });
+  classifier.recordRealDraw({ framebufferId: 14, indexed: true, pipelineId: 79, efb: true });
   assert.equal(classifier.beginFirstEfbPassReadback({ framebufferId: 14 }), true);
   assert.equal(classifier.recordFirstEfbPassReadback({ error: new Error("map failed") }), true);
 
@@ -554,6 +554,18 @@ test("worker reads the first completed EFB pass before later presents can clear 
     /beginFirstEfbPassReadback\(\{[\s\S]*?framebufferId: endedFramebufferId[\s\S]*?copyTextureToBuffer[\s\S]*?submitEnc\("first-efb-pass-readback"\)/
   );
   assert.match(worker, /recordFirstEfbPassReadback\(\{[\s\S]*?nonzeroColorBytes/);
+});
+
+test("a non-indexed utility EFB draw cannot consume the indexed mutation probe", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  classifier.recordRealDraw({ framebufferId: 14, indexed: false, pipelineId: 22, efb: true });
+  assert.equal(classifier.needsFirstEfbPassReadback(14), false);
+  classifier.recordRealDraw({ framebufferId: 14, indexed: true, pipelineId: 534, efb: true });
+  assert.equal(classifier.needsFirstEfbPassReadback(14), true);
+  assert.equal(classifier.beginFirstEfbPassReadback({ framebufferId: 14 }), true);
+  const snapshot = classifier.snapshot();
+  assert.equal(snapshot.stages.firstEfbDraw.pipelineId, 22);
+  assert.equal(snapshot.stages.firstIndexedEfbDraw.pipelineId, 534);
 });
 
 test("geometry upload packing is default-off with an explicit boolean override", () => {

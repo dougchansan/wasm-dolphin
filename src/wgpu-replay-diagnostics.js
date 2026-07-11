@@ -516,14 +516,14 @@ export function createWgpuReplayClassifier({
       (indexed && firstIndexedEfbDraw.status !== "pass");
   }
 
-  function needsFirstEfbPassReadback(framebufferId = firstEfbDraw.framebufferId) {
-    return firstEfbDraw.status === "pass" &&
+  function needsFirstEfbPassReadback(framebufferId = firstIndexedEfbDraw.framebufferId) {
+    return firstIndexedEfbDraw.status === "pass" &&
       firstEfbPassReadback.status === "pending" &&
-      (framebufferId >>> 0) === firstEfbDraw.framebufferId;
+      (framebufferId >>> 0) === firstIndexedEfbDraw.framebufferId;
   }
 
   function beginFirstEfbPassReadback({
-    framebufferId = firstEfbDraw.framebufferId,
+    framebufferId = firstIndexedEfbDraw.framebufferId,
     passEndRecordIndex = 0,
     drawCountAtEncode = efbMutation.drawCount
   } = {}) {
