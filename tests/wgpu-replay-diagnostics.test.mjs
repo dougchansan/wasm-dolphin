@@ -12,6 +12,7 @@ import {
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
+  requestedWgpuGeometryPack,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   selectAtomicReplayLimit,
@@ -494,6 +495,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuGeometryPack\(window\.location\.search\)/);
   assert.match(adapter, /wgpuReplayDiagnostics: this\.wgpuReplayDiagnostics/);
   assert.match(adapter, /wgpuDeepReplayDiagnostics: this\.wgpuDeepReplayDiagnostics/);
   assert.match(adapter, /wgpuDetachedPresenter: this\.wgpuDetachedPresenter/);
@@ -502,6 +504,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
+  assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
@@ -511,7 +514,9 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
+  assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
   assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
+  assert.match(worker, /setWebGpuGeometryPackEnabled\?\.\(wgpuGeometryPackEnabled \? 1 : 0\)/);
   assert.match(worker, /if \(!wgpuDeepReplayDiagnostics\) break;/);
   assert.match(worker, /wgpuDeepReplayDiagnostics && bid === self\._wgVtxBufId/);
   assert.match(worker, /scope: "load-state-file",\s+generation: wgpuReplayClassifierGeneration/);
@@ -548,6 +553,13 @@ test("worker reads the first completed EFB pass before later presents can clear 
     /beginFirstEfbPassReadback\(\{[\s\S]*?framebufferId: endedFramebufferId[\s\S]*?copyTextureToBuffer[\s\S]*?submitEnc\("first-efb-pass-readback"\)/
   );
   assert.match(worker, /recordFirstEfbPassReadback\(\{[\s\S]*?nonzeroColorBytes/);
+});
+
+test("geometry upload packing is default-off with an explicit boolean override", () => {
+  assert.equal(requestedWgpuGeometryPack(""), false);
+  assert.equal(requestedWgpuGeometryPack("", true), true);
+  assert.equal(requestedWgpuGeometryPack("?wgpugeompack=1"), true);
+  assert.equal(requestedWgpuGeometryPack("?wgpugeompack=0", true), false);
 });
 
 test("worker publishes upload-role, pass-window, and verified-load attribution", async () => {

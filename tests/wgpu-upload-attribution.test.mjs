@@ -11,10 +11,10 @@ import {
   createWgpuUploadAttribution,
 } from "../src/wgpu-upload-attribution.js";
 
-test("WGPU upload attribution starts with a fixed zero-filled v1 schema", () => {
+test("WGPU upload attribution starts with a fixed zero-filled v2 schema", () => {
   const snapshot = createWgpuUploadAttribution().snapshot({ enabled: false });
 
-  assert.equal(snapshot.schema, "wasm-dolphin.wgpu-upload-attribution.v1");
+  assert.equal(snapshot.schema, "wasm-dolphin.wgpu-upload-attribution.v2");
   assert.equal(snapshot.enabled, false);
   assert.deepEqual(snapshot.roleOrder, [
     "unknown",
@@ -23,6 +23,7 @@ test("WGPU upload attribution starts with a fixed zero-filled v1 schema", () => 
     "vertex",
     "index",
     "texture-adjacent",
+    "geometry",
   ]);
   assert.deepEqual(snapshot.sizeBucketLabels, [
     "<=64", "<=256", "<=1024", "<=4096", "<=16384", "<=65536", ">65536",
@@ -38,6 +39,14 @@ test("WGPU upload attribution starts with a fixed zero-filled v1 schema", () => 
   ));
   assert.equal(snapshot.passAssociation.completedPassCount, 0);
   assert.equal(snapshot.passAssociation.currentPassOpen, false);
+});
+
+test("packed geometry uploads retain their own stable producer role", () => {
+  const metrics = createWgpuUploadAttribution();
+  metrics.recordUpload(WGPU_UPLOAD_ROLE.GEOMETRY, 320, 4096);
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.callsByRole[WGPU_UPLOAD_ROLE.GEOMETRY], 1);
+  assert.equal(snapshot.bytesByRole[WGPU_UPLOAD_ROLE.GEOMETRY], 320);
 });
 
 test("WGPU upload attribution records roles, byte maxima, and exact bucket edges", () => {
@@ -124,6 +133,6 @@ test("reset restores all counters, buckets, pass state, and maxima", () => {
     maxCalls: 0,
     maxBytes: 0,
     maxDestinationSpanBytes: 0,
-    maxDestinationSpanBytesByRole: [0, 0, 0, 0, 0, 0],
+    maxDestinationSpanBytesByRole: [0, 0, 0, 0, 0, 0, 0],
   });
 });

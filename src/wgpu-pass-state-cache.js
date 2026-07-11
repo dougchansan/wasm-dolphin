@@ -11,6 +11,7 @@ export function parseWgpuProducerStateStats(text = "") {
   if (!match) return null;
   const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
     .exec(normalized);
+  const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   return {
     enabled: match[1] === "1",
     pipelineRecordsSuppressed: Number(match[2]),
@@ -28,7 +29,9 @@ export function parseWgpuProducerStateStats(text = "") {
     uboCacheHits: numericTriple(ubo, 6),
     uboCacheExpired: numericTriple(ubo, 9),
     uboUploadCallsSuppressed: numericTriple(ubo, 12),
-    uboUploadBytesSuppressed: numericTriple(ubo, 15)
+    uboUploadBytesSuppressed: numericTriple(ubo, 15),
+    geometryPackEnabled: geometry?.[1] === "1",
+    geometryPackEpoch: Number(geometry?.[2] || 0)
   };
 }
 

@@ -151,6 +151,7 @@ let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
+let wgpuGeometryPackEnabled = false;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
@@ -602,6 +603,7 @@ async function handleMessage(type, payload) {
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
+        wgpuGeometryPack: payload.wgpuGeometryPack,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -636,6 +638,7 @@ async function handleMessage(type, payload) {
     case "reset":
       api?.reset();
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       api?.setInputMask(inputMask);
       return framePayload();
@@ -645,8 +648,10 @@ async function handleMessage(type, payload) {
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       return { loaded, ...framePayload() };
     }
@@ -721,12 +726,14 @@ async function handleMessage(type, payload) {
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       const rc = api.loadStateFile(path) | 0;
       // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
       // step the core) — wait real wall-clock time so the restore
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       collectWebGpuProducerStateStats();
       const uploadTimeoutCountImmediatelyAfterLoad = webGpuCausalStats.uploadTimeoutCount;
@@ -890,6 +897,7 @@ async function loadCore({
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
+  wgpuGeometryPack: requestedWgpuGeometryPack = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -918,6 +926,7 @@ async function loadCore({
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
+  wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -1176,6 +1185,7 @@ async function loadCore({
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+  api.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
@@ -1250,6 +1260,10 @@ function bindApi(module) {
     setWebGpuUboCacheEnabled:
       typeof module._SetWebGpuUboCacheEnabled === "function"
         ? (mode) => ccall("SetWebGpuUboCacheEnabled", null, ["number"], [mode | 0])
+        : null,
+    setWebGpuGeometryPackEnabled:
+      typeof module._SetWebGpuGeometryPackEnabled === "function"
+        ? (enabled) => ccall("SetWebGpuGeometryPackEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
     getWebGpuStateCacheStats: optionalCwrap("GetWebGpuStateCacheStats", "string", []),
     setCpuOverclock:
@@ -1565,6 +1579,8 @@ function collectWebGpuProducerStateStats() {
       parsed.uboUploadCallsSuppressed;
     webGpuCausalStats.producerUboUploadBytesSuppressed =
       parsed.uboUploadBytesSuppressed;
+    webGpuCausalStats.producerGeometryPackEnabled = parsed.geometryPackEnabled;
+    webGpuCausalStats.producerGeometryPackEpoch = parsed.geometryPackEpoch;
   }
   return text;
 }
@@ -1926,7 +1942,9 @@ function maybeCreateCausalTelemetry(videoStats) {
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
+      geometryPackEnabled: wgpuGeometryPackEnabled,
       producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
+      producerGeometryPackAvailable: Boolean(api?.setWebGpuGeometryPackEnabled),
       producerStateCacheEnabled:
         wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
       consumerStateCacheEnabled: wgpuConsumerStateCacheEnabled,

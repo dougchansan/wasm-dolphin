@@ -1,0 +1,578 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index 61002b3..17ae306 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuGeometryPackEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 4e8837b..ee23c1d 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -301,15 +301,20 @@ bool WebGPUCommandStream::PushDrawTest(u32 pipeline_id, u32 vertex_count)
+ 
+ // ---- Phase A producer API ----------------------------------------
+ 
+-u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+-{
+-  if (!data || !m_upload_base || m_upload_size == 0 || len == 0 || len > m_upload_size)
+-  {
+-    PoisonPass();
+-    return 0;
+-  }
+-  if (align < 4)
+-    align = 4;
++u32 WebGPUCommandStream::ReserveUpload(size_t len, u32 align)
++{
++  if (!m_upload_base || m_upload_size == 0 || len == 0 || len > m_upload_size)
++  {
++    PoisonPass();
++    return 0;
++  }
++  if (align < 4)
++    align = 4;
++  if ((align & (align - 1)) != 0)
++  {
++    PoisonPass();
++    return 0;
++  }
+ 
+   // Convert the monotonic write position to a contiguous physical span.
+   // Padding at the end is part of the reserved byte range so the consumer
+@@ -395,15 +400,81 @@ u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
+     }
+   }
+ 
+-  std::memcpy(m_upload_base + aligned_offset, data, len);
+-  m_last_upload_write_before = m_upload_write;
++  m_last_upload_write_before = m_upload_write;
+   m_last_upload_write_after = end;
+   m_last_upload_ptr =
+       static_cast<u32>(reinterpret_cast<uintptr_t>(m_upload_base + aligned_offset));
+   m_last_upload_len = static_cast<u32>(len);
+   m_upload_write = end;
+-  return m_last_upload_ptr;
+-}
++  return m_last_upload_ptr;
++}
++
++u32 WebGPUCommandStream::UploadAlloc(const void* data, size_t len, u32 align)
++{
++  if (!data)
++  {
++    PoisonPass();
++    return 0;
++  }
++  const u32 ptr = ReserveUpload(len, align);
++  if (ptr == 0)
++    return 0;
++  std::memcpy(reinterpret_cast<void*>(static_cast<uintptr_t>(ptr)), data, len);
++  return ptr;
++}
++
++UploadPacket WebGPUCommandStream::UploadAllocTwoSegments(const void* first, size_t first_len,
++                                                          const void* second, size_t second_len,
++                                                          u32 second_align, u32 packet_align)
++{
++  UploadPacket packet{};
++  if ((first_len != 0 && first == nullptr) || (second_len != 0 && second == nullptr) ||
++      (first_len == 0 && second_len == 0))
++  {
++    PoisonPass();
++    return packet;
++  }
++  if (second_align < 4)
++    second_align = 4;
++  if ((second_align & (second_align - 1)) != 0 || first_len > UINT32_MAX ||
++      second_len > UINT32_MAX)
++  {
++    PoisonPass();
++    return packet;
++  }
++
++  const size_t second_offset = (first_len + second_align - 1) & ~(static_cast<size_t>(second_align) - 1);
++  if (second_offset < first_len || second_len > UINT32_MAX - second_offset)
++  {
++    PoisonPass();
++    return packet;
++  }
++  const size_t payload_size = second_offset + second_len;
++  if (payload_size > UINT32_MAX - 3u)
++  {
++    PoisonPass();
++    return packet;
++  }
++  const size_t total_size = (payload_size + 3u) & ~static_cast<size_t>(3u);
++  const u32 ptr = ReserveUpload(total_size, packet_align);
++  if (ptr == 0)
++    return packet;
++
++  u8* const destination = reinterpret_cast<u8*>(static_cast<uintptr_t>(ptr));
++  if (first_len != 0)
++    std::memcpy(destination, first, first_len);
++  if (second_offset > first_len)
++    std::memset(destination + first_len, 0, second_offset - first_len);
++  if (second_len != 0)
++    std::memcpy(destination + second_offset, second, second_len);
++  if (total_size > payload_size)
++    std::memset(destination + payload_size, 0, total_size - payload_size);
++
++  packet.src_heap_ptr = ptr;
++  packet.second_offset = static_cast<u32>(second_offset);
++  packet.total_size = static_cast<u32>(total_size);
++  return packet;
++}
+ 
+ void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
+ {
+@@ -769,14 +840,17 @@ bool WebGPUCommandStream::PushEndPass()
+   return committed;
+ }
+ 
+-bool WebGPUCommandStream::PushSubmitPresent()
+-{
++bool WebGPUCommandStream::PushSubmitPresent()
++{
+   if (!m_header)
+     return false;
+-  CmdRecord rec{};
+-  rec.op = static_cast<u32>(CmdOp::SubmitPresent);
+-  return Push(rec);
+-}
++  CmdRecord rec{};
++  rec.op = static_cast<u32>(CmdOp::SubmitPresent);
++  if (!Push(rec))
++    return false;
++  ++m_submit_serial;
++  return true;
++}
+ 
+ bool WebGPUCommandStream::PushDestroy(u32 class_tag, u32 id)
+ {
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index f47b6bb..36ad2a0 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -134,7 +134,15 @@ enum class BufferUploadRole : u32
+   Vertex = 3,
+   Index = 4,
+   TextureAdjacent = 5,
+-  Count = 6,
++  Geometry = 6,
++  Count = 7,
++};
++
++struct UploadPacket
++{
++  u32 src_heap_ptr = 0;
++  u32 second_offset = 0;
++  u32 total_size = 0;
+ };
+ 
+ // Fixed-size record: opcode + 7 payload words (mix of f32/u32 read
+@@ -229,8 +237,14 @@ public:
+   // `data` in, and return the ABSOLUTE wasm-heap offset of the copy
+   // (what the consumer reads from for UploadBuffer/UploadTexture), or
+   // 0 on failure. Offsets recycle only after the JS consumer publishes
+-  // upload_read, so queued records never observe overwritten bytes.
+-  u32 UploadAlloc(const void* data, size_t len, u32 align = 4);
++  // upload_read, so queued records never observe overwritten bytes.
++  u32 UploadAlloc(const void* data, size_t len, u32 align = 4);
++  // Reserve one arena span and copy two source segments directly into it.
++  // Padding before/after the second segment is zeroed so the packet is valid
++  // for one queue.writeBuffer without a temporary allocation.
++  UploadPacket UploadAllocTwoSegments(const void* first, size_t first_len, const void* second,
++                                      size_t second_len, u32 second_align = 4,
++                                      u32 packet_align = 4);
+ 
+   u32 PushCreateBuffer(u32 size, u32 usage_flags);
+   bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len,
+@@ -271,8 +285,16 @@ public:
+ 
+   // Discard the current staged pass without publishing BEGIN_PASS or any of
+   // its state/draw records. Safe to call redundantly.
+-  void AbortPass();
+-  bool pass_staging() const { return m_pass_staging; }
++  void AbortPass();
++  // Reject the owning/following transaction when a producer-side invariant
++  // fails before it can emit a required resource record.
++  void FailRequiredPublication() { PoisonPass(); }
++  void FailLastUpload(u32 src_heap_ptr, u32 len)
++  {
++    RollbackLastUpload(src_heap_ptr, len);
++    PoisonPass();
++  }
++  bool pass_staging() const { return m_pass_staging; }
+   bool pass_poisoned() const { return m_pass_poisoned; }
+ 
+   u64 GetBatchAbortCount() const
+@@ -283,10 +305,13 @@ public:
+   {
+     return m_batch_oversize_count.load(std::memory_order_relaxed);
+   }
+-  u64 GetUploadTimeoutCount() const
++  u64 GetUploadTimeoutCount() const
+   {
+     return m_upload_timeout_count.load(std::memory_order_relaxed);
+-  }
++  }
++  // Successful publication of SUBMIT_PRESENT is a FIFO reuse barrier: the
++  // consumer submits all earlier encoded draws before replaying later uploads.
++  u64 GetSubmitSerial() const { return m_submit_serial; }
+ 
+   bool ready() const { return m_header != nullptr; }
+ 
+@@ -298,9 +323,10 @@ public:
+ 
+ private:
+   bool StagePassRecord(const CmdRecord& rec);
+-  void PoisonPass();
+-  void ResetPassStaging();
+-  void RollbackLastUpload(u32 src_heap_ptr, u32 len);
++  void PoisonPass();
++  void ResetPassStaging();
++  void RollbackLastUpload(u32 src_heap_ptr, u32 len);
++  u32 ReserveUpload(size_t len, u32 align);
+ 
+   CmdRingHeader* m_header = nullptr;
+   CmdRecord* m_slots = nullptr;
+@@ -316,8 +342,9 @@ private:
+   std::atomic<u64> m_upload_timeout_count{0};
+   u32 m_last_upload_write_before = 0;
+   u32 m_last_upload_write_after = 0;
+-  u32 m_last_upload_ptr = 0;
+-  u32 m_last_upload_len = 0;
++  u32 m_last_upload_ptr = 0;
++  u32 m_last_upload_len = 0;
++  u64 m_submit_serial = 0;
+ 
+   // BEGIN_PASS..END_PASS records stay private until END_PASS can publish the
+   // entire batch. Resource creation/uploads remain immediate so the consumer
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index e73f907..47aa305 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -61,6 +61,8 @@ std::atomic<u64> s_ubo_cache_hits[3]{};
+ std::atomic<u64> s_ubo_cache_expired[3]{};
+ std::atomic<u64> s_ubo_upload_calls_suppressed[3]{};
+ std::atomic<u64> s_ubo_upload_bytes_suppressed[3]{};
++std::atomic<bool> s_geometry_upload_pack_enabled{false};
++std::atomic<u64> s_geometry_upload_pack_epoch{0};
+ }
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
+@@ -79,6 +81,25 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUboCacheEnabled(int mode)
+   // deliberately re-applies the setting to invalidate producer-local slices.
+   s_ubo_cache_epoch.fetch_add(1, std::memory_order_release);
+ }
++
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled(int enabled)
++{
++  s_geometry_upload_pack_enabled.store(enabled != 0, std::memory_order_relaxed);
++  // Re-applying the setting around reset/save-load is an invalidation event.
++  // The vertex manager observes this epoch and starts a fresh buffer id rather
++  // than reusing destination bytes that an old command suffix may reference.
++  s_geometry_upload_pack_epoch.fetch_add(1, std::memory_order_release);
++}
++
++bool IsGeometryUploadPackEnabled()
++{
++  return s_geometry_upload_pack_enabled.load(std::memory_order_relaxed);
++}
++
++u64 GetGeometryUploadPackEpoch()
++{
++  return s_geometry_upload_pack_epoch.load(std::memory_order_acquire);
++}
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+ {
+@@ -112,7 +133,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << s_ubo_upload_calls_suppressed[2].load(std::memory_order_relaxed)
+       << " usupbyte:" << s_ubo_upload_bytes_suppressed[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_upload_bytes_suppressed[1].load(std::memory_order_relaxed) << ","
+-      << s_ubo_upload_bytes_suppressed[2].load(std::memory_order_relaxed);
++      << s_ubo_upload_bytes_suppressed[2].load(std::memory_order_relaxed)
++      << " wggeom:" << (s_geometry_upload_pack_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " wggeomepoch:" << s_geometry_upload_pack_epoch.load(std::memory_order_relaxed);
+   stats = out.str();
+   return stats.c_str();
+ }
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index afa1786..187956e 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -3,7 +3,8 @@
+ 
+ #include "VideoBackends/WebGPU/WebGPUVertexManager.h"
+ 
+-#include <cstring>
++#include <cstring>
++#include <limits>
+ 
+ #include <emscripten/emscripten.h>
+ 
+@@ -16,8 +17,9 @@ namespace WebGPU
+ {
+ // GPUBufferUsage numeric flags (DESIGN doc): VERTEX 0x20, INDEX 0x10,
+ // COPY_DST 0x8.
+-static constexpr u32 kUsageVertex = 0x20 | 0x8;
+-static constexpr u32 kUsageIndex = 0x10 | 0x8;
++static constexpr u32 kUsageVertex = 0x20 | 0x8;
++static constexpr u32 kUsageIndex = 0x10 | 0x8;
++static constexpr u32 kUsageGeometry = 0x20 | 0x10 | 0x8;
+ 
+ VertexManager::VertexManager() = default;
+ VertexManager::~VertexManager() = default;
+@@ -32,7 +34,7 @@ bool VertexManager::Initialize()
+   return true;
+ }
+ 
+-void VertexManager::EnsureBuffers()
++void VertexManager::EnsureLegacyBuffers()
+ {
+   WebGPUCommandStream& cs = GetCommandStream();
+   cs.EnsureRing();
+@@ -44,20 +46,143 @@ void VertexManager::EnsureBuffers()
+     m_index_buffer_id = cs.PushCreateBuffer(kIndexBufferSize, kUsageIndex);
+ }
+ 
+-void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_indices,
+-                                 u32* out_base_vertex, u32* out_base_index)
+-{
+-  *out_base_vertex = 0;
+-  *out_base_index = 0;
+-
+-  EnsureBuffers();
+-  WebGPUCommandStream& cs = GetCommandStream();
+-  if (m_vertex_buffer_id == 0 || m_index_buffer_id == 0)
+-    return;
+-
+-  if (vertex_stride == 0)
+-    return;
+-  // queue.writeBuffer requires the destination offset AND the byte
++void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_indices,
++                                 u32* out_base_vertex, u32* out_base_index)
++{
++  *out_base_vertex = 0;
++  *out_base_index = 0;
++
++  WebGPUCommandStream& cs = GetCommandStream();
++  cs.EnsureRing();
++  if (!cs.ready())
++    return;
++  if (vertex_stride == 0)
++    return;
++
++  const bool geometry_pack_enabled = IsGeometryUploadPackEnabled();
++  const u64 geometry_pack_epoch = GetGeometryUploadPackEpoch();
++  if (geometry_pack_epoch != m_geometry_pack_epoch)
++  {
++    m_geometry_pack_epoch = geometry_pack_epoch;
++    m_geometry_pack_active = geometry_pack_enabled;
++    if (geometry_pack_enabled)
++    {
++      // A reset/save-load/toggle is not a submit barrier. Start with a new
++      // resource id so an old queued suffix cannot observe recycled bytes.
++      m_geometry_buffer_id = 0;
++      m_geometry_offset = 0;
++      m_geometry_generations_since_submit = 0;
++      m_geometry_submit_serial = cs.GetSubmitSerial();
++    }
++  }
++  else
++  {
++    m_geometry_pack_active = geometry_pack_enabled;
++  }
++
++  if (m_geometry_pack_active)
++  {
++    const u64 vertex_bytes_64 = static_cast<u64>(num_vertices) * vertex_stride;
++    const u64 index_bytes_64 = static_cast<u64>(num_indices) * sizeof(u16);
++    if (vertex_bytes_64 > std::numeric_limits<u32>::max() ||
++        index_bytes_64 > std::numeric_limits<u32>::max())
++    {
++      cs.FailRequiredPublication();
++      return;
++    }
++    const u32 vertex_bytes = static_cast<u32>(vertex_bytes_64);
++    const u32 index_bytes = static_cast<u32>(index_bytes_64);
++    if (vertex_bytes == 0 && index_bytes == 0)
++      return;
++    const u64 combined_bytes = vertex_bytes_64 + index_bytes_64;
++    if ((vertex_stride & 3u) != 0 || combined_bytes > std::numeric_limits<u32>::max() - 3u)
++    {
++      cs.FailRequiredPublication();
++      return;
++    }
++    const u32 packet_bytes = (static_cast<u32>(combined_bytes) + 3u) & ~3u;
++    if (packet_bytes > kGeometryBufferSize)
++    {
++      cs.FailRequiredPublication();
++      return;
++    }
++
++    const u64 submit_serial = cs.GetSubmitSerial();
++    u32 candidate_buffer_id = m_geometry_buffer_id;
++    u32 candidate_offset = m_geometry_offset;
++    u32 candidate_generations = m_geometry_generations_since_submit;
++    if (submit_serial != m_geometry_submit_serial)
++    {
++      // The SUBMIT_PRESENT record is ahead of every new upload in the FIFO.
++      // Reusing this buffer is therefore ordered after all prior draws.
++      candidate_offset = 0;
++      candidate_generations = candidate_buffer_id == 0 ? 0 : 1;
++    }
++
++    if (candidate_buffer_id == 0)
++    {
++      candidate_buffer_id = cs.PushCreateBuffer(kGeometryBufferSize, kUsageGeometry);
++      if (candidate_buffer_id == 0)
++        return;
++      candidate_offset = 0;
++      candidate_generations = 1;
++    }
++
++    const u64 aligned_offset_64 =
++        (static_cast<u64>(candidate_offset) + vertex_stride - 1) / vertex_stride * vertex_stride;
++    u32 packet_offset = aligned_offset_64 <= std::numeric_limits<u32>::max() ?
++                            static_cast<u32>(aligned_offset_64) :
++                            kGeometryBufferSize;
++    if (packet_offset > kGeometryBufferSize - packet_bytes)
++    {
++      // END_PASS is not a reuse barrier: all uploads can precede the eventual
++      // queue.submit. Rotate to a new id instead of wrapping this generation.
++      if (candidate_generations >= kMaxGeometryGenerationsPerSubmit)
++      {
++        cs.FailRequiredPublication();
++        return;
++      }
++      const u32 new_buffer_id = cs.PushCreateBuffer(kGeometryBufferSize, kUsageGeometry);
++      if (new_buffer_id == 0)
++        return;
++      candidate_buffer_id = new_buffer_id;
++      candidate_offset = 0;
++      packet_offset = 0;
++      ++candidate_generations;
++    }
++
++    const UploadPacket packet = cs.UploadAllocTwoSegments(
++        m_base_buffer_pointer, vertex_bytes, m_cpu_index_buffer.data(), index_bytes, 4, 4);
++    if (packet.src_heap_ptr == 0)
++      return;
++    if (packet.second_offset != vertex_bytes || packet.total_size != packet_bytes)
++    {
++      cs.FailLastUpload(packet.src_heap_ptr, packet.total_size);
++      return;
++    }
++    if (!cs.PushUploadBuffer(candidate_buffer_id, packet_offset, packet.src_heap_ptr,
++                             packet.total_size, BufferUploadRole::Geometry))
++      return;
++
++    // Publish all producer-local placement state only after the arena copy and
++    // its single upload record are visible. A failed candidate buffer create
++    // may leak an unused resource id, but no draw can reference it.
++    m_geometry_buffer_id = candidate_buffer_id;
++    m_geometry_offset = packet_offset + packet.total_size;
++    m_geometry_generations_since_submit = candidate_generations;
++    m_geometry_submit_serial = submit_serial;
++    m_last_vertex_byte = packet_offset;
++    m_last_index_byte = packet_offset + packet.second_offset;
++    *out_base_vertex = packet_offset / vertex_stride;
++    *out_base_index = (packet_offset + packet.second_offset) / sizeof(u16);
++    return;
++  }
++
++  EnsureLegacyBuffers();
++  if (m_vertex_buffer_id == 0 || m_index_buffer_id == 0)
++    return;
++
++  // queue.writeBuffer requires the destination offset AND the byte
+   // count to be multiples of 4. Vertex stride is always 4-aligned
+   // (OGLNativeVertexFormat panics otherwise) so a stride-aligned
+   // vertex offset is 4-aligned; round the index region + both upload
+@@ -124,8 +249,8 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   // base_vertex (mirrors the Vulkan backend). Indices likewise via
+   // first_index.
+   *out_base_vertex = voff / vertex_stride;
+-  *out_base_index = ioff / static_cast<u32>(sizeof(u16));
+-}
++  *out_base_index = ioff / static_cast<u32>(sizeof(u16));
++}
+ 
+ void VertexManager::UploadUtilityUniforms(const void* uniforms, u32 uniforms_size)
+ {
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+index bb67317..c688ec1 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+@@ -6,8 +6,11 @@
+ #include "Common/CommonTypes.h"
+ #include "VideoCommon/VertexManagerBase.h"
+ 
+-namespace WebGPU
+-{
++namespace WebGPU
++{
++bool IsGeometryUploadPackEnabled();
++u64 GetGeometryUploadPackEpoch();
++
+ // Day-33 A3: a real VertexManagerBase for the remote WebGPU backend.
+ //
+ // Vertices/indices are assembled by VideoCommon into the base class's
+@@ -39,15 +42,21 @@ public:
+   // also owns pipeline/framebuffer/texture/UBO state). Draw recording
+   // therefore goes through the base DrawCurrentBatch → g_gfx->
+   // DrawIndexed path rather than being overridden here.
+-  u32 GetVertexBufferId() const { return m_vertex_buffer_id; }
+-  u32 GetIndexBufferId() const { return m_index_buffer_id; }
++  u32 GetVertexBufferId() const
++  {
++    return m_geometry_pack_active ? m_geometry_buffer_id : m_vertex_buffer_id;
++  }
++  u32 GetIndexBufferId() const
++  {
++    return m_geometry_pack_active ? m_geometry_buffer_id : m_index_buffer_id;
++  }
+ 
+ protected:
+   void CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_indices, u32* out_base_vertex,
+                     u32* out_base_index) override;
+ 
+ private:
+-  void EnsureBuffers();
++  void EnsureLegacyBuffers();
+ 
+   // Persistent GPU buffers (bridge ids; 0 until created). Large
+   // ring-rolled regions — the consumer is ~1 frame behind and a
+@@ -61,7 +70,20 @@ private:
+   u32 m_index_offset = 0;   // rolling byte offset into the GPU ibuf
+ 
+   // Last committed batch placement (consumed by DrawCurrentBatch).
+-  u32 m_last_vertex_byte = 0;
+-  u32 m_last_index_byte = 0;
+-};
++  u32 m_last_vertex_byte = 0;
++  u32 m_last_index_byte = 0;
++
++  // Default-off packed path. Destination bytes may be reused only after a
++  // successfully published SUBMIT_PRESENT record. If one frame exhausts a
++  // generation first, a fresh buffer id is created instead of wrapping over
++  // data referenced by an unpublished/encoded draw.
++  static constexpr u32 kGeometryBufferSize = 32u * 1024u * 1024u;
++  static constexpr u32 kMaxGeometryGenerationsPerSubmit = 8;
++  u32 m_geometry_buffer_id = 0;
++  u32 m_geometry_offset = 0;
++  u32 m_geometry_generations_since_submit = 0;
++  u64 m_geometry_submit_serial = 0;
++  u64 m_geometry_pack_epoch = 0;
++  bool m_geometry_pack_active = false;
++};
+ }  // namespace WebGPU
+

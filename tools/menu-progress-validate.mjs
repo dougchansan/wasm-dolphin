@@ -195,6 +195,7 @@ for (const [environmentName, queryName] of [
   ["WGPUPUMP", "wgpupump"],
   ["WGPUSTATECACHE", "wgpustatecache"],
   ["WGPUUBOCACHE", "wgpuubocache"],
+  ["WGPUGEOMPACK", "wgpugeompack"],
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],

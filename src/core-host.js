@@ -17,6 +17,7 @@ import {
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
   requestedWgpuStateCache,
+  requestedWgpuGeometryPack,
   requestedWgpuUboCache
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -92,6 +93,7 @@ export class EmulatorHost {
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
+    this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
@@ -312,6 +314,7 @@ export class EmulatorHost {
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
+            wgpuGeometryPack: this.wgpuGeometryPack,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,

@@ -6,11 +6,15 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ATTRIBUTION_SCHEMA = "wasm-dolphin.wgpu-upload-attribution.v1";
+const ATTRIBUTION_SCHEMAS = Object.freeze({
+  "wasm-dolphin.wgpu-upload-attribution.v1": Object.freeze([
+    "unknown", "ubo", "utility-uniform", "vertex", "index", "texture-adjacent",
+  ]),
+  "wasm-dolphin.wgpu-upload-attribution.v2": Object.freeze([
+    "unknown", "ubo", "utility-uniform", "vertex", "index", "texture-adjacent", "geometry",
+  ]),
+});
 const REPLAY_SCHEMA = "wasm-dolphin.wgpu-replay-op-metrics.v1";
-const ROLE_ORDER = Object.freeze([
-  "unknown", "ubo", "utility-uniform", "vertex", "index", "texture-adjacent",
-]);
 const BUCKET_LABELS = Object.freeze([
   "<=64", "<=256", "<=1024", "<=4096", "<=16384", "<=65536", ">65536",
 ]);
@@ -119,10 +123,11 @@ async function validateRun(root, runId, addIssue) {
 function validateAttributionSnapshot(webgpu, addIssue, runId, label) {
   const attr = webgpu.uploadAttribution || {};
   const replay = webgpu.replayOps || {};
-  check(attr.schema === ATTRIBUTION_SCHEMA, "ATTR_SCHEMA",
+  const roleOrder = ATTRIBUTION_SCHEMAS[attr.schema] || null;
+  check(roleOrder !== null, "ATTR_SCHEMA",
     `${label}: attribution schema is ${attr.schema}`, addIssue, runId);
   check(attr.enabled === true, "ATTR_DISABLED", `${label}: attribution is disabled`, addIssue, runId);
-  check(equalArray(attr.roleOrder, ROLE_ORDER), "ATTR_ROLE_ORDER",
+  check(roleOrder !== null && equalArray(attr.roleOrder, roleOrder), "ATTR_ROLE_ORDER",
     `${label}: role order is ${JSON.stringify(attr.roleOrder)}`, addIssue, runId);
   check(equalArray(attr.sizeBucketLabels, BUCKET_LABELS), "ATTR_BUCKET_ORDER",
     `${label}: bucket order is ${JSON.stringify(attr.sizeBucketLabels)}`, addIssue, runId);
@@ -132,17 +137,18 @@ function validateAttributionSnapshot(webgpu, addIssue, runId, label) {
       replay.names?.[OP_UPLOAD_TEXTURE] === "UPLOAD_TEXTURE", "REPLAY_OPCODE_ORDER",
     `${label}: replay opcode names are not locked at 6/8`, addIssue, runId);
 
-  const calls = numericVector(attr.callsByRole, ROLE_ORDER.length, `${label} callsByRole`, addIssue, runId);
-  const bytes = numericVector(attr.bytesByRole, ROLE_ORDER.length, `${label} bytesByRole`, addIssue, runId);
+  const roleCount = roleOrder?.length ?? 0;
+  const calls = numericVector(attr.callsByRole, roleCount, `${label} callsByRole`, addIssue, runId);
+  const bytes = numericVector(attr.bytesByRole, roleCount, `${label} bytesByRole`, addIssue, runId);
   const maxima = numericVector(
-    attr.maxBytesByRole, ROLE_ORDER.length, `${label} maxBytesByRole`, addIssue, runId
+    attr.maxBytesByRole, roleCount, `${label} maxBytesByRole`, addIssue, runId
   );
   const bucketCalls = numericMatrix(
-    attr.bucketCallsByRole, ROLE_ORDER.length, BUCKET_LABELS.length,
+    attr.bucketCallsByRole, roleCount, BUCKET_LABELS.length,
     `${label} bucketCallsByRole`, addIssue, runId
   );
   const bucketBytes = numericMatrix(
-    attr.bucketBytesByRole, ROLE_ORDER.length, BUCKET_LABELS.length,
+    attr.bucketBytesByRole, roleCount, BUCKET_LABELS.length,
     `${label} bucketBytesByRole`, addIssue, runId
   );
   const totalCalls = safeCounter(attr.totalCalls);
@@ -153,15 +159,15 @@ function validateAttributionSnapshot(webgpu, addIssue, runId, label) {
     `${label}: totalCalls=${attr.totalCalls}, sum(callsByRole)=${roleCalls}`, addIssue, runId);
   check(totalBytes !== null && totalBytes === roleBytes, "ATTR_ROLE_SUM",
     `${label}: totalBytes=${attr.totalBytes}, sum(bytesByRole)=${roleBytes}`, addIssue, runId);
-  for (let role = 0; role < ROLE_ORDER.length; role += 1) {
+  for (let role = 0; role < roleCount; role += 1) {
     check(sum(bucketCalls[role]) === calls[role], "ATTR_BUCKET_SUM",
-      `${label}: ${ROLE_ORDER[role]} bucket calls=${sum(bucketCalls[role])}, role calls=${calls[role]}`,
+      `${label}: ${roleOrder[role]} bucket calls=${sum(bucketCalls[role])}, role calls=${calls[role]}`,
       addIssue, runId);
     check(sum(bucketBytes[role]) === bytes[role], "ATTR_BUCKET_SUM",
-      `${label}: ${ROLE_ORDER[role]} bucket bytes=${sum(bucketBytes[role])}, role bytes=${bytes[role]}`,
+      `${label}: ${roleOrder[role]} bucket bytes=${sum(bucketBytes[role])}, role bytes=${bytes[role]}`,
       addIssue, runId);
     check(maxima[role] <= bytes[role] && (calls[role] !== 0 || maxima[role] === 0),
-      "ATTR_MAX_INVALID", `${label}: invalid maximum for ${ROLE_ORDER[role]}`, addIssue, runId);
+      "ATTR_MAX_INVALID", `${label}: invalid maximum for ${roleOrder[role]}`, addIssue, runId);
   }
 
   const queueCalls = replay.queueUploadCalls || [];
@@ -173,12 +179,14 @@ function validateAttributionSnapshot(webgpu, addIssue, runId, label) {
   const op8Calls = safeCounter(queueCalls[OP_UPLOAD_TEXTURE]);
   const op6Bytes = safeCounter(queueBytes[OP_UPLOAD_BUFFER]);
   const op8Bytes = safeCounter(queueBytes[OP_UPLOAD_TEXTURE]);
-  const bufferRoleCalls = sum(calls.slice(0, 5));
-  const bufferRoleBytes = sum(bytes.slice(0, 5));
+  const bufferRoleCalls = calls.reduce((total, value, index) =>
+    total + (index === 5 ? 0 : value), 0);
+  const bufferRoleBytes = bytes.reduce((total, value, index) =>
+    total + (index === 5 ? 0 : value), 0);
   check(op6Calls !== null && bufferRoleCalls === op6Calls, "ATTR_OP6_RECONCILE",
-    `${label}: roles[0..4] calls=${bufferRoleCalls}, opcode6 calls=${op6Calls}`, addIssue, runId);
+    `${label}: non-texture roles calls=${bufferRoleCalls}, opcode6 calls=${op6Calls}`, addIssue, runId);
   check(op6Bytes !== null && bufferRoleBytes === op6Bytes, "ATTR_OP6_RECONCILE",
-    `${label}: roles[0..4] bytes=${bufferRoleBytes}, opcode6 bytes=${op6Bytes}`, addIssue, runId);
+    `${label}: non-texture roles bytes=${bufferRoleBytes}, opcode6 bytes=${op6Bytes}`, addIssue, runId);
   check(op8Calls !== null && calls[5] === op8Calls, "ATTR_OP8_RECONCILE",
     `${label}: texture-adjacent calls=${calls[5]}, opcode8 calls=${op8Calls}`, addIssue, runId);
   check(op8Bytes !== null && bytes[5] === op8Bytes, "ATTR_OP8_RECONCILE",

@@ -194,7 +194,7 @@ test("buffer uploads carry stable producer roles without widening the wire recor
     ), "utf8"),
   ]);
 
-  assert.match(header, /enum class BufferUploadRole : u32[\s\S]*?Unknown = 0,[\s\S]*?Ubo = 1,[\s\S]*?Utility = 2,[\s\S]*?Vertex = 3,[\s\S]*?Index = 4,[\s\S]*?TextureAdjacent = 5,[\s\S]*?Count = 6/);
+  assert.match(header, /enum class BufferUploadRole : u32[\s\S]*?Unknown = 0,[\s\S]*?Ubo = 1,[\s\S]*?Utility = 2,[\s\S]*?Vertex = 3,[\s\S]*?Index = 4,[\s\S]*?TextureAdjacent = 5,[\s\S]*?Geometry = 6,[\s\S]*?Count = 7/);
   assert.match(header, /static_assert\(sizeof\(CmdRecord\) == 32/);
   assert.match(header, /PushUploadBuffer\([\s\S]*?BufferUploadRole role\)/);
   assert.match(stream, /rec\.arg\.u\[4\] = static_cast<u32>\(role\)/);
