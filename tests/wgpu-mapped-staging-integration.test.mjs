@@ -17,6 +17,7 @@ test("upload transport flows from URL parsing through the worker load payload", 
   assert.match(host, /wgpuUploadTransport: this\.wgpuUploadTransport/);
   assert.match(adapter, /wgpuUploadTransport === "mapped" \? "mapped" : "queue"/);
   assert.match(adapter, /wgpuUploadTransport: this\.wgpuUploadTransport/);
+  assert.match(worker, /wgpuUploadTransport: payload\.wgpuUploadTransport/);
   assert.match(worker, /requestedWgpuUploadTransport === "mapped" \? "mapped" : "queue"/);
 });
 

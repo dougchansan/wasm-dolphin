@@ -636,6 +636,7 @@ async function handleMessage(type, payload) {
         wgpuUboCache: payload.wgpuUboCache,
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
+        wgpuUploadTransport: payload.wgpuUploadTransport,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
