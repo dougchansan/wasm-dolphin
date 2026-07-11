@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-11T12:42:26.570Z",
-  "coreId": "sha256:03acd0d3f5b6b82fdd4644b03b26addeef8487307211e6eba70a3ee8b66e133b",
+  "createdAt": "2026-07-11T14:12:34.370Z",
+  "coreId": "sha256:4d60e9ed17ce699d1c6b3317c6f07552175f4c768d1d6f3fcb41b1062a3aa7fd",
   "repository": {
-    "commit": "f9de497bdbe828e474356afb80e78fd97f3354fb",
-    "status": ""
+    "commit": "0516263e243d6ffa9e38561fcc41fcc756b402d3",
+    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "9be317dd703326653a33c9e36abd15f1bc8f94f72ef77d7b0e4c8e0af33154b9",
-    "vendorResultTree": "5b985691c8b5aad78e4aa9226762c4bc43b10984",
-    "sourceLockSha256": "4d66e84c223fd9ca219bcd0cc1fbea30cc24b0ec3d668d5454f534ba716eeb40",
-    "vendorSnapshotSha256": "048fd7b36107edc9ec4a050bf5aa8f5ba872b9760fa6249f61c7d3434cd021b8",
+    "patchSeriesSha256": "13f2b4a98e2d8617ceb3881084ec668dda1f7ec3169a1068ca96f99320529785",
+    "vendorResultTree": "e26ffb5287b3e033888028e729f94f733dc187da",
+    "sourceLockSha256": "21ec894c6d79aedcfeebcd63a949d320e91b36abe01776960befbe7f3174141f",
+    "vendorSnapshotSha256": "090d8a9e269a37f24e76187c6beb888cb66cfb8043ddc37f60740db5940780e3",
     "localInputsSha256": "312d9e264f08a5c8498889947577bd8a8cde3bc7c5b2c3550b49d51e78acb073",
     "localInputs": [
       {
@@ -121,7 +121,7 @@
       "-DDOLPHIN_WASM_CORE_SOURCE=C:\\Users\\douglaswhittingham\\wasm-dolphin-final-opt\\core\\upstream\\dolphin_web_core.cpp",
       "-DDOLPHIN_WASM_OUTPUT_DIR=C:\\Users\\douglaswhittingham\\wasm-dolphin-final-opt\\cores\\dolphin"
     ],
-    "cmakeCacheSha256": "c0839cc66b28b59dbebd91218ebc9dbf095ead71f6751aa83c549e590a4857bd"
+    "cmakeCacheSha256": "8451edf47be9ff3279247e3e1d2169c466fa4226fd70c6669866cc5cd1b2e2f6"
   },
   "artifacts": {
     "js": {
@@ -132,8 +132,8 @@
     },
     "wasm": {
       "path": "C:\\Users\\douglaswhittingham\\wasm-dolphin-final-opt\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12877445,
-      "sha256": "03acd0d3f5b6b82fdd4644b03b26addeef8487307211e6eba70a3ee8b66e133b",
+      "size": 12877649,
+      "sha256": "4d60e9ed17ce699d1c6b3317c6f07552175f4c768d1d6f3fcb41b1062a3aa7fd",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -184,8 +184,8 @@
       },
       {
         "id": 10,
-        "size": 10385363,
-        "sha256": "4ada9b8aaf664fef00d44deb260e9797f2af1ea5680ef33c36e0146f1c9e3c99"
+        "size": 10385567,
+        "sha256": "d896078bae402b30689a3df1cf03dd1c3b842769ed3f8dff4e482c1af406eced"
       },
       {
         "id": 11,
