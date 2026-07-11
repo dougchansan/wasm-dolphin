@@ -13,6 +13,6 @@
     {"name":"1024-2","gameSpeedPercent":78.02399913890751,"queueWriteMaxMs":10.295,"drainMaxMs":38.515,"waitMaxMs":1938.465,"timeouts":1,"aborts":1,"drops":0,"inputPolled":11},
     {"name":"1024-2-continuous-stage","gameSpeedPercent":75.93107438951262,"queueWriteMaxMs":2.255,"drainMaxMs":11.96,"waitMaxMs":1966.88,"timeouts":0,"aborts":2409,"drops":2437,"inputPolled":11}
   ],
-  "decision": "default-off; not promotable",
+  "decision": "runtime removed before release; not promotable",
   "nextArchitecture": ["shadow command queue", "dedicated renderer worker with non-aborting backpressure", "mapped GPU staging pool"]
 }

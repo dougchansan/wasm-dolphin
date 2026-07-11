@@ -3,8 +3,9 @@
 These direct-save smokes tested whether asynchronous GPU queue fences could
 replace the recurring 1.7-second synchronous `GPUQueue.writeBuffer` stall. The
 experiment substantially improved measured game speed and queue latency, but
-none of the variants preserved every correctness, audio, and input gate. It
-remains default-off and is not ready for promotion.
+none of the variants preserved every correctness, audio, and input gate. The
+runtime and URL flag were removed before release; this document retains the
+negative result.
 
 ## Environment
 
@@ -15,7 +16,7 @@ remains default-off and is not ready for promotion.
 | CPU/GPU | AMD Ryzen 9 9950X3D; AMD `rdna-4` WebGPU adapter |
 | Scene | Direct verified `__battle.sav` Kirby-versus-Link load |
 | Work | Eight emulated seconds; same 12 input transitions |
-| Flag | `wgpuqueuewait=1` (default off) |
+| Historical flag | `wgpuqueuewait=1` (removed) |
 
 ## Results
 
@@ -59,8 +60,10 @@ the startup GPU event.
 
 ## Decision
 
-Keep `wgpuqueuewait=1` default-off. Do not describe the 76–81% figures as a
+Do not ship `wgpuqueuewait=1`, and do not describe the 76–81% figures as a
 successful optimization because the strict correctness and latency gates fail.
+The experimental runtime was removed; only its evidence and design record are
+retained.
 
 The next architectural step must provide one of:
 

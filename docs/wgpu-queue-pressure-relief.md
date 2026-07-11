@@ -1,6 +1,7 @@
 # Hardware-WGPU queue-pressure relief experiment
 
-Status: scoped, default-off experiment. This is not a promoted rendering mode.
+Status: rejected experiment; runtime removed before release. This is an evidence
+and design record, not an available rendering mode.
 
 ## Problem statement
 
@@ -14,10 +15,10 @@ The same worker event loop handles replay, audio RPCs, and input application.
 When `writeBuffer` blocks, audio underruns and input-marker supersession follow.
 Outer 4/6 ms replay budgets cannot interrupt a single synchronous queue call.
 
-## Proposed experiment
+## Experiment that was tested
 
-`wgpuqueuewait=1` enables asynchronous pressure relief. The default remains
-off. The experiment arms after either:
+The removed `wgpuqueuewait=1` flag enabled asynchronous pressure relief. The
+experiment armed after either:
 
 - 8,192 successful queue upload calls, or
 - 16 MiB of successful queue upload payloads.
@@ -42,7 +43,7 @@ the same renderer/load generation completes the wait.
 - Ignore stale completion callbacks after load, reset, or device replacement.
 - On rejection, record the failure, disable relief for the run, and resume the
   legacy pump rather than deadlocking.
-- Omitting `wgpuqueuewait=1` must preserve the current path.
+- The experiment had to preserve the current path when disabled.
 
 The producer may block on the bounded upload arena while the asynchronous wait
 is pending. That is intentional: the GPU queue progresses independently and
@@ -63,6 +64,7 @@ Promotion requires balanced direct-save A/B evidence with:
 - improved audio gaps and exact input propagation;
 - game-speed noninferiority lower 95% bound above -1%.
 
-If the experiment only trades the synchronous stall for lower game speed, it
-remains default-off and a separate renderer worker or mapped staging pool is
+The measured variants traded the synchronous stall for timeout, abort/drop,
+audio, or input failures. The runtime was therefore removed. A dedicated
+renderer worker with bounded producer backpressure or a mapped staging pool is
 the next architectural option.
