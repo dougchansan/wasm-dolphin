@@ -23,8 +23,8 @@ test("upload transport flows from URL parsing through the worker load payload", 
 
 test("mapped uploads are copied into a bounded pool and queue writes stay isolated", async () => {
   const worker = await readSource("../src/upstream-discio-worker.js");
-  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 3/);
-  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_BYTES = 16 \* 1024 \* 1024/);
+  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 32/);
+  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_BYTES = 2 \* 1024 \* 1024/);
   assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageBuffer\(\{/);
   assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageTexture\(\{/);
   assert.match(worker, /\} else \{[\s\S]*?q\.writeBuffer\(/);
