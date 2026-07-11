@@ -445,6 +445,15 @@ test("opt-in geometry packing uses one transactional upload and a published-subm
   assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet\.total_size/);
   assert.match(vertexSource, /EnsureLegacyBuffers\(\)/);
   assert.match(gfxSource, /EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled\(int enabled\)/);
+  assert.match(gfxSource, /void InvalidateGeometryUploadPack\(\)/);
+  assert.match(
+    gfxSource,
+    /void WebGPUGfx::AbortRecordedPass\(\)[\s\S]*?m_cmd_stream\.AbortPass\(\);[\s\S]*?InvalidateGeometryUploadPack\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(committed\)[\s\S]*?m_cmd_stream\.AbortPass\(\);[\s\S]*?InvalidateGeometryUploadPack\(\)/
+  );
   assert.match(gfxSource, /s_geometry_upload_pack_epoch\.fetch_add\(1, std::memory_order_release\)/);
   assert.match(coreCmake, /'_SetWebGpuGeometryPackEnabled'/);
   assert.match(worker, /case "loadState":[\s\S]*?setWebGpuGeometryPackEnabled[\s\S]*?api\?\.loadState[\s\S]*?setWebGpuGeometryPackEnabled/);

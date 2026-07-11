@@ -65,6 +65,7 @@ import {
   WGPU_UPLOAD_ROLE,
   createWgpuUploadAttribution
 } from "./wgpu-upload-attribution.js";
+import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -177,6 +178,7 @@ let wgpuReplayPumpEnabled = false;
 let wgpuReplayPumpTimer = null;
 let wgpuReplayBudgetMs = 0;
 let wgpuPowerPreference = "high-performance";
+let wgpuReplayFatal = null;
 let wgpuReplayYieldPending = false;
 let wgpuReplayPumpScheduledAt = 0;
 let wgpuReplayPumpDueAt = 0;
@@ -3615,13 +3617,23 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
     uploadBuffer: null
   };
 
+  wgpuReplayFatal = null;
+
   device.lost.then((info) => {
-    recordRendererError("device-lost", info?.message || info?.reason || "unknown");
-    if (renderGpu?.device === device) {
-      renderGpu = null;
-      renderBackend = "webgpu-lost";
-      postStatus(`WebGPU device lost: ${info?.message || info?.reason || "unknown"}`);
-    }
+    handleWgpuDeviceLoss({
+      activeDevice: renderGpu?.device,
+      lostDevice: device,
+      info,
+      recordError: recordRendererError,
+      markFatal: markWgpuReplayFatal,
+      cancelReplay: cancelWgpuReplayPump,
+      clearReplayState: clearWgpuReplayStateAfterDeviceLoss,
+      invalidateGeometry: () =>
+        api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0),
+      clearActiveDevice: () => { renderGpu = null; },
+      setBackend: (backend) => { renderBackend = backend; },
+      postStatus,
+    });
   });
 
   return state;
@@ -5122,6 +5134,31 @@ function scheduleWgpuReplayPump(callback, delayMs) {
   wgpuReplayPumpTimer = setTimeout(callback, delay);
 }
 
+function cancelWgpuReplayPump() {
+  if (wgpuReplayPumpTimer !== null) clearTimeout(wgpuReplayPumpTimer);
+  wgpuReplayPumpTimer = null;
+  wgpuReplayYieldPending = false;
+  wgpuReplayPumpScheduledAt = 0;
+  wgpuReplayPumpDueAt = 0;
+}
+
+function clearWgpuReplayStateAfterDeviceLoss() {
+  if (webGpuCmdRing) {
+    webGpuCmdRing.heldReplayStart = null;
+    webGpuCmdRing.stagedUploads?.clear();
+    webGpuCmdRing.stagedUploadBytes = 0;
+    webGpuCmdRing.stagedPassStart = null;
+    webGpuCmdRing.stagedScanCursor = null;
+  }
+  wgpuPassStateCache.reset("device-lost");
+}
+
+function markWgpuReplayFatal(scope, detail) {
+  if (wgpuReplayFatal) return false;
+  wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
+  return true;
+}
+
 function summarizeCurrentWgpuRing({
   readIndex: requestedReadIndex = null,
   writeIndex: requestedWriteIndex = null,
@@ -5833,6 +5870,7 @@ function recordBoundedHistogram(values, bounds, value) {
 }
 
 function drainWebGpuCmdRing(source = "presentation") {
+  if (wgpuReplayFatal) return;
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
   const normalizedSource = source === "pump" ? "pump" : "presentation";
@@ -6158,6 +6196,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       submitted = true;
     } catch (e) {
       recordRendererError("submit-error", e?.message || e);
+      markWgpuReplayFatal("submit-error", e?.message || e);
       wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error: e });
     }
     if (submitted) {
@@ -7950,6 +7989,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     if (causalMetricsEnabled) {
       wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
     }
+    if (wgpuReplayFatal) break;
     read = (read + 1) >>> 0;
     if (wgpuReplayBudgetMs > 0) {
       if (op === WGPU_CMD_OP_BEGIN_PASS) protocolPassDepth += 1;
