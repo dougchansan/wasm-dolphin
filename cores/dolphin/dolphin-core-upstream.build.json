@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-11T11:12:51.916Z",
+  "createdAt": "2026-07-11T11:14:47.724Z",
   "coreId": "sha256:1eafb703b9cc28aa772a077e3b61809a8c652506e84801708757184a60c98821",
   "repository": {
-    "commit": "f0acd7112c0f3660c045aa800221d4c6a1e29867",
-    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/core-host.js\n M src/upstream-discio-worker.js\n M src/upstream-worker-adapter.js\n M src/wgpu-pass-state-cache.js\n M src/wgpu-replay-diagnostics.js\n M src/wgpu-upload-attribution.js\n M tests/causal-telemetry.test.mjs\n M tests/wgpu-pass-state-cache.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n M tests/wgpu-upload-attribution.test.mjs\n M tools/menu-progress-validate.mjs\n M tools/perf-regression-gate.mjs\n M tools/validate-wgpu-upload-attribution.mjs\n?? patches/dolphin-wasm/snapshot/0023-webgpu-geometry-upload-pack.patch"
+    "commit": "457e35e1513ef8fb8667c5c7f9d39a644bf9c5d5",
+    "status": ""
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
