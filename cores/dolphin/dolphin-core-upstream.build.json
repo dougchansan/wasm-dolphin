@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-07-11T10:34:40.475Z",
+  "createdAt": "2026-07-11T10:37:51.253Z",
   "coreId": "sha256:a2f19894f3855a8adb281b709a8e0f72cc8a929aef9978a17aa9545a5e9e775e",
   "repository": {
-    "commit": "67421e63d63bf567ce2517613c5cb37b19badc0f",
-    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M docs/causal-telemetry.md\n M package.json\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/causal-telemetry.js\n M src/upstream-discio-worker.js\n M tests/causal-telemetry.test.mjs\n M tests/wgpu-pass-transaction.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n?? patches/dolphin-wasm/snapshot/0022-webgpu-upload-role-attribution.patch\n?? src/wgpu-upload-attribution.js\n?? tests/wgpu-upload-attribution.test.mjs"
+    "commit": "d6bd7dbe215be2ebd1f568e235e581b3256e2f6b",
+    "status": ""
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
