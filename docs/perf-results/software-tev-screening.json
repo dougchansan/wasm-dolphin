@@ -1,0 +1,61 @@
+{
+  "mode": "screening",
+  "blockCount": 2,
+  "maxBlockCount": 2,
+  "hypothesis": "Exact high-volume TEV specializations improve fixed-battle software-renderer game speed without changing visible output.",
+  "primaryMetric": "metrics.fixedEmulatedWork.throughputGameSpeedPercent",
+  "direction": "higher",
+  "minimumEffectPercent": 3,
+  "invalidationRules": [
+    "fixture or deterministic save-state checkpoint fails verification",
+    "requested or active backend is not Software Renderer with the WebGPU presenter",
+    "page, worker, WASM, renderer, missing-resource, drop, or underrun error",
+    "timed samples or final screenshot are missing",
+    "PERF_TARGET_CORE_SECONDS is absent or the fixed emulated-work target is not reached",
+    "shadow validation has not first completed with nonzero specialized pixels and zero mismatches"
+  ],
+  "armA": {
+    "name": "software-tev-generic",
+    "cacheState": "disabled",
+    "params": {
+      "video": "software",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "unlimited",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "4",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "0",
+      "swtevfast": "0",
+      "swtevshadow": "0"
+    }
+  },
+  "armB": {
+    "name": "software-tev-exact-hot-cases",
+    "cacheState": "disabled",
+    "params": {
+      "video": "software",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "unlimited",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "4",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "0",
+      "swtevfast": "1",
+      "swtevshadow": "0"
+    }
+  }
+}

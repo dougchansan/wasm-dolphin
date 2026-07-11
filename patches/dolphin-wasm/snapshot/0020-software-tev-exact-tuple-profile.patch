@@ -1,0 +1,67 @@
+diff --git a/Source/Core/VideoBackends/Software/Tev.cpp b/Source/Core/VideoBackends/Software/Tev.cpp
+index d893bafa89f92de701198ad47539ac56553cfff0..7c9ee1984e0032b886f8e1685284a19841e80178 100644
+--- a/Source/Core/VideoBackends/Software/Tev.cpp
++++ b/Source/Core/VideoBackends/Software/Tev.cpp
+@@ -407,6 +407,9 @@ void Tev::Draw()
+     u32 alpha_compare_count = 0;
+     u32 color_clamp_count = 0;
+     u32 alpha_clamp_count = 0;
++    DolphinWeb::RasterProfile::TevExactWords exact_words{};
++    u32 exact_word_count = 0;
++    const bool capture_exact_single_stage = tev_stage_count == 1 && indirect_stage_count == 0;
+     std::uint64_t fingerprint = DolphinWeb::RasterProfile::TEV_PROGRAM_FINGERPRINT_SEED;
+     fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint,
+                                                                    bpmem.genMode.hex);
+@@ -449,14 +452,35 @@ void Tev::Draw()
+       const u32 konst_word = static_cast<u32>(bpmem.tevksel.GetKonstColor(stage_num)) |
+                              (static_cast<u32>(bpmem.tevksel.GetKonstAlpha(stage_num)) << 8);
+       fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, konst_word);
+-      for (const u32 swap_table_id : {ac.rswap.Value(), ac.tswap.Value()})
++      const auto pack_swap_word = [](const auto& swap) {
++        return static_cast<u32>(swap[ColorChannel::Red]) |
++               (static_cast<u32>(swap[ColorChannel::Green]) << 2) |
++               (static_cast<u32>(swap[ColorChannel::Blue]) << 4) |
++               (static_cast<u32>(swap[ColorChannel::Alpha]) << 6);
++      };
++      const u32 raster_swap_word =
++          pack_swap_word(bpmem.tevksel.GetSwapTable(ac.rswap.Value()));
++      const u32 texture_swap_word =
++          pack_swap_word(bpmem.tevksel.GetSwapTable(ac.tswap.Value()));
++      fingerprint =
++          DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, raster_swap_word);
++      fingerprint =
++          DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, texture_swap_word);
++
++      if (capture_exact_single_stage)
+       {
+-        const auto swap = bpmem.tevksel.GetSwapTable(swap_table_id);
+-        const u32 swap_word = static_cast<u32>(swap[ColorChannel::Red]) |
+-                              (static_cast<u32>(swap[ColorChannel::Green]) << 2) |
+-                              (static_cast<u32>(swap[ColorChannel::Blue]) << 4) |
+-                              (static_cast<u32>(swap[ColorChannel::Alpha]) << 6);
+-        fingerprint = DolphinWeb::RasterProfile::AppendTevProgramWord(fingerprint, swap_word);
++        exact_words = {
++            bpmem.genMode.hex,
++            bpmem.tevindref.hex,
++            order_word,
++            indirect.fullhex & 0x1fffff,
++            cc.hex,
++            ac.hex,
++            konst_word,
++            raster_swap_word,
++            texture_swap_word,
++        };
++        exact_word_count = static_cast<u32>(exact_words.size());
+       }
+     }
+ 
+@@ -466,7 +490,8 @@ void Tev::Draw()
+         used_indirect_texture_mask, color_compare_count, alpha_compare_count, color_clamp_count,
+         alpha_clamp_count);
+     DolphinWeb::RasterProfile::RecordTevCase(
+-        structural_key, fingerprint, indirect_stage_count + tev_stage_count, profile_scope.Epoch());
++        structural_key, fingerprint, exact_word_count, exact_words,
++        indirect_stage_count + tev_stage_count, profile_scope.Epoch());
+   }
+ #endif
+   ASSERT(Position[0] >= 0 && Position[0] < s32(EFB_WIDTH));

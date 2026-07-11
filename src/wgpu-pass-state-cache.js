@@ -5,9 +5,12 @@ const NO_RESOURCE = Symbol("no-wgpu-resource");
 const NO_OFFSETS = Object.freeze([]);
 
 export function parseWgpuProducerStateStats(text = "") {
+  const normalized = String(text || "");
   const match = /\bwgstate:(\d+)\s+pipe:(\d+)\s+bg:(\d+),(\d+),(\d+)\s+vb:(\d+)\s+ib:(\d+)\s+wgdrop:(\d+)(?:\s+wgbabort:(\d+)\s+wgboversize:(\d+)\s+wguploadto:(\d+))?/i
-    .exec(String(text || ""));
+    .exec(normalized);
   if (!match) return null;
+  const ubo = /\bwgubo:(\d+)(?:\s+wgubometrics:(\d+))?\s+ulook:(\d+),(\d+),(\d+)\s+uhit:(\d+),(\d+),(\d+)\s+uexp:(\d+),(\d+),(\d+)\s+usupcall:(\d+),(\d+),(\d+)\s+usupbyte:(\d+),(\d+),(\d+)/i
+    .exec(normalized);
   return {
     enabled: match[1] === "1",
     pipelineRecordsSuppressed: Number(match[2]),
@@ -17,8 +20,24 @@ export function parseWgpuProducerStateStats(text = "") {
     commandDroppedCount: Number(match[8]),
     batchAbortCount: Number(match[9] || 0),
     batchOversizeCount: Number(match[10] || 0),
-    uploadTimeoutCount: Number(match[11] || 0)
+    uploadTimeoutCount: Number(match[11] || 0),
+    uboCacheEnabled: ubo?.[1] === "1",
+    uboCacheMetricsEnabled: ubo?.[2] === "1",
+    uboCacheClassOrder: ["vs", "ps", "gs"],
+    uboCacheLookups: numericTriple(ubo, 3),
+    uboCacheHits: numericTriple(ubo, 6),
+    uboCacheExpired: numericTriple(ubo, 9),
+    uboUploadCallsSuppressed: numericTriple(ubo, 12),
+    uboUploadBytesSuppressed: numericTriple(ubo, 15)
   };
+}
+
+function numericTriple(match, start) {
+  return [
+    Number(match?.[start] || 0),
+    Number(match?.[start + 1] || 0),
+    Number(match?.[start + 2] || 0)
+  ];
 }
 
 export function createWgpuPassStateCache() {

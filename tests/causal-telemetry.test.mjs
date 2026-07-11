@@ -63,6 +63,9 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.input.marker.exactCorePollCount, 0);
   assert.equal(value.input.marker.markerCompletedCount, 0);
   assert.equal(value.input.marker.lastCompletionKind, "");
+  assert.equal(value.input.marker.overhead.enabled, false);
+  assert.equal(value.input.marker.overhead.softwareFrameCopyPaint.calls, 0);
+  assert.equal(value.input.marker.overhead.padStatsPollParse.calls, 0);
 });
 
 test("core profile text is promoted without changing the compatibility string", () => {
@@ -73,7 +76,7 @@ test("core profile text is promoted without changing the compatibility string", 
     "swxfb:0.9 conv:0.8 copy:0.1 " +
     "swphase:1 caseseed:305419896 rast:120/4/840/4096 tev:1024/8192/2/410 tex:4096/2/260 " +
     "texcase:10/80/2/16/3:61b31d6=8/64 " +
-    "tevcase:10/20/2/4/5:21002a112322.deadbeef=8/16 " +
+    "tevcase:10/20/2/4/5:21002a112322.deadbeef@1.10.20.43.0.123456.abcdef.3412.e4.1b=8/16 " +
     "fifo:128/127/64/512/900/2400/127 fifouf:0 xfbgen:77/900/69300/1800 " +
     "framegen:77/16600/1278200/41000/76";
   assert.deepEqual(parseCoreProfileTelemetry(source), {
@@ -149,6 +152,27 @@ test("core profile text is promoted without changing the compatibility string", 
       topCases: [{
         structuralKey: "0x21002a112322",
         programFingerprint: "0xdeadbeef",
+        canonicalProgramSchema: 1,
+        canonicalProgramWords: [
+          "0x10",
+          "0x20",
+          "0x43",
+          "0x0",
+          "0x123456",
+          "0xabcdef",
+          "0x3412",
+          "0xe4",
+          "0x1b",
+        ],
+        genModeHex: "0x10",
+        tevIndirectReferenceHex: "0x20",
+        orderWord: "0x43",
+        indirectWord: "0x0",
+        colorCombinerHex: "0x123456",
+        alphaCombinerHex: "0xabcdef",
+        konstWord: "0x3412",
+        rasterSwapWord: "0xe4",
+        textureSwapWord: "0x1b",
         sampleCount: 8,
         stageWorkCount: 16,
         tevStageCount: 2,
@@ -183,6 +207,19 @@ test("core profile text is promoted without changing the compatibility string", 
     frameGenerationIntervalAverageMs: 16.818421052631578,
     frameGenerationIntervalMaxMs: 41,
   });
+});
+
+test("TEV case parsing keeps legacy records and rejects incomplete schema-1 tuples", () => {
+  const legacy = parseCoreProfileTelemetry(
+    "tevcase:1/1/0/0/0:1.deadbeef=1/1"
+  ).tevCases.topCases[0];
+  assert.equal(legacy.programFingerprint, "0xdeadbeef");
+  assert.equal("canonicalProgramSchema" in legacy, false);
+
+  const incomplete = parseCoreProfileTelemetry(
+    "tevcase:1/1/0/0/0:1.deadbeef@1.1.2=1/1"
+  ).tevCases.topCases;
+  assert.deepEqual(incomplete, []);
 });
 
 test("profile windows retain counts, totals, averages, and copy throughput", () => {
@@ -228,6 +265,16 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         topCases: [{
           structuralKey: "0x21002a112322",
           programFingerprint: "0xdeadbeef",
+          canonicalProgramSchema: 1,
+          genModeHex: "0x10",
+          tevIndirectReferenceHex: "0x20",
+          orderWord: "0x43",
+          indirectWord: "0x0",
+          colorCombinerHex: "0x123456",
+          alphaCombinerHex: "0xabcdef",
+          konstWord: "0x3412",
+          rasterSwapWord: "0xe4",
+          textureSwapWord: "0x1b",
           sampleCount: 8,
         }],
       },
@@ -277,6 +324,23 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         pollToCompletionP95Ms: 18,
         lastCompletedGeneration: 9,
         lastCompletionKind: "gpu-complete",
+        overhead: {
+          enabled: true,
+          softwareFrameCopyPaint: {
+            calls: 12,
+            sourceBytes: 14_745_600,
+            paintedBytes: 1_277_952,
+            totalMs: 6.5,
+            maxMs: 0.9,
+          },
+          padStatsPollParse: {
+            calls: 5,
+            sourceUtf16Bytes: 8_192,
+            totalMs: 1.25,
+            maxMs: 0.4,
+            failureCount: 1,
+          },
+        },
       },
     },
   });
@@ -302,6 +366,16 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalTevCaseCollisionCount, 5);
   assert.equal(flat.causalTevTopStructuralKey, "0x21002a112322");
   assert.equal(flat.causalTevTopProgramFingerprint, "0xdeadbeef");
+  assert.equal(flat.causalTevTopCanonicalProgramSchema, 1);
+  assert.equal(flat.causalTevTopGenModeHex, "0x10");
+  assert.equal(flat.causalTevTopIndirectReferenceHex, "0x20");
+  assert.equal(flat.causalTevTopOrderWord, "0x43");
+  assert.equal(flat.causalTevTopIndirectWord, "0x0");
+  assert.equal(flat.causalTevTopColorCombinerHex, "0x123456");
+  assert.equal(flat.causalTevTopAlphaCombinerHex, "0xabcdef");
+  assert.equal(flat.causalTevTopKonstWord, "0x3412");
+  assert.equal(flat.causalTevTopRasterSwapWord, "0xe4");
+  assert.equal(flat.causalTevTopTextureSwapWord, "0x1b");
   assert.equal(flat.causalTevTopCaseSamples, 8);
   assert.equal(flat.causalFifoOldestPendingAgeMaxMs, 2.4);
   assert.equal(flat.causalFifoConsumerObservedBacklogAgeMaxMs, 2.4);
@@ -336,6 +410,17 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalInputMarkerPollToCompletionP95Ms, 18);
   assert.equal(flat.causalInputMarkerLastCompletedGeneration, 9);
   assert.equal(flat.causalInputMarkerCompletionKind, "gpu-complete");
+  assert.equal(flat.causalInputPhotonOverheadEnabled, true);
+  assert.equal(flat.causalInputPhotonFrameCopyPaintCalls, 12);
+  assert.equal(flat.causalInputPhotonFrameCopyBytes, 14_745_600);
+  assert.equal(flat.causalInputPhotonMarkerPaintBytes, 1_277_952);
+  assert.equal(flat.causalInputPhotonFrameCopyPaintTotalMs, 6.5);
+  assert.equal(flat.causalInputPhotonFrameCopyPaintMaxMs, 0.9);
+  assert.equal(flat.causalInputPhotonPadStatsPollParseCalls, 5);
+  assert.equal(flat.causalInputPhotonPadStatsSourceUtf16Bytes, 8_192);
+  assert.equal(flat.causalInputPhotonPadStatsPollParseTotalMs, 1.25);
+  assert.equal(flat.causalInputPhotonPadStatsPollParseMaxMs, 0.4);
+  assert.equal(flat.causalInputPhotonPadStatsPollParseFailureCount, 1);
   assert.equal(flat.causalWgpuProducerStateCacheEnabled, false);
   assert.deepEqual(flat.causalWgpuProducerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(flat.causalWgpuCommandDroppedCount, 0);
@@ -377,4 +462,13 @@ test("deep merge preserves untouched telemetry branches", () => {
   assert.equal(merged.audio.underrunCount, 2);
   assert.equal(merged.audio.overrunCount, 0);
   assert.equal(merged.presentation.backend, "none");
+});
+
+test("flattening a pre-overhead schema snapshot supplies inert marker counters", () => {
+  const value = createCausalTelemetry({ enabled: true });
+  delete value.input.marker.overhead;
+  const flat = flattenCausalTelemetry(value);
+  assert.equal(flat.causalInputPhotonOverheadEnabled, false);
+  assert.equal(flat.causalInputPhotonFrameCopyPaintCalls, 0);
+  assert.equal(flat.causalInputPhotonPadStatsPollParseCalls, 0);
 });

@@ -1,10 +1,27 @@
 // Large enough for an external photodiode or high-speed-camera region while
 // the browser observer samples only the uniform top-left 8x8 subset.
 export const INPUT_VISUAL_MARKER_SIZE = 32;
+export const INPUT_PHOTON_MARKER_SIZE = 160;
+export const INPUT_VISUAL_MARKER_MODE_BROWSER = "browser-canvas";
+export const INPUT_VISUAL_MARKER_MODE_PHOTON = "external-sensor";
 const DEFAULT_MARKER_SIZE = INPUT_VISUAL_MARKER_SIZE;
 const DEFAULT_MAX_SAMPLES = 64;
 const DEFAULT_MARKER_HOLD_MS = 250;
 const DEFAULT_MARKER_MAX_LIFETIME_MS = 2000;
+
+export function requestedInputPhotonMarkerConfig(
+  search = globalThis.location?.search ?? ""
+) {
+  const params = new URLSearchParams(search);
+  const enabled = params.get("inputphoton") === "1";
+  return {
+    enabled,
+    mode: enabled ? INPUT_VISUAL_MARKER_MODE_PHOTON : INPUT_VISUAL_MARKER_MODE_BROWSER,
+    size: boundedInteger(params.get("inputphotonsize"), INPUT_PHOTON_MARKER_SIZE, 16, 4096),
+    x: optionalNonNegativeInteger(params.get("inputphotonx")),
+    y: optionalNonNegativeInteger(params.get("inputphotony"))
+  };
+}
 
 export function inputMarkerRgba(generation) {
   const value = Number(generation) >>> 0;
@@ -53,6 +70,96 @@ export function applyInputMarkerRgba(
   return true;
 }
 
+export function inputPhotonLuminance(generation) {
+  return (Number(generation) >>> 0) & 1 ? 0xff : 0x00;
+}
+
+export function resolveInputPhotonMarkerGeometry(
+  width,
+  height,
+  { size = INPUT_PHOTON_MARKER_SIZE, x = null, y = null } = {}
+) {
+  const frameWidth = Math.max(0, Math.trunc(Number(width) || 0));
+  const frameHeight = Math.max(0, Math.trunc(Number(height) || 0));
+  const markerWidth = Math.min(
+    frameWidth,
+    Math.max(1, Math.trunc(Number(size) || INPUT_PHOTON_MARKER_SIZE))
+  );
+  const markerHeight = Math.min(
+    frameHeight,
+    Math.max(1, Math.trunc(Number(size) || INPUT_PHOTON_MARKER_SIZE))
+  );
+  const requestedX = optionalNonNegativeInteger(x);
+  const requestedY = optionalNonNegativeInteger(y);
+  return {
+    x: Math.min(
+      Math.max(0, frameWidth - markerWidth),
+      requestedX ?? Math.floor((frameWidth - markerWidth) / 2)
+    ),
+    y: Math.min(
+      Math.max(0, frameHeight - markerHeight),
+      requestedY ?? Math.floor((frameHeight - markerHeight) / 2)
+    ),
+    width: markerWidth,
+    height: markerHeight,
+    frameWidth,
+    frameHeight
+  };
+}
+
+// The external-sensor mode always paints its optical ROI, including the
+// generation-zero black baseline. The corner code stays separate so a camera
+// run can recover the exact input generation without weakening the 0/255 edge.
+export function applyInputPhotonMarkerRgba(
+  bytes,
+  width,
+  height,
+  generation,
+  {
+    bytesPerRow = Number(width) * 4,
+    size = INPUT_PHOTON_MARKER_SIZE,
+    x = null,
+    y = null,
+    barcodeSize = INPUT_VISUAL_MARKER_SIZE,
+    luminance = inputPhotonLuminance(generation)
+  } = {}
+) {
+  const frameWidth = Math.trunc(Number(width));
+  const frameHeight = Math.trunc(Number(height));
+  const stride = Math.trunc(Number(bytesPerRow));
+  if (
+    !bytes ||
+    frameWidth <= 0 ||
+    frameHeight <= 0 ||
+    stride < frameWidth * 4 ||
+    bytes.byteLength < stride * frameHeight
+  ) {
+    return false;
+  }
+
+  const geometry = resolveInputPhotonMarkerGeometry(frameWidth, frameHeight, { size, x, y });
+  const opticalLevel = Number(luminance) >= 0x80 ? 0xff : 0x00;
+  fillRgbaRect(bytes, stride, geometry, [opticalLevel, opticalLevel, opticalLevel, 0xff]);
+  applyInputMarkerRgba(bytes, frameWidth, frameHeight, generation, {
+    bytesPerRow: stride,
+    markerSize: barcodeSize
+  });
+  return true;
+}
+
+export function applyInputVisualMarkerRgba(bytes, width, height, marker) {
+  if (!marker) return false;
+  if (marker.mode === INPUT_VISUAL_MARKER_MODE_PHOTON) {
+    return applyInputPhotonMarkerRgba(bytes, width, height, marker.generation, {
+      size: marker.optical?.size,
+      x: marker.optical?.x,
+      y: marker.optical?.y,
+      luminance: marker.optical?.luminance
+    });
+  }
+  return applyInputMarkerRgba(bytes, width, height, marker.generation);
+}
+
 export function inputMarkerPixelMatches(bytes, generation, offset = 0) {
   const index = Math.trunc(Number(offset));
   if (!bytes || index < 0 || index + 3 >= bytes.byteLength) return false;
@@ -62,12 +169,23 @@ export function inputMarkerPixelMatches(bytes, generation, offset = 0) {
 
 export function createInputVisualMarkerTracker({
   enabled = false,
+  mode = INPUT_VISUAL_MARKER_MODE_BROWSER,
+  opticalMarker = {},
   maxSamples = DEFAULT_MAX_SAMPLES,
   markerHoldMs = DEFAULT_MARKER_HOLD_MS,
   markerMaxLifetimeMs = DEFAULT_MARKER_MAX_LIFETIME_MS,
   now = () => Date.now()
 } = {}) {
   const active = Boolean(enabled);
+  const markerMode = mode === INPUT_VISUAL_MARKER_MODE_PHOTON
+    ? INPUT_VISUAL_MARKER_MODE_PHOTON
+    : INPUT_VISUAL_MARKER_MODE_BROWSER;
+  const opticalMode = markerMode === INPUT_VISUAL_MARKER_MODE_PHOTON;
+  const optical = {
+    size: boundedInteger(opticalMarker?.size, INPUT_PHOTON_MARKER_SIZE, 16, 4096),
+    x: optionalNonNegativeInteger(opticalMarker?.x),
+    y: optionalNonNegativeInteger(opticalMarker?.y)
+  };
   const sampleLimit = Math.max(1, Math.trunc(Number(maxSamples) || DEFAULT_MAX_SAMPLES));
   const holdMs = Math.max(0, Math.trunc(Number(markerHoldMs) || 0));
   const maxLifetimeMs = Math.max(
@@ -80,6 +198,8 @@ export function createInputVisualMarkerTracker({
   let activeGeneration = 0;
   let activeMarkerExpiresAtEpochMs = 0;
   let activeMarkerCompleted = false;
+  let opticalLuminance = 0;
+  let lastRenderGeometry = null;
   const stats = {
     appliedCount: 0,
     duplicateApplyCount: 0,
@@ -178,7 +298,8 @@ export function createInputVisualMarkerTracker({
       stats.droppedInFlightCount += 1;
     }
     activeGeneration = token.generation;
-    activeMarkerExpiresAtEpochMs = token.expiresAtEpochMs;
+    if (opticalMode) opticalLuminance = opticalLuminance === 0 ? 0xff : 0x00;
+    activeMarkerExpiresAtEpochMs = opticalMode ? 0 : token.expiresAtEpochMs;
     activeMarkerCompleted = false;
     pending = null;
     stats.exactCorePollCount += 1;
@@ -189,14 +310,38 @@ export function createInputVisualMarkerTracker({
   }
 
   function currentMarker() {
-    if (!active || !activeGeneration) return null;
-    if (expireActiveMarker()) return null;
+    if (!active) return null;
+    if (!opticalMode && !activeGeneration) return null;
+    if (!opticalMode && expireActiveMarker()) return null;
     const token = tokens.get(activeGeneration);
     return {
       generation: activeGeneration,
       rgba: inputMarkerRgba(activeGeneration),
-      needsSubmission: Boolean(token && !token.submittedAtEpochMs)
+      needsSubmission: Boolean(token && !token.submittedAtEpochMs),
+      mode: markerMode,
+      optical: opticalMode ? {
+        ...optical,
+        luminance: opticalLuminance,
+        persistentBaseline: true
+      } : null
     };
+  }
+
+  function hasPendingInput() {
+    return active && pending !== null;
+  }
+
+  function recordRenderGeometry(geometry) {
+    if (!active || !opticalMode || !geometry) return false;
+    lastRenderGeometry = {
+      x: Number(geometry.x) >>> 0,
+      y: Number(geometry.y) >>> 0,
+      width: Number(geometry.width) >>> 0,
+      height: Number(geometry.height) >>> 0,
+      frameWidth: Number(geometry.frameWidth) >>> 0,
+      frameHeight: Number(geometry.frameHeight) >>> 0
+    };
+    return true;
   }
 
   function recordMarkerSubmitted({ generation, coreFrame = 0, source = "unknown" } = {}) {
@@ -234,7 +379,7 @@ export function createInputVisualMarkerTracker({
     }
     token.completedAtEpochMs = Number(now());
     if (activeGeneration === token.generation) {
-      activeMarkerExpiresAtEpochMs = token.completedAtEpochMs + holdMs;
+      activeMarkerExpiresAtEpochMs = opticalMode ? 0 : token.completedAtEpochMs + holdMs;
       activeMarkerCompleted = true;
     }
     token.coreFrame = Number(coreFrame) >>> 0;
@@ -268,14 +413,35 @@ export function createInputVisualMarkerTracker({
   }
 
   function snapshot() {
-    expireActiveMarker();
+    if (!opticalMode) expireActiveMarker();
     const completionAges = completedSamples.map((sample) => sample.completionAgeMs);
     const pollToCompletion = completedSamples.map((sample) => sample.pollToCompletionMs);
     return {
       schema: "wasm-dolphin.input-visual-marker.v1",
       enabled: active,
+      mode: markerMode,
       causalVisualAttribution: true,
-      meaning: "host-input-to-core-polled-generation-to-deterministic-marker-completion",
+      meaning: opticalMode
+        ? "host-input-to-core-polled-generation-to-external-sensor-optical-transition"
+        : "host-input-to-core-polled-generation-to-deterministic-marker-completion",
+      measurementBoundary: opticalMode
+        ? "worker input generation through marker submission/completion telemetry; photon time requires an external sensor"
+        : "worker input generation through browser marker submission/completion telemetry",
+      physicalPhotonBoundaryIncluded: false,
+      opticalMarker: {
+        enabled: active && opticalMode,
+        persistentBlackBaseline: active && opticalMode,
+        transition: active && opticalMode
+          ? "every exact core-polled generation toggles full-scale black/white"
+          : "none",
+        lowLuminance: 0,
+        highLuminance: 255,
+        requestedSize: optical.size,
+        requestedX: optical.x,
+        requestedY: optical.y,
+        barcodeSize: INPUT_VISUAL_MARKER_SIZE,
+        lastRenderGeometry: lastRenderGeometry ? { ...lastRenderGeometry } : null
+      },
       ...stats,
       pendingGeneration: pending?.generation ?? 0,
       activeGeneration,
@@ -315,12 +481,41 @@ export function createInputVisualMarkerTracker({
 
   return {
     currentMarker,
+    hasPendingInput,
     recordApplied,
     recordCorePoll,
     recordMarkerCompleted,
     recordMarkerSubmitted,
+    recordRenderGeometry,
     snapshot
   };
+}
+
+function fillRgbaRect(bytes, stride, geometry, rgba) {
+  for (let y = geometry.y; y < geometry.y + geometry.height; y += 1) {
+    const row = y * stride;
+    for (let x = geometry.x; x < geometry.x + geometry.width; x += 1) {
+      const offset = row + x * 4;
+      bytes[offset] = rgba[0];
+      bytes[offset + 1] = rgba[1];
+      bytes[offset + 2] = rgba[2];
+      bytes[offset + 3] = rgba[3];
+    }
+  }
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const number = value === null || value === undefined || value === ""
+    ? Number.NaN
+    : Number(value);
+  const integer = Number.isFinite(number) ? Math.trunc(number) : fallback;
+  return Math.min(maximum, Math.max(minimum, integer));
+}
+
+function optionalNonNegativeInteger(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : null;
 }
 
 function validAge(end, start) {

@@ -187,6 +187,7 @@ export function createCausalTelemetry(overrides = {}) {
           pollToCompletionP95Ms: 0,
           lastCompletedGeneration: 0,
           lastCompletionKind: "",
+          overhead: emptyInputPhotonOverheadTelemetry(),
         },
       },
       host: {
@@ -309,15 +310,47 @@ function parseTevCaseProfile(match) {
   const encoded = String(match?.[6] || "");
   if (!encoded || encoded === "-") return profile;
   profile.topCases = encoded.split(",").flatMap((entry) => {
-    const parsed = /^([0-9a-f]+)\.([0-9a-f]+)=(\d+)\/(\d+)$/i.exec(entry);
+    const parsed =
+      /^([0-9a-f]+)\.([0-9a-f]+)(?:@(\d+)((?:\.[0-9a-f]+)+))?=(\d+)\/(\d+)$/i.exec(entry);
     if (!parsed) return [];
     const structure = Number.parseInt(parsed[1], 16);
     if (!Number.isSafeInteger(structure)) return [];
+    const canonicalProgramSchema = parsed[3] == null ? null : Number.parseInt(parsed[3], 10);
+    const rawCanonicalWords = parsed[4] == null ? [] : parsed[4].slice(1).split(".");
+    const canonicalWordValues = rawCanonicalWords.map((word) => Number.parseInt(word, 16));
+    if (
+      canonicalWordValues.some(
+        (word) => !Number.isSafeInteger(word) || word < 0 || word > 0xffffffff
+      )
+    ) {
+      return [];
+    }
+    if (canonicalProgramSchema === 1 && canonicalWordValues.length !== 9) return [];
+    const canonicalProgramWords = canonicalWordValues.map((word) => `0x${word.toString(16)}`);
+    const canonicalProgram = canonicalProgramSchema == null
+      ? {}
+      : {
+          canonicalProgramSchema,
+          canonicalProgramWords,
+          ...(canonicalProgramSchema === 1
+            ? {
+                genModeHex: canonicalProgramWords[0],
+                tevIndirectReferenceHex: canonicalProgramWords[1],
+                orderWord: canonicalProgramWords[2],
+                indirectWord: canonicalProgramWords[3],
+                colorCombinerHex: canonicalProgramWords[4],
+                alphaCombinerHex: canonicalProgramWords[5],
+                konstWord: canonicalProgramWords[6],
+                rasterSwapWord: canonicalProgramWords[7],
+                textureSwapWord: canonicalProgramWords[8],
+              }
+            : {}),
+        };
     return [{
       structuralKey: `0x${parsed[1].toLowerCase()}`,
       programFingerprint: `0x${parsed[2].toLowerCase()}`,
-      sampleCount: finite(parsed[3]),
-      stageWorkCount: finite(parsed[4]),
+      sampleCount: finite(parsed[5]),
+      stageWorkCount: finite(parsed[6]),
       tevStageCount: unpackBits(structure, 0, 5),
       indirectStageCount: unpackBits(structure, 5, 3),
       textureGenerationCount: unpackBits(structure, 8, 4),
@@ -329,6 +362,7 @@ function parseTevCaseProfile(match) {
       alphaCompareStageCount: unpackBits(structure, 34, 5),
       colorClampStageCount: unpackBits(structure, 39, 5),
       alphaClampStageCount: unpackBits(structure, 44, 5),
+      ...canonicalProgram,
     }];
   });
   return profile;
@@ -459,6 +493,11 @@ export function estimateMessageBytes(value, seen = new Set()) {
 export function flattenCausalTelemetry(value) {
   const valid = value?.schemaVersion === CAUSAL_TELEMETRY_SCHEMA_VERSION;
   const telemetry = valid ? value : createCausalTelemetry();
+  const topTevCase = telemetry.softwareRaster.tevCases.topCases[0];
+  const inputPhotonOverhead = deepMerge(
+    emptyInputPhotonOverheadTelemetry(),
+    telemetry.input?.marker?.overhead ?? {}
+  );
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -494,11 +533,19 @@ export function flattenCausalTelemetry(value) {
     causalTevCaseWorkCount: telemetry.softwareRaster.tevCases.workCount,
     causalTevCaseOtherSampleCount: telemetry.softwareRaster.tevCases.otherSampleCount,
     causalTevCaseCollisionCount: telemetry.softwareRaster.tevCases.collisionCount,
-    causalTevTopStructuralKey:
-      telemetry.softwareRaster.tevCases.topCases[0]?.structuralKey ?? null,
-    causalTevTopProgramFingerprint:
-      telemetry.softwareRaster.tevCases.topCases[0]?.programFingerprint ?? null,
-    causalTevTopCaseSamples: telemetry.softwareRaster.tevCases.topCases[0]?.sampleCount ?? 0,
+    causalTevTopStructuralKey: topTevCase?.structuralKey ?? null,
+    causalTevTopProgramFingerprint: topTevCase?.programFingerprint ?? null,
+    causalTevTopCanonicalProgramSchema: topTevCase?.canonicalProgramSchema ?? null,
+    causalTevTopGenModeHex: topTevCase?.genModeHex ?? null,
+    causalTevTopIndirectReferenceHex: topTevCase?.tevIndirectReferenceHex ?? null,
+    causalTevTopOrderWord: topTevCase?.orderWord ?? null,
+    causalTevTopIndirectWord: topTevCase?.indirectWord ?? null,
+    causalTevTopColorCombinerHex: topTevCase?.colorCombinerHex ?? null,
+    causalTevTopAlphaCombinerHex: topTevCase?.alphaCombinerHex ?? null,
+    causalTevTopKonstWord: topTevCase?.konstWord ?? null,
+    causalTevTopRasterSwapWord: topTevCase?.rasterSwapWord ?? null,
+    causalTevTopTextureSwapWord: topTevCase?.textureSwapWord ?? null,
+    causalTevTopCaseSamples: topTevCase?.sampleCount ?? 0,
     causalFifoBytesLast: telemetry.softwareRaster.fifoBytesLast,
     causalFifoBytesMax: telemetry.softwareRaster.fifoBytesMax,
     causalFifoConsumerObservedBacklogAgeLastMs:
@@ -578,6 +625,27 @@ export function flattenCausalTelemetry(value) {
     causalInputMarkerPollToCompletionP95Ms: telemetry.input.marker.pollToCompletionP95Ms,
     causalInputMarkerLastCompletedGeneration: telemetry.input.marker.lastCompletedGeneration,
     causalInputMarkerCompletionKind: telemetry.input.marker.lastCompletionKind,
+    causalInputPhotonOverheadEnabled: inputPhotonOverhead.enabled,
+    causalInputPhotonFrameCopyPaintCalls:
+      inputPhotonOverhead.softwareFrameCopyPaint.calls,
+    causalInputPhotonFrameCopyBytes:
+      inputPhotonOverhead.softwareFrameCopyPaint.sourceBytes,
+    causalInputPhotonMarkerPaintBytes:
+      inputPhotonOverhead.softwareFrameCopyPaint.paintedBytes,
+    causalInputPhotonFrameCopyPaintTotalMs:
+      inputPhotonOverhead.softwareFrameCopyPaint.totalMs,
+    causalInputPhotonFrameCopyPaintMaxMs:
+      inputPhotonOverhead.softwareFrameCopyPaint.maxMs,
+    causalInputPhotonPadStatsPollParseCalls:
+      inputPhotonOverhead.padStatsPollParse.calls,
+    causalInputPhotonPadStatsSourceUtf16Bytes:
+      inputPhotonOverhead.padStatsPollParse.sourceUtf16Bytes,
+    causalInputPhotonPadStatsPollParseTotalMs:
+      inputPhotonOverhead.padStatsPollParse.totalMs,
+    causalInputPhotonPadStatsPollParseMaxMs:
+      inputPhotonOverhead.padStatsPollParse.maxMs,
+    causalInputPhotonPadStatsPollParseFailureCount:
+      inputPhotonOverhead.padStatsPollParse.failureCount,
   };
   return valid
     ? flattened
@@ -661,6 +729,30 @@ function emptyInputVisibleLatencyTelemetry() {
     visibleAgeMaxMs: 0,
     pollToVisibleAverageMs: 0,
     pollToVisibleP95Ms: 0,
+  };
+}
+
+function emptyInputPhotonOverheadTelemetry() {
+  return {
+    schema: "wasm-dolphin.input-photon-overhead.v1",
+    enabled: false,
+    collectionRequires: "inputphoton=1&metrics=1",
+    softwareFrameCopyPaint: {
+      calls: 0,
+      sourceBytes: 0,
+      paintedBytes: 0,
+      totalMs: 0,
+      maxMs: 0,
+      averageMs: 0,
+    },
+    padStatsPollParse: {
+      calls: 0,
+      sourceUtf16Bytes: 0,
+      totalMs: 0,
+      maxMs: 0,
+      failureCount: 0,
+      averageMs: 0,
+    },
   };
 }
 

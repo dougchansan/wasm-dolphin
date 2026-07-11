@@ -1,0 +1,836 @@
+diff --git a/Source/Core/Core/CoreTiming.cpp b/Source/Core/Core/CoreTiming.cpp
+index 247a30c107e4ccfb9d595ca9713666c151e2166f..68eefc8937bc8a7131537fc27eaf888abb2a0b63 100644
+--- a/Source/Core/Core/CoreTiming.cpp
++++ b/Source/Core/Core/CoreTiming.cpp
+@@ -549,8 +549,15 @@ void CoreTimingManager::SleepUntil(TimePoint time_point)
+     const TimePoint time_after_sleep = Clock::now();
+     m_system.GetPerfMetrics().CountThrottleSleep(time_after_sleep - time);
+ #ifdef __EMSCRIPTEN__
+-    DolphinWeb::WasmTimingProfile::RecordThrottleWaitUs(
+-        DolphinWeb::WasmTimingProfile::ElapsedMicros(time, time_after_sleep));
++    if (DolphinWeb::WasmTimingProfile::IsSliceActive())
++    {
++      const u32 requested_us = DolphinWeb::WasmTimingProfile::ElapsedMicros(time, time_point);
++      const u32 actual_us =
++          DolphinWeb::WasmTimingProfile::ElapsedMicros(time, time_after_sleep);
++      const s32 overshoot_us =
++          DolphinWeb::WasmTimingProfile::SignedDifferenceMicros(actual_us, requested_us);
++      DolphinWeb::WasmTimingProfile::RecordThrottleWaitUs(actual_us, requested_us, overshoot_us);
++    }
+ #endif
+   }
+   else
+diff --git a/Source/Core/Core/HW/DVD/DVDThread.cpp b/Source/Core/Core/HW/DVD/DVDThread.cpp
+index f03498aae12f8265b1b1bea7b7f3ea8871a0d9eb..35b63454c394b8118f0ff5c0a5e935cd939e675d 100644
+--- a/Source/Core/Core/HW/DVD/DVDThread.cpp
++++ b/Source/Core/Core/HW/DVD/DVDThread.cpp
+@@ -228,6 +228,12 @@ void DVDThread::GlobalFinishRead(Core::System& system, u64 id, s64 cycles_late)
+ 
+ void DVDThread::FinishRead(u64 id, s64 cycles_late)
+ {
++#ifdef __EMSCRIPTEN__
++  const bool profile_dvd = DolphinWeb::WasmTimingProfile::BeginDvdCompletion();
++  const auto dvd_started_at = profile_dvd ?
++                                  DolphinWeb::WasmTimingProfile::Clock::now() :
++                                  DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+   // We can't simply pop result_queue and always get the ReadResult
+   // we want, because the DVD thread may add ReadResults to the queue
+   // in a different order than we want to get them. What we do instead
+@@ -239,35 +245,70 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
+   // When this function is called again later, it will check the map for
+   // the wanted ReadResult before it starts searching through the queue.
+   ReadResult result;
++#ifdef __EMSCRIPTEN__
++  const auto map_lookup_started_at = profile_dvd ?
++                                         DolphinWeb::WasmTimingProfile::Clock::now() :
++                                         DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+   auto it = m_result_map.find(id);
++#ifdef __EMSCRIPTEN__
++  if (profile_dvd)
++  {
++    DolphinWeb::WasmTimingProfile::RecordDvdMapUs(DolphinWeb::WasmTimingProfile::ElapsedMicros(
++        map_lookup_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++  }
++#endif
+   if (it != m_result_map.end())
+   {
++#ifdef __EMSCRIPTEN__
++    const auto map_hit_started_at = profile_dvd ?
++                                        DolphinWeb::WasmTimingProfile::Clock::now() :
++                                        DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+     result = std::move(it->second);
+     m_result_map.erase(it);
++#ifdef __EMSCRIPTEN__
++    if (profile_dvd)
++    {
++      DolphinWeb::WasmTimingProfile::RecordDvdMapUs(DolphinWeb::WasmTimingProfile::ElapsedMicros(
++          map_hit_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++    }
++#endif
+   }
+   else
+   {
+     while (true)
+     {
+ #ifdef __EMSCRIPTEN__
+-      const bool profile_wait = DolphinWeb::WasmTimingProfile::IsSliceActive();
+-      const auto wait_started_at = profile_wait ?
++      const auto wait_started_at = profile_dvd ?
+                                        DolphinWeb::WasmTimingProfile::Clock::now() :
+                                        DolphinWeb::WasmTimingProfile::Clock::time_point{};
+ #endif
+       m_result_queue.WaitForData();
+ #ifdef __EMSCRIPTEN__
+-      if (profile_wait)
++      if (profile_dvd)
+       {
+         DolphinWeb::WasmTimingProfile::RecordDvdWaitUs(DolphinWeb::WasmTimingProfile::ElapsedMicros(
+             wait_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
+       }
++      const auto queue_pop_started_at = profile_dvd ?
++                                            DolphinWeb::WasmTimingProfile::Clock::now() :
++                                            DolphinWeb::WasmTimingProfile::Clock::time_point{};
+ #endif
+       m_result_queue.Pop(result);
+-      if (result.first.id == id)
++      const bool matched_request = result.first.id == id;
++      if (!matched_request)
++        m_result_map.emplace(result.first.id, std::move(result));
++#ifdef __EMSCRIPTEN__
++      if (profile_dvd)
++      {
++        DolphinWeb::WasmTimingProfile::RecordDvdQueuePopUs(
++            DolphinWeb::WasmTimingProfile::ElapsedMicros(
++                queue_pop_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++      }
++#endif
++      if (matched_request)
+         break;
+-
+-      m_result_map.emplace(result.first.id, std::move(result));
+     }
+   }
+   // We have now obtained the right ReadResult.
+@@ -299,14 +340,43 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
+     if (request.copy_to_ram)
+     {
+       auto& memory = m_system.GetMemory();
++#ifdef __EMSCRIPTEN__
++      const auto ram_copy_started_at = profile_dvd ?
++                                           DolphinWeb::WasmTimingProfile::Clock::now() :
++                                           DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+       memory.CopyToEmu(request.output_address, buffer.data(), request.length);
++#ifdef __EMSCRIPTEN__
++      if (profile_dvd)
++      {
++        DolphinWeb::WasmTimingProfile::RecordDvdRamCopyUs(
++            DolphinWeb::WasmTimingProfile::ElapsedMicros(
++                ram_copy_started_at, DolphinWeb::WasmTimingProfile::Clock::now()),
++            request.length);
++      }
++#endif
+     }
+ 
+     interrupt = DVD::DIInterruptType::TCINT;
+   }
+ 
+   // Notify the emulated software that the command has been executed
++#ifdef __EMSCRIPTEN__
++  const auto command_finish_started_at = profile_dvd ?
++                                             DolphinWeb::WasmTimingProfile::Clock::now() :
++                                             DolphinWeb::WasmTimingProfile::Clock::time_point{};
++#endif
+   dvd_interface.FinishExecutingCommand(request.reply_type, interrupt, cycles_late, buffer);
++#ifdef __EMSCRIPTEN__
++  if (profile_dvd)
++  {
++    DolphinWeb::WasmTimingProfile::RecordDvdCommandFinishUs(
++        DolphinWeb::WasmTimingProfile::ElapsedMicros(
++            command_finish_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++    DolphinWeb::WasmTimingProfile::FinishDvdCompletion(DolphinWeb::WasmTimingProfile::ElapsedMicros(
++        dvd_started_at, DolphinWeb::WasmTimingProfile::Clock::now()));
++  }
++#endif
+ }
+ 
+ void DVDThread::ProcessReadRequest(ReadRequest&& request)
+diff --git a/Source/Core/Core/HW/VideoInterface.cpp b/Source/Core/Core/HW/VideoInterface.cpp
+index 0bda6efdf27ddf503389878cdbb267fe8cd1184d..2fa67037f14895d8976ee454e0d19deed4baea29 100644
+--- a/Source/Core/Core/HW/VideoInterface.cpp
++++ b/Source/Core/Core/HW/VideoInterface.cpp
+@@ -900,7 +900,13 @@ void VideoInterfaceManager::EndField(FieldType field, u64 ticks)
+   // The Rush Frame Presentation setting is handled by Throttle itself.
+   const bool is_vblank_data_wanted = !g_ActiveConfig.bImmediateXFB;
+   if (is_vblank_data_wanted)
++  {
++#ifdef __EMSCRIPTEN__
++    const DolphinWeb::WasmTimingProfile::ScopedThrottleSite throttle_site{
++        DolphinWeb::WasmTimingProfile::ThrottleSite::ViEndField};
++#endif
+     m_system.GetCoreTiming().Throttle(ticks);
++  }
+ 
+   m_system.GetPerfMetrics().CountVBlank();
+   m_system.GetVideoEvents().vi_end_field_event.Trigger();
+@@ -992,6 +998,10 @@ void VideoInterfaceManager::Update(u64 ticks)
+   if (m_half_line_count == m_half_line_of_next_si_poll)
+   {
+     // Throttle before SI poll so user input is taken just before needed. (lower input latency)
++#ifdef __EMSCRIPTEN__
++    const DolphinWeb::WasmTimingProfile::ScopedThrottleSite throttle_site{
++        DolphinWeb::WasmTimingProfile::ThrottleSite::ViSiPoll};
++#endif
+     core_timing.Throttle(ticks);
+ 
+     Core::UpdateInputGate(!Config::Get(Config::MAIN_INPUT_BACKGROUND_INPUT),
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index fb44b647d8df5a0d17edb03c061a5570bc0acd05..bf2ce5b6cff4e44e3960e661fe9496488232826c 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -11076,6 +11076,36 @@ extern "C" const char* GetPpcWasmHelperStats()
+       << ",throttle=" << worst_slice.throttle_wait_us << ",dvd=" << worst_slice.dvd_wait_us
+       << ",video=" << worst_slice.video_work_us
+       << ",event=" << DolphinWeb::WasmTimingProfile::EventName(worst_slice.event) << " ";
++  const DolphinWeb::WasmTimingProfile::WorstDvdCompletion& slice_dvd =
++      worst_slice.dvd_completion;
++  out << "slicephase:v=1,throttlesite="
++      << DolphinWeb::WasmTimingProfile::ThrottleSiteName(worst_slice.throttle_site)
++      << ",throttlesiteus=" << worst_slice.throttle_site_us
++      << ",throttlemax=" << worst_slice.throttle_max_us
++      << ",requested=" << worst_slice.throttle_requested_us
++      << ",overshoot=" << worst_slice.throttle_overshoot_us
++      << ",dvdtotal=" << slice_dvd.total_us << ",dvdmap=" << slice_dvd.map_us
++      << ",dvdwait=" << slice_dvd.queue_wait_us << ",dvdpop=" << slice_dvd.queue_pop_us
++      << ",dvdcopy=" << slice_dvd.ram_copy_us
++      << ",dvdfinish=" << slice_dvd.command_finish_us << ",dvdother=" << slice_dvd.other_us
++      << ",dvdbytes=" << slice_dvd.bytes << ",dvdloops=" << slice_dvd.queue_loops << " ";
++  const DolphinWeb::WasmTimingProfile::WorstDvdCompletion worst_dvd =
++      DolphinWeb::WasmTimingProfile::CaptureWorstDvdCompletion();
++  out << "dvdprof:v=1,total=" << worst_dvd.total_us << ",map=" << worst_dvd.map_us
++      << ",wait=" << worst_dvd.queue_wait_us << ",pop=" << worst_dvd.queue_pop_us
++      << ",copy=" << worst_dvd.ram_copy_us << ",finish=" << worst_dvd.command_finish_us
++      << ",other=" << worst_dvd.other_us << ",bytes=" << worst_dvd.bytes
++      << ",loops=" << worst_dvd.queue_loops << " ";
++  const auto emit_throttle_profile = [&out](DolphinWeb::WasmTimingProfile::ThrottleSite site) {
++    const DolphinWeb::WasmTimingProfile::ThrottleProfile profile =
++        DolphinWeb::WasmTimingProfile::CaptureThrottleProfile(site);
++    out << "throttleprof:v=1,site=" << DolphinWeb::WasmTimingProfile::ThrottleSiteName(site)
++        << ",count=" << profile.count << ",slow=" << profile.slow_count
++        << ",total=" << profile.total_actual_us << ",max=" << profile.max_actual_us
++        << ",requested=" << profile.requested_us << ",overshoot=" << profile.overshoot_us << " ";
++  };
++  emit_throttle_profile(DolphinWeb::WasmTimingProfile::ThrottleSite::ViEndField);
++  emit_throttle_profile(DolphinWeb::WasmTimingProfile::ThrottleSite::ViSiPoll);
+   out << "reject:" << s_wasm_direct_tier_reject_count << " ";
+   out << s_wasm_helper_call_count << " calls, " << s_wasm_helper_halt_count << " halt";
+   out << " | imports system:" << s_wasm_system_call_count << " fp:" << s_wasm_fp_call_count
+diff --git a/Source/Core/Core/WasmTimingProfile.h b/Source/Core/Core/WasmTimingProfile.h
+index 13c8b377f6dd3a328be1f2a21e79b860c1b39892..7cedebe6a47d68382bccf9af078a0ce8a6f686e0 100644
+--- a/Source/Core/Core/WasmTimingProfile.h
++++ b/Source/Core/Core/WasmTimingProfile.h
+@@ -6,8 +6,10 @@
+ #ifdef __EMSCRIPTEN__
+ 
+ #include <algorithm>
++#include <array>
+ #include <atomic>
+ #include <chrono>
++#include <cstddef>
+ #include <cstdint>
+ #include <limits>
+ #include <string_view>
+@@ -24,6 +26,27 @@ enum class EventKind : std::uint32_t
+   OtherCoreTiming,
+ };
+ 
++enum class ThrottleSite : std::uint32_t
++{
++  None,
++  ViEndField,
++  ViSiPoll,
++  Count,
++};
++
++struct WorstDvdCompletion
++{
++  std::uint32_t total_us = 0;
++  std::uint32_t map_us = 0;
++  std::uint32_t queue_wait_us = 0;
++  std::uint32_t queue_pop_us = 0;
++  std::uint32_t ram_copy_us = 0;
++  std::uint32_t command_finish_us = 0;
++  std::uint32_t other_us = 0;
++  std::uint32_t bytes = 0;
++  std::uint32_t queue_loops = 0;
++};
++
+ struct WorstSlice
+ {
+   std::uint32_t total_us = 0;
+@@ -34,6 +57,30 @@ struct WorstSlice
+   std::uint32_t dvd_wait_us = 0;
+   std::uint32_t video_work_us = 0;
+   EventKind event = EventKind::None;
++  ThrottleSite throttle_site = ThrottleSite::None;
++  std::uint32_t throttle_site_us = 0;
++  std::uint32_t throttle_max_us = 0;
++  std::uint32_t throttle_requested_us = 0;
++  std::int32_t throttle_overshoot_us = 0;
++  WorstDvdCompletion dvd_completion{};
++};
++
++struct ThrottleProfile
++{
++  std::uint32_t count = 0;
++  std::uint32_t slow_count = 0;
++  std::uint64_t total_actual_us = 0;
++  std::uint32_t max_actual_us = 0;
++  std::uint32_t requested_us = 0;
++  std::int32_t overshoot_us = 0;
++};
++
++struct CurrentThrottleSite
++{
++  std::uint32_t total_actual_us = 0;
++  std::uint32_t max_actual_us = 0;
++  std::uint32_t requested_us = 0;
++  std::int32_t overshoot_us = 0;
+ };
+ 
+ struct CurrentSlice
+@@ -45,6 +92,21 @@ struct CurrentSlice
+   std::uint32_t video_work_us = 0;
+   std::uint32_t longest_event_us = 0;
+   EventKind longest_event = EventKind::None;
++  std::array<CurrentThrottleSite, static_cast<std::size_t>(ThrottleSite::Count)>
++      throttle_sites{};
++  WorstDvdCompletion dvd_completion{};
++};
++
++struct CurrentDvdCompletion
++{
++  bool active = false;
++  std::uint32_t map_us = 0;
++  std::uint32_t queue_wait_us = 0;
++  std::uint32_t queue_pop_us = 0;
++  std::uint32_t ram_copy_us = 0;
++  std::uint32_t command_finish_us = 0;
++  std::uint32_t bytes = 0;
++  std::uint32_t queue_loops = 0;
+ };
+ 
+ struct WorstSliceStorage
+@@ -58,11 +120,55 @@ struct WorstSliceStorage
+   std::atomic<std::uint32_t> dvd_wait_us{0};
+   std::atomic<std::uint32_t> video_work_us{0};
+   std::atomic<std::uint32_t> event{static_cast<std::uint32_t>(EventKind::None)};
++  std::atomic<std::uint32_t> throttle_site{static_cast<std::uint32_t>(ThrottleSite::None)};
++  std::atomic<std::uint32_t> throttle_site_us{0};
++  std::atomic<std::uint32_t> throttle_max_us{0};
++  std::atomic<std::uint32_t> throttle_requested_us{0};
++  std::atomic<std::int32_t> throttle_overshoot_us{0};
++  std::atomic<std::uint32_t> dvd_total_us{0};
++  std::atomic<std::uint32_t> dvd_map_us{0};
++  std::atomic<std::uint32_t> dvd_queue_wait_us{0};
++  std::atomic<std::uint32_t> dvd_queue_pop_us{0};
++  std::atomic<std::uint32_t> dvd_ram_copy_us{0};
++  std::atomic<std::uint32_t> dvd_command_finish_us{0};
++  std::atomic<std::uint32_t> dvd_other_us{0};
++  std::atomic<std::uint32_t> dvd_bytes{0};
++  std::atomic<std::uint32_t> dvd_queue_loops{0};
++};
++
++struct WorstDvdCompletionStorage
++{
++  std::atomic<std::uint32_t> sequence{0};
++  std::atomic<std::uint32_t> total_us{0};
++  std::atomic<std::uint32_t> map_us{0};
++  std::atomic<std::uint32_t> queue_wait_us{0};
++  std::atomic<std::uint32_t> queue_pop_us{0};
++  std::atomic<std::uint32_t> ram_copy_us{0};
++  std::atomic<std::uint32_t> command_finish_us{0};
++  std::atomic<std::uint32_t> other_us{0};
++  std::atomic<std::uint32_t> bytes{0};
++  std::atomic<std::uint32_t> queue_loops{0};
++};
++
++struct ThrottleProfileStorage
++{
++  std::atomic<std::uint32_t> sequence{0};
++  std::atomic<std::uint32_t> count{0};
++  std::atomic<std::uint32_t> slow_count{0};
++  std::atomic<std::uint64_t> total_actual_us{0};
++  std::atomic<std::uint32_t> max_actual_us{0};
++  std::atomic<std::uint32_t> requested_us{0};
++  std::atomic<std::int32_t> overshoot_us{0};
+ };
+ 
+ inline std::atomic<bool> s_enabled{false};
+ inline thread_local CurrentSlice s_current_slice{};
++inline thread_local CurrentDvdCompletion s_current_dvd_completion{};
++inline thread_local ThrottleSite s_current_throttle_site = ThrottleSite::None;
+ inline WorstSliceStorage s_worst_slice{};
++inline WorstDvdCompletionStorage s_worst_dvd_completion{};
++inline std::array<ThrottleProfileStorage, static_cast<std::size_t>(ThrottleSite::Count)>
++    s_throttle_profiles{};
+ 
+ inline std::uint32_t SaturatingAdd(std::uint32_t left, std::uint32_t right)
+ {
+@@ -79,6 +185,16 @@ inline std::uint32_t ElapsedMicros(Clock::time_point begin, Clock::time_point en
+       std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
+ }
+ 
++inline std::int32_t SignedDifferenceMicros(std::uint32_t actual_us,
++                                           std::uint32_t requested_us)
++{
++  const std::int64_t difference =
++      static_cast<std::int64_t>(actual_us) - static_cast<std::int64_t>(requested_us);
++  return static_cast<std::int32_t>(std::clamp<std::int64_t>(
++      difference, std::numeric_limits<std::int32_t>::min(),
++      std::numeric_limits<std::int32_t>::max()));
++}
++
+ inline void ResetWorstSlice()
+ {
+   s_worst_slice.sequence.fetch_add(1, std::memory_order_acq_rel);
+@@ -90,22 +206,78 @@ inline void ResetWorstSlice()
+   s_worst_slice.dvd_wait_us.store(0, std::memory_order_relaxed);
+   s_worst_slice.video_work_us.store(0, std::memory_order_relaxed);
+   s_worst_slice.event.store(static_cast<std::uint32_t>(EventKind::None), std::memory_order_relaxed);
++  s_worst_slice.throttle_site.store(static_cast<std::uint32_t>(ThrottleSite::None),
++                                    std::memory_order_relaxed);
++  s_worst_slice.throttle_site_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.throttle_max_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.throttle_requested_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.throttle_overshoot_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_total_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_map_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_wait_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_pop_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_ram_copy_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_command_finish_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_other_us.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_bytes.store(0, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_loops.store(0, std::memory_order_relaxed);
+   s_worst_slice.sequence.fetch_add(1, std::memory_order_release);
+ }
+ 
++inline void ResetWorstDvdCompletion()
++{
++  s_worst_dvd_completion.sequence.fetch_add(1, std::memory_order_acq_rel);
++  s_worst_dvd_completion.total_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.map_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_wait_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_pop_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.ram_copy_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.command_finish_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.other_us.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.bytes.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_loops.store(0, std::memory_order_relaxed);
++  s_worst_dvd_completion.sequence.fetch_add(1, std::memory_order_release);
++}
++
++inline void ResetThrottleProfiles()
++{
++  for (ThrottleProfileStorage& profile : s_throttle_profiles)
++  {
++    profile.sequence.fetch_add(1, std::memory_order_acq_rel);
++    profile.count.store(0, std::memory_order_relaxed);
++    profile.slow_count.store(0, std::memory_order_relaxed);
++    profile.total_actual_us.store(0, std::memory_order_relaxed);
++    profile.max_actual_us.store(0, std::memory_order_relaxed);
++    profile.requested_us.store(0, std::memory_order_relaxed);
++    profile.overshoot_us.store(0, std::memory_order_relaxed);
++    profile.sequence.fetch_add(1, std::memory_order_release);
++  }
++}
++
+ inline void SetEnabled(bool enabled)
+ {
+   const bool was_enabled = s_enabled.exchange(enabled, std::memory_order_acq_rel);
+   s_current_slice = {};
++  s_current_dvd_completion = {};
++  s_current_throttle_site = ThrottleSite::None;
+   if (enabled && !was_enabled)
++  {
+     ResetWorstSlice();
++    ResetWorstDvdCompletion();
++    ResetThrottleProfiles();
++  }
+ }
+ 
+ inline bool BeginSlice()
+ {
++  if (!s_enabled.load(std::memory_order_acquire))
++  {
++    s_current_slice.active = false;
++    return false;
++  }
+   s_current_slice = {};
+-  s_current_slice.active = s_enabled.load(std::memory_order_acquire);
+-  return s_current_slice.active;
++  s_current_slice.active = true;
++  return true;
+ }
+ 
+ inline bool IsSliceActive()
+@@ -113,6 +285,45 @@ inline bool IsSliceActive()
+   return s_current_slice.active;
+ }
+ 
++class ScopedThrottleSite
++{
++public:
++  explicit ScopedThrottleSite(ThrottleSite site)
++      : m_active(IsSliceActive()), m_previous(s_current_throttle_site)
++  {
++    if (m_active)
++      s_current_throttle_site = site;
++  }
++
++  ~ScopedThrottleSite()
++  {
++    if (m_active)
++      s_current_throttle_site = m_previous;
++  }
++
++  ScopedThrottleSite(const ScopedThrottleSite&) = delete;
++  ScopedThrottleSite& operator=(const ScopedThrottleSite&) = delete;
++
++private:
++  bool m_active;
++  ThrottleSite m_previous;
++};
++
++inline const char* ThrottleSiteName(ThrottleSite site)
++{
++  switch (site)
++  {
++  case ThrottleSite::ViEndField:
++    return "vi-end-field";
++  case ThrottleSite::ViSiPoll:
++    return "vi-si-poll";
++  case ThrottleSite::None:
++  case ThrottleSite::Count:
++  default:
++    return "none";
++  }
++}
++
+ inline EventKind ClassifyEvent(std::string_view name)
+ {
+   if (name == "VICallback")
+@@ -168,18 +379,104 @@ inline void RecordCompileUs(std::uint32_t elapsed_us)
+     s_current_slice.compile_us = SaturatingAdd(s_current_slice.compile_us, elapsed_us);
+ }
+ 
+-inline void RecordThrottleWaitUs(std::uint32_t elapsed_us)
++inline bool BeginDvdCompletion()
+ {
+-  if (s_current_slice.active)
++  if (!IsSliceActive())
++  {
++    s_current_dvd_completion.active = false;
++    return false;
++  }
++  s_current_dvd_completion = {};
++  s_current_dvd_completion.active = true;
++  return true;
++}
++
++inline void RecordDvdMapUs(std::uint32_t elapsed_us)
++{
++  if (s_current_dvd_completion.active)
+   {
+-    s_current_slice.throttle_wait_us = SaturatingAdd(s_current_slice.throttle_wait_us, elapsed_us);
++    s_current_dvd_completion.map_us =
++        SaturatingAdd(s_current_dvd_completion.map_us, elapsed_us);
+   }
+ }
+ 
++inline void RecordDvdQueuePopUs(std::uint32_t elapsed_us)
++{
++  if (!s_current_dvd_completion.active)
++    return;
++  s_current_dvd_completion.queue_pop_us =
++      SaturatingAdd(s_current_dvd_completion.queue_pop_us, elapsed_us);
++  s_current_dvd_completion.queue_loops =
++      SaturatingAdd(s_current_dvd_completion.queue_loops, 1);
++}
++
++inline void RecordDvdRamCopyUs(std::uint32_t elapsed_us, std::uint32_t bytes)
++{
++  if (!s_current_dvd_completion.active)
++    return;
++  s_current_dvd_completion.ram_copy_us =
++      SaturatingAdd(s_current_dvd_completion.ram_copy_us, elapsed_us);
++  s_current_dvd_completion.bytes = SaturatingAdd(s_current_dvd_completion.bytes, bytes);
++}
++
++inline void RecordDvdCommandFinishUs(std::uint32_t elapsed_us)
++{
++  if (s_current_dvd_completion.active)
++  {
++    s_current_dvd_completion.command_finish_us =
++        SaturatingAdd(s_current_dvd_completion.command_finish_us, elapsed_us);
++  }
++}
++
++inline void RecordThrottleWaitUs(std::uint32_t elapsed_us, std::uint32_t requested_us,
++                                 std::int32_t overshoot_us)
++{
++  if (!s_current_slice.active)
++    return;
++
++  s_current_slice.throttle_wait_us =
++      SaturatingAdd(s_current_slice.throttle_wait_us, elapsed_us);
++
++  const std::size_t site_index = static_cast<std::size_t>(s_current_throttle_site);
++  if (s_current_throttle_site == ThrottleSite::None ||
++      site_index >= static_cast<std::size_t>(ThrottleSite::Count))
++  {
++    return;
++  }
++
++  CurrentThrottleSite& current = s_current_slice.throttle_sites[site_index];
++  current.total_actual_us = SaturatingAdd(current.total_actual_us, elapsed_us);
++  if (elapsed_us > current.max_actual_us)
++  {
++    current.max_actual_us = elapsed_us;
++    current.requested_us = requested_us;
++    current.overshoot_us = overshoot_us;
++  }
++
++  ThrottleProfileStorage& profile = s_throttle_profiles[site_index];
++  profile.sequence.fetch_add(1, std::memory_order_acq_rel);
++  profile.count.fetch_add(1, std::memory_order_relaxed);
++  if (elapsed_us > 5000)
++    profile.slow_count.fetch_add(1, std::memory_order_relaxed);
++  profile.total_actual_us.fetch_add(elapsed_us, std::memory_order_relaxed);
++  if (elapsed_us > profile.max_actual_us.load(std::memory_order_relaxed))
++  {
++    profile.max_actual_us.store(elapsed_us, std::memory_order_relaxed);
++    profile.requested_us.store(requested_us, std::memory_order_relaxed);
++    profile.overshoot_us.store(overshoot_us, std::memory_order_relaxed);
++  }
++  profile.sequence.fetch_add(1, std::memory_order_release);
++}
++
+ inline void RecordDvdWaitUs(std::uint32_t elapsed_us)
+ {
+   if (s_current_slice.active)
+     s_current_slice.dvd_wait_us = SaturatingAdd(s_current_slice.dvd_wait_us, elapsed_us);
++  if (s_current_dvd_completion.active)
++  {
++    s_current_dvd_completion.queue_wait_us =
++        SaturatingAdd(s_current_dvd_completion.queue_wait_us, elapsed_us);
++  }
+ }
+ 
+ inline std::uint32_t CurrentAttributedWaitUs()
+@@ -187,6 +484,65 @@ inline std::uint32_t CurrentAttributedWaitUs()
+   return SaturatingAdd(s_current_slice.throttle_wait_us, s_current_slice.dvd_wait_us);
+ }
+ 
++inline void FinishDvdCompletion(std::uint32_t total_us)
++{
++  if (!s_current_dvd_completion.active)
++    return;
++  s_current_dvd_completion.active = false;
++
++  std::uint32_t attributed_us = 0;
++  attributed_us = SaturatingAdd(attributed_us, s_current_dvd_completion.map_us);
++  attributed_us = SaturatingAdd(attributed_us, s_current_dvd_completion.queue_wait_us);
++  attributed_us = SaturatingAdd(attributed_us, s_current_dvd_completion.queue_pop_us);
++  attributed_us = SaturatingAdd(attributed_us, s_current_dvd_completion.ram_copy_us);
++  attributed_us = SaturatingAdd(attributed_us, s_current_dvd_completion.command_finish_us);
++  WorstDvdCompletion completion;
++  completion.total_us = total_us;
++  completion.map_us = std::min(s_current_dvd_completion.map_us, total_us);
++  completion.queue_wait_us = std::min(s_current_dvd_completion.queue_wait_us, total_us);
++  completion.queue_pop_us = std::min(s_current_dvd_completion.queue_pop_us, total_us);
++  completion.ram_copy_us = std::min(s_current_dvd_completion.ram_copy_us, total_us);
++  completion.command_finish_us =
++      std::min(s_current_dvd_completion.command_finish_us, total_us);
++  completion.other_us = total_us > attributed_us ? total_us - attributed_us : 0;
++  completion.bytes = s_current_dvd_completion.bytes;
++  completion.queue_loops = s_current_dvd_completion.queue_loops;
++
++  // Aggregate only completions that occurred inside this exact slice. This
++  // coherent tuple is copied into WorstSlice if the slice wins; the separately
++  // retained process-wide DVD maximum remains supplemental context.
++  WorstDvdCompletion& slice_dvd = s_current_slice.dvd_completion;
++  slice_dvd.total_us = SaturatingAdd(slice_dvd.total_us, completion.total_us);
++  slice_dvd.map_us = SaturatingAdd(slice_dvd.map_us, completion.map_us);
++  slice_dvd.queue_wait_us = SaturatingAdd(slice_dvd.queue_wait_us, completion.queue_wait_us);
++  slice_dvd.queue_pop_us = SaturatingAdd(slice_dvd.queue_pop_us, completion.queue_pop_us);
++  slice_dvd.ram_copy_us = SaturatingAdd(slice_dvd.ram_copy_us, completion.ram_copy_us);
++  slice_dvd.command_finish_us =
++      SaturatingAdd(slice_dvd.command_finish_us, completion.command_finish_us);
++  slice_dvd.other_us = SaturatingAdd(slice_dvd.other_us, completion.other_us);
++  slice_dvd.bytes = SaturatingAdd(slice_dvd.bytes, completion.bytes);
++  slice_dvd.queue_loops = SaturatingAdd(slice_dvd.queue_loops, completion.queue_loops);
++
++  if (completion.total_us <= s_worst_dvd_completion.total_us.load(std::memory_order_relaxed))
++    return;
++
++  s_worst_dvd_completion.sequence.fetch_add(1, std::memory_order_acq_rel);
++  s_worst_dvd_completion.total_us.store(completion.total_us, std::memory_order_relaxed);
++  s_worst_dvd_completion.map_us.store(completion.map_us, std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_wait_us.store(completion.queue_wait_us,
++                                              std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_pop_us.store(completion.queue_pop_us,
++                                             std::memory_order_relaxed);
++  s_worst_dvd_completion.ram_copy_us.store(completion.ram_copy_us,
++                                            std::memory_order_relaxed);
++  s_worst_dvd_completion.command_finish_us.store(completion.command_finish_us,
++                                                  std::memory_order_relaxed);
++  s_worst_dvd_completion.other_us.store(completion.other_us, std::memory_order_relaxed);
++  s_worst_dvd_completion.bytes.store(completion.bytes, std::memory_order_relaxed);
++  s_worst_dvd_completion.queue_loops.store(completion.queue_loops, std::memory_order_relaxed);
++  s_worst_dvd_completion.sequence.fetch_add(1, std::memory_order_release);
++}
++
+ inline void FinishSlice(std::uint32_t total_us, std::uint32_t advance_us, std::uint32_t execute_us)
+ {
+   if (!s_current_slice.active)
+@@ -196,6 +552,19 @@ inline void FinishSlice(std::uint32_t total_us, std::uint32_t advance_us, std::u
+   if (total_us <= s_worst_slice.total_us.load(std::memory_order_relaxed))
+     return;
+ 
++  std::size_t dominant_throttle_index = static_cast<std::size_t>(ThrottleSite::None);
++  for (std::size_t index = 1; index < static_cast<std::size_t>(ThrottleSite::Count); ++index)
++  {
++    if (s_current_slice.throttle_sites[index].total_actual_us >
++        s_current_slice.throttle_sites[dominant_throttle_index].total_actual_us)
++    {
++      dominant_throttle_index = index;
++    }
++  }
++  const CurrentThrottleSite& dominant_throttle =
++      s_current_slice.throttle_sites[dominant_throttle_index];
++  const WorstDvdCompletion& dvd = s_current_slice.dvd_completion;
++
+   s_worst_slice.sequence.fetch_add(1, std::memory_order_acq_rel);
+   s_worst_slice.total_us.store(total_us, std::memory_order_relaxed);
+   s_worst_slice.advance_us.store(std::min(advance_us, total_us), std::memory_order_relaxed);
+@@ -210,6 +579,26 @@ inline void FinishSlice(std::uint32_t total_us, std::uint32_t advance_us, std::u
+                                     std::memory_order_relaxed);
+   s_worst_slice.event.store(static_cast<std::uint32_t>(s_current_slice.longest_event),
+                             std::memory_order_relaxed);
++  s_worst_slice.throttle_site.store(static_cast<std::uint32_t>(dominant_throttle_index),
++                                    std::memory_order_relaxed);
++  s_worst_slice.throttle_site_us.store(dominant_throttle.total_actual_us,
++                                       std::memory_order_relaxed);
++  s_worst_slice.throttle_max_us.store(dominant_throttle.max_actual_us,
++                                      std::memory_order_relaxed);
++  s_worst_slice.throttle_requested_us.store(dominant_throttle.requested_us,
++                                            std::memory_order_relaxed);
++  s_worst_slice.throttle_overshoot_us.store(dominant_throttle.overshoot_us,
++                                            std::memory_order_relaxed);
++  s_worst_slice.dvd_total_us.store(dvd.total_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_map_us.store(dvd.map_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_wait_us.store(dvd.queue_wait_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_pop_us.store(dvd.queue_pop_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_ram_copy_us.store(dvd.ram_copy_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_command_finish_us.store(dvd.command_finish_us,
++                                             std::memory_order_relaxed);
++  s_worst_slice.dvd_other_us.store(dvd.other_us, std::memory_order_relaxed);
++  s_worst_slice.dvd_bytes.store(dvd.bytes, std::memory_order_relaxed);
++  s_worst_slice.dvd_queue_loops.store(dvd.queue_loops, std::memory_order_relaxed);
+   s_worst_slice.sequence.fetch_add(1, std::memory_order_release);
+ }
+ 
+@@ -231,10 +620,88 @@ inline WorstSlice CaptureWorstSlice()
+     snapshot.dvd_wait_us = s_worst_slice.dvd_wait_us.load(std::memory_order_relaxed);
+     snapshot.video_work_us = s_worst_slice.video_work_us.load(std::memory_order_relaxed);
+     snapshot.event = static_cast<EventKind>(s_worst_slice.event.load(std::memory_order_relaxed));
++    snapshot.throttle_site =
++        static_cast<ThrottleSite>(s_worst_slice.throttle_site.load(std::memory_order_relaxed));
++    snapshot.throttle_site_us = s_worst_slice.throttle_site_us.load(std::memory_order_relaxed);
++    snapshot.throttle_max_us = s_worst_slice.throttle_max_us.load(std::memory_order_relaxed);
++    snapshot.throttle_requested_us =
++        s_worst_slice.throttle_requested_us.load(std::memory_order_relaxed);
++    snapshot.throttle_overshoot_us =
++        s_worst_slice.throttle_overshoot_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.total_us =
++        s_worst_slice.dvd_total_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.map_us = s_worst_slice.dvd_map_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.queue_wait_us =
++        s_worst_slice.dvd_queue_wait_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.queue_pop_us =
++        s_worst_slice.dvd_queue_pop_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.ram_copy_us =
++        s_worst_slice.dvd_ram_copy_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.command_finish_us =
++        s_worst_slice.dvd_command_finish_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.other_us =
++        s_worst_slice.dvd_other_us.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.bytes = s_worst_slice.dvd_bytes.load(std::memory_order_relaxed);
++    snapshot.dvd_completion.queue_loops =
++        s_worst_slice.dvd_queue_loops.load(std::memory_order_relaxed);
+     after = s_worst_slice.sequence.load(std::memory_order_acquire);
+   } while (before != after || (after & 1U) != 0);
+   return snapshot;
+ }
++
++inline WorstDvdCompletion CaptureWorstDvdCompletion()
++{
++  WorstDvdCompletion snapshot;
++  std::uint32_t before = 0;
++  std::uint32_t after = 0;
++  do
++  {
++    before = s_worst_dvd_completion.sequence.load(std::memory_order_acquire);
++    if ((before & 1U) != 0)
++      continue;
++    snapshot.total_us = s_worst_dvd_completion.total_us.load(std::memory_order_relaxed);
++    snapshot.map_us = s_worst_dvd_completion.map_us.load(std::memory_order_relaxed);
++    snapshot.queue_wait_us =
++        s_worst_dvd_completion.queue_wait_us.load(std::memory_order_relaxed);
++    snapshot.queue_pop_us =
++        s_worst_dvd_completion.queue_pop_us.load(std::memory_order_relaxed);
++    snapshot.ram_copy_us =
++        s_worst_dvd_completion.ram_copy_us.load(std::memory_order_relaxed);
++    snapshot.command_finish_us =
++        s_worst_dvd_completion.command_finish_us.load(std::memory_order_relaxed);
++    snapshot.other_us = s_worst_dvd_completion.other_us.load(std::memory_order_relaxed);
++    snapshot.bytes = s_worst_dvd_completion.bytes.load(std::memory_order_relaxed);
++    snapshot.queue_loops = s_worst_dvd_completion.queue_loops.load(std::memory_order_relaxed);
++    after = s_worst_dvd_completion.sequence.load(std::memory_order_acquire);
++  } while (before != after || (after & 1U) != 0);
++  return snapshot;
++}
++
++inline ThrottleProfile CaptureThrottleProfile(ThrottleSite site)
++{
++  ThrottleProfile snapshot;
++  const std::size_t site_index = static_cast<std::size_t>(site);
++  if (site == ThrottleSite::None || site_index >= static_cast<std::size_t>(ThrottleSite::Count))
++    return snapshot;
++
++  const ThrottleProfileStorage& profile = s_throttle_profiles[site_index];
++  std::uint32_t before = 0;
++  std::uint32_t after = 0;
++  do
++  {
++    before = profile.sequence.load(std::memory_order_acquire);
++    if ((before & 1U) != 0)
++      continue;
++    snapshot.count = profile.count.load(std::memory_order_relaxed);
++    snapshot.slow_count = profile.slow_count.load(std::memory_order_relaxed);
++    snapshot.total_actual_us = profile.total_actual_us.load(std::memory_order_relaxed);
++    snapshot.max_actual_us = profile.max_actual_us.load(std::memory_order_relaxed);
++    snapshot.requested_us = profile.requested_us.load(std::memory_order_relaxed);
++    snapshot.overshoot_us = profile.overshoot_us.load(std::memory_order_relaxed);
++    after = profile.sequence.load(std::memory_order_acquire);
++  } while (before != after || (after & 1U) != 0);
++  return snapshot;
++}
+ }  // namespace DolphinWeb::WasmTimingProfile
+ 
+ #endif  // __EMSCRIPTEN__

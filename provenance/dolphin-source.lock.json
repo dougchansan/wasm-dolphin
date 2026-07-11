@@ -25,149 +25,189 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "80a1c15ab588e440207aa15cb7d79029d121b77797de11505e6c84f427f89f63",
+  "patchSeriesSha256": "ba2a234ff399ca1c0c83528f5ed52fd3390503d7a90b160eff935fc3df75ed93",
   "patches": [
     {
       "order": 1,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0001-browser-platform-core.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0001-browser-platform-core.patch",
       "size": 84417,
       "sha256": "90c09843ced0fc6f68808f2e97b3b654785dfd74a0addd93cf974426e06c89ac"
     },
     {
       "order": 2,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0002-browser-audio.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0002-browser-audio.patch",
       "size": 7222,
       "sha256": "e134e7397f98e8e377be3573b1ad8e5acfeafd062bd3ed6fffe0d5f6f7493889"
     },
     {
       "order": 3,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0003-ppc-wasm-jit.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0003-ppc-wasm-jit.patch",
       "size": 452603,
       "sha256": "efc071bfb3a6930145576738cc3672858f8f520944864ef1d46514324aac5795"
     },
     {
       "order": 4,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0004-software-ogl-video.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0004-software-ogl-video.patch",
       "size": 24508,
       "sha256": "44b2b7173c293aadac14822566618ef30a82cfc0325c8ffa76cd3a14570f5e18"
     },
     {
       "order": 5,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0005-video-common-shaders.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0005-video-common-shaders.patch",
       "size": 59737,
       "sha256": "bee75cfb1bdf3cd10cf4af3ec1eeafeaaad3fc11646cc4da4094a24df0c52fb0"
     },
     {
       "order": 6,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0006-webgpu-backend.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0006-webgpu-backend.patch",
       "size": 160617,
       "sha256": "552af3bdd107d5f69fee6696d722e45a9f0af6f144ce017e90b167b5c5ad352f"
     },
     {
       "order": 7,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0007-hermetic-build-inputs.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0007-hermetic-build-inputs.patch",
       "size": 4060,
       "sha256": "268cd441f291d4ac26cdfdbc1820f69da7cd1c7a75eb902ed30536b47f4f42db"
     },
     {
       "order": 8,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0008-xfb-safe-fastpaths.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0008-xfb-safe-fastpaths.patch",
       "size": 3173,
       "sha256": "6d46035701b59d54bdd28ad1d0343b6ba4a6f45a72bcf6ebf88ffa9c2c9e7557"
     },
     {
       "order": 9,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0009-software-raster-phase-profile.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0009-software-raster-phase-profile.patch",
       "size": 7037,
       "sha256": "6aee286ef0a83cd8de2eb3b7370ebba43022bef12b50537d58a953dd5ec80c91"
     },
     {
       "order": 10,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0010-jit-emit-diagnostics.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0010-jit-emit-diagnostics.patch",
       "size": 3940,
       "sha256": "455064f141d570ad7284e04c0b97b08626f0052e5f02d987e51f526a0e035ca9"
     },
     {
       "order": 11,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0011-webgpu-upload-watermark.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0011-webgpu-upload-watermark.patch",
       "size": 11430,
       "sha256": "e95385943e083d610f23a2e207d372fde87cee8dc71653386175bb01b73e6a91"
     },
     {
       "order": 12,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0012-software-raster-case-profile.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0012-software-raster-case-profile.patch",
       "size": 6500,
       "sha256": "3459c603b79f83b137067501fd4f448da73cf968a7ef0589857b1597ebd54c7c"
     },
     {
       "order": 13,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0013-webgpu-pass-state-cache.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0013-webgpu-pass-state-cache.patch",
       "size": 22358,
       "sha256": "bc815552cdb3c4ce2a5731b8fccc6db6600fe4507210789495665fb4ad3cc675"
     },
     {
       "order": 14,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0014-correlated-core-timing-profile.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0014-correlated-core-timing-profile.patch",
       "size": 26209,
       "sha256": "350dbbf0a2b1d4301c023de38b39cc1361dc774c96bf9075603f5dd617f9824e"
     },
     {
       "order": 15,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0015-webgpu-pass-transactions.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0015-webgpu-pass-transactions.patch",
       "size": 35959,
       "sha256": "b780df30f8621b04ae76836a3ffc83f98e956ae8b04725ede02a19c529350e4f"
     },
     {
       "order": 16,
       "cwd": ".",
-      "path": "patches/dolphin-wasm/snapshot/0016-software-texture-hot-case.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0016-software-texture-hot-case.patch",
       "size": 7930,
       "sha256": "6efa2d800ff691fb56dfd39688e9c3a805681346dc5cddebee35367e8496a0a4"
     },
     {
       "order": 17,
-      "cwd": "Externals/SFML/SFML",
-      "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
+      "cwd": ".",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0017-software-texture-i4-hot-case.patch",
+      "size": 7725,
+      "sha256": "49bd1b820d15ec1352244f950890d7559a8e49b951906127bedd746a4981ee0d"
+    },
+    {
+      "order": 18,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0018-core-timing-phase-attribution.patch",
+      "size": 37027,
+      "sha256": "daaf3ff5c976a85338532d5bd1fd5fd61c093322c7493f83f5c75f0c8c12916e"
+    },
+    {
+      "order": 19,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0019-webgpu-ubo-slice-cache.patch",
+      "size": 21297,
+      "sha256": "01290f8d66b4b6d4a865dd303a2f5d3a1e1735aff82a778247b4d54f84dfffa6"
+    },
+    {
+      "order": 20,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0020-software-tev-exact-tuple-profile.patch",
+      "size": 3501,
+      "sha256": "879babd5fc0b98fe5b1231208d6efaef72380f2341546ae2f424207f54858fad"
+    },
+    {
+      "order": 21,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0021-software-tev-hot-case.patch",
+      "size": 19818,
+      "sha256": "1bf0a26b2ebbce65c1ef1ddebca90b32a06e593eccf8cdfa7323bcb5299d121a"
+    },
+    {
+      "order": 22,
+      "cwd": "Externals/SFML/SFML",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
       "size": 406,
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 18,
+      "order": 23,
       "cwd": "Externals/xxhash/xxHash",
-      "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
       "size": 708,
       "sha256": "eadc1ec28a44506fed436e31982d78e4d0d2880a1d1d29778f2747d45a7bac8a"
     }

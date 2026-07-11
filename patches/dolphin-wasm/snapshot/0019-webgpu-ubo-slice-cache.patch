@@ -1,0 +1,421 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index 9f9cd3e387..16f76439c7 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 4217c0f30b..ced9eeb3d3 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -53,6 +53,14 @@ std::atomic<u64> s_pipeline_records_suppressed{0};
+ std::atomic<u64> s_bind_group_records_suppressed[3]{};
+ std::atomic<u64> s_vertex_buffer_records_suppressed{0};
+ std::atomic<u64> s_index_buffer_records_suppressed{0};
++std::atomic<bool> s_ubo_cache_enabled{false};
++std::atomic<bool> s_ubo_cache_metrics_enabled{false};
++std::atomic<u64> s_ubo_cache_epoch{0};
++std::atomic<u64> s_ubo_cache_lookups[3]{};
++std::atomic<u64> s_ubo_cache_hits[3]{};
++std::atomic<u64> s_ubo_cache_expired[3]{};
++std::atomic<u64> s_ubo_upload_calls_suppressed[3]{};
++std::atomic<u64> s_ubo_upload_bytes_suppressed[3]{};
+ }
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
+@@ -63,6 +71,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
+   s_state_cache_enabled.store(enabled != 0, std::memory_order_relaxed);
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUboCacheEnabled(int mode)
++{
++  s_ubo_cache_enabled.store((mode & 1) != 0, std::memory_order_relaxed);
++  s_ubo_cache_metrics_enabled.store((mode & 2) != 0, std::memory_order_relaxed);
++  // Increment even when the boolean is unchanged. The JS state-load path
++  // deliberately re-applies the setting to invalidate producer-local slices.
++  s_ubo_cache_epoch.fetch_add(1, std::memory_order_release);
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+ {
+   static std::string stats;
+@@ -77,7 +94,25 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " wgdrop:" << GetWebGpuCommandDroppedRecordCount()
+       << " wgbabort:" << GetCommandStream().GetBatchAbortCount()
+       << " wgboversize:" << GetCommandStream().GetBatchOversizeCount()
+-      << " wguploadto:" << GetCommandStream().GetUploadTimeoutCount();
++      << " wguploadto:" << GetCommandStream().GetUploadTimeoutCount()
++      << " wgubo:" << (s_ubo_cache_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " wgubometrics:"
++      << (s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " ulook:" << s_ubo_cache_lookups[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_lookups[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_lookups[2].load(std::memory_order_relaxed)
++      << " uhit:" << s_ubo_cache_hits[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_hits[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_hits[2].load(std::memory_order_relaxed)
++      << " uexp:" << s_ubo_cache_expired[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_expired[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_cache_expired[2].load(std::memory_order_relaxed)
++      << " usupcall:" << s_ubo_upload_calls_suppressed[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_upload_calls_suppressed[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_upload_calls_suppressed[2].load(std::memory_order_relaxed)
++      << " usupbyte:" << s_ubo_upload_bytes_suppressed[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_upload_bytes_suppressed[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_upload_bytes_suppressed[2].load(std::memory_order_relaxed);
+   stats = out.str();
+   return stats.c_str();
+ }
+@@ -891,6 +926,8 @@ void WebGPUGfx::AbortRecordedPass()
+ {
+   m_cmd_stream.AbortPass();
+   m_pass_open = false;
++  if (m_ubo_cache_active)
++    InvalidateUboSlices();
+   ResetRecordedPassState();
+ }
+ 
+@@ -907,6 +944,8 @@ bool WebGPUGfx::EndPassIfOpen()
+     return true;
+   }
+   m_cmd_stream.AbortPass();
++  if (m_ubo_cache_active)
++    InvalidateUboSlices();
+   return false;
+ }
+ 
+@@ -952,6 +991,7 @@ static void PutBgU32(std::vector<u8>& b, u32 v)
+ bool WebGPUGfx::PrepareDrawResources()
+ {
+   auto& system = Core::System::GetInstance();
++  const bool ubo_cache_enabled = RefreshUboCacheState();
+ 
+   // §16 per-draw uniform ring (created once). One big buffer; each
+   // dirty GX constant set bump-allocates a fresh 256-aligned slice so
+@@ -1042,9 +1082,23 @@ bool WebGPUGfx::PrepareDrawResources()
+       !m_vs_shadow_valid ||
+       std::memcmp(m_vs_shadow.data(), &vsm.constants,
+                   sizeof(vsm.constants)) != 0;
++  const bool vs_expired = ubo_cache_enabled && m_vs_off != kUboOffNone &&
++                          !IsUboSliceLive(m_vs_publication_serial);
++  if (vs_expired)
++  {
++    ExpireUboClass(UboClass::Vertex);
++    m_vs_off = kUboOffNone;
++    m_vs_publication_serial = 0;
++  }
+   if (vsm.dirty || m_vs_off == kUboOffNone || vs_changed)
+   {
+-    m_vs_off = AllocUboSlice(&vsm.constants, sizeof(vsm.constants));
++    m_vs_off = ubo_cache_enabled ?
++                   AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
++                   AllocUboSlice(&vsm.constants, sizeof(vsm.constants));
++    if (ubo_cache_enabled && m_vs_off == kUboOffNone)
++      return false;
++    m_vs_publication_serial =
++        m_vs_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     vsm.dirty = false;
+     std::memcpy(m_vs_shadow.data(), &vsm.constants, sizeof(vsm.constants));
+     m_vs_shadow_valid = true;
+@@ -1064,9 +1118,23 @@ bool WebGPUGfx::PrepareDrawResources()
+       !m_ps_shadow_valid ||
+       std::memcmp(m_ps_shadow.data(), &psm.constants,
+                   sizeof(psm.constants)) != 0;
++  const bool ps_expired = ubo_cache_enabled && m_ps_off != kUboOffNone &&
++                          !IsUboSliceLive(m_ps_publication_serial);
++  if (ps_expired)
++  {
++    ExpireUboClass(UboClass::Pixel);
++    m_ps_off = kUboOffNone;
++    m_ps_publication_serial = 0;
++  }
+   if (psm.dirty || m_ps_off == kUboOffNone || ps_changed)
+   {
+-    m_ps_off = AllocUboSlice(&psm.constants, sizeof(psm.constants));
++    m_ps_off = ubo_cache_enabled ?
++                   AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
++                   AllocUboSlice(&psm.constants, sizeof(psm.constants));
++    if (ubo_cache_enabled && m_ps_off == kUboOffNone)
++      return false;
++    m_ps_publication_serial =
++        m_ps_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     psm.dirty = false;
+     std::memcpy(m_ps_shadow.data(), &psm.constants, sizeof(psm.constants));
+     m_ps_shadow_valid = true;
+@@ -1112,9 +1180,23 @@ bool WebGPUGfx::PrepareDrawResources()
+       !m_gs_shadow_valid ||
+       std::memcmp(m_gs_shadow.data(), &gsm.constants,
+                   sizeof(gsm.constants)) != 0;
++  const bool gs_expired = ubo_cache_enabled && m_gs_off != kUboOffNone &&
++                          !IsUboSliceLive(m_gs_publication_serial);
++  if (gs_expired)
++  {
++    ExpireUboClass(UboClass::Geometry);
++    m_gs_off = kUboOffNone;
++    m_gs_publication_serial = 0;
++  }
+   if (gsm.dirty || m_gs_off == kUboOffNone || gs_changed)
+   {
+-    m_gs_off = AllocUboSlice(&gsm.constants, sizeof(gsm.constants));
++    m_gs_off = ubo_cache_enabled ?
++                   AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
++                   AllocUboSlice(&gsm.constants, sizeof(gsm.constants));
++    if (ubo_cache_enabled && m_gs_off == kUboOffNone)
++      return false;
++    m_gs_publication_serial =
++        m_gs_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     gsm.dirty = false;
+     std::memcpy(m_gs_shadow.data(), &gsm.constants, sizeof(gsm.constants));
+     m_gs_shadow_valid = true;
+@@ -1326,10 +1408,144 @@ void WebGPUGfx::SetSamplerState(u32 /* index */, const SamplerState& /* state */
+   // post-cutover refinement.
+ }
+ 
++bool WebGPUGfx::RefreshUboCacheState()
++{
++  const bool enabled = s_ubo_cache_enabled.load(std::memory_order_relaxed);
++  if (!enabled)
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
++    m_ubo_cache_active = false;
++    return false;
++  }
++
++  const u64 epoch = s_ubo_cache_epoch.load(std::memory_order_acquire);
++  if (!m_ubo_cache_active || m_ubo_cache_epoch != epoch)
++  {
++    InvalidateUboSlices();
++    m_ubo_cache_epoch = epoch;
++    m_ubo_cache_active = true;
++  }
++  return true;
++}
++
++bool WebGPUGfx::IsUboSliceLive(u64 publication_serial) const
++{
++  if (publication_serial == 0 || publication_serial > m_ubo_publication_serial)
++    return false;
++  const u64 age = m_ubo_publication_serial - publication_serial;
++  return age < static_cast<u64>(kUboRingSliceCount - kUboReuseSafetySlots);
++}
++
++void WebGPUGfx::ResetUboSliceCache()
++{
++  for (auto& cache : m_ubo_slice_cache)
++  {
++    for (UboSliceCacheEntry& entry : cache)
++      entry = {};
++  }
++  m_ubo_cache_mru_serial = 0;
++}
++
++void WebGPUGfx::ExpireUboClass(UboClass ubo_class)
++{
++  const u32 class_index = static_cast<u32>(ubo_class);
++  for (UboSliceCacheEntry& entry : m_ubo_slice_cache[class_index])
++    entry = {};
++  if (s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++    s_ubo_cache_expired[class_index].fetch_add(1, std::memory_order_relaxed);
++}
++
++void WebGPUGfx::InvalidateUboSlices()
++{
++  ResetUboSliceCache();
++  m_ps_off = kUboOffNone;
++  m_vs_off = kUboOffNone;
++  m_gs_off = kUboOffNone;
++  m_util_off = kUboOffNone;
++  m_ps_publication_serial = 0;
++  m_vs_publication_serial = 0;
++  m_gs_publication_serial = 0;
++  m_last_ubo_slice_serial = 0;
++  m_ps_shadow_valid = false;
++  m_vs_shadow_valid = false;
++  m_gs_shadow_valid = false;
++  m_util_uniform_mode = false;
++}
++
++void WebGPUGfx::StoreUboSlice(UboClass ubo_class, const void* data, u32 size, u32 offset,
++                              u64 publication_serial)
++{
++  auto& cache = m_ubo_slice_cache[static_cast<u32>(ubo_class)];
++  UboSliceCacheEntry* replacement = nullptr;
++  for (UboSliceCacheEntry& entry : cache)
++  {
++    if (!entry.valid)
++    {
++      replacement = &entry;
++      break;
++    }
++    if (!replacement || entry.mru_serial < replacement->mru_serial)
++      replacement = &entry;
++  }
++  if (!replacement)
++    return;
++
++  std::memcpy(replacement->bytes.data(), data, size);
++  replacement->size = size;
++  replacement->offset = offset;
++  replacement->publication_serial = publication_serial;
++  replacement->mru_serial = ++m_ubo_cache_mru_serial;
++  replacement->valid = true;
++}
++
++u32 WebGPUGfx::AcquireUboSlice(UboClass ubo_class, const void* data, u32 size)
++{
++  const u32 class_index = static_cast<u32>(ubo_class);
++  const bool record_metrics = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed);
++  if (record_metrics)
++    s_ubo_cache_lookups[class_index].fetch_add(1, std::memory_order_relaxed);
++  for (UboSliceCacheEntry& entry : m_ubo_slice_cache[class_index])
++  {
++    if (!entry.valid)
++      continue;
++    if (!IsUboSliceLive(entry.publication_serial))
++    {
++      entry = {};
++      if (record_metrics)
++        s_ubo_cache_expired[class_index].fetch_add(1, std::memory_order_relaxed);
++      continue;
++    }
++    // Size and a full byte comparison are the correctness predicate. A hash
++    // may be added only as a shortlist; it must never replace this memcmp.
++    if (entry.size != size || std::memcmp(entry.bytes.data(), data, size) != 0)
++      continue;
++
++    entry.mru_serial = ++m_ubo_cache_mru_serial;
++    m_last_ubo_slice_serial = entry.publication_serial;
++    if (record_metrics)
++    {
++      s_ubo_cache_hits[class_index].fetch_add(1, std::memory_order_relaxed);
++      s_ubo_upload_calls_suppressed[class_index].fetch_add(1, std::memory_order_relaxed);
++      s_ubo_upload_bytes_suppressed[class_index].fetch_add(size, std::memory_order_relaxed);
++    }
++    return entry.offset;
++  }
++
++  const u32 offset = AllocUboSlice(data, size);
++  if (offset != kUboOffNone)
++    StoreUboSlice(ubo_class, data, size, offset, m_last_ubo_slice_serial);
++  return offset;
++}
++
+ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size)
+ {
+   if (m_ubo_ring == 0 || size == 0 || size > kUboSliceStride)
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
+     return kUboOffNone;
++  }
+   // Bump-allocate a fixed-stride slice (stride is 256-aligned so the
+   // offset is a valid WebGPU dynamic offset). Wrap at ring end; the
+   // ring spans many frames of distinct constant sets so the consumer
+@@ -1339,10 +1555,19 @@ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size)
+   const u32 off = m_ubo_ring_off;
+   const u32 src = m_cmd_stream.UploadAlloc(data, size, 16);
+   if (src == 0)
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
+     return kUboOffNone;
++  }
+   if (!m_cmd_stream.PushUploadBuffer(m_ubo_ring, off, src, size))
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
+     return kUboOffNone;
++  }
+   m_ubo_ring_off = off + kUboSliceStride;
++  m_last_ubo_slice_serial = ++m_ubo_publication_serial;
+   return off;
+ }
+ 
+@@ -1350,6 +1575,11 @@ void WebGPUGfx::UploadUtilityUniforms(const void* data, u32 size)
+ {
+   if (data == nullptr || size == 0)
+     return;
++  // A state-load/toggle epoch may have changed since the last GX draw. Apply
++  // it before publishing this utility slice; refreshing later from
++  // PrepareDrawResources would otherwise invalidate the just-written offset
++  // and clear m_util_uniform_mode before the utility draw can bind it.
++  RefreshUboCacheState();
+   const u32 off = AllocUboSlice(data, size);
+   if (off == kUboOffNone)
+     return;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index fee5324d6f..0329a08e8a 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -180,7 +180,22 @@ private:
+   // WebGPU dynamic offset). One shared buffer overwritten per draw made
+   // every draw read only the last upload's constants (the §16 root
+   // cause); distinct slices + dynamic offsets give each draw its own.
++  enum class UboClass : u32
++  {
++    Vertex = 0,
++    Pixel = 1,
++    Geometry = 2,
++    Count = 3
++  };
+   u32 AllocUboSlice(const void* data, u32 size);
++  u32 AcquireUboSlice(UboClass ubo_class, const void* data, u32 size);
++  bool RefreshUboCacheState();
++  bool IsUboSliceLive(u64 publication_serial) const;
++  void ResetUboSliceCache();
++  void ExpireUboClass(UboClass ubo_class);
++  void InvalidateUboSlices();
++  void StoreUboSlice(UboClass ubo_class, const void* data, u32 size, u32 offset,
++                     u64 publication_serial);
+ 
+   bool m_pass_open = false;
+   u32 m_fb_color_id = 0;  // 0 = backbuffer
+@@ -221,13 +236,40 @@ private:
+   // of distinct constant sets (consumer is ≤2 frames behind).
+   static constexpr u32 kUboSliceStride = 8192;
+   static constexpr u32 kUboRingSize = 32u * 1024u * 1024u;
++  static constexpr u32 kUboRingSliceCount = kUboRingSize / kUboSliceStride;
++  // A lookup may be followed by allocations for the other two constant
++  // classes before the draw. Expire four slots early so a later allocation
++  // in the same PrepareDrawResources call cannot wrap onto a reused slice.
++  static constexpr u32 kUboReuseSafetySlots = 4;
+   static constexpr u32 kUboOffNone = 0xFFFFFFFFu;  // force first alloc
++  static_assert(kUboRingSliceCount > kUboReuseSafetySlots);
++
++  struct UboSliceCacheEntry
++  {
++    std::array<u8, kUboSliceStride> bytes{};
++    u32 size = 0;
++    u32 offset = kUboOffNone;
++    u64 publication_serial = 0;
++    u64 mru_serial = 0;
++    bool valid = false;
++  };
++
+   u32 m_ubo_ring = 0;
+   u32 m_ubo_ring_off = 0;
++  u64 m_ubo_publication_serial = 0;
++  u64 m_last_ubo_slice_serial = 0;
++  u64 m_ubo_cache_epoch = 0;
++  u64 m_ubo_cache_mru_serial = 0;
++  bool m_ubo_cache_active = false;
++  std::array<std::array<UboSliceCacheEntry, 2>, static_cast<u32>(UboClass::Count)>
++      m_ubo_slice_cache{};
+   u32 m_ps_off = kUboOffNone;
+   u32 m_vs_off = kUboOffNone;
+   u32 m_gs_off = kUboOffNone;
+   u32 m_util_off = kUboOffNone;
++  u64 m_ps_publication_serial = 0;
++  u64 m_vs_publication_serial = 0;
++  u64 m_gs_publication_serial = 0;
+   // §19/§20: VS constants can change without `vsm.dirty` being set —
+   // CPUCull's SetProjectionMatrix consumes DidProjectionChange() (and
+   // writes constants.projection) before SetConstants runs (§18/§19),

@@ -36,8 +36,8 @@ test("software raster profiling is metrics-gated and explicitly sampled", async 
   assert.match(header, /PublishGeneratedFrame/);
 });
 
-test("applied software sources keep the measured CMPR specialization exact", async () => {
-  const [texture, hotCase, tev, bridge, hotPatch, parityHarness] = await Promise.all([
+test("applied software sources keep measured CMPR and I4 specializations exact", async () => {
+  const [texture, hotCase, tev, bridge, hotPatch, i4Patch, parityHarness] = await Promise.all([
     readFile(
       new URL(
         "../vendor/dolphin/Source/Core/VideoBackends/Software/TextureSampler.cpp",
@@ -60,6 +60,13 @@ test("applied software sources keep the measured CMPR specialization exact", asy
     readFile(
       new URL(
         "../patches/dolphin-wasm/snapshot/0016-software-texture-hot-case.patch",
+        import.meta.url
+      ),
+      "utf8"
+    ),
+    readFile(
+      new URL(
+        "../patches/dolphin-wasm/snapshot/0017-software-texture-i4-hot-case.patch",
         import.meta.url
       ),
       "utf8"
@@ -95,9 +102,35 @@ test("applied software sources keep the measured CMPR specialization exact", asy
   assert.match(hotCase, /Common::SafeSpanRead<DXTBlock>/);
   assert.match(hotCase, /std::array<DecodedCmprBlock, 4>/);
   assert.match(hotPatch, /keys 0xd38a01e and 0xd34a01e/);
+  for (const key of [
+    "0x05340010",
+    "0x05300010",
+    "0x0d34a010",
+    "0x0d000010",
+    "0x0d280010",
+    "0x0d240010",
+  ]) {
+    assert.match(hotCase, new RegExp(key));
+    assert.match(i4Patch, new RegExp(key));
+  }
+  assert.match(texture, /HotCase::IsMeasuredI4LinearCase/);
+  assert.match(texture, /HotCase::SampleI4LinearCanonical/);
+  assert.ok(
+    texture.indexOf("HotCase::SampleI4LinearCanonical") >
+      texture.indexOf("WrapCoord(&imageTPlus1"),
+    "I4 dispatch must consume all four canonical WrapCoord results"
+  );
+  assert.match(hotCase, /Common::SafeSpanRead<u8>/);
+  assert.match(hotCase, /const u8 result = static_cast<u8>\(value >> 14\)/);
+  assert.match(i4Patch, /Exact union of the six I4 cases/);
   assert.match(parityHarness, /TexDecoder_DecodeTexel/);
   assert.match(parityHarness, /TLUTFormat::RGB565/);
   assert.match(parityHarness, /TLUTFormat::RGB5A3/);
+  assert.match(parityHarness, /CheckI4DispatchPredicate/);
+  assert.match(parityHarness, /MEASURED_I4_LINEAR_CASE_KEYS/);
+  assert.match(parityHarness, /fract_s < 128/);
+  assert.match(parityHarness, /fract_t < 128/);
+  assert.match(parityHarness, /texture\.empty\(\) \? 0 : texture\.size\(\) - 1/);
   assert.doesNotMatch(tev, /swtevfast|SampleNearestBaseMip/);
 });
 
@@ -122,6 +155,49 @@ test("the locked Dolphin patch reaches each measured phase without changing rend
     assert.match(patch, new RegExp(marker.replaceAll("::", "::")));
   }
   assert.doesNotMatch(patch, /fast_software_raster\s*[=+\-]/);
+});
+
+test("sampled one-stage TEV cases retain an exact canonical tuple without a fast path", async () => {
+  const [header, tev, bridge, patch] = await Promise.all([
+    readFile(new URL("../core/upstream/dolphin_web_raster_profile.h", import.meta.url), "utf8"),
+    readFile(
+      new URL("../vendor/dolphin/Source/Core/VideoBackends/Software/Tev.cpp", import.meta.url),
+      "utf8"
+    ),
+    readFile(new URL("../core/upstream/dolphin_web_discio.cpp", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../patches/dolphin-wasm/snapshot/0020-software-tev-exact-tuple-profile.patch",
+        import.meta.url
+      ),
+      "utf8"
+    ),
+  ]);
+
+  assert.match(header, /TEV_EXACT_WORD_COUNT = 9/);
+  assert.match(header, /if \(left\.HasExactTuple\(\)\)\s*return left\.exact_words == right\.exact_words/);
+  assert.match(header, /if \(!key\.HasExactTuple\(\)\)\s*return hash \^ MixCaseHash\(key\.program_fingerprint/);
+  assert.match(tev, /capture_exact_single_stage = tev_stage_count == 1 && indirect_stage_count == 0/);
+  assert.ok(
+    tev.indexOf("capture_exact_single_stage") > tev.indexOf("profile_scope.ShouldRecordCase()"),
+    "exact tuple construction must remain inside the metrics-gated sampled branch"
+  );
+  for (const word of [
+    "bpmem.genMode.hex",
+    "bpmem.tevindref.hex",
+    "order_word",
+    "indirect.fullhex & 0x1fffff",
+    "cc.hex",
+    "ac.hex",
+    "konst_word",
+    "raster_swap_word",
+    "texture_swap_word",
+  ]) {
+    assert.match(tev, new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(bridge, /out << "@1"/);
+  assert.match(patch, /capture_exact_single_stage/);
+  assert.doesNotMatch(patch, /swtevfast|SampleNearestBaseMip|DrawExactTev/);
 });
 
 test("the parity-built core exports the software raster profiler", async () => {

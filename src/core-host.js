@@ -5,6 +5,7 @@ import { UpstreamWorkerAdapter, upstreamBundleAvailable } from "./upstream-worke
 import {
   DEFAULT_UPSTREAM_CORE_URL,
   requestedLegacyOneWayAck,
+  requestedSoftwareTevHotCaseMode,
   requestedXfbFastPaths,
   requestedUpstreamCoreBuild
 } from "./upstream-worker-protocol.js";
@@ -15,7 +16,8 @@ import {
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuReplayDiagnostics,
-  requestedWgpuStateCache
+  requestedWgpuStateCache,
+  requestedWgpuUboCache
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
@@ -25,6 +27,7 @@ import {
   requestedInputLatencyDiagnostics,
   requestedInputReadbackDiagnostics
 } from "./input-latency-telemetry.js";
+import { requestedInputPhotonMarkerConfig } from "./input-visual-marker.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -67,6 +70,7 @@ export class EmulatorHost {
     this.oglProxyMode = requestedOglProxyMode();
     this.oglTestClear = requestedOglTestClear();
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
+    this.softwareTevHotCaseMode = requestedSoftwareTevHotCaseMode(window.location.search);
     this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
@@ -87,8 +91,11 @@ export class EmulatorHost {
     );
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
+    this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
-    this.inputLatencyDiagnostics = requestedInputLatencyDiagnostics(window.location.search);
+    this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
+    this.inputLatencyDiagnostics =
+      requestedInputLatencyDiagnostics(window.location.search) || this.inputPhotonMarker.enabled;
     this.inputReadbackDiagnostics = requestedInputReadbackDiagnostics(window.location.search);
     this.visibleSamplerEnabled = requestedVisibleSampler();
     // SAB pixel transport: when ?oglsab=1 is set on the URL AND we're on the
@@ -291,6 +298,7 @@ export class EmulatorHost {
             oglProxyMode: this.oglProxyMode,
             oglTestClear: this.oglTestClear,
             fastSoftwareRaster: this.fastSoftwareRaster,
+            softwareTevHotCaseMode: this.softwareTevHotCaseMode,
             xfbFastPaths: this.xfbFastPaths,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
@@ -303,9 +311,12 @@ export class EmulatorHost {
             wgpuReplayPump: this.wgpuReplayPump,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,
+            wgpuUboCache: this.wgpuUboCache,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
-            inputReadbackDiagnostics: this.inputReadbackDiagnostics
+            inputReadbackDiagnostics: this.inputReadbackDiagnostics,
+            inputPhotonDiagnostics: this.inputPhotonMarker.enabled,
+            inputPhotonMarker: this.inputPhotonMarker
           })
         : new DolphinCoreAdapter({ canvas, onStatus });
     this.mode = "demo";

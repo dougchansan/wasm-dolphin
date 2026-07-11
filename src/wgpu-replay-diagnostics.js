@@ -4,6 +4,129 @@ const DEFAULT_MAX_DRAIN_SAMPLES = 32;
 const DEFAULT_MAX_CHAIN_READBACKS = 8;
 const DEFAULT_READBACK_PRESENT_GAP = 120;
 
+// Keep this array in exact wire-protocol order. Fixed-width output avoids
+// silently dropping cold opcodes from benchmark artifacts and makes two runs
+// directly comparable without first unioning object keys.
+export const WGPU_REPLAY_OP_NAMES = Object.freeze([
+  "NOP",
+  "CLEAR",
+  "CREATE_SHADER",
+  "CREATE_PIPELINE",
+  "DRAW_TEST",
+  "CREATE_BUFFER",
+  "UPLOAD_BUFFER",
+  "CREATE_TEXTURE",
+  "UPLOAD_TEXTURE",
+  "CREATE_PIPELINE_CFG",
+  "CREATE_SAMPLER",
+  "CREATE_BIND_GROUP",
+  "BEGIN_PASS",
+  "SET_PIPELINE",
+  "SET_BIND_GROUP",
+  "SET_VERTEX_BUFFER",
+  "SET_INDEX_BUFFER",
+  "SET_VIEWPORT",
+  "SET_SCISSOR",
+  "DRAW",
+  "DRAW_INDEXED",
+  "END_PASS",
+  "SUBMIT_PRESENT",
+  "DESTROY",
+  "BLIT_TEXTURE"
+]);
+
+export function createWgpuReplayOpMetrics() {
+  const replayCount = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayCpuTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayCpuMaxMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const uploadCopyCalls = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const uploadCopyBytes = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const uploadCopyCpuTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const uploadCopyCpuMaxMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const queueUploadCalls = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const queueUploadBytes = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+
+  function validOp(op) {
+    return Number.isInteger(op) && op >= 0 && op < WGPU_REPLAY_OP_NAMES.length;
+  }
+
+  function recordReplay(op, cpuTimeMs = 0) {
+    if (!validOp(op)) return false;
+    const elapsed = finiteNonnegative(cpuTimeMs);
+    replayCount[op] += 1;
+    replayCpuTotalMs[op] += elapsed;
+    replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function recordUploadCopy(op, bytes = 0, cpuTimeMs = 0) {
+    if (!validOp(op)) return false;
+    const copiedBytes = finiteNonnegative(bytes);
+    const elapsed = finiteNonnegative(cpuTimeMs);
+    uploadCopyCalls[op] += 1;
+    uploadCopyBytes[op] += copiedBytes;
+    uploadCopyCpuTotalMs[op] += elapsed;
+    uploadCopyCpuMaxMs[op] = Math.max(uploadCopyCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function recordQueueUpload(op, bytes = 0) {
+    if (!validOp(op)) return false;
+    queueUploadCalls[op] += 1;
+    queueUploadBytes[op] += finiteNonnegative(bytes);
+    return true;
+  }
+
+  function reset() {
+    for (const metric of [
+      replayCount,
+      replayCpuTotalMs,
+      replayCpuMaxMs,
+      uploadCopyCalls,
+      uploadCopyBytes,
+      uploadCopyCpuTotalMs,
+      uploadCopyCpuMaxMs,
+      queueUploadCalls,
+      queueUploadBytes
+    ]) {
+      metric.fill(0);
+    }
+  }
+
+  function snapshot({ enabled = true } = {}) {
+    return {
+      schema: "wasm-dolphin.wgpu-replay-op-metrics.v1",
+      enabled: Boolean(enabled),
+      opCount: WGPU_REPLAY_OP_NAMES.length,
+      names: [...WGPU_REPLAY_OP_NAMES],
+      histogram: Array.from(replayCount),
+      replayCpuTotalMs: Array.from(replayCpuTotalMs),
+      replayCpuMaxMs: Array.from(replayCpuMaxMs),
+      uploadCopyCalls: Array.from(uploadCopyCalls),
+      uploadCopyBytes: Array.from(uploadCopyBytes),
+      uploadCopyCpuTotalMs: Array.from(uploadCopyCpuTotalMs),
+      uploadCopyCpuMaxMs: Array.from(uploadCopyCpuMaxMs),
+      queueUploadCalls: Array.from(queueUploadCalls),
+      queueUploadBytes: Array.from(queueUploadBytes),
+      uploadCopyDefinition: "wasm-heap-to-local-payload-copy",
+      queueUploadDefinition: "GPUQueue.writeBuffer/writeTexture"
+    };
+  }
+
+  return {
+    recordReplay,
+    recordUploadCopy,
+    recordQueueUpload,
+    reset,
+    snapshot
+  };
+}
+
+function finiteNonnegative(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
 export function requestedWgpuReplayDiagnostics(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuclassify") === "1";
 }
@@ -35,6 +158,16 @@ export function requestedWgpuStateCache(
   enabledByDefault = false
 ) {
   const value = new URLSearchParams(search).get("wgpustatecache");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
+export function requestedWgpuUboCache(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpuubocache");
   if (value === "1") return true;
   if (value === "0") return false;
   return Boolean(enabledByDefault);

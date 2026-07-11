@@ -36,17 +36,188 @@ const FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW = Object.freeze({
   1: FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash,
 });
 
+const FIXED_MELEE_WGPU_XFB_HASH = "6fd97dc5";
+
 export function expectedBattleCheckpointForParams(params = {}) {
   const video = String(params.video || "software").toLowerCase();
   const fastsw = Number.parseInt(String(params.fastsw ?? "1"), 10);
-  const xfbHash = video === "software"
-    ? FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW[fastsw] ?? FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash
-    : FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash;
+  let xfbHash = FIXED_MELEE_BATTLE_CHECKPOINT.xfbHash;
+  if (video === "software") {
+    xfbHash = FIXED_MELEE_SOFTWARE_XFB_HASH_BY_FASTSW[fastsw] ?? xfbHash;
+  } else if (video === "wgpu") {
+    xfbHash = FIXED_MELEE_WGPU_XFB_HASH;
+  }
   return { ...FIXED_MELEE_BATTLE_CHECKPOINT, xfbHash };
 }
 
 export const HOST_CORE_ABI_VERSION = 1;
 export const PERF_EVENT_SCHEMA_VERSION = 1;
+
+const POST_LOAD_INPUT_KEYS = new Set([
+  "x", "z", "v", "b", "q", "e", "c",
+  "w", "a", "s", "d", "i", "j", "k", "l",
+  "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+]);
+
+export function parsePostLoadInputScript(value, { durationSeconds = Infinity } = {}) {
+  const source = String(value ?? "").trim();
+  if (!source || /^(?:none|off)$/i.test(source)) return [];
+  if (!(durationSeconds > 0)) {
+    throw new Error("Post-load input scripts require a positive benchmark duration");
+  }
+
+  const entries = source.split(",");
+  if (entries.length > 256) {
+    throw new Error("PERF_INPUT_SCRIPT supports at most 256 input events");
+  }
+
+  const events = entries.map((entry, index) => {
+    const parts = entry.trim().split(":");
+    const action = parts[0];
+    const second = Number.parseFloat(parts[1]);
+    const key = parts[2];
+    if (
+      parts.length !== 3 ||
+      !["down", "up"].includes(action) ||
+      !Number.isFinite(second) ||
+      second < 0 ||
+      second >= durationSeconds ||
+      !POST_LOAD_INPUT_KEYS.has(key)
+    ) {
+      throw new Error(`Invalid PERF_INPUT_SCRIPT entry "${entry}"`);
+    }
+    return { action, second, key, index };
+  }).sort((left, right) => left.second - right.second || left.index - right.index);
+
+  const pressedAt = new Map();
+  for (const event of events) {
+    if (event.action === "down") {
+      if (pressedAt.has(event.key)) {
+        throw new Error(`PERF_INPUT_SCRIPT repeats key down without key up: ${event.key}`);
+      }
+      pressedAt.set(event.key, event.second);
+      continue;
+    }
+    const downAt = pressedAt.get(event.key);
+    if (downAt == null) {
+      throw new Error(`PERF_INPUT_SCRIPT releases a key that is not down: ${event.key}`);
+    }
+    if (event.second <= downAt) {
+      throw new Error(`PERF_INPUT_SCRIPT key up must follow key down in time: ${event.key}`);
+    }
+    pressedAt.delete(event.key);
+  }
+  if (pressedAt.size) {
+    throw new Error(`PERF_INPUT_SCRIPT leaves keys pressed: ${[...pressedAt.keys()].join(", ")}`);
+  }
+  return events;
+}
+
+export function serializePostLoadInputScript(events) {
+  return events.map((event) => `${event.action}:${event.second}:${event.key}`).join(",");
+}
+
+export function selectNextPostLoadBenchmarkAction({
+  sampleIndex,
+  totalSamples,
+  sampleMs,
+  inputIndex,
+  inputEvents,
+}) {
+  const sample = sampleIndex <= totalSamples
+    ? { type: "sample", index: sampleIndex, atMs: sampleIndex * sampleMs }
+    : null;
+  const inputEvent = inputEvents[inputIndex];
+  const input = inputEvent
+    ? { type: "input", index: inputIndex, atMs: inputEvent.second * 1000, event: inputEvent }
+    : null;
+  if (!sample) return input;
+  if (!input || sampleIndex === 0 || sample.atMs <= input.atMs) return sample;
+  return input;
+}
+
+export function selectNextFixedWorkBenchmarkAction({
+  wallTimeCapMs,
+  ...schedule
+}) {
+  const action = selectNextPostLoadBenchmarkAction(schedule);
+  if (!action || action.atMs > wallTimeCapMs) {
+    return { type: "wall-time-cap", atMs: wallTimeCapMs };
+  }
+  return action;
+}
+
+export function fixedWorkPollDelayMs({
+  nowMs,
+  deadlineMs,
+  pollIntervalMs = 100,
+}) {
+  const remainingMs = Number(deadlineMs) - Number(nowMs);
+  if (!(remainingMs > 0)) return 0;
+  const intervalMs = Number(pollIntervalMs);
+  if (!(intervalMs > 0)) {
+    throw new Error("Fixed-work polling requires a positive poll interval");
+  }
+  return Math.min(intervalMs, remainingMs);
+}
+
+export function summarizeFixedEmulatedWork({
+  targetCoreSeconds,
+  coreTicksPerSecond,
+  baseline,
+  observation,
+  wallTimeCapSeconds,
+  pollIntervalMs,
+}) {
+  const targetSeconds = Number(targetCoreSeconds);
+  const ticksPerSecond = Number(coreTicksPerSecond);
+  const baselineTicks = Number(baseline?.coreTicks);
+  const baselineFrame = Number(baseline?.frame);
+  const baselineObservedAtMs = Number(baseline?.observedAtMs);
+  const observedTicks = Number(observation?.coreTicks);
+  const observedFrame = Number(observation?.frame);
+  const observedAtMs = Number(observation?.observedAtMs);
+  if (!(targetSeconds > 0)) {
+    throw new Error("Fixed emulated work requires positive targetCoreSeconds");
+  }
+  if (!(ticksPerSecond > 0)) {
+    throw new Error("Fixed emulated work requires positive coreTicksPerSecond");
+  }
+  if (![baselineTicks, baselineFrame, baselineObservedAtMs, observedTicks, observedFrame, observedAtMs]
+    .every(Number.isFinite)) {
+    throw new Error("Fixed emulated work requires finite baseline and observation values");
+  }
+
+  const targetCoreTicks = targetSeconds * ticksPerSecond;
+  const actualCoreTickDelta = observedTicks - baselineTicks;
+  const actualFrameDelta = observedFrame - baselineFrame;
+  const elapsedWallSeconds = (observedAtMs - baselineObservedAtMs) / 1000;
+  const deltasValid = actualCoreTickDelta >= 0 && actualFrameDelta >= 0 && elapsedWallSeconds >= 0;
+  const hasElapsedTime = deltasValid && elapsedWallSeconds > 0;
+  return {
+    enabled: true,
+    targetCoreSeconds: targetSeconds,
+    targetCoreTicks,
+    coreTicksPerSecond: ticksPerSecond,
+    wallTimeCapSeconds: Number(wallTimeCapSeconds),
+    pollIntervalMs: Number(pollIntervalMs),
+    baselineCoreTicks: baselineTicks,
+    baselineFrame,
+    baselineObservedAtMs,
+    observedCoreTicks: observedTicks,
+    observedFrame,
+    observedAtMs,
+    actualCoreTickDelta,
+    actualFrameDelta,
+    elapsedWallSeconds,
+    reachedTarget: deltasValid && actualCoreTickDelta >= targetCoreTicks,
+    throughputGameSpeedPercent: hasElapsedTime
+      ? (actualCoreTickDelta * 100) / (ticksPerSecond * elapsedWallSeconds)
+      : null,
+    throughputCoreFps: hasElapsedTime ? actualFrameDelta / elapsedWallSeconds : null,
+    deltasValid,
+  };
+}
 
 export const REQUIRED_RUN_PROVENANCE = Object.freeze([
   "git.commit",
@@ -144,8 +315,43 @@ export function assertRunProvenance(manifest, required = REQUIRED_RUN_PROVENANCE
   if (manifest.benchmark.saveStateAt !== 0) {
     throw new Error("Fixed-battle timing requires benchmark.saveStateAt=0");
   }
-  if (manifest.benchmark.inputScriptMode !== "none") {
-    throw new Error("Fixed-battle timing requires benchmark.inputScriptMode=none");
+  const inputScriptMode = manifest.benchmark.inputScriptMode;
+  if (!new Set(["none", "post-load-only"]).has(inputScriptMode)) {
+    throw new Error(
+      "Fixed-battle timing requires benchmark.inputScriptMode=none or post-load-only"
+    );
+  }
+  if (inputScriptMode === "post-load-only") {
+    if (manifest.benchmark.timingStartsAfterVerifiedLoad !== true) {
+      throw new Error("Post-load input requires timingStartsAfterVerifiedLoad=true");
+    }
+    if (manifest.benchmark.inputScriptScheduleOrigin !== "after-first-timed-sample") {
+      throw new Error("Post-load input must be scheduled after the first timed baseline sample");
+    }
+    if (!manifest.benchmark.timingBaselineEstablishedAt) {
+      throw new Error("Post-load input requires an established timed baseline sample");
+    }
+    if (!(manifest.benchmark.inputScriptEventCount > 0)) {
+      throw new Error("Post-load input requires a positive inputScriptEventCount");
+    }
+    if (!/^[0-9a-f]{64}$/i.test(String(manifest.benchmark.inputScriptSha256 || ""))) {
+      throw new Error("Post-load input requires a SHA-256 inputScriptSha256");
+    }
+  }
+  const fixedWork = manifest.benchmark.fixedEmulatedWork;
+  if (fixedWork?.enabled) {
+    if (!(fixedWork.targetCoreSeconds > 0) || !(fixedWork.targetCoreTicks > 0)) {
+      throw new Error("Fixed emulated work requires positive target seconds and target ticks");
+    }
+    if (!(fixedWork.coreTicksPerSecond > 0) || !(fixedWork.wallTimeCapSeconds > 0)) {
+      throw new Error("Fixed emulated work requires a positive tick rate and wall-time cap");
+    }
+    if (!(fixedWork.pollIntervalMs > 0)) {
+      throw new Error("Fixed emulated work requires a positive polling interval");
+    }
+    if (!manifest.benchmark.timingBaselineEstablishedAt) {
+      throw new Error("Fixed emulated work requires a post-settle timed baseline sample");
+    }
   }
   if (manifest.causalTelemetrySchema.version !== CAUSAL_TELEMETRY_SCHEMA_VERSION) {
     throw new Error(

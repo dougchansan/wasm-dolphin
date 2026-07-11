@@ -22,6 +22,7 @@ import {
   recordSampledSourceFrame
 } from "./frame-reuse-telemetry.js";
 import {
+  createWgpuReplayOpMetrics,
   createWgpuReplayClassifier,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
@@ -37,9 +38,12 @@ import {
 } from "./input-latency-telemetry.js";
 import {
   INPUT_VISUAL_MARKER_SIZE,
-  applyInputMarkerRgba,
+  INPUT_VISUAL_MARKER_MODE_PHOTON,
+  applyInputVisualMarkerRgba,
   createInputVisualMarkerTracker,
-  inputMarkerRgba
+  inputMarkerRgba,
+  inputPhotonLuminance,
+  resolveInputPhotonMarkerGeometry
 } from "./input-visual-marker.js";
 import {
   compareInputGenerations,
@@ -142,14 +146,18 @@ let wgpuInputVisualBaselineReady = false;
 let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuStateCacheEnabled = false;
+let wgpuUboCacheEnabled = false;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
+let wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
 let inputLatencyDiagnostics = false;
 let inputReadbackDiagnostics = false;
+let inputPhotonDiagnostics = false;
+let inputPhotonOverheadDiagnostics = createInputPhotonOverheadDiagnostics();
 let inputVisibleLatencyTracker = createInputVisibleLatencyTracker();
 let inputVisualMarkerTracker = createInputVisualMarkerTracker();
 let wgpuDetachedPresenter = false;
@@ -163,6 +171,7 @@ let profileWindow = createProfileWindow();
 let lastStructuredProfileWindow = emptyStageWindow();
 let causalMetricsEnabled = false;
 let collectMetrics = false;
+let softwareTevHotCaseMode = 0;
 let metricsDiagnostics = createMetricsDiagnostics();
 let lastCausalTelemetryAt = 0;
 const CAUSAL_TELEMETRY_INTERVAL_MS = 200;
@@ -372,6 +381,48 @@ function metricsDiagnosticsPayload() {
   return { ...metricsDiagnostics, enabled: collectMetrics };
 }
 
+function createInputPhotonOverheadDiagnostics(enabled = false) {
+  return {
+    schema: "wasm-dolphin.input-photon-overhead.v1",
+    enabled: Boolean(enabled),
+    collectionRequires: "inputphoton=1&metrics=1",
+    softwareFrameCopyPaint: {
+      calls: 0,
+      sourceBytes: 0,
+      paintedBytes: 0,
+      totalMs: 0,
+      maxMs: 0,
+    },
+    padStatsPollParse: {
+      calls: 0,
+      sourceUtf16Bytes: 0,
+      totalMs: 0,
+      maxMs: 0,
+      failureCount: 0,
+    },
+  };
+}
+
+function inputPhotonOverheadDiagnosticsPayload() {
+  const copyPaint = inputPhotonOverheadDiagnostics.softwareFrameCopyPaint;
+  const padStats = inputPhotonOverheadDiagnostics.padStatsPollParse;
+  return {
+    ...inputPhotonOverheadDiagnostics,
+    softwareFrameCopyPaint: {
+      ...copyPaint,
+      averageMs: copyPaint.calls > 0 ? copyPaint.totalMs / copyPaint.calls : 0,
+    },
+    padStatsPollParse: {
+      ...padStats,
+      averageMs: padStats.calls > 0 ? padStats.totalMs / padStats.calls : 0,
+    },
+  };
+}
+
+function webGpuUboCacheMode() {
+  return (wgpuUboCacheEnabled ? 1 : 0) | (collectMetrics ? 2 : 0);
+}
+
 function recordRendererError(kind, message) {
   const entry = {
     atMs: Number(performance.now().toFixed(3)),
@@ -404,6 +455,7 @@ function rendererDiagnosticsPayload() {
     fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
     workerTransport: workerTransportTelemetry(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
+    wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
   };
 }
 
@@ -465,11 +517,18 @@ async function handleMessage(type, payload) {
       collectMetrics = Boolean(payload.collectMetrics);
       metricsDiagnostics = createMetricsDiagnostics();
       metricsDiagnostics.enabled = collectMetrics;
+      wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
         enabled: gpuCompletionDiagnostics
       });
-      inputLatencyDiagnostics = Boolean(payload.inputLatencyDiagnostics);
+      inputPhotonDiagnostics = Boolean(payload.inputPhotonDiagnostics);
+      inputLatencyDiagnostics = Boolean(
+        payload.inputLatencyDiagnostics || inputPhotonDiagnostics
+      );
+      inputPhotonOverheadDiagnostics = createInputPhotonOverheadDiagnostics(
+        inputPhotonDiagnostics && collectMetrics
+      );
       inputReadbackDiagnostics = Boolean(
         inputLatencyDiagnostics && payload.inputReadbackDiagnostics
       );
@@ -477,7 +536,11 @@ async function handleMessage(type, payload) {
         enabled: inputLatencyDiagnostics
       });
       inputVisualMarkerTracker = createInputVisualMarkerTracker({
-        enabled: inputLatencyDiagnostics
+        enabled: inputLatencyDiagnostics,
+        mode: inputPhotonDiagnostics
+          ? INPUT_VISUAL_MARKER_MODE_PHOTON
+          : undefined,
+        opticalMarker: payload.inputPhotonMarker
       });
       frameReuseTelemetry = createFrameReuseTelemetry();
       legacyOneWayAck = Boolean(payload.legacyOneWayAck);
@@ -519,6 +582,7 @@ async function handleMessage(type, payload) {
         oglProxyMode: payload.oglProxyMode,
         oglTestClear: payload.oglTestClear,
         fastSoftwareRaster: payload.fastSoftwareRaster,
+        softwareTevHotCaseMode: payload.softwareTevHotCaseMode,
         xfbFastPaths: payload.xfbFastPaths,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
@@ -530,6 +594,7 @@ async function handleMessage(type, payload) {
         wgpuReplayPump: payload.wgpuReplayPump,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuStateCache: payload.wgpuStateCache,
+        wgpuUboCache: payload.wgpuUboCache,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -563,14 +628,21 @@ async function handleMessage(type, payload) {
       return framePayload();
     case "reset":
       api?.reset();
+      api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       api?.setInputMask(inputMask);
       return framePayload();
     case "bootProbe":
       return { bootProbe: bootProbePayload(metadataPayload()) };
     case "saveState":
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
-    case "loadState":
-      return { loaded: Boolean(api?.loadState(payload.slot | 0)), ...framePayload() };
+    case "loadState": {
+      api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      const loaded = Boolean(api?.loadState(payload.slot | 0));
+      api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      return { loaded, ...framePayload() };
+    }
     case "validationSetCorePaused": {
       // Harness-only checkpoint barrier. The app never sends this message;
       // normal emulator pause/start behavior and defaults remain unchanged.
@@ -639,11 +711,22 @@ async function handleMessage(type, payload) {
           (loadRingBoundary?.summary?.openPassDepth > 0 || hasHeldReplay);
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
+      api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       const rc = api.loadStateFile(path) | 0;
       // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
       // step the core) — wait real wall-clock time so the restore
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
+      api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      // The fixed battle state is the measurement boundary. Clear boot/menu
+      // tuples after the core's existing post-load settle, then let the
+      // harness's later first sample act as the battle-settle baseline.
+      if (rc === 1 && collectMetrics &&
+          rendererDiagnostics.configuredVideoBackend === "Software Renderer") {
+        api?.setSoftwareRasterProfileEnabled?.(0);
+        api?.setSoftwareRasterProfileEnabled?.(1);
+      }
       const afterState = api?.getCoreStateName?.() ?? "";
       // §27 diagnostic (JS-only, served live, no rebuild): open a
       // post-load watchdog window so drainWebGpuCmdRing logs whether
@@ -763,6 +846,7 @@ async function loadCore({
   oglProxyMode = "proxy",
   oglTestClear = false,
   fastSoftwareRaster = 0,
+  softwareTevHotCaseMode: requestedSoftwareTevHotCaseMode = 0,
   xfbFastPaths = 0,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
@@ -774,6 +858,7 @@ async function loadCore({
   wgpuReplayPump: requestedWgpuReplayPump = false,
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   wgpuStateCache: requestedWgpuStateCache = false,
+  wgpuUboCache: requestedWgpuUboCache = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -801,6 +886,7 @@ async function loadCore({
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
+  wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -812,6 +898,7 @@ async function loadCore({
   wgpuReplayPumpEnabled = Boolean(requestedWgpuReplayPump);
   webGpuCausalStats.replayWindowRecords = WGPU_REPLAY_WINDOW_RECORDS;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
+  softwareTevHotCaseMode = (Number(requestedSoftwareTevHotCaseMode) || 0) & 3;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
   oglSabEnabledForLoad = Boolean(oglSabEnabled);
 
@@ -1057,10 +1144,12 @@ async function loadCore({
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
+  api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
   api.setFastSoftwareRaster?.(Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)));
+  api.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
   api.setXfbFastPaths?.((Number(xfbFastPaths) || 0) & 3);
   api.setSoftwareRasterProfileEnabled?.(
     collectMetrics && videoBackend === "Software Renderer" ? 1 : 0
@@ -1127,6 +1216,10 @@ function bindApi(module) {
       typeof module._SetWebGpuStateCacheEnabled === "function"
         ? (enabled) => ccall("SetWebGpuStateCacheEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
+    setWebGpuUboCacheEnabled:
+      typeof module._SetWebGpuUboCacheEnabled === "function"
+        ? (mode) => ccall("SetWebGpuUboCacheEnabled", null, ["number"], [mode | 0])
+        : null,
     getWebGpuStateCacheStats: optionalCwrap("GetWebGpuStateCacheStats", "string", []),
     setCpuOverclock:
       typeof module._SetCpuOverclock === "function"
@@ -1143,6 +1236,10 @@ function bindApi(module) {
     setFastSoftwareRaster:
       typeof module._SetFastSoftwareRaster === "function"
         ? (mode) => ccall("SetFastSoftwareRaster", "number", ["number"], [mode | 0])
+        : null,
+    setSoftwareTevHotCaseMode:
+      typeof module._SetSoftwareTevHotCaseMode === "function"
+        ? (mode) => ccall("SetSoftwareTevHotCaseMode", "number", ["number"], [mode | 0])
         : null,
     setXfbFastPaths:
       typeof module._SetXfbFastPaths === "function"
@@ -1421,6 +1518,16 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.batchAbortCount = parsed.batchAbortCount;
     webGpuCausalStats.batchOversizeCount = parsed.batchOversizeCount;
     webGpuCausalStats.uploadTimeoutCount = parsed.uploadTimeoutCount;
+    webGpuCausalStats.producerUboCacheEnabled = parsed.uboCacheEnabled;
+    webGpuCausalStats.producerUboCacheMetricsEnabled = parsed.uboCacheMetricsEnabled;
+    webGpuCausalStats.producerUboCacheClassOrder = parsed.uboCacheClassOrder;
+    webGpuCausalStats.producerUboCacheLookups = parsed.uboCacheLookups;
+    webGpuCausalStats.producerUboCacheHits = parsed.uboCacheHits;
+    webGpuCausalStats.producerUboCacheExpired = parsed.uboCacheExpired;
+    webGpuCausalStats.producerUboUploadCallsSuppressed =
+      parsed.uboUploadCallsSuppressed;
+    webGpuCausalStats.producerUboUploadBytesSuppressed =
+      parsed.uboUploadBytesSuppressed;
   }
   return text;
 }
@@ -1777,8 +1884,11 @@ function maybeCreateCausalTelemetry(videoStats) {
     },
     webgpu: {
       ...webGpuCausalStats,
+      replayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
+      uboCacheEnabled: wgpuUboCacheEnabled,
+      producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
       producerStateCacheEnabled:
         wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
       consumerStateCacheEnabled: wgpuConsumerStateCacheEnabled,
@@ -1800,7 +1910,10 @@ function maybeCreateCausalTelemetry(videoStats) {
         : 0,
       ageMaxMs: causalInputStats.ageMaxMs,
       visible: inputVisibleLatencyTracker.snapshot(),
-      marker: inputVisualMarkerTracker.snapshot(),
+      marker: {
+        ...inputVisualMarkerTracker.snapshot(),
+        overhead: inputPhotonOverheadDiagnosticsPayload(),
+      },
       legacyReadbackEnabled: inputReadbackDiagnostics,
     },
   });
@@ -2482,17 +2595,47 @@ let _lastFrameCopy = null;
 let _lastFrameCopyValid = false;
 let _inputMarkerFrameCopy = null;
 
+function recordInputPhotonFrameCopyPaint({ sourceBytes, paintedBytes, elapsedMs }) {
+  if (!inputPhotonOverheadDiagnostics.enabled) return;
+  const stats = inputPhotonOverheadDiagnostics.softwareFrameCopyPaint;
+  const durationMs = Number.isFinite(elapsedMs) && elapsedMs >= 0 ? elapsedMs : 0;
+  stats.calls += 1;
+  stats.sourceBytes += Math.max(0, Number(sourceBytes) || 0);
+  stats.paintedBytes += Math.max(0, Number(paintedBytes) || 0);
+  stats.totalMs += durationMs;
+  stats.maxMs = Math.max(stats.maxMs, durationMs);
+}
+
 function frameWithInputMarker(bytes, width, height, marker) {
   if (!marker || !bytes?.byteLength) return { bytes, applied: false };
+  const collectOverhead = inputPhotonOverheadDiagnostics.enabled &&
+    marker.mode === INPUT_VISUAL_MARKER_MODE_PHOTON;
+  const startedAt = collectOverhead ? performance.now() : 0;
   if (!_inputMarkerFrameCopy || _inputMarkerFrameCopy.length < bytes.byteLength) {
     _inputMarkerFrameCopy = new Uint8Array(bytes.byteLength);
   }
   const marked = _inputMarkerFrameCopy.subarray(0, bytes.byteLength);
   marked.set(bytes);
-  return {
-    bytes: marked,
-    applied: applyInputMarkerRgba(marked, width, height, marker.generation)
-  };
+  const applied = applyInputVisualMarkerRgba(marked, width, height, marker);
+  const elapsedMs = collectOverhead ? performance.now() - startedAt : 0;
+  let geometry = null;
+  if (applied && marker.mode === INPUT_VISUAL_MARKER_MODE_PHOTON) {
+    geometry = resolveInputPhotonMarkerGeometry(width, height, marker.optical);
+  }
+  if (collectOverhead) {
+    const barcodeWidth = Math.min(INPUT_VISUAL_MARKER_SIZE, Math.max(0, Number(width) || 0));
+    const barcodeHeight = Math.min(INPUT_VISUAL_MARKER_SIZE, Math.max(0, Number(height) || 0));
+    const paintedBytes = applied
+      ? ((geometry?.width ?? 0) * (geometry?.height ?? 0) + barcodeWidth * barcodeHeight) * 4
+      : 0;
+    recordInputPhotonFrameCopyPaint({
+      sourceBytes: bytes.byteLength,
+      paintedBytes,
+      elapsedMs,
+    });
+  }
+  if (geometry) inputVisualMarkerTracker.recordRenderGeometry(geometry);
+  return { bytes: marked, applied };
 }
 
 function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?.() ?? 0) {
@@ -2984,12 +3127,40 @@ function wrappedEpochMilliseconds(lowBits) {
   return age <= 60000 ? now - age : now;
 }
 
+function recordInputPhotonPadStatsPollParse({ sourceUtf16Bytes, elapsedMs, failed }) {
+  if (!inputPhotonOverheadDiagnostics.enabled) return;
+  const stats = inputPhotonOverheadDiagnostics.padStatsPollParse;
+  const durationMs = Number.isFinite(elapsedMs) && elapsedMs >= 0 ? elapsedMs : 0;
+  stats.calls += 1;
+  stats.sourceUtf16Bytes += Math.max(0, Number(sourceUtf16Bytes) || 0);
+  stats.totalMs += durationMs;
+  stats.maxMs = Math.max(stats.maxMs, durationMs);
+  if (failed) stats.failureCount += 1;
+}
+
 function currentPadPollStats() {
   if (!inputLatencyDiagnostics || typeof api?.getVideoStats !== "function") return null;
+  if (!inputPhotonOverheadDiagnostics.enabled) {
+    try {
+      return parsePadPollStats(api.getVideoStats());
+    } catch {
+      return null;
+    }
+  }
+
+  const startedAt = performance.now();
+  let source = null;
+  let failed = false;
   try {
-    return parsePadPollStats(api.getVideoStats());
+    source = api.getVideoStats();
+    return parsePadPollStats(source);
   } catch {
+    failed = true;
     return null;
+  } finally {
+    const elapsedMs = performance.now() - startedAt;
+    const sourceUtf16Bytes = String(source || "").length * 2;
+    recordInputPhotonPadStatsPollParse({ sourceUtf16Bytes, elapsedMs, failed });
   }
 }
 
@@ -3026,7 +3197,13 @@ function recordInputVisibleObservation(hash) {
 
 function prepareInputVisualMarker(coreFrame = api?.getFrame?.() ?? 0) {
   if (!inputLatencyDiagnostics) return null;
-  const pad = currentPadPollStats();
+  // The optical baseline remains visible between inputs, but the expensive
+  // GetVideoStats string/parse is needed only while an input awaits an exact
+  // core poll. This keeps the diagnostic from polling all video telemetry on
+  // every 60 Hz repaint.
+  const pad = inputVisualMarkerTracker.hasPendingInput()
+    ? currentPadPollStats()
+    : null;
   if (pad) {
     inputVisualMarkerTracker.recordCorePoll({
       pollCount: pad.pollCount,
@@ -4480,45 +4657,79 @@ fn fs() -> @location(0) vec4f {
       fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
       primitive: { topology: "triangle-list" }
     });
-    const colorBuffer = device.createBuffer({
-      label: "dolphin-input-marker-color",
-      size: 16,
-      usage: 0x40 | 0x8
-    });
-    const bindGroup = device.createBindGroup({
-      label: "dolphin-input-marker",
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: colorBuffer } }]
-    });
-    state = { bindGroup, colorBuffer, format, generation: 0, pipeline };
+    const createColorBinding = (label) => {
+      const colorBuffer = device.createBuffer({
+        label,
+        size: 16,
+        usage: 0x40 | 0x8
+      });
+      return {
+        colorBuffer,
+        bindGroup: device.createBindGroup({
+          label,
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [{ binding: 0, resource: { buffer: colorBuffer } }]
+        })
+      };
+    };
+    state = {
+      barcode: createColorBinding("dolphin-input-marker-barcode-color"),
+      optical: createColorBinding("dolphin-input-marker-optical-color"),
+      format,
+      generation: null,
+      mode: "",
+      pipeline
+    };
     renderGpu.inputMarkerState = state;
   }
 
-  if (state.generation !== marker.generation) {
+  if (state.generation !== marker.generation || state.mode !== marker.mode) {
     const rgba = inputMarkerRgba(marker.generation).map((value) => value / 255);
-    device.queue.writeBuffer(state.colorBuffer, 0, new Float32Array(rgba));
+    const luminance = marker.mode === INPUT_VISUAL_MARKER_MODE_PHOTON
+      ? (Number(marker.optical?.luminance) >= 0x80 ? 1 : 0)
+      : inputPhotonLuminance(marker.generation) / 255;
+    device.queue.writeBuffer(state.barcode.colorBuffer, 0, new Float32Array(rgba));
+    device.queue.writeBuffer(
+      state.optical.colorBuffer,
+      0,
+      new Float32Array([luminance, luminance, luminance, 1])
+    );
     state.generation = marker.generation;
+    state.mode = marker.mode;
   }
 
-  const pass = encoder.beginRenderPass({
-    label: "dolphin-input-marker",
-    colorAttachments: [{
-      view: texture.createView(),
-      loadOp: "load",
-      storeOp: "store"
-    }]
-  });
-  pass.setPipeline(state.pipeline);
-  pass.setBindGroup(0, state.bindGroup);
-  pass.setViewport(0, 0, texture.width, texture.height, 0, 1);
-  pass.setScissorRect(
-    0,
-    0,
-    Math.min(INPUT_VISUAL_MARKER_SIZE, texture.width),
-    Math.min(INPUT_VISUAL_MARKER_SIZE, texture.height)
-  );
-  pass.draw(3);
-  pass.end();
+  const encodeRect = (binding, geometry, label) => {
+    const pass = encoder.beginRenderPass({
+      label,
+      colorAttachments: [{
+        view: texture.createView(),
+        loadOp: "load",
+        storeOp: "store"
+      }]
+    });
+    pass.setPipeline(state.pipeline);
+    pass.setBindGroup(0, binding.bindGroup);
+    pass.setViewport(0, 0, texture.width, texture.height, 0, 1);
+    pass.setScissorRect(geometry.x, geometry.y, geometry.width, geometry.height);
+    pass.draw(3);
+    pass.end();
+  };
+
+  if (marker.mode === INPUT_VISUAL_MARKER_MODE_PHOTON) {
+    const geometry = resolveInputPhotonMarkerGeometry(
+      texture.width,
+      texture.height,
+      marker.optical
+    );
+    encodeRect(state.optical, geometry, "dolphin-input-marker-optical-roi");
+    inputVisualMarkerTracker.recordRenderGeometry(geometry);
+  }
+  encodeRect(state.barcode, {
+    x: 0,
+    y: 0,
+    width: Math.min(INPUT_VISUAL_MARKER_SIZE, texture.width),
+    height: Math.min(INPUT_VISUAL_MARKER_SIZE, texture.height)
+  }, "dolphin-input-marker-generation-barcode");
   return true;
 }
 
@@ -4660,7 +4871,15 @@ function stageHeldWgpuUploads(ring, startIndex, writeIndex, u32, heap) {
         releaseWgpuUploadPayload(ring, pointer, bytes);
         break;
       }
+      const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
       const data = copyWgpuUploadPayload(heap, pointer, bytes, kind === "buffer");
+      if (causalMetricsEnabled) {
+        wgpuReplayOpMetrics.recordUploadCopy(
+          op,
+          data.byteLength,
+          performance.now() - copyStartedAt
+        );
+      }
       const publishedRead = releaseWgpuUploadPayload(ring, pointer, bytes);
       if (publishedRead !== expectedRead) break;
       ring.stagedUploads.set(index, { kind, data });
@@ -5251,6 +5470,14 @@ const webGpuCausalStats = {
   producerBindGroupRecordsSuppressed: [0, 0, 0],
   producerVertexBufferRecordsSuppressed: 0,
   producerIndexBufferRecordsSuppressed: 0,
+  producerUboCacheEnabled: false,
+  producerUboCacheMetricsEnabled: false,
+  producerUboCacheClassOrder: ["vs", "ps", "gs"],
+  producerUboCacheLookups: [0, 0, 0],
+  producerUboCacheHits: [0, 0, 0],
+  producerUboCacheExpired: [0, 0, 0],
+  producerUboUploadCallsSuppressed: [0, 0, 0],
+  producerUboUploadBytesSuppressed: [0, 0, 0],
   commandDroppedCount: 0,
   batchAbortCount: 0,
   batchOversizeCount: 0,
@@ -5748,6 +5975,7 @@ function drainWebGpuCmdRing() {
     } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
       self._wgBpDefer = 0;
     }
+    const replayOpStartedAt = causalMetricsEnabled ? performance.now() : 0;
     try {
       switch (op) {
         case WGPU_CMD_OP_CREATE_SHADER:
@@ -5933,9 +6161,25 @@ function drainWebGpuCmdRing() {
               if (self._wgVbSnap.size > 64)
                 self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
             }
-              q.writeBuffer(buf, u32[recWord + 2] & ~3,
-                            stagedUpload?.data ??
-                              copyWgpuUploadPayload(heap, srcP, uploadBytes, true));
+              let uploadPayload = stagedUpload?.data;
+              if (!uploadPayload) {
+                const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
+                uploadPayload = copyWgpuUploadPayload(heap, srcP, uploadBytes, true);
+                if (causalMetricsEnabled) {
+                  wgpuReplayOpMetrics.recordUploadCopy(
+                    WGPU_CMD_OP_UPLOAD_BUFFER,
+                    uploadPayload.byteLength,
+                    performance.now() - copyStartedAt
+                  );
+                }
+              }
+              q.writeBuffer(buf, u32[recWord + 2] & ~3, uploadPayload);
+              if (causalMetricsEnabled) {
+                wgpuReplayOpMetrics.recordQueueUpload(
+                  WGPU_CMD_OP_UPLOAD_BUFFER,
+                  uploadPayload.byteLength
+                );
+              }
             }
           } finally {
             // heapCopy/q.writeBuffer have synchronously detached this upload
@@ -5998,12 +6242,30 @@ function drainWebGpuCmdRing() {
                 `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
+              let uploadPayload = stagedUpload?.data;
+              if (!uploadPayload) {
+                const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
+                uploadPayload = heapCopy(src, uploadBytes);
+                if (causalMetricsEnabled) {
+                  wgpuReplayOpMetrics.recordUploadCopy(
+                    WGPU_CMD_OP_UPLOAD_TEXTURE,
+                    uploadPayload.byteLength,
+                    performance.now() - copyStartedAt
+                  );
+                }
+              }
               q.writeTexture(
                 { texture: t.tex, mipLevel: u32[recWord + 6],
                   origin: { x: 0, y: 0, z: uz } },
-                stagedUpload?.data ?? heapCopy(src, uploadBytes),
+                uploadPayload,
                 { offset: 0, bytesPerRow: bpr, rowsPerImage: h },
                 { width: w, height: h, depthOrArrayLayers: 1 });
+              if (causalMetricsEnabled) {
+                wgpuReplayOpMetrics.recordQueueUpload(
+                  WGPU_CMD_OP_UPLOAD_TEXTURE,
+                  uploadPayload.byteLength
+                );
+              }
             }
           } finally {
             // queue.writeTexture consumes the local heapCopy synchronously.
@@ -7285,6 +7547,9 @@ function drainWebGpuCmdRing() {
         self._webGpuExecErr = true;
         console.log(`[webgpu-exec] op=${op} threw: ${e?.message || e}`);
       }
+    }
+    if (causalMetricsEnabled) {
+      wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
     }
     read = (read + 1) >>> 0;
   }

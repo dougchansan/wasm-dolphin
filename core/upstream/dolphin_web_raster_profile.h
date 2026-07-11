@@ -28,6 +28,8 @@ enum class Phase
 // grows when every slot is occupied by a different exact key.
 constexpr std::size_t TEXTURE_CASE_CAPACITY = 256;
 constexpr std::size_t TEV_CASE_CAPACITY = 256;
+constexpr std::size_t TEV_EXACT_WORD_COUNT = 9;
+using TevExactWords = std::array<std::uint32_t, TEV_EXACT_WORD_COUNT>;
 
 struct TextureCaseKey
 {
@@ -43,11 +45,23 @@ struct TevCaseKey
 {
   std::uint64_t structure = 0;
   std::uint64_t program_fingerprint = 0;
+  std::uint32_t exact_word_count = 0;
+  TevExactWords exact_words{};
+
+  constexpr bool HasExactTuple() const
+  {
+    return exact_word_count == exact_words.size();
+  }
 
   friend constexpr bool operator==(TevCaseKey left, TevCaseKey right)
   {
-    return left.structure == right.structure &&
-           left.program_fingerprint == right.program_fingerprint;
+    if (left.structure != right.structure || left.HasExactTuple() != right.HasExactTuple())
+      return false;
+    // The fingerprint remains useful for display and regression probes, but
+    // exact single-stage cases aggregate only when all canonical words match.
+    if (left.HasExactTuple())
+      return left.exact_words == right.exact_words;
+    return left.program_fingerprint == right.program_fingerprint;
   }
 };
 
@@ -153,6 +167,11 @@ struct Snapshot
   TevCaseTableSnapshot tev_cases;
   std::uint64_t raster_candidate_pixels = 0;
   std::uint64_t tev_stages = 0;
+  std::uint64_t tev_hot_classified_batches = 0;
+  std::uint64_t tev_hot_classified_pixels = 0;
+  std::uint64_t tev_hot_specialized_pixels = 0;
+  std::uint64_t tev_hot_shadow_pixels = 0;
+  std::uint64_t tev_hot_shadow_mismatches = 0;
   std::uint64_t fifo_burst_count = 0;
   std::uint64_t fifo_consume_count = 0;
   std::uint64_t fifo_bytes_last = 0;
@@ -187,6 +206,11 @@ inline std::atomic<std::uint64_t> s_tev_calls{0};
 inline std::atomic<std::uint64_t> s_tev_stages{0};
 inline std::atomic<std::uint64_t> s_tev_timed_samples{0};
 inline std::atomic<std::uint64_t> s_tev_sampled_total_us{0};
+inline std::atomic<std::uint64_t> s_tev_hot_classified_batches{0};
+inline std::atomic<std::uint64_t> s_tev_hot_classified_pixels{0};
+inline std::atomic<std::uint64_t> s_tev_hot_specialized_pixels{0};
+inline std::atomic<std::uint64_t> s_tev_hot_shadow_pixels{0};
+inline std::atomic<std::uint64_t> s_tev_hot_shadow_mismatches{0};
 inline std::atomic<std::uint64_t> s_texture_calls{0};
 inline std::atomic<std::uint64_t> s_texture_timed_samples{0};
 inline std::atomic<std::uint64_t> s_texture_sampled_total_us{0};
@@ -260,8 +284,11 @@ inline void ResetPublished()
   for (std::atomic<std::uint64_t>* counter : {
            &s_raster_calls, &s_raster_timed_samples, &s_raster_sampled_total_us,
            &s_raster_candidate_pixels, &s_tev_calls, &s_tev_stages, &s_tev_timed_samples,
-           &s_tev_sampled_total_us, &s_texture_calls, &s_texture_timed_samples,
-           &s_texture_sampled_total_us, &s_fifo_burst_count, &s_fifo_consume_count,
+           &s_tev_sampled_total_us, &s_tev_hot_classified_batches,
+           &s_tev_hot_classified_pixels, &s_tev_hot_specialized_pixels,
+           &s_tev_hot_shadow_pixels, &s_tev_hot_shadow_mismatches, &s_texture_calls,
+           &s_texture_timed_samples, &s_texture_sampled_total_us, &s_fifo_burst_count,
+           &s_fifo_consume_count,
            &s_fifo_bytes_last, &s_fifo_bytes_max, &s_fifo_age_last_us, &s_fifo_age_max_us,
            &s_fifo_age_sample_count, &s_fifo_distance_underflow_count,
            &s_xfb_generation_count, &s_xfb_generation_last_us, &s_xfb_generation_total_us,
@@ -375,7 +402,17 @@ inline std::uint64_t CaseHash(TextureCaseKey key)
 
 inline std::uint64_t CaseHash(TevCaseKey key)
 {
-  return MixCaseHash(key.structure) ^ MixCaseHash(key.program_fingerprint + 0x9e3779b97f4a7c15ULL);
+  std::uint64_t hash = MixCaseHash(key.structure);
+  if (!key.HasExactTuple())
+    return hash ^ MixCaseHash(key.program_fingerprint + 0x9e3779b97f4a7c15ULL);
+
+  hash ^= MixCaseHash(key.exact_word_count + 0x9e3779b97f4a7c15ULL);
+  for (std::size_t i = 0; i < key.exact_words.size(); ++i)
+  {
+    hash = MixCaseHash(hash ^ (static_cast<std::uint64_t>(key.exact_words[i]) +
+                               0x9e3779b97f4a7c15ULL + i));
+  }
+  return hash;
 }
 
 template <typename Key, std::size_t Capacity>
@@ -646,6 +683,15 @@ inline void RecordTevCase(std::uint64_t structural_key, std::uint64_t program_fi
              expected_epoch);
 }
 
+inline void RecordTevCase(std::uint64_t structural_key, std::uint64_t program_fingerprint,
+                          std::uint32_t exact_word_count, const TevExactWords& exact_words,
+                          std::uint64_t stage_work, std::uint64_t expected_epoch)
+{
+  RecordCase(s_tev_cases,
+             TevCaseKey{structural_key, program_fingerprint, exact_word_count, exact_words},
+             stage_work, expected_epoch);
+}
+
 inline void RecordRasterCandidatePixel()
 {
   // Called inside the traversal SampledScope; use its TLS activity marker to
@@ -659,6 +705,36 @@ inline void RecordTevStages(std::uint64_t stages)
   // Called immediately after constructing the TEV SampledScope.
   if (s_local.active_scope_depth != 0)
     s_local.tev_stages += stages;
+}
+
+inline void RecordTevHotCaseClassifiedBatch()
+{
+  if (Enabled())
+    s_tev_hot_classified_batches.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void RecordTevHotCaseClassifiedPixel()
+{
+  if (Enabled())
+    s_tev_hot_classified_pixels.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void RecordTevHotCaseSpecializedPixel()
+{
+  if (Enabled())
+    s_tev_hot_specialized_pixels.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void RecordTevHotCaseShadowPixel()
+{
+  if (Enabled())
+    s_tev_hot_shadow_pixels.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void RecordTevHotCaseShadowMismatch()
+{
+  if (Enabled())
+    s_tev_hot_shadow_mismatches.fetch_add(1, std::memory_order_relaxed);
 }
 
 inline void RecordXfbGeneration(std::uint64_t elapsed_us)
@@ -791,6 +867,15 @@ inline Snapshot Capture()
   snapshot.tev_cases = CaptureCaseTable(s_tev_cases);
   snapshot.raster_candidate_pixels = s_raster_candidate_pixels.load(std::memory_order_relaxed);
   snapshot.tev_stages = s_tev_stages.load(std::memory_order_relaxed);
+  snapshot.tev_hot_classified_batches =
+      s_tev_hot_classified_batches.load(std::memory_order_relaxed);
+  snapshot.tev_hot_classified_pixels =
+      s_tev_hot_classified_pixels.load(std::memory_order_relaxed);
+  snapshot.tev_hot_specialized_pixels =
+      s_tev_hot_specialized_pixels.load(std::memory_order_relaxed);
+  snapshot.tev_hot_shadow_pixels = s_tev_hot_shadow_pixels.load(std::memory_order_relaxed);
+  snapshot.tev_hot_shadow_mismatches =
+      s_tev_hot_shadow_mismatches.load(std::memory_order_relaxed);
   snapshot.fifo_burst_count = s_fifo_burst_count.load(std::memory_order_relaxed);
   snapshot.fifo_consume_count = s_fifo_consume_count.load(std::memory_order_relaxed);
   snapshot.fifo_bytes_last = s_fifo_bytes_last.load(std::memory_order_relaxed);

@@ -1,0 +1,455 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index 16f76439c7..0e7190d68d 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/Software/Rasterizer.cpp b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+index 32d864b0aa..919d2ddc82 100644
+--- a/Source/Core/VideoBackends/Software/Rasterizer.cpp
++++ b/Source/Core/VideoBackends/Software/Rasterizer.cpp
+@@ -159,6 +159,11 @@ void SetTevKonstColors()
+   tev.SetKonstColors();
+ }
+ 
++void ClassifyTevHotCase()
++{
++  tev.ClassifyHotCaseDraw();
++}
++
+ static void Draw(s32 x, s32 y, s32 xi, s32 yi)
+ {
+   static const int fast_software_raster = DolphinWeb_FastSoftwareRaster();
+diff --git a/Source/Core/VideoBackends/Software/Rasterizer.h b/Source/Core/VideoBackends/Software/Rasterizer.h
+index d9cd4a6b11..dd5ddfdda2 100644
+--- a/Source/Core/VideoBackends/Software/Rasterizer.h
++++ b/Source/Core/VideoBackends/Software/Rasterizer.h
+@@ -18,6 +18,7 @@ void DrawTriangleFrontFace(const OutputVertexData* v0, const OutputVertexData* v
+                            const OutputVertexData* v2);
+ 
+ void SetTevKonstColors();
++void ClassifyTevHotCase();
+ 
+ struct RasterBlockPixel
+ {
+diff --git a/Source/Core/VideoBackends/Software/SWVertexLoader.cpp b/Source/Core/VideoBackends/Software/SWVertexLoader.cpp
+index 8759de597a..d2eaffa53e 100644
+--- a/Source/Core/VideoBackends/Software/SWVertexLoader.cpp
++++ b/Source/Core/VideoBackends/Software/SWVertexLoader.cpp
+@@ -64,6 +64,9 @@ void SWVertexLoader::DrawCurrentBatch(u32 base_index, u32 num_indices, u32 base_
+ 
+   m_setup_unit.Init(primitive_type);
+   Rasterizer::SetTevKonstColors();
++  // BP/TEV state is stable for the submitted GX batch. Classify the exact
++  // measured program once here rather than rebuilding its tuple per pixel.
++  Rasterizer::ClassifyTevHotCase();
+ 
+   for (u32 i = 0; i < m_index_generator.GetIndexLen(); i++)
+   {
+diff --git a/Source/Core/VideoBackends/Software/Tev.cpp b/Source/Core/VideoBackends/Software/Tev.cpp
+index 7c9ee1984e..807bf97905 100644
+--- a/Source/Core/VideoBackends/Software/Tev.cpp
++++ b/Source/Core/VideoBackends/Software/Tev.cpp
+@@ -23,6 +23,19 @@
+ 
+ #ifdef __EMSCRIPTEN__
+ #include "dolphin_web_raster_profile.h"
++
++extern "C" int DolphinWeb_SoftwareTevHotCaseMode();
++extern "C" unsigned int DolphinWeb_SoftwareTevHotCaseGeneration();
++#else
++static int DolphinWeb_SoftwareTevHotCaseMode()
++{
++  return 0;
++}
++
++static unsigned int DolphinWeb_SoftwareTevHotCaseGeneration()
++{
++  return 0;
++}
+ #endif
+ 
+ static inline s16 Clamp255(s16 in)
+@@ -35,6 +48,97 @@ static inline s16 Clamp1024(s16 in)
+   return std::clamp<s16>(in, -1024, 1023);
+ }
+ 
++static u32 PackTevSwapWord(const auto& swap)
++{
++  return static_cast<u32>(swap[ColorChannel::Red]) |
++         (static_cast<u32>(swap[ColorChannel::Green]) << 2) |
++         (static_cast<u32>(swap[ColorChannel::Blue]) << 4) |
++         (static_cast<u32>(swap[ColorChannel::Alpha]) << 6);
++}
++
++static TevHotCase::ExactTuple BuildSingleStageExactTuple()
++{
++  const TwoTevStageOrders& order = bpmem.tevorders[0];
++  const TevStageCombiner::ColorCombiner& cc = bpmem.combiners[0].colorC;
++  const TevStageCombiner::AlphaCombiner& ac = bpmem.combiners[0].alphaC;
++  const bool texture_enabled = order.getEnable(0) != 0;
++  const u32 order_word = order.getTexMap(0) | (order.getTexCoord(0) << 3) |
++                         (static_cast<u32>(texture_enabled) << 6) |
++                         (static_cast<u32>(order.getColorChan(0)) << 7);
++  const u32 konst_word = static_cast<u32>(bpmem.tevksel.GetKonstColor(0)) |
++                         (static_cast<u32>(bpmem.tevksel.GetKonstAlpha(0)) << 8);
++  return {
++      bpmem.genMode.hex,
++      bpmem.tevindref.hex,
++      order_word,
++      bpmem.tevind[0].fullhex & 0x1fffff,
++      cc.hex,
++      ac.hex,
++      konst_word,
++      PackTevSwapWord(bpmem.tevksel.GetSwapTable(ac.rswap.Value())),
++      PackTevSwapWord(bpmem.tevksel.GetSwapTable(ac.tswap.Value())),
++  };
++}
++
++Tev::RegisterSnapshot Tev::CaptureRegisters() const
++{
++  RegisterSnapshot snapshot;
++  for (u32 i = 0; i < snapshot.size(); ++i)
++    snapshot[i] = Reg[static_cast<TevOutput>(i)];
++  return snapshot;
++}
++
++void Tev::RestoreRegisters(const RegisterSnapshot& snapshot)
++{
++  for (u32 i = 0; i < snapshot.size(); ++i)
++    Reg[static_cast<TevOutput>(i)] = snapshot[i];
++}
++
++bool Tev::RegistersEqual(const RegisterSnapshot& snapshot) const
++{
++  for (u32 i = 0; i < snapshot.size(); ++i)
++  {
++    const TevColor& value = Reg[static_cast<TevOutput>(i)];
++    if (value.a != snapshot[i].a || value.b != snapshot[i].b || value.g != snapshot[i].g ||
++        value.r != snapshot[i].r)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
++void Tev::EvaluateHotCase()
++{
++  TevHotCase::Evaluate(m_hot_case, Reg[TevOutput::Prev], TexColor, RasColor);
++}
++
++void Tev::ClassifyHotCaseDraw()
++{
++#ifdef __EMSCRIPTEN__
++  m_hot_case_metrics_enabled = DolphinWeb::RasterProfile::Enabled();
++#else
++  m_hot_case_metrics_enabled = false;
++#endif
++  const u32 generation = DolphinWeb_SoftwareTevHotCaseGeneration();
++  if (generation != m_hot_case_mode_generation)
++  {
++    m_hot_case_mode_generation = generation;
++    m_hot_case_latched_off = false;
++  }
++
++  m_hot_case_mode = static_cast<u32>(DolphinWeb_SoftwareTevHotCaseMode()) & 0x3;
++  m_hot_case = TevHotCase::Kind::None;
++  if (m_hot_case_mode == 0 || m_hot_case_latched_off)
++    return;
++
++  m_hot_case = TevHotCase::Classify(BuildSingleStageExactTuple());
++#ifdef __EMSCRIPTEN__
++  if (m_hot_case_metrics_enabled && m_hot_case != TevHotCase::Kind::None)
++    DolphinWeb::RasterProfile::RecordTevHotCaseClassifiedBatch();
++#endif
++}
++
+ void Tev::SetRasColor(RasColorChan colorChan, u32 swaptable)
+ {
+   switch (colorChan)
+@@ -596,52 +700,106 @@ void Tev::Draw()
+     // set color
+     SetRasColor(order.getColorChan(stageOdd), ac.rswap);
+ 
+-    // combine inputs
+-    InputRegType inputs[4];
+-    inputs[BLU_C].a = m_ColorInputLUT[cc.a].b;
+-    inputs[BLU_C].b = m_ColorInputLUT[cc.b].b;
+-    inputs[BLU_C].c = m_ColorInputLUT[cc.c].b;
+-    inputs[BLU_C].d = m_ColorInputLUT[cc.d].b;
+-    inputs[GRN_C].a = m_ColorInputLUT[cc.a].g;
+-    inputs[GRN_C].b = m_ColorInputLUT[cc.b].g;
+-    inputs[GRN_C].c = m_ColorInputLUT[cc.c].g;
+-    inputs[GRN_C].d = m_ColorInputLUT[cc.d].g;
+-    inputs[RED_C].a = m_ColorInputLUT[cc.a].r;
+-    inputs[RED_C].b = m_ColorInputLUT[cc.b].r;
+-    inputs[RED_C].c = m_ColorInputLUT[cc.c].r;
+-    inputs[RED_C].d = m_ColorInputLUT[cc.d].r;
+-    inputs[ALP_C].a = m_AlphaInputLUT[ac.a].a;
+-    inputs[ALP_C].b = m_AlphaInputLUT[ac.b].a;
+-    inputs[ALP_C].c = m_AlphaInputLUT[ac.c].a;
+-    inputs[ALP_C].d = m_AlphaInputLUT[ac.d].a;
+-
+-    if (cc.bias != TevBias::Compare)
+-      DrawColorRegular(cc, inputs);
+-    else
+-      DrawColorCompare(cc, inputs);
++    const auto draw_generic_stage = [&] {
++      InputRegType inputs[4];
++      inputs[BLU_C].a = m_ColorInputLUT[cc.a].b;
++      inputs[BLU_C].b = m_ColorInputLUT[cc.b].b;
++      inputs[BLU_C].c = m_ColorInputLUT[cc.c].b;
++      inputs[BLU_C].d = m_ColorInputLUT[cc.d].b;
++      inputs[GRN_C].a = m_ColorInputLUT[cc.a].g;
++      inputs[GRN_C].b = m_ColorInputLUT[cc.b].g;
++      inputs[GRN_C].c = m_ColorInputLUT[cc.c].g;
++      inputs[GRN_C].d = m_ColorInputLUT[cc.d].g;
++      inputs[RED_C].a = m_ColorInputLUT[cc.a].r;
++      inputs[RED_C].b = m_ColorInputLUT[cc.b].r;
++      inputs[RED_C].c = m_ColorInputLUT[cc.c].r;
++      inputs[RED_C].d = m_ColorInputLUT[cc.d].r;
++      inputs[ALP_C].a = m_AlphaInputLUT[ac.a].a;
++      inputs[ALP_C].b = m_AlphaInputLUT[ac.b].a;
++      inputs[ALP_C].c = m_AlphaInputLUT[ac.c].a;
++      inputs[ALP_C].d = m_AlphaInputLUT[ac.d].a;
++
++      if (cc.bias != TevBias::Compare)
++        DrawColorRegular(cc, inputs);
++      else
++        DrawColorCompare(cc, inputs);
++
++      if (cc.clamp)
++      {
++        Reg[cc.dest].r = Clamp255(Reg[cc.dest].r);
++        Reg[cc.dest].g = Clamp255(Reg[cc.dest].g);
++        Reg[cc.dest].b = Clamp255(Reg[cc.dest].b);
++      }
++      else
++      {
++        Reg[cc.dest].r = Clamp1024(Reg[cc.dest].r);
++        Reg[cc.dest].g = Clamp1024(Reg[cc.dest].g);
++        Reg[cc.dest].b = Clamp1024(Reg[cc.dest].b);
++      }
+ 
+-    if (cc.clamp)
++      if (ac.bias != TevBias::Compare)
++        DrawAlphaRegular(ac, inputs);
++      else
++        DrawAlphaCompare(ac, inputs);
++
++      if (ac.clamp)
++        Reg[ac.dest].a = Clamp255(Reg[ac.dest].a);
++      else
++        Reg[ac.dest].a = Clamp1024(Reg[ac.dest].a);
++    };
++
++    if (m_hot_case == TevHotCase::Kind::None)
+     {
+-      Reg[cc.dest].r = Clamp255(Reg[cc.dest].r);
+-      Reg[cc.dest].g = Clamp255(Reg[cc.dest].g);
+-      Reg[cc.dest].b = Clamp255(Reg[cc.dest].b);
++      draw_generic_stage();
++      continue;
+     }
+-    else
++
++#ifdef __EMSCRIPTEN__
++    if (m_hot_case_metrics_enabled)
++      DolphinWeb::RasterProfile::RecordTevHotCaseClassifiedPixel();
++#endif
++    if ((m_hot_case_mode & TevHotCase::MODE_SHADOW) != 0)
+     {
+-      Reg[cc.dest].r = Clamp1024(Reg[cc.dest].r);
+-      Reg[cc.dest].g = Clamp1024(Reg[cc.dest].g);
+-      Reg[cc.dest].b = Clamp1024(Reg[cc.dest].b);
++      const RegisterSnapshot before = CaptureRegisters();
++      draw_generic_stage();
++      const RegisterSnapshot generic = CaptureRegisters();
++      RestoreRegisters(before);
++      EvaluateHotCase();
++#ifdef __EMSCRIPTEN__
++      if (m_hot_case_metrics_enabled)
++        DolphinWeb::RasterProfile::RecordTevHotCaseShadowPixel();
++#endif
++      if (!RegistersEqual(generic))
++      {
++        RestoreRegisters(generic);
++        m_hot_case = TevHotCase::Kind::None;
++        m_hot_case_latched_off = true;
++#ifdef __EMSCRIPTEN__
++        if (m_hot_case_metrics_enabled)
++          DolphinWeb::RasterProfile::RecordTevHotCaseShadowMismatch();
++#endif
++      }
++      else if ((m_hot_case_mode & TevHotCase::MODE_EXECUTE) == 0)
++      {
++        // Shadow-only mode proves parity without changing renderer output.
++        RestoreRegisters(generic);
++      }
++      else
++      {
++#ifdef __EMSCRIPTEN__
++        if (m_hot_case_metrics_enabled)
++          DolphinWeb::RasterProfile::RecordTevHotCaseSpecializedPixel();
++#endif
++      }
+     }
+-
+-    if (ac.bias != TevBias::Compare)
+-      DrawAlphaRegular(ac, inputs);
+-    else
+-      DrawAlphaCompare(ac, inputs);
+-
+-    if (ac.clamp)
+-      Reg[ac.dest].a = Clamp255(Reg[ac.dest].a);
+     else
+-      Reg[ac.dest].a = Clamp1024(Reg[ac.dest].a);
++    {
++      EvaluateHotCase();
++#ifdef __EMSCRIPTEN__
++      if (m_hot_case_metrics_enabled)
++        DolphinWeb::RasterProfile::RecordTevHotCaseSpecializedPixel();
++#endif
++    }
+   }
+ 
+   // convert to 8 bits per component
+diff --git a/Source/Core/VideoBackends/Software/Tev.h b/Source/Core/VideoBackends/Software/Tev.h
+index c6b6f87851..2155f35fff 100644
+--- a/Source/Core/VideoBackends/Software/Tev.h
++++ b/Source/Core/VideoBackends/Software/Tev.h
+@@ -6,6 +6,7 @@
+ #include <array>
+ 
+ #include "Common/EnumMap.h"
++#include "VideoBackends/Software/TevHotCase.h"
+ #include "VideoCommon/BPMemory.h"
+ 
+ class Tev
+@@ -213,6 +214,18 @@ class Tev
+ 
+   void Indirect(unsigned int stageNum, s32 s, s32 t);
+ 
++  using RegisterSnapshot = std::array<TevColor, 4>;
++  RegisterSnapshot CaptureRegisters() const;
++  void RestoreRegisters(const RegisterSnapshot& snapshot);
++  bool RegistersEqual(const RegisterSnapshot& snapshot) const;
++  void EvaluateHotCase();
++
++  TevHotCase::Kind m_hot_case = TevHotCase::Kind::None;
++  u32 m_hot_case_mode = 0;
++  u32 m_hot_case_mode_generation = 0;
++  bool m_hot_case_latched_off = false;
++  bool m_hot_case_metrics_enabled = false;
++
+ public:
+   s32 Position[3]{};
+   u8 Color[2][4]{};  // must be RGBA for correct swap table ordering
+@@ -231,5 +244,6 @@ public:
+   };
+ 
+   void SetKonstColors();
++  void ClassifyHotCaseDraw();
+   void Draw();
+ };
+diff --git a/Source/Core/VideoBackends/Software/TevHotCase.h b/Source/Core/VideoBackends/Software/TevHotCase.h
+new file mode 100644
+index 0000000000..580beb2979
+--- /dev/null
++++ b/Source/Core/VideoBackends/Software/TevHotCase.h
+@@ -0,0 +1,87 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <array>
++#include <cstdint>
++
++namespace TevHotCase
++{
++using ExactTuple = std::array<std::uint32_t, 9>;
++
++enum class Kind : std::uint8_t
++{
++  None,
++  TextureModulateRgbRasterAlpha,
++  PassThroughGenMode10,
++  PassThroughGenMode4010,
++};
++
++inline constexpr std::uint32_t MODE_EXECUTE = 1u << 0;
++inline constexpr std::uint32_t MODE_SHADOW = 1u << 1;
++
++inline constexpr ExactTuple TEXTURE_MODULATE_RGB_RASTER_ALPHA = {
++    0x4011, 0x0, 0x40, 0x0, 0x8fa8f, 0x8ffd0, 0x0, 0xe4, 0xe4,
++};
++inline constexpr ExactTuple PASS_THROUGH_GENMODE_10 = {
++    0x10, 0x0, 0x0, 0x0, 0x8fffa, 0x8ffd0, 0x0, 0xe4, 0xe4,
++};
++inline constexpr ExactTuple PASS_THROUGH_GENMODE_4010 = {
++    0x4010, 0x0, 0x0, 0x0, 0x8fffa, 0x8ffd0, 0x0, 0xe4, 0xe4,
++};
++
++constexpr Kind Classify(const ExactTuple& tuple)
++{
++  if (tuple == TEXTURE_MODULATE_RGB_RASTER_ALPHA)
++    return Kind::TextureModulateRgbRasterAlpha;
++  if (tuple == PASS_THROUGH_GENMODE_10)
++    return Kind::PassThroughGenMode10;
++  if (tuple == PASS_THROUGH_GENMODE_4010)
++    return Kind::PassThroughGenMode4010;
++  return Kind::None;
++}
++
++constexpr std::int16_t Clamp255(std::int32_t value)
++{
++  return static_cast<std::int16_t>(value < 0 ? 0 : value > 255 ? 255 : value);
++}
++
++// This is the exact regular-combiner arithmetic for
++//   prev.rgb = lerp(0, ras.rgb, tex.rgb), clamp
++// used by the measured one-stage tuple. Inputs are the canonical post-swap
++// TEV values, so both operands are in [0, 255].
++constexpr std::int16_t Modulate(std::int16_t raster, std::int16_t texture)
++{
++  const std::uint16_t c = static_cast<std::uint16_t>(texture) +
++                          (static_cast<std::uint16_t>(texture) >> 7);
++  const std::int32_t value =
++      (static_cast<std::int32_t>(raster) * static_cast<std::int32_t>(c) + 128) >> 8;
++  return Clamp255(value);
++}
++
++// Color must expose signed a/b/g/r members. Only the destination Prev register
++// is mutated; callers preserve the other three TEV registers unchanged.
++template <typename Color>
++constexpr void Evaluate(Kind kind, Color& previous, const Color& texture, const Color& raster)
++{
++  switch (kind)
++  {
++  case Kind::TextureModulateRgbRasterAlpha:
++    previous.r = Modulate(raster.r, texture.r);
++    previous.g = Modulate(raster.g, texture.g);
++    previous.b = Modulate(raster.b, texture.b);
++    previous.a = Clamp255(raster.a);
++    return;
++  case Kind::PassThroughGenMode10:
++  case Kind::PassThroughGenMode4010:
++    previous.r = Clamp255(raster.r);
++    previous.g = Clamp255(raster.g);
++    previous.b = Clamp255(raster.b);
++    previous.a = Clamp255(raster.a);
++    return;
++  case Kind::None:
++    return;
++  }
++}
++}  // namespace TevHotCase

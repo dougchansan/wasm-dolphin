@@ -14,6 +14,7 @@ import {
   buildComparisonTasklist,
   buildReplacementBlock,
   classifyGateOutcome,
+  collectRunMetadata,
   evaluateMetricsModeEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateQualificationProvenance,
@@ -21,14 +22,20 @@ import {
   expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
+  fixedWorkPollDelayMs,
   parseProfileMetrics,
   parseBattleCheckpoint,
+  parsePostLoadInputScript,
   recordsToCsv,
   resolveCoreArtifactPath,
+  selectNextFixedWorkBenchmarkAction,
   summarizeComparison,
   summarizeJitMetrics,
   summarizeNumeric,
   summarizeTimedMetricWindows,
+  selectNextPostLoadBenchmarkAction,
+  serializePostLoadInputScript,
+  summarizeFixedEmulatedWork,
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
@@ -141,7 +148,20 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
 
   const menuDriven = validManifest();
   menuDriven.benchmark.inputScriptMode = "scripted";
-  assert.throws(() => assertRunProvenance(menuDriven), /inputScriptMode=none/);
+  assert.throws(() => assertRunProvenance(menuDriven), /inputScriptMode=none or post-load-only/);
+
+  const postLoad = validManifest();
+  Object.assign(postLoad.benchmark, {
+    inputScriptMode: "post-load-only",
+    inputScriptEventCount: 2,
+    inputScriptScheduleOrigin: "after-first-timed-sample",
+    inputScriptSha256: "a".repeat(64),
+    timingStartsAfterVerifiedLoad: true,
+    timingBaselineEstablishedAt: "2026-07-10T00:00:00.000Z",
+  });
+  assert.equal(assertRunProvenance(postLoad).benchmark.inputScriptEventCount, 2);
+  postLoad.benchmark.inputScriptScheduleOrigin = "save-loaded";
+  assert.throws(() => assertRunProvenance(postLoad), /first timed baseline sample/);
 
   const labelOnly = validManifest();
   labelOnly.fixture.battleCheckpoint.verified = false;
@@ -152,6 +172,184 @@ test("fixed-battle provenance rejects missing fields and premature timing", () =
   assert.throws(() => assertRunProvenance(unknownTelemetry), /Unsupported causal telemetry schema/);
 
   assert.equal(assertRunProvenance(validManifest()).fixture.saveStateLoaded, true);
+});
+
+test("post-load input parser accepts only balanced deterministic emulator keys", () => {
+  const parsed = parsePostLoadInputScript(
+    "down:2:x,up:2.1:x,down:1:ArrowLeft,up:1.2:ArrowLeft",
+    { durationSeconds: 5 }
+  );
+  assert.deepEqual(parsed.map(({ action, second, key }) => ({ action, second, key })), [
+    { action: "down", second: 1, key: "ArrowLeft" },
+    { action: "up", second: 1.2, key: "ArrowLeft" },
+    { action: "down", second: 2, key: "x" },
+    { action: "up", second: 2.1, key: "x" },
+  ]);
+  assert.equal(
+    serializePostLoadInputScript(parsed),
+    "down:1:ArrowLeft,up:1.2:ArrowLeft,down:2:x,up:2.1:x"
+  );
+  assert.deepEqual(parsePostLoadInputScript("none", { durationSeconds: 5 }), []);
+  assert.throws(
+    () => parsePostLoadInputScript("down:1:x", { durationSeconds: 5 }),
+    /leaves keys pressed/
+  );
+  assert.throws(
+    () => parsePostLoadInputScript("up:1:x", { durationSeconds: 5 }),
+    /not down/
+  );
+  assert.throws(
+    () => parsePostLoadInputScript("down:1:F5,up:2:F5", { durationSeconds: 5 }),
+    /Invalid PERF_INPUT_SCRIPT/
+  );
+  assert.throws(
+    () => parsePostLoadInputScript("down:5:x,up:5.1:x", { durationSeconds: 5 }),
+    /Invalid PERF_INPUT_SCRIPT/
+  );
+});
+
+test("post-load input metadata hashes the canonical script before provenance checks", async () => {
+  const inputScript = "down:1:x,up:1.1:x";
+  const metadata = await collectRunMetadata({
+    root: process.cwd(),
+    url: "http://127.0.0.1:8082/?inputphoton=1",
+    browserName: "chromium",
+    browserChannel: "chrome",
+    browserVersion: "143.0",
+    browserExecutable: "chrome.exe",
+    headed: true,
+    durationSeconds: 5,
+    sampleMs: 1000,
+    screenshotEverySeconds: 0,
+    captureScreenshots: true,
+    showDebugPanel: false,
+    romPath: "unused.iso",
+    corePath: "unused.wasm",
+    saveStateUrl: "/fixture.sav",
+    saveStatePath: "unused.sav",
+    saveStateAt: 0,
+    inputScript,
+    sceneLabel: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
+    artifactDescriptions: {
+      rom: { sha256: FIXED_MELEE_BATTLE_FIXTURE.isoSha256 },
+      core: { sha256: "1".repeat(64) },
+      saveState: { sha256: FIXED_MELEE_BATTLE_FIXTURE.saveStateSha256 },
+    },
+  });
+  assert.equal(
+    metadata.benchmark.inputScriptSha256,
+    createHash("sha256").update(inputScript).digest("hex")
+  );
+});
+
+test("post-load scheduler establishes sample zero and samples timestamp ties before input", () => {
+  const inputEvents = parsePostLoadInputScript("down:0:x,up:0.1:x", { durationSeconds: 2 });
+  assert.deepEqual(
+    selectNextPostLoadBenchmarkAction({
+      sampleIndex: 0,
+      totalSamples: 2,
+      sampleMs: 1000,
+      inputIndex: 0,
+      inputEvents,
+    }),
+    { type: "sample", index: 0, atMs: 0 }
+  );
+  assert.equal(
+    selectNextPostLoadBenchmarkAction({
+      sampleIndex: 1,
+      totalSamples: 2,
+      sampleMs: 1000,
+      inputIndex: 0,
+      inputEvents,
+    }).type,
+    "input"
+  );
+
+  const tied = parsePostLoadInputScript("down:1:x,up:1.1:x", { durationSeconds: 2 });
+  assert.deepEqual(
+    selectNextPostLoadBenchmarkAction({
+      sampleIndex: 1,
+      totalSamples: 2,
+      sampleMs: 1000,
+      inputIndex: 0,
+      inputEvents: tied,
+    }),
+    { type: "sample", index: 1, atMs: 1000 }
+  );
+});
+
+test("fixed-work scheduler preserves marker actions and bounds the run by wall time", () => {
+  const inputEvents = parsePostLoadInputScript(
+    "down:1.5:x,up:1.6:x",
+    { durationSeconds: 2 }
+  );
+  assert.equal(
+    selectNextFixedWorkBenchmarkAction({
+      sampleIndex: 2,
+      totalSamples: 2,
+      sampleMs: 1000,
+      inputIndex: 0,
+      inputEvents,
+      wallTimeCapMs: 2000,
+    }).type,
+    "input"
+  );
+  assert.deepEqual(
+    selectNextFixedWorkBenchmarkAction({
+      sampleIndex: 2,
+      totalSamples: 1,
+      sampleMs: 1000,
+      inputIndex: inputEvents.length,
+      inputEvents,
+      wallTimeCapMs: 1750,
+    }),
+    { type: "wall-time-cap", atMs: 1750 }
+  );
+  assert.equal(fixedWorkPollDelayMs({ nowMs: 1000, deadlineMs: 1500 }), 100);
+  assert.equal(fixedWorkPollDelayMs({ nowMs: 1440, deadlineMs: 1500 }), 60);
+  assert.equal(fixedWorkPollDelayMs({ nowMs: 1500, deadlineMs: 1500 }), 0);
+  assert.throws(
+    () => fixedWorkPollDelayMs({ nowMs: 1000, deadlineMs: 1500, pollIntervalMs: 0 }),
+    /positive poll interval/
+  );
+});
+
+test("fixed emulated work derives throughput from one post-settle baseline", () => {
+  const common = {
+    targetCoreSeconds: 2,
+    coreTicksPerSecond: 1000,
+    baseline: { coreTicks: 10_000, frame: 100, observedAtMs: 500 },
+    wallTimeCapSeconds: 5,
+    pollIntervalMs: 100,
+  };
+  const reached = summarizeFixedEmulatedWork({
+    ...common,
+    observation: { coreTicks: 12_100, frame: 226, observedAtMs: 2500 },
+  });
+  assert.equal(reached.targetCoreTicks, 2000);
+  assert.equal(reached.actualCoreTickDelta, 2100);
+  assert.equal(reached.actualFrameDelta, 126);
+  assert.equal(reached.elapsedWallSeconds, 2);
+  assert.equal(reached.reachedTarget, true);
+  assert.equal(reached.throughputGameSpeedPercent, 105);
+  assert.equal(reached.throughputCoreFps, 63);
+
+  const capped = summarizeFixedEmulatedWork({
+    ...common,
+    observation: { coreTicks: 11_900, frame: 214, observedAtMs: 2500 },
+  });
+  assert.equal(capped.reachedTarget, false);
+  assert.equal(capped.throughputGameSpeedPercent, 95);
+  assert.equal(capped.throughputCoreFps, 57);
+
+  const regressed = summarizeFixedEmulatedWork({
+    ...common,
+    observation: { coreTicks: 9_999, frame: 99, observedAtMs: 2500 },
+  });
+  assert.equal(regressed.deltasValid, false);
+  assert.equal(regressed.reachedTarget, false);
+  assert.equal(regressed.throughputGameSpeedPercent, null);
+  assert.equal(regressed.throughputCoreFps, null);
 });
 
 test("served identity and observed battle checkpoint reject mismatches", () => {
@@ -459,7 +657,7 @@ test("comparison run validity includes assertions and page/worker console errors
   ]);
 });
 
-test("fixed-battle XFB identity is locked per deliberate software raster mode", () => {
+test("fixed-battle XFB identity is locked per deliberate rendering mode", () => {
   assert.equal(
     expectedBattleCheckpointForParams({ video: "software", fastsw: "0" }).xfbHash,
     "55dc4398"
@@ -470,7 +668,7 @@ test("fixed-battle XFB identity is locked per deliberate software raster mode", 
   );
   assert.equal(
     expectedBattleCheckpointForParams({ video: "wgpu", fastsw: "0" }).xfbHash,
-    "4b2d0a3b"
+    "6fd97dc5"
   );
   const full = expectedBattleCheckpointForParams({ video: "software", fastsw: "0" });
   assert.equal(
