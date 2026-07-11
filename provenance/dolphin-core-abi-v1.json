@@ -129,7 +129,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "3a1837169f3dc986d53931f86518390261e2dbcbe78f48e434a2c788da8fc1c6"
+      "sha256": "b79585d941e8394eae3a1ba02db8b7bd436c9a935dc82a791af1c13e1a6104fc"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
