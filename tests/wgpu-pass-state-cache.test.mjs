@@ -16,7 +16,10 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       "wgstate:1 pipe:4 bg:5,6,7 vb:8 ib:9 wgdrop:0 " +
       "wgbabort:10 wgboversize:11 wguploadto:12 " +
       "wgubo:1 wgubometrics:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
-      "usupcall:22,23,24 usupbyte:25,26,27"
+      "usupcall:22,23,24 usupbyte:25,26,27 " +
+      "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
+      "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
+      "wgarena:67108864,67108864,29,30,31,33554432"
     ),
     {
       enabled: true,
@@ -35,7 +38,22 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheHits: [16, 17, 18],
       uboCacheExpired: [19, 20, 21],
       uboUploadCallsSuppressed: [22, 23, 24],
-      uboUploadBytesSuppressed: [25, 26, 27]
+      uboUploadBytesSuppressed: [25, 26, 27],
+      uboChangeMaskHistogram: [1, 2, 3, 4, 5, 6, 7, 8],
+      uboPacketEligibleCount: 9,
+      uboPacketTheoreticalCallsRemoved: 10,
+      uboPacketPayloadBytes: 11,
+      uboPacketAlignedBytes: 12,
+      uboPrepareCpuCalls: [13, 14, 15],
+      uboPrepareCpuNs: [16, 17, 18],
+      geometryPackEnabled: true,
+      geometryPackEpoch: 28,
+      uploadArenaRequestedBytes: 67108864,
+      uploadArenaConfiguredBytes: 67108864,
+      uploadArenaFallbackCount: 29,
+      uploadArenaLateRejectCount: 30,
+      uploadArenaWrapCount: 31,
+      uploadArenaInflightHighWaterBytes: 33554432
     }
   );
   assert.deepEqual(
@@ -59,7 +77,22 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheHits: [0, 0, 0],
       uboCacheExpired: [0, 0, 0],
       uboUploadCallsSuppressed: [0, 0, 0],
-      uboUploadBytesSuppressed: [0, 0, 0]
+      uboUploadBytesSuppressed: [0, 0, 0],
+      uboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+      uboPacketEligibleCount: 0,
+      uboPacketTheoreticalCallsRemoved: 0,
+      uboPacketPayloadBytes: 0,
+      uboPacketAlignedBytes: 0,
+      uboPrepareCpuCalls: [0, 0, 0],
+      uboPrepareCpuNs: [0, 0, 0],
+      geometryPackEnabled: false,
+      geometryPackEpoch: 0,
+      uploadArenaRequestedBytes: 0,
+      uploadArenaConfiguredBytes: 0,
+      uploadArenaFallbackCount: 0,
+      uploadArenaLateRejectCount: 0,
+      uploadArenaWrapCount: 0,
+      uploadArenaInflightHighWaterBytes: 0
     }
   );
   assert.equal(parseWgpuProducerStateStats("wgstate:1 pipe:4"), null);
@@ -364,7 +397,9 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityEnd = gfxSource.indexOf("void WebGPUGfx::Draw(", utilityStart);
   const utilitySource = gfxSource.slice(utilityStart, utilityEnd);
   const utilityRefresh = utilitySource.indexOf("RefreshUboCacheState();");
-  const utilityAlloc = utilitySource.indexOf("AllocUboSlice(data, size)");
+  const utilityAlloc = utilitySource.indexOf(
+    "AllocUboSlice(data, size, BufferUploadRole::Utility)"
+  );
   const utilityArm = utilitySource.indexOf("m_util_uniform_mode = true");
   assert.ok(
     utilityStart >= 0 && utilityEnd > utilityStart &&
@@ -381,4 +416,37 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   assert.match(worker,
     /\? \(mode\) => ccall\("SetWebGpuUboCacheEnabled", null, \["number"\], \[mode \| 0\]\)/);
   assert.match(gfxSource, /ulook:[\s\S]*?uhit:[\s\S]*?uexp:[\s\S]*?usupcall:[\s\S]*?usupbyte:/);
+});
+
+test("opt-in geometry packing uses one transactional upload and a published-submit reuse barrier", async () => {
+  const [streamHeader, streamSource, vertexHeader, vertexSource, gfxSource, coreCmake, worker] =
+    await Promise.all([
+      readFile(new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h", import.meta.url), "utf8"),
+      readFile(new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp", import.meta.url), "utf8"),
+      readFile(new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h", import.meta.url), "utf8"),
+      readFile(new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp", import.meta.url), "utf8"),
+      readFile(new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp", import.meta.url), "utf8"),
+      readFile(new URL("../vendor/dolphin/Source/Core/Core/CMakeLists.txt", import.meta.url), "utf8"),
+      readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    ]);
+
+  assert.match(streamHeader, /Geometry = 6,[\s\S]*?Count = 7/);
+  assert.match(streamHeader, /UploadAllocTwoSegments/);
+  assert.match(streamSource, /ReserveUpload\(total_size, packet_align\)/);
+  assert.match(streamSource, /std::memcpy\(destination, first, first_len\)/);
+  assert.match(streamSource, /std::memset\(destination \+ first_len, 0/);
+  assert.doesNotMatch(streamSource, /std::vector[^\n]*UploadPacket/);
+  assert.match(streamSource, /if \(!Push\(rec\)\)[\s\S]*?\+\+m_submit_serial/);
+  assert.match(vertexHeader, /kGeometryBufferSize = 32u \* 1024u \* 1024u/);
+  assert.match(vertexHeader, /kMaxGeometryGenerationsPerSubmit = 8/);
+  assert.match(vertexSource, /kUsageGeometry = 0x20 \| 0x10 \| 0x8/);
+  assert.match(vertexSource, /if \(submit_serial != m_geometry_submit_serial\)/);
+  assert.match(vertexSource, /PushUploadBuffer\(candidate_buffer_id,[\s\S]*?BufferUploadRole::Geometry\)/);
+  assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet\.total_size/);
+  assert.match(vertexSource, /EnsureLegacyBuffers\(\)/);
+  assert.match(gfxSource, /EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled\(int enabled\)/);
+  assert.match(gfxSource, /s_geometry_upload_pack_epoch\.fetch_add\(1, std::memory_order_release\)/);
+  assert.match(coreCmake, /'_SetWebGpuGeometryPackEnabled'/);
+  assert.match(worker, /case "loadState":[\s\S]*?setWebGpuGeometryPackEnabled[\s\S]*?api\?\.loadState[\s\S]*?setWebGpuGeometryPackEnabled/);
+  assert.match(worker, /api\.loadStateFile\(path\)[\s\S]*?setTimeout\(r, 1200\)[\s\S]*?setWebGpuGeometryPackEnabled/);
 });

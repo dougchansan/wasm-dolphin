@@ -173,6 +173,126 @@ export function requestedWgpuUboCache(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuReplayBudgetMs(
+  search = globalThis.location?.search ?? ""
+) {
+  const value = new URLSearchParams(search).get("wgpureplayms");
+  return value === "4" ? 4 : value === "6" ? 6 : 0;
+}
+
+export function requestedWgpuPowerPreference(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpupower") === "low"
+    ? "low-power"
+    : "high-performance";
+}
+
+export function createWgpuReplayBudgetGate({
+  budgetMs = 0,
+  checkIntervalRecords = 32,
+  now = () => performance.now(),
+} = {}) {
+  const budget = budgetMs === 4 || budgetMs === 6 ? budgetMs : 0;
+  const interval = Math.max(1, Math.trunc(Number(checkIntervalRecords) || 32));
+  let startedAt = 0;
+  let nextCheck = interval;
+  let checkCount = 0;
+  let atomicContinuationCount = 0;
+  let atomicContinuationActive = false;
+  let atomicOverrunCompleted = false;
+  let atomicOverrunMs = 0;
+  let deadlineReached = false;
+
+  function beginDrain() {
+    nextCheck = interval;
+    checkCount = 0;
+    atomicContinuationCount = 0;
+    atomicContinuationActive = false;
+    atomicOverrunCompleted = false;
+    atomicOverrunMs = 0;
+    deadlineReached = false;
+    startedAt = budget > 0 ? now() : 0;
+    return startedAt;
+  }
+
+  function check({ processed = 0, passDepth = 0, force = false } = {}) {
+    if (budget === 0 || (!force && (processed <= 0 || processed < nextCheck))) {
+      return { checked: false, shouldYield: false, reason: null, elapsedMs: 0 };
+    }
+    while (nextCheck <= processed) nextCheck += interval;
+    checkCount += 1;
+    const elapsedMs = Math.max(0, now() - startedAt);
+    deadlineReached ||= elapsedMs >= budget;
+    if (!deadlineReached) {
+      return { checked: true, shouldYield: false, reason: null, elapsedMs };
+    }
+    if (passDepth > 0) {
+      atomicContinuationCount += 1;
+      atomicContinuationActive = true;
+      return { checked: true, shouldYield: false, reason: "atomic-pass", elapsedMs };
+    }
+    if (atomicContinuationActive && !atomicOverrunCompleted) {
+      atomicOverrunCompleted = true;
+      atomicOverrunMs = Math.max(0, elapsedMs - budget);
+    }
+    return { checked: true, shouldYield: true, reason: "time-budget", elapsedMs };
+  }
+
+  function snapshot() {
+    return {
+      enabled: budget > 0,
+      budgetMs: budget,
+      checkIntervalRecords: interval,
+      checkCount,
+      atomicContinuationCount,
+      atomicOverrunCompleted,
+      atomicOverrunMs,
+      deadlineReached,
+      startedAt,
+    };
+  }
+
+  return { beginDrain, check, snapshot };
+}
+
+export function findPublishedAtomicPassEnd({
+  begin,
+  write,
+  opAt,
+  beginOp = 12,
+  endOp = 21,
+} = {}) {
+  if (typeof opAt !== "function") return null;
+  const available = (write - begin) >>> 0;
+  let depth = 0;
+  for (let offset = 0; offset < available; offset += 1) {
+    const index = (begin + offset) >>> 0;
+    const op = opAt(index);
+    if (op === beginOp) depth += 1;
+    if (op !== endOp || depth === 0) continue;
+    depth -= 1;
+    if (depth === 0) return (index + 1) >>> 0;
+  }
+  return null;
+}
+
+export function requestedWgpuGeometryPack(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpugeompack");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
+export function requestedWgpuUploadArenaMiB(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }
@@ -500,14 +620,14 @@ export function createWgpuReplayClassifier({
       (indexed && firstIndexedEfbDraw.status !== "pass");
   }
 
-  function needsFirstEfbPassReadback(framebufferId = firstEfbDraw.framebufferId) {
-    return firstEfbDraw.status === "pass" &&
+  function needsFirstEfbPassReadback(framebufferId = firstIndexedEfbDraw.framebufferId) {
+    return firstIndexedEfbDraw.status === "pass" &&
       firstEfbPassReadback.status === "pending" &&
-      (framebufferId >>> 0) === firstEfbDraw.framebufferId;
+      (framebufferId >>> 0) === firstIndexedEfbDraw.framebufferId;
   }
 
   function beginFirstEfbPassReadback({
-    framebufferId = firstEfbDraw.framebufferId,
+    framebufferId = firstIndexedEfbDraw.framebufferId,
     passEndRecordIndex = 0,
     drawCountAtEncode = efbMutation.drawCount
   } = {}) {

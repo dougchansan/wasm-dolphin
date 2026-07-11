@@ -1,0 +1,150 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 884ae85..19c011e 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -62,5 +62,12 @@ std::atomic<u64> s_ubo_cache_expired[3]{};
+ std::atomic<u64> s_ubo_upload_calls_suppressed[3]{};
+ std::atomic<u64> s_ubo_upload_bytes_suppressed[3]{};
++std::atomic<u64> s_ubo_change_mask_histogram[8]{};
++std::atomic<u64> s_ubo_packet_eligible_count{0};
++std::atomic<u64> s_ubo_packet_theoretical_calls_removed{0};
++std::atomic<u64> s_ubo_packet_payload_bytes{0};
++std::atomic<u64> s_ubo_packet_aligned_bytes{0};
++std::atomic<u64> s_ubo_prepare_cpu_calls[3]{};
++std::atomic<u64> s_ubo_prepare_cpu_ns[3]{};
+ std::atomic<bool> s_geometry_upload_pack_enabled{false};
+ std::atomic<u64> s_geometry_upload_pack_epoch{0};
+ }
+@@ -104,6 +111,44 @@ u64 GetGeometryUploadPackEpoch()
+   return s_geometry_upload_pack_epoch.load(std::memory_order_acquire);
+ }
+ 
++void RecordUboPrepareCpu(u32 class_index, double start_ms)
++{
++  if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++    return;
++  const double elapsed_ms = emscripten_get_now() - start_ms;
++  const u64 elapsed_ns = static_cast<u64>(std::max(0.0, elapsed_ms) * 1000000.0);
++  s_ubo_prepare_cpu_calls[class_index].fetch_add(1, std::memory_order_relaxed);
++  s_ubo_prepare_cpu_ns[class_index].fetch_add(elapsed_ns, std::memory_order_relaxed);
++}
++
++void RecordUboPacketOpportunity(u32 change_mask, const std::array<u32, 3>& payload_sizes)
++{
++  if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++    return;
++
++  change_mask &= 7;
++  s_ubo_change_mask_histogram[change_mask].fetch_add(1, std::memory_order_relaxed);
++  u32 changed_count = 0;
++  u64 payload_bytes = 0;
++  u64 aligned_bytes = 0;
++  for (u32 index = 0; index < payload_sizes.size(); ++index)
++  {
++    if ((change_mask & (1u << index)) == 0)
++      continue;
++    ++changed_count;
++    payload_bytes += payload_sizes[index];
++    aligned_bytes += (payload_sizes[index] + 255u) & ~255u;
++  }
++  if (changed_count >= 2)
++  {
++    s_ubo_packet_eligible_count.fetch_add(1, std::memory_order_relaxed);
++    s_ubo_packet_theoretical_calls_removed.fetch_add(changed_count - 1,
++                                                      std::memory_order_relaxed);
++  }
++  s_ubo_packet_payload_bytes.fetch_add(payload_bytes, std::memory_order_relaxed);
++  s_ubo_packet_aligned_bytes.fetch_add(aligned_bytes, std::memory_order_relaxed);
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+ {
+   static std::string stats;
+@@ -140,6 +185,24 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " usupbyte:" << s_ubo_upload_bytes_suppressed[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_upload_bytes_suppressed[1].load(std::memory_order_relaxed) << ","
+       << s_ubo_upload_bytes_suppressed[2].load(std::memory_order_relaxed)
++      << " umask:" << s_ubo_change_mask_histogram[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[2].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[3].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[4].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[5].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[6].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_mask_histogram[7].load(std::memory_order_relaxed)
++      << " upack:" << s_ubo_packet_eligible_count.load(std::memory_order_relaxed) << ","
++      << s_ubo_packet_theoretical_calls_removed.load(std::memory_order_relaxed) << ","
++      << s_ubo_packet_payload_bytes.load(std::memory_order_relaxed) << ","
++      << s_ubo_packet_aligned_bytes.load(std::memory_order_relaxed)
++      << " ucpucall:" << s_ubo_prepare_cpu_calls[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_prepare_cpu_calls[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_prepare_cpu_calls[2].load(std::memory_order_relaxed)
++      << " ucpuns:" << s_ubo_prepare_cpu_ns[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_prepare_cpu_ns[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_prepare_cpu_ns[2].load(std::memory_order_relaxed)
+       << " wggeom:" << (s_geometry_upload_pack_enabled.load(std::memory_order_relaxed) ? 1 : 0)
+       << " wggeomepoch:" << s_geometry_upload_pack_epoch.load(std::memory_order_relaxed)
+       << " wgarena:" << GetCommandStream().GetUploadArenaRequestedBytes() << ","
+@@ -1027,6 +1090,8 @@ bool WebGPUGfx::PrepareDrawResources()
+ {
+   auto& system = Core::System::GetInstance();
+   const bool ubo_cache_enabled = RefreshUboCacheState();
++  u32 ubo_change_mask = 0;
++  std::array<u32, 3> ubo_payload_sizes{};
+ 
+   // §16 per-draw uniform ring (created once). One big buffer; each
+   // dirty GX constant set bump-allocates a fresh 256-aligned slice so
+@@ -1126,9 +1191,14 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+   if (vsm.dirty || m_vs_off == kUboOffNone || vs_changed)
+   {
++    ubo_change_mask |= 1u << 0;
++    ubo_payload_sizes[0] = sizeof(vsm.constants);
++    const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
++                                    emscripten_get_now() : 0.0;
+     m_vs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
+                    AllocUboSlice(&vsm.constants, sizeof(vsm.constants), BufferUploadRole::Ubo);
++    RecordUboPrepareCpu(0, cpu_start_ms);
+     if (ubo_cache_enabled && m_vs_off == kUboOffNone)
+       return false;
+     m_vs_publication_serial =
+@@ -1162,9 +1232,14 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+   if (psm.dirty || m_ps_off == kUboOffNone || ps_changed)
+   {
++    ubo_change_mask |= 1u << 1;
++    ubo_payload_sizes[1] = sizeof(psm.constants);
++    const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
++                                    emscripten_get_now() : 0.0;
+     m_ps_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
+                    AllocUboSlice(&psm.constants, sizeof(psm.constants), BufferUploadRole::Ubo);
++    RecordUboPrepareCpu(1, cpu_start_ms);
+     if (ubo_cache_enabled && m_ps_off == kUboOffNone)
+       return false;
+     m_ps_publication_serial =
+@@ -1224,9 +1299,14 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+   if (gsm.dirty || m_gs_off == kUboOffNone || gs_changed)
+   {
++    ubo_change_mask |= 1u << 2;
++    ubo_payload_sizes[2] = sizeof(gsm.constants);
++    const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
++                                    emscripten_get_now() : 0.0;
+     m_gs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
+                    AllocUboSlice(&gsm.constants, sizeof(gsm.constants), BufferUploadRole::Ubo);
++    RecordUboPrepareCpu(2, cpu_start_ms);
+     if (ubo_cache_enabled && m_gs_off == kUboOffNone)
+       return false;
+     m_gs_publication_serial =
+@@ -1235,6 +1315,8 @@ bool WebGPUGfx::PrepareDrawResources()
+     std::memcpy(m_gs_shadow.data(), &gsm.constants, sizeof(gsm.constants));
+     m_gs_shadow_valid = true;
+   }
++  // Measurement only: no packet is emitted and all existing uploads remain unchanged.
++  RecordUboPacketOpportunity(ubo_change_mask, ubo_payload_sizes);
+ 
+   // One shared sampler (the Day-30 split uses a single samp_ss).
+   if (m_sampler_id == 0)

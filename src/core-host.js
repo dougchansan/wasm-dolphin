@@ -15,8 +15,12 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
+  requestedWgpuReplayBudgetMs,
+  requestedWgpuPowerPreference,
   requestedWgpuReplayDiagnostics,
   requestedWgpuStateCache,
+  requestedWgpuGeometryPack,
+  requestedWgpuUploadArenaMiB,
   requestedWgpuUboCache
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -89,9 +93,13 @@ export class EmulatorHost {
       window.location.search,
       this.videoBackend === "WebGPU-Real"
     );
+    this.wgpuReplayBudgetMs = requestedWgpuReplayBudgetMs(window.location.search);
+    this.wgpuPowerPreference = requestedWgpuPowerPreference(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
+    this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
+    this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
@@ -309,9 +317,13 @@ export class EmulatorHost {
             wgpuDetachedPresenter: this.wgpuDetachedPresenter,
             wgpuLoadEpochFence: this.wgpuLoadEpochFence,
             wgpuReplayPump: this.wgpuReplayPump,
+            wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
+            wgpuPowerPreference: this.wgpuPowerPreference,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
+            wgpuGeometryPack: this.wgpuGeometryPack,
+            wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,

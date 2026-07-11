@@ -36,9 +36,137 @@ import {
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
   summarizeFixedEmulatedWork,
+  summarizeCausalFairness,
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
+
+test("causal fairness uses timed counter deltas and enforces marker parity", () => {
+  const sample = (audio, marker, webgpu = {}, gpuCompletion = {}) => ({
+    causalAudioWorkerMixCount: audio.mix,
+    causalAudioWorkerEmptyMixCount: audio.empty,
+    causalAudioUnderruns: audio.underrun,
+    causalAudioOverruns: audio.overrun,
+    causalAudioPumpMissCount: audio.miss,
+    causalAudioWorkerMixMaxMs: audio.mixMax,
+    causalAudioPumpGapMaxMs: audio.gapMax,
+    causalAudioMixRoundTripMaxMs: audio.roundTripMax,
+    causalAudioScheduleLeadSeconds: audio.lead,
+    causalAudioScheduleDriftSeconds: audio.drift,
+    causalInputMarkerEnabled: true,
+    causalInputMarkerAppliedCount: marker.applied,
+    causalInputMarkerExactCorePollCount: marker.polled,
+    causalInputMarkerArmedCount: marker.armed,
+    causalInputMarkerSubmittedCount: marker.submitted,
+    causalInputMarkerCompletedCount: marker.completed,
+    causalInputMarkerSupersededCount: marker.superseded,
+    causalInputMarkerSupersededArmedCount: marker.supersededArmed,
+    causalInputMarkerExpiredCount: marker.expired,
+    causalInputMarkerExpiredInFlightCount: marker.expiredInFlight,
+    causalInputMarkerGenerationMismatchCount: marker.mismatch,
+    causalInputMarkerGenerationUnavailableCount: marker.unavailable,
+    causalInputMarkerDroppedInFlightCount: marker.dropped,
+    causalWgpuErrorCount: webgpu.error ?? 0,
+    causalGpuCompletionFailedCount: gpuCompletion.failed ?? 0,
+  });
+  const baseline = sample(
+    { mix: 10, empty: 1, underrun: 2, overrun: 0, miss: 3, mixMax: 1, gapMax: 4, roundTripMax: 5, lead: 0.05, drift: -0.01 },
+    { applied: 1, polled: 1, armed: 1, submitted: 1, completed: 1, superseded: 0, supersededArmed: 0, expired: 0, expiredInFlight: 0, mismatch: 0, unavailable: 0, dropped: 0 }
+  );
+  const final = sample(
+    { mix: 20, empty: 1, underrun: 2, overrun: 0, miss: 4, mixMax: 2, gapMax: 8, roundTripMax: 9, lead: 0.08, drift: 0.02 },
+    { applied: 3, polled: 3, armed: 3, submitted: 3, completed: 3, superseded: 0, supersededArmed: 0, expired: 0, expiredInFlight: 0, mismatch: 0, unavailable: 0, dropped: 0 }
+  );
+  const result = summarizeCausalFairness([baseline, final], { expectedInputEvents: 2 });
+  assert.equal(result.audio.deltas.workerMixCount, 10);
+  assert.equal(result.audio.deltas.workerEmptyMixCount, 0);
+  assert.equal(result.audio.deltas.underrunCount, 0);
+  assert.equal(result.audio.extrema.pumpGapMaxMs, 8);
+  assert.equal(result.inputMarker.parityPassed, true);
+  assert.deepEqual(result.failures, []);
+});
+
+test("causal fairness reports audio, marker, and GPU decision failures", () => {
+  const baseline = {
+    causalAudioWorkerMixCount: 1,
+    causalAudioWorkerEmptyMixCount: 0,
+    causalAudioUnderruns: 0,
+    causalInputMarkerEnabled: true,
+    causalInputMarkerAppliedCount: 0,
+    causalInputMarkerExactCorePollCount: 0,
+    causalInputMarkerArmedCount: 0,
+    causalInputMarkerSubmittedCount: 0,
+    causalInputMarkerCompletedCount: 0,
+    causalInputMarkerSupersededCount: 0,
+    causalInputMarkerSupersededArmedCount: 0,
+    causalInputMarkerExpiredCount: 0,
+    causalInputMarkerExpiredInFlightCount: 0,
+    causalInputMarkerGenerationMismatchCount: 0,
+    causalInputMarkerGenerationUnavailableCount: 0,
+    causalInputMarkerDroppedInFlightCount: 0,
+    causalWgpuErrorCount: 0,
+    causalGpuCompletionFailedCount: 0,
+  };
+  const final = {
+    ...baseline,
+    causalAudioWorkerMixCount: 2,
+    causalAudioWorkerEmptyMixCount: 1,
+    causalAudioUnderruns: 1,
+    causalInputMarkerAppliedCount: 1,
+    causalInputMarkerExactCorePollCount: 1,
+    causalInputMarkerArmedCount: 1,
+    causalInputMarkerSubmittedCount: 1,
+    causalInputMarkerCompletedCount: 0,
+    causalInputMarkerSupersededCount: 1,
+    causalInputMarkerExpiredCount: 1,
+    causalInputMarkerGenerationMismatchCount: 1,
+    causalWgpuErrorCount: 1,
+  };
+  const result = summarizeCausalFairness([baseline, final], { expectedInputEvents: 1 });
+  assert.equal(result.inputMarker.parityPassed, false);
+  assert.match(result.failures.join("\n"), /audio empty mixes=1/);
+  assert.match(result.failures.join("\n"), /WebAudio underruns=1/);
+  assert.match(result.failures.join("\n"), /input marker parity/);
+  assert.match(result.failures.join("\n"), /supersededCount=1/);
+  assert.match(result.failures.join("\n"), /WGPU errors=1/);
+});
+
+test("causal fairness fails closed on missing decision counters", () => {
+  const baseline = {
+    causalAudioWorkerEmptyMixCount: 0,
+    causalAudioUnderruns: 0,
+    causalWgpuErrorCount: 0,
+    causalGpuCompletionFailedCount: 0,
+  };
+  const result = summarizeCausalFairness([baseline, { ...baseline, causalWgpuErrorCount: undefined }]);
+  assert.match(result.failures.join("\n"), /missing WGPU error counter delta/);
+});
+
+test("causal fairness fails closed when a decision counter resets", () => {
+  const baseline = {
+    causalAudioWorkerEmptyMixCount: 3,
+    causalAudioUnderruns: 2,
+    causalWgpuErrorCount: 1,
+    causalGpuCompletionFailedCount: 1,
+  };
+  const result = summarizeCausalFairness([
+    baseline,
+    {
+      ...baseline,
+      causalAudioUnderruns: 1,
+      causalGpuCompletionFailedCount: 0,
+    },
+  ]);
+  assert.match(result.failures.join("\n"), /reset WebAudio underrun counter delta=-1/);
+  assert.match(result.failures.join("\n"), /reset GPU completion error counter delta=-1/);
+});
+
+test("perf gate names presentation underruns explicitly and retains its compatibility alias", async () => {
+  const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
+  assert.match(source, /presentationUnderrun: maxRegex\(helperText, \/underrun:/);
+  assert.match(source, /Deprecated alias retained[\s\S]*?underrun: maxRegex\(helperText/);
+  assert.match(source, /failures\.push\(\.\.\.causalFairness\.failures\)/);
+});
 
 test("run metadata resolves the core selected by coreid", () => {
   const hash = "a".repeat(64);

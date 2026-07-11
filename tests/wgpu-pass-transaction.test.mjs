@@ -169,3 +169,38 @@ test("worker publishes the actual consumed index and uses 16K only as a work bud
   assert.match(worker,
     /selectAtomicReplayLimit\(\{[\s\S]*?maxRecords:\s*WGPU_REPLAY_WINDOW_RECORDS/);
 });
+
+test("buffer uploads carry stable producer roles without widening the wire record", async () => {
+  const [header, stream, gfxHeader, gfx, vertex] = await Promise.all([
+    readFile(new URL(
+      "../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h",
+      import.meta.url
+    ), "utf8"),
+    readFile(new URL(
+      "../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp",
+      import.meta.url
+    ), "utf8"),
+    readFile(new URL(
+      "../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h",
+      import.meta.url
+    ), "utf8"),
+    readFile(new URL(
+      "../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp",
+      import.meta.url
+    ), "utf8"),
+    readFile(new URL(
+      "../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp",
+      import.meta.url
+    ), "utf8"),
+  ]);
+
+  assert.match(header, /enum class BufferUploadRole : u32[\s\S]*?Unknown = 0,[\s\S]*?Ubo = 1,[\s\S]*?Utility = 2,[\s\S]*?Vertex = 3,[\s\S]*?Index = 4,[\s\S]*?TextureAdjacent = 5,[\s\S]*?Geometry = 6,[\s\S]*?Count = 7/);
+  assert.match(header, /static_assert\(sizeof\(CmdRecord\) == 32/);
+  assert.match(header, /PushUploadBuffer\([\s\S]*?BufferUploadRole role\)/);
+  assert.match(stream, /rec\.arg\.u\[4\] = static_cast<u32>\(role\)/);
+  assert.match(vertex, /PushUploadBuffer\([\s\S]*?BufferUploadRole::Vertex\)/);
+  assert.match(vertex, /PushUploadBuffer\([\s\S]*?BufferUploadRole::Index\)/);
+  assert.match(gfxHeader, /AllocUboSlice\([\s\S]*?BufferUploadRole role\)/);
+  assert.match(gfx, /AllocUboSlice\([\s\S]*?BufferUploadRole::Ubo\)/);
+  assert.match(gfx, /UploadUtilityUniforms\([\s\S]*?BufferUploadRole::Utility/);
+});

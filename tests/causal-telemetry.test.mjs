@@ -11,6 +11,10 @@ import {
   parseCoreProfileTelemetry,
   stageWindowFromProfile,
 } from "../src/causal-telemetry.js";
+import {
+  WGPU_UPLOAD_ROLE,
+  createWgpuUploadAttribution,
+} from "../src/wgpu-upload-attribution.js";
 
 test("causal telemetry has a stable versioned shape", () => {
   const value = createCausalTelemetry({
@@ -37,6 +41,14 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.producerStateCacheEnabled, false);
   assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(value.webgpu.commandDroppedCount, 0);
+  assert.equal(value.webgpu.producerUploadArenaConfiguredBytes, 0);
+  assert.equal(value.webgpu.uploadArenaRingHandoffMismatch, false);
+  assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
+  assert.equal(
+    value.webgpu.uploadAttribution.schema,
+    "wasm-dolphin.wgpu-upload-attribution.v2"
+  );
+  assert.deepEqual(value.webgpu.uploadAttribution.callsByRole, [0, 0, 0, 0, 0, 0, 0]);
   assert.equal(value.softwareRaster.profileEnabled, false);
   assert.equal(value.softwareRaster.caseSampleSeed, 0);
   assert.equal(value.softwareRaster.rasterTraversalCount, 0);
@@ -287,6 +299,7 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       staleRepaintCount: 2,
     },
     presentation: {
+      underrunCount: 6,
       freshFrameDelivery: "immediate",
       legacyTickQueue: false,
       immediateFreshFrameCount: 9,
@@ -304,7 +317,44 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         inFlight: 1,
       },
     },
-    webgpu: { backlogLast: 3 },
+    webgpu: {
+      backlogLast: 3,
+      backlogSampleP95: 12,
+      backlogSampleAverage: 6.5,
+      backlogAfterLast: 2,
+      backlogNonzeroAgeMaxMs: 44,
+      replayBudgetMs: 4,
+      replayBudgetYieldCount: 7,
+      replayBudgetAtomicOverrunMaxMs: 1.5,
+      replayBudgetStopReasons: { "time-budget": 7 },
+      drainDurationHistogram: [1, 2, 3, 4, 0, 0, 0, 0],
+      drainCommandHistogram: [0, 1, 2, 3, 4, 0, 0, 0],
+      replayPumpWakeDelayAverageMs: 0.75,
+      replayPumpWakeDelayMaxMs: 2.5,
+      stageBudgetYieldCount: 5,
+      stageCopyDeadlineOverrunMaxMs: 0.4,
+    },
+    audio: {
+      workerMixCount: 11,
+      workerRequestedFrames: 22,
+      workerReturnedFrames: 20,
+      workerEmptyMixCount: 2,
+      workerMixLastMs: 1.1,
+      workerMixTotalMs: 5.5,
+      workerMixMaxMs: 1.5,
+      pumpCount: 12,
+      pumpPendingSkipCount: 1,
+      pumpMissCount: 2,
+      pumpGapLastMs: 3,
+      pumpGapAverageMs: 4,
+      pumpGapMaxMs: 5,
+      mixRoundTripAverageMs: 6,
+      mixRoundTripMaxMs: 7,
+      underrunCount: 3,
+      overrunCount: 4,
+      scheduleLeadSeconds: 0.08,
+      scheduleDriftSeconds: -0.02,
+    },
     input: {
       ageLastMs: 4,
       mainGeneration: 7,
@@ -316,8 +366,25 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       },
       marker: {
         enabled: true,
+        appliedCount: 4,
+        duplicateApplyCount: 1,
+        supersededCount: 2,
+        supersededArmedCount: 3,
+        droppedInFlightCount: 4,
         exactCorePollCount: 4,
+        generationMismatchCount: 5,
+        generationUnavailableCount: 6,
+        markerArmedCount: 4,
+        markerSubmittedCount: 4,
         markerCompletedCount: 3,
+        duplicateSubmitCount: 7,
+        duplicateCompleteCount: 8,
+        retiredCompletedMarkerCount: 9,
+        expiredMarkerCount: 10,
+        expiredInFlightCount: 11,
+        pendingGeneration: 12,
+        activeGeneration: 13,
+        inFlightCount: 1,
         completionAgeLastMs: 22,
         completionAgeP95Ms: 30,
         pollToCompletionLastMs: 12,
@@ -394,7 +461,23 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalGpuCompletionMs, 3.5);
   assert.equal(flat.causalGpuCompletionP95Ms, 4.5);
   assert.equal(flat.causalGpuCompletionInFlight, 1);
+  assert.equal(flat.causalGpuCompletionFailedCount, 0);
+  assert.equal(flat.causalPresentationUnderruns, 6);
   assert.equal(flat.causalWgpuBacklog, 3);
+  assert.equal(flat.causalWgpuBacklogSampleP95, 12);
+  assert.equal(flat.causalWgpuBacklogSampleAverage, 6.5);
+  assert.equal(flat.causalWgpuBacklogAfter, 2);
+  assert.equal(flat.causalWgpuBacklogNonzeroAgeMaxMs, 44);
+  assert.equal(flat.causalWgpuReplayBudgetMs, 4);
+  assert.equal(flat.causalWgpuReplayBudgetYieldCount, 7);
+  assert.equal(flat.causalWgpuReplayBudgetAtomicOverrunMaxMs, 1.5);
+  assert.equal(flat.causalWgpuReplayBudgetStopReasons["time-budget"], 7);
+  assert.deepEqual(flat.causalWgpuDrainDurationHistogram, [1, 2, 3, 4, 0, 0, 0, 0]);
+  assert.deepEqual(flat.causalWgpuDrainCommandHistogram, [0, 1, 2, 3, 4, 0, 0, 0]);
+  assert.equal(flat.causalWgpuReplayPumpWakeDelayAverageMs, 0.75);
+  assert.equal(flat.causalWgpuReplayPumpWakeDelayMaxMs, 2.5);
+  assert.equal(flat.causalWgpuStageBudgetYieldCount, 5);
+  assert.equal(flat.causalWgpuStageCopyDeadlineOverrunMaxMs, 0.4);
   assert.equal(flat.causalInputAgeMs, 4);
   assert.equal(flat.causalInputGeneration, 7);
   assert.equal(flat.causalInputVisibleEnabled, true);
@@ -424,7 +507,74 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuProducerStateCacheEnabled, false);
   assert.deepEqual(flat.causalWgpuProducerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(flat.causalWgpuCommandDroppedCount, 0);
+  assert.equal(flat.causalWgpuErrorCount, 0);
+  assert.equal(flat.causalAudioWorkerMixCount, 11);
+  assert.equal(flat.causalAudioWorkerRequestedFrames, 22);
+  assert.equal(flat.causalAudioWorkerReturnedFrames, 20);
+  assert.equal(flat.causalAudioWorkerEmptyMixCount, 2);
+  assert.equal(flat.causalAudioWorkerMixLastMs, 1.1);
+  assert.equal(flat.causalAudioWorkerMixTotalMs, 5.5);
+  assert.equal(flat.causalAudioWorkerMixMaxMs, 1.5);
+  assert.equal(flat.causalAudioPumpCount, 12);
+  assert.equal(flat.causalAudioPumpPendingSkipCount, 1);
+  assert.equal(flat.causalAudioPumpMissCount, 2);
+  assert.equal(flat.causalAudioPumpGapLastMs, 3);
+  assert.equal(flat.causalAudioPumpGapAverageMs, 4);
+  assert.equal(flat.causalAudioPumpGapMaxMs, 5);
+  assert.equal(flat.causalAudioMixRoundTripAverageMs, 6);
+  assert.equal(flat.causalAudioMixRoundTripMaxMs, 7);
+  assert.equal(flat.causalAudioUnderruns, 3);
+  assert.equal(flat.causalAudioOverruns, 4);
+  assert.equal(flat.causalAudioScheduleLeadSeconds, 0.08);
+  assert.equal(flat.causalAudioScheduleDriftSeconds, -0.02);
+  assert.equal(flat.causalInputMarkerAppliedCount, 4);
+  assert.equal(flat.causalInputMarkerDuplicateApplyCount, 1);
+  assert.equal(flat.causalInputMarkerSupersededCount, 2);
+  assert.equal(flat.causalInputMarkerSupersededArmedCount, 3);
+  assert.equal(flat.causalInputMarkerDroppedInFlightCount, 4);
+  assert.equal(flat.causalInputMarkerGenerationMismatchCount, 5);
+  assert.equal(flat.causalInputMarkerGenerationUnavailableCount, 6);
+  assert.equal(flat.causalInputMarkerArmedCount, 4);
+  assert.equal(flat.causalInputMarkerSubmittedCount, 4);
+  assert.equal(flat.causalInputMarkerDuplicateSubmitCount, 7);
+  assert.equal(flat.causalInputMarkerDuplicateCompleteCount, 8);
+  assert.equal(flat.causalInputMarkerRetiredCompletedCount, 9);
+  assert.equal(flat.causalInputMarkerExpiredCount, 10);
+  assert.equal(flat.causalInputMarkerExpiredInFlightCount, 11);
+  assert.equal(flat.causalInputMarkerPendingGeneration, 12);
+  assert.equal(flat.causalInputMarkerActiveGeneration, 13);
+  assert.equal(flat.causalInputMarkerInFlightCount, 1);
   assert.equal(flattenCausalTelemetry(null).causalTelemetrySchemaVersion, null);
+});
+
+test("upload attribution and verified-load timeout deltas flatten into CSV-safe fields", () => {
+  const uploads = createWgpuUploadAttribution();
+  uploads.recordUpload(WGPU_UPLOAD_ROLE.VERTEX, 1024, 256);
+  uploads.recordUpload(WGPU_UPLOAD_ROLE.INDEX, 64, 64);
+  uploads.recordPassBegin();
+  uploads.recordPassEnd();
+
+  const telemetry = createCausalTelemetry({
+    webgpu: {
+      uploadTimeoutCount: 5,
+      uploadTimeoutBoundaryVerified: true,
+      uploadTimeoutCountAtVerifiedLoad: 2,
+      uploadTimeoutCountBeforeVerifiedLoad: 2,
+      uploadTimeoutCountAfterVerifiedLoad: 3,
+      uploadAttribution: uploads.snapshot(),
+    },
+  });
+  const flat = flattenCausalTelemetry(telemetry);
+
+  assert.equal(flat.causalWgpuUploadTimeoutBoundaryVerified, true);
+  assert.equal(flat.causalWgpuUploadTimeoutCountAtVerifiedLoad, 2);
+  assert.equal(flat.causalWgpuUploadTimeoutCountAfterVerifiedLoad, 3);
+  assert.equal(flat.causalWgpuUploadTotalCalls, 2);
+  assert.equal(flat.causalWgpuUploadTotalBytes, 1088);
+  assert.deepEqual(flat.causalWgpuUploadCallsByRole, [0, 0, 0, 1, 1, 0, 0]);
+  assert.equal(flat.causalWgpuUploadMaxPassCalls, 2);
+  assert.equal(flat.causalWgpuUploadMaxPassBytes, 1088);
+  assert.equal(flat.causalWgpuUploadMaxDestinationSpanBytes, 1024);
 });
 
 test("rebuilt core exports CPU-thread checkpoint capture before renderer resync", async () => {

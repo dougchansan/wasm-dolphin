@@ -35,6 +35,7 @@ import {
   selectNextFixedWorkBenchmarkAction,
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
+  summarizeCausalFairness,
   summarizeFixedEmulatedWork,
   summarizeComparison,
   summarizeJitMetrics,
@@ -665,7 +666,8 @@ async function runScenario(scenario, context) {
     scenarioDir,
     consoleLines,
     consoleErrors,
-    invalidReasons
+    invalidReasons,
+    { expectedInputEvents: context.postLoadInputScript.length }
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
@@ -716,7 +718,16 @@ async function runScenario(scenario, context) {
   return summary;
 }
 
-function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, consoleErrors, invalidReasons) {
+function summarizeScenario(
+  scenario,
+  url,
+  samples,
+  scenarioDir,
+  consoleLines,
+  consoleErrors,
+  invalidReasons,
+  { expectedInputEvents = 0 } = {}
+) {
   const timedWindow = samples;
   const windows = summarizeTimedMetricWindows(samples, scenario.assertAfterSeconds);
   const steadyStateWindow = windows.steadyStateWindow;
@@ -724,6 +735,7 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, co
   const helperText = timedWindow.map((sample) => sample.helper || "").join(" | ");
   const fullTimedWindow = windows.fullTimedWindow.metrics;
   const steadyState = steadyStateWindow.metrics;
+  const causalFairness = summarizeCausalFairness(timedWindow, { expectedInputEvents });
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -742,8 +754,11 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, co
     maxGlError: lastMatch(helperText, /glerr:(0x[0-9a-f]+)/gi) || "unknown",
     emitfail: maxRegex(helperText, /emitfail:(\d+)/g),
     compilefail: maxRegex(helperText, /compilefail:(\d+)/g),
+    presentationUnderrun: maxRegex(helperText, /underrun:(\d+)/g),
+    // Deprecated alias retained so existing artifact readers do not break.
     underrun: maxRegex(helperText, /underrun:(\d+)/g),
     drop: maxRegex(helperText, /drop:(\d+)/g),
+    causalFairness,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
@@ -756,6 +771,7 @@ function summarizeScenario(scenario, url, samples, scenarioDir, consoleLines, co
   };
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
+  failures.push(...causalFairness.failures);
   if (metrics.minPresentFps < scenario.thresholds.minPresentFps) {
     targetIssue(`min present FPS ${metrics.minPresentFps} < ${scenario.thresholds.minPresentFps}`);
   }
@@ -828,7 +844,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "wgpugeompack", "wgpuuploadmb", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

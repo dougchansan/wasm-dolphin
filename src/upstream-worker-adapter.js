@@ -67,9 +67,13 @@ export class UpstreamWorkerAdapter {
     wgpuDetachedPresenter = false,
     wgpuLoadEpochFence = false,
     wgpuReplayPump = false,
+    wgpuReplayBudgetMs = 0,
+    wgpuPowerPreference = "high-performance",
     wgpuAtomicPassReplay = true,
     wgpuStateCache = false,
     wgpuUboCache = false,
+    wgpuGeometryPack = false,
+    wgpuUploadArenaMiB = 32,
     gpuCompletionDiagnostics = false,
     inputLatencyDiagnostics = false,
     inputReadbackDiagnostics = false,
@@ -128,9 +132,17 @@ export class UpstreamWorkerAdapter {
     this.wgpuDetachedPresenter = Boolean(wgpuDetachedPresenter);
     this.wgpuLoadEpochFence = Boolean(wgpuLoadEpochFence);
     this.wgpuReplayPump = Boolean(wgpuReplayPump);
+    this.wgpuReplayBudgetMs = [4, 6].includes(Number(wgpuReplayBudgetMs))
+      ? Number(wgpuReplayBudgetMs)
+      : 0;
+    this.wgpuPowerPreference = wgpuPowerPreference === "low-power"
+      ? "low-power"
+      : "high-performance";
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
     this.wgpuStateCache = Boolean(wgpuStateCache);
     this.wgpuUboCache = Boolean(wgpuUboCache);
+    this.wgpuGeometryPack = Boolean(wgpuGeometryPack);
+    this.wgpuUploadArenaMiB = Number(wgpuUploadArenaMiB) === 64 ? 64 : 32;
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
     this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
@@ -289,9 +301,13 @@ export class UpstreamWorkerAdapter {
       wgpuDetachedPresenter: this.wgpuDetachedPresenter,
       wgpuLoadEpochFence: this.wgpuLoadEpochFence,
       wgpuReplayPump: this.wgpuReplayPump,
+      wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
+      wgpuPowerPreference: this.wgpuPowerPreference,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
       wgpuStateCache: this.wgpuStateCache,
       wgpuUboCache: this.wgpuUboCache,
+      wgpuGeometryPack: this.wgpuGeometryPack,
+      wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
       inputReadbackDiagnostics: this.inputReadbackDiagnostics,
