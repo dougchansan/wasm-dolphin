@@ -181,7 +181,6 @@ if (process.env.GPUCOMPLETE) url.searchParams.set("gpucomplete", process.env.GPU
 if (process.env.WGPUUPLOADMB) url.searchParams.set("wgpuuploadmb", process.env.WGPUUPLOADMB);
 if (process.env.WGPUREPLAYMS) url.searchParams.set("wgpureplayms", process.env.WGPUREPLAYMS);
 if (process.env.WGPUPOWER) url.searchParams.set("wgpupower", process.env.WGPUPOWER);
-if (process.env.WGPUQUEUEWAIT) url.searchParams.set("wgpuqueuewait", process.env.WGPUQUEUEWAIT);
 if (process.env.INPUTLATENCY) url.searchParams.set("inputlatency", process.env.INPUTLATENCY);
 if (process.env.INPUTREADBACK) url.searchParams.set("inputreadback", process.env.INPUTREADBACK);
 for (const [environmentName, queryName] of [

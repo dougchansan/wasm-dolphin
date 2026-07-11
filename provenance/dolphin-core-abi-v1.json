@@ -56,8 +56,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 46801,
-      "sha256": "ad97a301345df4251bd970c1d368990fd8ebdc7213fe287e69c167c1bb4e7928"
+      "size": 43506,
+      "sha256": "7a86be72377b13286fa92d71888f608b2352b7f0ea970ad9ee3c142168879f5f"
     },
     {
       "path": "src/core-host.js",
@@ -110,8 +110,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 381282,
-      "sha256": "3206e6d9bf6dac0c83f6ee144fe8aa704dd5cae2de08e22183daefa9fccf1a65"
+      "size": 376909,
+      "sha256": "0c9413221450469e0d476030f1422f606fcf30b372bca9648af95223be6dd1a1"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
