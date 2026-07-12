@@ -25,7 +25,6 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
-  evaluateWgpuMappedStagingSlotsEvidence,
   evaluateWgpuDirtyRangeProjection,
   evaluateQualificationProvenance,
   evaluateRunValidity,
@@ -870,10 +869,6 @@ function summarizeScenario(
     requested: scenario.params?.wgpugeomrange,
     telemetry: final.causalTelemetry?.webgpu,
   }).failures);
-  failures.push(...evaluateWgpuMappedStagingSlotsEvidence({
-    requested: scenario.params?.wgpustagingslots,
-    telemetry: final.causalTelemetry?.webgpu,
-  }).failures);
   const requestedAudioTransport = scenario.params?.audiotransport;
   if (requestedAudioTransport) {
     const activeAudioTransport = final.causalTelemetry?.audio?.activeTransport;
@@ -939,7 +934,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpustagingslots", "wgpuuploadtransport", "wgpudirtyranges", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpudirtyranges", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

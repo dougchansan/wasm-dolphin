@@ -1618,20 +1618,6 @@ export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {})
   return { required: true, expectedActive, enabled, available, failures };
 }
 
-export function evaluateWgpuMappedStagingSlotsEvidence({ requested, telemetry } = {}) {
-  if (requested == null) return { required: false, failures: [] };
-  const expected = Number(requested);
-  const active = Number(telemetry?.mappedStaging?.slotCount);
-  const failures = [];
-  if (![3, 6].includes(expected) || active !== expected) {
-    failures.push(
-      `WGPU mapped staging slot mismatch: requested=${Number.isFinite(expected) ? expected : "invalid"} ` +
-      `active=${Number.isFinite(active) ? active : "unavailable"}`
-    );
-  }
-  return { required: true, expected, active, failures };
-}
-
 const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =
   "wasm-dolphin.wgpu-dirty-range-projection.v1";
 const WGPU_DIRTY_RANGE_HAZARD_COUNTERS = Object.freeze([

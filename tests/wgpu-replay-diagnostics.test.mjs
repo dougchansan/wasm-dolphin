@@ -18,7 +18,6 @@ import {
   requestedWgpuPowerPreference,
   requestedWgpuGeometryPack,
   requestedWgpuGeometryRange,
-  requestedWgpuMappedStagingSlots,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuStateCache,
@@ -611,13 +610,6 @@ test("WGPU upload arena accepts only the independent 64 MiB screening arm", () =
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=64"), 64);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=064"), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=128"), 32);
-});
-
-test("mapped staging capacity accepts only the six-slot screening arm", () => {
-  assert.equal(requestedWgpuMappedStagingSlots(""), 3);
-  assert.equal(requestedWgpuMappedStagingSlots("?wgpustagingslots=3"), 3);
-  assert.equal(requestedWgpuMappedStagingSlots("?wgpustagingslots=6"), 6);
-  assert.equal(requestedWgpuMappedStagingSlots("?wgpustagingslots=06"), 3);
 });
 
 test("mapped upload transport is opt-in and queue remains the reference", () => {

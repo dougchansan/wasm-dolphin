@@ -76,7 +76,6 @@ export class UpstreamWorkerAdapter {
     wgpuGeometryPack = false,
     wgpuGeometryRange = false,
     wgpuUploadArenaMiB = 32,
-    wgpuMappedStagingSlots = 3,
     wgpuUploadTransport = "queue",
     gpuCompletionDiagnostics = false,
     wgpuDirtyRangeProjection = false,
@@ -150,7 +149,6 @@ export class UpstreamWorkerAdapter {
     this.wgpuGeometryPack = Boolean(wgpuGeometryPack);
     this.wgpuGeometryRange = this.wgpuGeometryPack && Boolean(wgpuGeometryRange);
     this.wgpuUploadArenaMiB = Number(wgpuUploadArenaMiB) === 64 ? 64 : 32;
-    this.wgpuMappedStagingSlots = Number(wgpuMappedStagingSlots) === 6 ? 6 : 3;
     this.wgpuUploadTransport = wgpuUploadTransport === "mapped" ? "mapped" : "queue";
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.wgpuDirtyRangeProjection = Boolean(wgpuDirtyRangeProjection);
@@ -320,7 +318,6 @@ export class UpstreamWorkerAdapter {
       wgpuGeometryPack: this.wgpuGeometryPack,
       wgpuGeometryRange: this.wgpuGeometryRange,
       wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
-      wgpuMappedStagingSlots: this.wgpuMappedStagingSlots,
       wgpuUploadTransport: this.wgpuUploadTransport,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
