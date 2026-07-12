@@ -60,6 +60,9 @@ test("upload probes share one executor and suppress normal visible replay", asyn
   assert.match(disc, /isWgpuUploadProbeMode\(wgpuRendererWorkerProbe\)/);
   assert.match(disc, /renderBackend = "wgpu-upload-probe"/);
   assert.match(disc, /cmdRingOwnsCanvas = true/);
+  assert.match(disc, /disposition: intentionalBlankProbe \? "intentional-blank-probe" : "visible-canvas"/);
+  assert.match(disc, /expectsVisibleCanvas: !intentionalBlankProbe/);
+  assert.match(disc, /outputContract: wgpuOutputContractPayload\(\)/);
   assert.match(disc, /validationFinalizeWgpuRendererProbe/);
   assert.match(disc, /validationBeginWgpuRendererProbeMeasurement/);
   assert.match(disc, /validationReadCoreProgress/);
@@ -70,4 +73,17 @@ test("upload probes share one executor and suppress normal visible replay", asyn
   assert.match(disc, /failWgpuUploadProbeRing\("upload probe requires protocol v3 handoff"\)/);
   assert.match(gate, /validateWgpuUploadProbeFinalization/);
   assert.match(gate, /liveWorkerProgress: uploadProbeMode/);
+});
+
+test("visible replay classifies the existing failed-present branch", async () => {
+  const disc = await readSource("../src/upstream-discio-worker.js");
+  const submitPresent = disc.indexOf("const submittedPresent = presentAlreadySubmitted");
+  const rejection = disc.indexOf("recordPresentRejected", submitPresent);
+  const existingBreak = disc.indexOf("break;", rejection);
+  assert.ok(submitPresent > 0 && rejection > submitPresent && existingBreak > rejection);
+  assert.match(disc, /lastSubmitFailureReason = wgpuReplayFatal \? "replay-fatal" : "no-command-encoder"/);
+  assert.match(disc, /lastSubmitFailureReason = "submit-error"/);
+  assert.match(disc, /lastSubmitFailureReason = wgpuReplayFatal\.scope === "submit-error"/);
+  assert.match(disc, /\[webgpu-present-rejected\] reason=/);
+  assert.match(disc, /_wgPresentRejectedLogCount <= 4/);
 });

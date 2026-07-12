@@ -545,7 +545,16 @@ export function createWgpuReplayClassifier({
     commandCount: 0,
     submittedCount: 0,
     completedCount: 0,
-    errorCount: 0
+    errorCount: 0,
+    rejectedCount: 0,
+    rejectedReasons: {
+      "no-command-encoder": 0,
+      "submit-error": 0,
+      "replay-fatal": 0,
+      unknown: 0
+    },
+    lastRejectedReason: null,
+    lastRejectedRecordIndex: null
   };
   const ringEpoch = {
     loadBoundary: null,
@@ -773,6 +782,20 @@ export function createWgpuReplayClassifier({
     recordEvent("present-command", { recordIndex });
   }
 
+  function recordPresentRejected({ recordIndex = 0, reason = "unknown" } = {}) {
+    const normalizedReason = Object.hasOwn(presentSubmission.rejectedReasons, reason)
+      ? reason
+      : "unknown";
+    presentSubmission.rejectedCount += 1;
+    presentSubmission.rejectedReasons[normalizedReason] += 1;
+    presentSubmission.lastRejectedReason = normalizedReason;
+    presentSubmission.lastRejectedRecordIndex = recordIndex >>> 0;
+    recordEvent("present-rejected", {
+      recordIndex: recordIndex >>> 0,
+      reason: normalizedReason
+    });
+  }
+
   function recordSubmission({ reason = "unknown", submitted = false, error = null } = {}) {
     if (submitted) presentSubmission.submittedCount += 1;
     if (error) presentSubmission.errorCount += 1;
@@ -921,12 +944,16 @@ export function createWgpuReplayClassifier({
     missingResources.status = missingResources.total ? "fail" : "pending";
     efbMutation.status = efbMutation.nonzeroReadbackCount ? "pass" :
       efbMutation.postDrawReadbackCount ? "fail" : "pending";
-    presentSubmission.status = presentSubmission.errorCount ? "fail" :
+    presentSubmission.status = presentSubmission.errorCount || presentSubmission.rejectedCount ? "fail" :
       presentSubmission.completedCount ? "pass" : presentSubmission.submittedCount ? "running" : "pending";
 
     let classifier = { status: "running", code: "WAITING_FOR_DRAW" };
     if (passAtomicity.splitAtDrainCount) classifier = { status: "fail", code: "PASS_SPLIT_AT_DRAIN" };
     else if (missingResources.total) classifier = { status: "fail", code: "MISSING_RESOURCES" };
+    else if (presentSubmission.rejectedCount) classifier = {
+      status: "fail",
+      code: "PRESENT_SUBMISSION_REJECTED"
+    };
     else if (firstEfbPassReadback.status === "error") classifier = {
       status: "fail",
       code: "FIRST_EFB_PASS_READBACK_ERROR"
@@ -994,6 +1021,7 @@ export function createWgpuReplayClassifier({
     captureEfbDrawCount,
     needsPostDrawEfbReadback,
     recordPresentCommand,
+    recordPresentRejected,
     recordSubmission,
     recordPresentCompletion,
     recordLoadBoundary,

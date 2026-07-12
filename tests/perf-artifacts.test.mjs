@@ -20,6 +20,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuOutputContractEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
   validateWgpuUploadProbeFinalization,
@@ -343,6 +344,60 @@ test("renderer worker canary evidence requires the nested-worker schema", () => 
     requested: "canary",
     telemetry: { rendererWorkerProbe: { requested: "canary", active: false } },
   }).failures.join("\n"), /active=0|schema mismatch/);
+});
+
+test("WGPU output contracts distinguish intentional blank probes from visible canvas runs", () => {
+  const blankDiagnostics = {
+    activePresenterBackend: "wgpu-upload-probe",
+    outputContract: {
+      schema: "wasm-dolphin.wgpu-output-contract.v1",
+      disposition: "intentional-blank-probe",
+      expectsVisibleCanvas: false,
+      activePresenterBackend: "wgpu-upload-probe",
+      probeMode: "inline-upload",
+    },
+  };
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "inline-upload",
+    diagnostics: blankDiagnostics,
+  }).failures, []);
+
+  const visibleDiagnostics = {
+    activePresenterBackend: "webgpu",
+    outputContract: {
+      schema: "wasm-dolphin.wgpu-output-contract.v1",
+      disposition: "visible-canvas",
+      expectsVisibleCanvas: true,
+      activePresenterBackend: "webgpu",
+      probeMode: null,
+    },
+  };
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "off",
+    diagnostics: visibleDiagnostics,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "canary",
+    diagnostics: visibleDiagnostics,
+  }).failures, []);
+
+  assert.match(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "off",
+    diagnostics: blankDiagnostics,
+  }).failures.join("\n"), /disposition mismatch|expectsVisibleCanvas mismatch|backend mismatch/);
+  assert.match(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "inline-upload",
+    diagnostics: null,
+  }).failures.join("\n"), /schema mismatch/);
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "software",
+    diagnostics: null,
+  }).failures, []);
 });
 
 test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {

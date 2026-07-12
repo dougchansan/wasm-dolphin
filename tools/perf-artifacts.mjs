@@ -1770,6 +1770,59 @@ export function evaluateWgpuRendererWorkerProbeEvidence({ requested, telemetry }
   return { required: true, requested, probe, failures };
 }
 
+export function evaluateWgpuOutputContractEvidence({
+  video,
+  requestedProbe,
+  diagnostics,
+} = {}) {
+  const uploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    requestedProbe
+  );
+  const visibleWgpu = ["wgpu", "webgpu-real", "webgpu2"].includes(
+    String(video || "").toLowerCase()
+  );
+  if (!uploadProbe && !visibleWgpu) return { required: false, failures: [] };
+
+  const contract = diagnostics?.outputContract;
+  const expected = uploadProbe
+    ? {
+        disposition: "intentional-blank-probe",
+        expectsVisibleCanvas: false,
+        activePresenterBackend: "wgpu-upload-probe",
+        probeMode: requestedProbe,
+      }
+    : {
+        disposition: "visible-canvas",
+        expectsVisibleCanvas: true,
+        activePresenterBackend: "webgpu",
+        probeMode: null,
+      };
+  const failures = [];
+  if (contract?.schema !== "wasm-dolphin.wgpu-output-contract.v1") {
+    failures.push(`WGPU output contract schema mismatch: ${contract?.schema || "unavailable"}`);
+  }
+  for (const field of [
+    "disposition",
+    "expectsVisibleCanvas",
+    "activePresenterBackend",
+    "probeMode",
+  ]) {
+    if (contract?.[field] !== expected[field]) {
+      failures.push(
+        `WGPU output contract ${field} mismatch: expected=${String(expected[field])} ` +
+        `actual=${contract?.[field] == null ? String(contract?.[field] ?? "unavailable") : String(contract[field])}`
+      );
+    }
+  }
+  if (diagnostics?.activePresenterBackend !== expected.activePresenterBackend) {
+    failures.push(
+      `WGPU output backend mismatch: contract=${expected.activePresenterBackend} ` +
+      `diagnostics=${diagnostics?.activePresenterBackend || "unavailable"}`
+    );
+  }
+  return { required: true, expected, contract, failures };
+}
+
 export function validateWgpuUploadProbeFinalization({ requested, finalized } = {}) {
   const failures = [];
   const telemetry = finalized?.causalTelemetry;

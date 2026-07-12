@@ -515,6 +515,17 @@ function recordRendererError(kind, message) {
   return entry;
 }
 
+function wgpuOutputContractPayload() {
+  const intentionalBlankProbe = isWgpuUploadProbeMode(wgpuRendererWorkerProbe);
+  return {
+    schema: "wasm-dolphin.wgpu-output-contract.v1",
+    disposition: intentionalBlankProbe ? "intentional-blank-probe" : "visible-canvas",
+    expectsVisibleCanvas: !intentionalBlankProbe,
+    activePresenterBackend: renderBackend,
+    probeMode: intentionalBlankProbe ? wgpuRendererWorkerProbe : null
+  };
+}
+
 function rendererDiagnosticsPayload() {
   return {
     ...rendererDiagnostics,
@@ -526,6 +537,7 @@ function rendererDiagnosticsPayload() {
     statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
     fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
     workerTransport: workerTransportTelemetry(),
+    outputContract: wgpuOutputContractPayload(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
     wgpuUploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
@@ -6832,16 +6844,24 @@ function drainWebGpuCmdRing(source = "presentation") {
       return false;
     }
   };
+  let lastSubmitFailureReason = null;
   const submitEnc = (reason = "drain-boundary") => {
+    lastSubmitFailureReason = null;
     if (!enc) {
       // Upload-only drains still have to seal and submit their mapped batch,
       // but callers use the return value to decide whether a render/present
       // command buffer was submitted.
       flushMappedUploadsOnly(reason);
+      lastSubmitFailureReason = wgpuReplayFatal ? "replay-fatal" : "no-command-encoder";
       return false;
     }
     const mappedBatch = sealMappedBatch();
-    if (wgpuReplayFatal) return false;
+    if (wgpuReplayFatal) {
+      lastSubmitFailureReason = wgpuReplayFatal.scope === "submit-error"
+        ? "submit-error"
+        : "replay-fatal";
+      return false;
+    }
     let submitted = false;
     try {
       const renderCommandBuffer = enc.finish();
@@ -6852,6 +6872,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       acceptMappedBatch(mappedBatch);
       submitted = true;
     } catch (e) {
+      lastSubmitFailureReason = "submit-error";
       rejectMappedBatch(mappedBatch, e);
       recordRendererError("submit-error", e?.message || e);
       markWgpuReplayFatal("submit-error", e?.message || e);
@@ -8736,7 +8757,23 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (!presentAlreadySubmitted) applyHardwareInputMarker();
           const submittedPresent = presentAlreadySubmitted || submitEnc("present");
-          if (!submittedPresent) break;
+          if (!submittedPresent) {
+            const rejectionReason = lastSubmitFailureReason ||
+              (wgpuReplayFatal?.scope === "submit-error" ? "submit-error" :
+                wgpuReplayFatal ? "replay-fatal" : "unknown");
+            wgpuReplayClassifier?.recordPresentRejected({
+              recordIndex: read,
+              reason: rejectionReason
+            });
+            self._wgPresentRejectedLogCount = (self._wgPresentRejectedLogCount || 0) + 1;
+            if (self._wgPresentRejectedLogCount <= 4) {
+              console.log(
+                `[webgpu-present-rejected] reason=${rejectionReason} ` +
+                `fatalScope=${wgpuReplayFatal?.scope || "none"} record=${read}`
+              );
+            }
+            break;
+          }
           if (hardwareInputMarkerApplied) {
             recordInputMarkerSubmission(
               hardwareInputMarker,

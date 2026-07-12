@@ -164,6 +164,37 @@ test("classifier distinguishes draws, zero EFB, nonzero EFB, and present complet
   assert.equal(snapshot.stages.firstNonzeroEfb.presentSequence, 871);
   assert.equal(snapshot.stages.firstNonzeroEfb.readbackOrdinal, 2);
   assert.equal(snapshot.stages.presentSubmission.completedCount, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedCount, 0);
+});
+
+test("a rejected present fails classification even after EFB mutation", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 7, efb: true });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 4,
+    nonzeroColorBytes: 3,
+    maxByte: 255,
+    presentSequence: 1,
+  });
+  classifier.recordPresentCommand({ recordIndex: 22 });
+  classifier.recordPresentRejected({ recordIndex: 22, reason: "no-command-encoder" });
+
+  let snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.code, "PRESENT_SUBMISSION_REJECTED");
+  assert.equal(snapshot.stages.presentSubmission.status, "fail");
+  assert.equal(snapshot.stages.presentSubmission.rejectedCount, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["no-command-encoder"], 1);
+  assert.equal(snapshot.stages.presentSubmission.lastRejectedRecordIndex, 22);
+
+  classifier.recordPresentRejected({ recordIndex: 23, reason: "unexpected" });
+  classifier.recordPresentRejected({ recordIndex: 24, reason: "submit-error" });
+  classifier.recordPresentRejected({ recordIndex: 25, reason: "replay-fatal" });
+  snapshot = classifier.snapshot();
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons.unknown, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["submit-error"], 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["replay-fatal"], 1);
+  assert.equal(snapshot.stages.presentSubmission.lastRejectedReason, "replay-fatal");
 });
 
 test("legacy deep replay probes are default-off with an explicit rollback", () => {

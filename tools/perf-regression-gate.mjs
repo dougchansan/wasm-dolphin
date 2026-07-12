@@ -25,6 +25,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuOutputContractEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
   evaluateWgpuDirtyRangeProjection,
@@ -774,6 +775,11 @@ async function runScenario(scenario, context) {
   invalidReasons.push(...evaluateCoreSelectionEvidence({
     url: url.href,
     artifactSha256: context.coreArtifact?.sha256,
+    diagnostics: renderer,
+  }).failures);
+  invalidReasons.push(...evaluateWgpuOutputContractEvidence({
+    video: scenario.params.video,
+    requestedProbe: scenario.params.wgpurenderprobe,
     diagnostics: renderer,
   }).failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
