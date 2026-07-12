@@ -29,6 +29,7 @@ import {
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuUboCache,
+  requestedWgpuUboMetrics,
   requestedWgpuUboPack
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
@@ -114,6 +115,7 @@ export class EmulatorHost {
     this.wgpuTailGate = requestedWgpuTailGate(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
+    this.wgpuUboMetrics = requestedWgpuUboMetrics(window.location.search);
     this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
     this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
     this.wgpuGeometryRange =
@@ -348,6 +350,7 @@ export class EmulatorHost {
             wgpuTailGate: this.wgpuTailGate,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
+            wgpuUboMetrics: this.wgpuUboMetrics,
             wgpuUboPack: this.wgpuUboPack,
             wgpuGeometryPack: this.wgpuGeometryPack,
             wgpuGeometryRange: this.wgpuGeometryRange,

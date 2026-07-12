@@ -41,6 +41,12 @@ is not the recommended gameplay path. The command replay pump and bounded
 16,384-record credit window are enabled for this backend after repeated A/B
 evidence; use `wgpupump=0` only as a rollback/diagnostic comparison.
 
+`wgpuubometrics=1` enables detailed producer-side UBO timing and change-mask
+histograms for hardware-WGPU experiments. It requires `video=wgpu&metrics=1`
+and is default-off because its per-draw clocks and atomic counters perturb the
+path being measured. Ordinary `metrics=1` keeps general telemetry without
+activating this detailed UBO instrumentation.
+
 `video=ogl` is an OGL/WebGL2-style diagnostic backend. Its JIT safety behavior
 is intentionally more conservative; see [JIT flags](jit-flags.md).
 

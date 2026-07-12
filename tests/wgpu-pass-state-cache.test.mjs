@@ -508,7 +508,12 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   assert.match(worker,
     /api\.loadStateFile\(path\)[\s\S]*?setTimeout\(r, 1200\)[\s\S]*?setWebGpuUboCacheEnabled/);
   assert.match(worker,
-    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?collectMetrics \? 2 : 0/);
+    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?wgpuUboMetricsEnabled \? 2 : 0/);
+  assert.doesNotMatch(
+    worker,
+    /function webGpuUboCacheMode\(\)[\s\S]*?collectMetrics \? 2 : 0/,
+    "ordinary metrics collection must not activate per-draw UBO timing and histogram atomics"
+  );
   assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
   assert.match(worker,
     /\? \(mode\) => ccall\("SetWebGpuUboCacheEnabled", null, \["number"\], \[mode \| 0\]\)/);

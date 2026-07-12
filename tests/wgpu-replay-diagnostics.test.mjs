@@ -27,6 +27,7 @@ import {
   requestedWgpuUploadTransport,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
+  requestedWgpuUboMetrics,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
@@ -58,6 +59,13 @@ test("blank-probe notice requires the hardware WGPU path", () => {
   ]) {
     assert.equal(shouldShowIntentionalBlankWgpuNotice(search), false, search);
   }
+});
+
+test("detailed UBO telemetry is independent and default-off", () => {
+  assert.equal(requestedWgpuUboMetrics(""), false);
+  assert.equal(requestedWgpuUboMetrics("?metrics=1"), false);
+  assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=0&metrics=1"), false);
+  assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=1&metrics=0"), true);
 });
 
 test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () => {
@@ -580,6 +588,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuProducerProfile: this\.wgpuProducerProfile/);
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
+  assert.match(adapter, /wgpuUboMetrics: this\.wgpuUboMetrics/);
   assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
   assert.match(adapter, /wgpuReplayBudgetMs: this\.wgpuReplayBudgetMs/);
   assert.match(adapter, /wgpuPowerPreference: this\.wgpuPowerPreference/);
@@ -598,6 +607,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuProducerProfile: payload\.wgpuProducerProfile/);
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
+  assert.match(worker, /wgpuUboMetrics: payload\.wgpuUboMetrics/);
   assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
   assert.match(worker, /wgpuReplayBudgetMs: payload\.wgpuReplayBudgetMs/);
   assert.match(worker, /wgpuPowerPreference: payload\.wgpuPowerPreference/);

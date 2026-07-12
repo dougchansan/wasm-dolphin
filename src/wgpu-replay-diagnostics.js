@@ -173,6 +173,10 @@ export function requestedWgpuUboCache(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuUboMetrics(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuubometrics") === "1";
+}
+
 export function requestedWgpuReplayBudgetMs(
   search = globalThis.location?.search ?? ""
 ) {

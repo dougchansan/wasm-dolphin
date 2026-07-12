@@ -190,6 +190,7 @@ let wgpuTailGateRequested = false;
 let wgpuTailGateAvailable = false;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
+let wgpuUboMetricsEnabled = false;
 let wgpuUboPackEnabled = false;
 let wgpuGeometryPackEnabled = false;
 let wgpuGeometryRangeEnabled = false;
@@ -504,7 +505,7 @@ function inputPhotonOverheadDiagnosticsPayload() {
 }
 
 function webGpuUboCacheMode() {
-  return (wgpuUboCacheEnabled ? 1 : 0) | (collectMetrics ? 2 : 0);
+  return (wgpuUboCacheEnabled ? 1 : 0) | (wgpuUboMetricsEnabled ? 2 : 0);
 }
 
 function webGpuUboPackMode() {
@@ -714,6 +715,7 @@ async function handleMessage(type, payload) {
         wgpuTailGate: payload.wgpuTailGate,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
+        wgpuUboMetrics: payload.wgpuUboMetrics,
         wgpuUboPack: payload.wgpuUboPack,
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuGeometryRange: payload.wgpuGeometryRange,
@@ -1097,6 +1099,7 @@ async function loadCore({
   wgpuTailGate: requestedWgpuTailGate = false,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
+  wgpuUboMetrics: requestedWgpuUboMetrics = false,
   wgpuUboPack: requestedWgpuUboPack = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
@@ -1173,6 +1176,13 @@ async function loadCore({
   }
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
+  if (requestedWgpuUboMetrics && !collectMetrics) {
+    throw new Error("wgpuubometrics=1 requires metrics=1");
+  }
+  if (requestedWgpuUboMetrics && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubometrics=1 requires video=wgpu");
+  }
+  wgpuUboMetricsEnabled = collectMetrics && Boolean(requestedWgpuUboMetrics);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
   wgpuGeometryRangeEnabled =

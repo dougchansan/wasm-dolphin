@@ -1034,6 +1034,18 @@ function summarizeScenario(
       );
     }
   }
+  const requestedUboMetrics = scenario.params?.wgpuubometrics;
+  if (requestedUboMetrics != null) {
+    const expectedUboMetrics = String(requestedUboMetrics) === "1";
+    const activeUboMetrics =
+      final.causalTelemetry?.webgpu?.producerUboCacheMetricsEnabled;
+    if (activeUboMetrics !== expectedUboMetrics) {
+      failures.push(
+        `WGPU UBO metrics mismatch: requested=${expectedUboMetrics ? 1 : 0} ` +
+        `active=${activeUboMetrics == null ? "unavailable" : activeUboMetrics ? 1 : 0}`
+      );
+    }
+  }
   failures.push(...evaluateWgpuGeometryRangeEvidence({
     requested: scenario.params?.wgpugeomrange,
     telemetry: final.causalTelemetry?.webgpu,
@@ -1107,7 +1119,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
