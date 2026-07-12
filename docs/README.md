@@ -57,6 +57,9 @@
   nested-worker, shared-memory, and headless WebGPU feasibility evidence.
 - [WGPU upload-isolation screen](perf-results/melee-wgpu-upload-isolation-2026-07-12.md) —
   renderer-worker rejection, null-drain ceiling, and the intentional-blank probe boundary.
+- [WGPU producer phase profile](perf-results/melee-wgpu-producer-profile-2026-07-12.md) —
+  validated profiler overhead, visible WGPU confirmation, and the 22.2-million-per-second
+  idle FIFO-tail call pattern.
 - [WGPU transaction-staging results](perf-results/melee-wgpu-transaction-staging-2026-07-12.md) —
   valid batching A/B, critical-path regression, and no-merge decision.
 - [WGPU batched queue-staging smoke](perf-results/melee-wgpu-batched-queue-staging-2026-07-12.md) —
