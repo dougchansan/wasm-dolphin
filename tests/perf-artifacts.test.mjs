@@ -1586,6 +1586,25 @@ test("tail-gate screening is a bounded null-drain A/B with semantic-work gates",
   );
 });
 
+test("diagnostic-quiet screening changes only the explicit log filter arm", async () => {
+  const config = JSON.parse(await readFile(
+    "tools/perf-configs/wgpu-diagnostic-quiet-screening.json", "utf8"
+  ));
+  const tasklist = buildComparisonTasklist(config);
+  assert.equal(config.primaryMetric, "fixedEmulatedWork.throughputGameSpeedPercent");
+  assert.equal(config.minimumEffectPercent, 1);
+  assert.deepEqual(tasklist.blocks.map((block) => block.order), [
+    ["A", "B", "B", "A"],
+    ["B", "A", "A", "B"],
+  ]);
+  assert.equal(config.armA.params.wgpudiagquiet, "0");
+  assert.equal(config.armB.params.wgpudiagquiet, "1");
+  assert.equal(config.armA.params.wgputailgate, "0");
+  assert.equal(config.armB.params.wgputailgate, "0");
+  const withoutQuiet = ({ wgpudiagquiet, ...params }) => params;
+  assert.deepEqual(withoutQuiet(config.armA.params), withoutQuiet(config.armB.params));
+});
+
 test("comparison runner consumes bounded replacements before final invalid-rate classification", async () => {
   const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
   assert.match(source,
