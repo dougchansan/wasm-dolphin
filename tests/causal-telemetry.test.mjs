@@ -331,11 +331,28 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       producerUploadWaitTotalUs: 15_000,
       producerUploadWaitMaxUs: 1_600,
       rendererWorkerProbe: {
-        requested: "canary",
+        requested: "worker-upload",
         active: true,
         passed: true,
-        schema: "wasm-dolphin.wgpu-renderer-worker-canary.v1",
+        schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
         totalMs: 12.5,
+        executorLocation: "worker",
+        blankOutput: true,
+        protocolVersion: 3,
+        claimedOwner: 2,
+        claimCount: 1,
+        conflictCount: 0,
+        observedRecordCount: 100,
+        consumedRecordCount: 100,
+        uploadRecordCount: 20,
+        releasedUploadCount: 20,
+        totalUploadBytes: 4096,
+        submissionCount: 4,
+        gpuCompletionCount: 4,
+        backlog: 0,
+        quiesced: true,
+        fatalCount: 0,
+        streamDigest: "deadbeef",
         error: "",
       },
       backlogLast: 3,
@@ -509,11 +526,26 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuProducerUploadWaitCount, 14);
   assert.equal(flat.causalWgpuProducerUploadWaitTotalUs, 15_000);
   assert.equal(flat.causalWgpuProducerUploadWaitMaxUs, 1_600);
-  assert.equal(flat.causalWgpuRendererWorkerProbeRequested, "canary");
+  assert.equal(flat.causalWgpuRendererWorkerProbeRequested, "worker-upload");
   assert.equal(flat.causalWgpuRendererWorkerProbeActive, true);
   assert.equal(flat.causalWgpuRendererWorkerProbePassed, true);
-  assert.equal(flat.causalWgpuRendererWorkerProbeSchema, "wasm-dolphin.wgpu-renderer-worker-canary.v1");
+  assert.equal(flat.causalWgpuRendererWorkerProbeSchema, "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1");
   assert.equal(flat.causalWgpuRendererWorkerProbeTotalMs, 12.5);
+  assert.equal(flat.causalWgpuRendererWorkerProbeExecutor, "worker");
+  assert.equal(flat.causalWgpuRendererWorkerProbeBlankOutput, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeProtocolVersion, 3);
+  assert.equal(flat.causalWgpuRendererWorkerProbeClaimedOwner, 2);
+  assert.equal(flat.causalWgpuRendererWorkerProbeObservedRecords, 100);
+  assert.equal(flat.causalWgpuRendererWorkerProbeConsumedRecords, 100);
+  assert.equal(flat.causalWgpuRendererWorkerProbeUploadRecords, 20);
+  assert.equal(flat.causalWgpuRendererWorkerProbeReleasedUploads, 20);
+  assert.equal(flat.causalWgpuRendererWorkerProbeUploadBytes, 4096);
+  assert.equal(flat.causalWgpuRendererWorkerProbeSubmissions, 4);
+  assert.equal(flat.causalWgpuRendererWorkerProbeGpuCompletions, 4);
+  assert.equal(flat.causalWgpuRendererWorkerProbeBacklog, 0);
+  assert.equal(flat.causalWgpuRendererWorkerProbeQuiesced, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeFatalCount, 0);
+  assert.equal(flat.causalWgpuRendererWorkerProbeStreamDigest, "deadbeef");
   assert.equal(flat.causalWgpuMappedStagingSlotCount, 6);
   assert.equal(flat.causalWgpuMappedStagingSlotSize, 8 * 1024 * 1024);
   assert.equal(flat.causalWgpuMappedStagingCapacityMissesNoMappedSlots, 9);

@@ -37,6 +37,8 @@ const HEADER_WORDS = 7;
 const OWNER_WORDS = 4;
 const DEFAULT_MAX_RECORDS = 16384;
 const DEFAULT_SLOT_BYTES = 16 * 1024 * 1024;
+const MAX_SUBMIT_DIGESTS = 1024;
+const REQUIRED_STABLE_EMPTY_OBSERVATIONS = 2;
 const TEXTURE_FORMATS = Object.freeze([
   "rgba8unorm", "bgra8unorm", "depth24plus", "depth32float",
   "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
@@ -485,9 +487,11 @@ export function createWgpuUploadProbeExecutor({
     return true;
   }
 
-  async function finalize({ timeoutMs = 10000 } = {}) {
+  async function quiesce({ timeoutMs = 10000 } = {}) {
     if (!ring) throw new Error("upload probe ring is not attached");
     const deadline = now() + timeoutMs;
+    let stableEmptyObservations = 0;
+    let stableWrite = null;
     if (timer !== null) {
       cancelSchedule(timer);
       timer = null;
@@ -507,19 +511,76 @@ export function createWgpuUploadProbeExecutor({
       }
       updateRingStats();
       const staging = pool?.snapshot();
-      if (stats.backlog === 0 && remapPromises.size === 0 && completionPromises.size === 0 &&
-          (!staging || (staging.pendingUploads === 0 && staging.activeBatches === 0))) {
+      const empty = stats.backlog === 0 && remapPromises.size === 0 &&
+        completionPromises.size === 0 &&
+        (!staging || (staging.pendingUploads === 0 && staging.activeBatches === 0));
+      if (empty && stableWrite === stats.finalWrite) {
+        stableEmptyObservations += 1;
+      } else if (empty) {
+        stableWrite = stats.finalWrite;
+        stableEmptyObservations = 1;
+      } else {
+        stableWrite = null;
+        stableEmptyObservations = 0;
+      }
+      if (stableEmptyObservations >= REQUIRED_STABLE_EMPTY_OBSERVATIONS) {
         stats.quiesced = true;
         destroyDeferredResources();
-        destroyRemainingResources();
         emitSnapshot(true);
         return snapshot();
       }
-      await delay(0);
+      await delay(1);
     }
     stats.quiesced = false;
     markFatal("finalize-timeout", "upload probe did not quiesce before timeout");
     return snapshot();
+  }
+
+  async function beginMeasurement({ timeoutMs = 10000 } = {}) {
+    const boundary = await quiesce({ timeoutMs });
+    if (!boundary.quiesced || !boundary.passed) return boundary;
+    resetMeasurementStats();
+    stats.quiesced = false;
+    emitSnapshot(true);
+    schedulePump(0);
+    return snapshot();
+  }
+
+  async function finalize({ timeoutMs = 10000 } = {}) {
+    const finalSnapshot = await quiesce({ timeoutMs });
+    if (finalSnapshot.quiesced && finalSnapshot.passed) {
+      destroyRemainingResources();
+      emitSnapshot(true);
+    }
+    return snapshot();
+  }
+
+  function resetMeasurementStats() {
+    const read = ring.consumerRead >>> 0;
+    const uploadRead = Atomics.load(ring.headerI32, 3) >>> 0;
+    for (const name of [
+      "pumpCount", "pumpTotalMs", "pumpMaxMs", "wakeDelayTotalMs", "wakeDelayMaxMs",
+      "observedRecordCount", "consumedRecordCount", "skippedRecordCount",
+      "invalidRecordCount", "unknownOpcodeCount", "readPublishCount",
+      "uploadRecordCount", "releasedUploadCount", "bufferUploadCalls", "bufferUploadBytes",
+      "textureUploadCalls", "textureUploadBytes", "totalUploadBytes",
+      "invalidUploadSpanCount", "uploadReleaseMismatchCount", "watermarkPublishCount",
+      "bufferCreateCount", "textureCreateCount", "bufferDestroyCount", "textureDestroyCount",
+      "missingResourceCount", "capacityHoldCount", "submissionCount", "gpuCompletionCount",
+      "gpuCompletionTotalMs", "gpuCompletionMaxMs",
+    ]) stats[name] = 0;
+    stats.initialRead = read;
+    stats.finalRead = read;
+    stats.finalWrite = Atomics.load(ring.headerI32, 0) >>> 0;
+    stats.backlog = 0;
+    stats.initialUploadRead = uploadRead;
+    stats.finalUploadRead = uploadRead;
+    histogram.fill(0);
+    completionSamples.length = 0;
+    submitDigests.length = 0;
+    digest = 2166136261 >>> 0;
+    submitDigest = 2166136261 >>> 0;
+    heldRecordIndex = null;
   }
 
   function validateUploadSpan(pointer, bytes) {
@@ -580,35 +641,49 @@ export function createWgpuUploadProbeExecutor({
   }
 
   function hashRecord(op, word) {
-    for (let index = 0; index < 8; index += 1) {
-      const pointerWord = (op === OP_UPLOAD_BUFFER && index === 3) ||
-        (op === OP_UPLOAD_TEXTURE && index === 2);
-      hashWord(pointerWord ? 0 : ring.u32[word + index] >>> 0);
-    }
+    hashStreamWord(op);
+    hashSubmitWord(op);
+    const stableWords = op === OP_CREATE_BUFFER ? [2, 3]
+      : op === OP_UPLOAD_BUFFER ? [4, 5]
+        : op === OP_CREATE_TEXTURE ? [2, 3, 4, 5, 6]
+          : op === OP_UPLOAD_TEXTURE ? [3, 4, 5, 6, 7]
+            : op === OP_DESTROY ? [1]
+              : [];
+    for (const index of stableWords) hashStreamWord(ring.u32[word + index] >>> 0);
   }
 
   function hashPayload(pointer, bytes) {
     const head = Math.min(16, bytes);
-    for (let index = 0; index < head; index += 1) hashByte(ring.heap[pointer + index]);
+    for (let index = 0; index < head; index += 1) hashPayloadByte(ring.heap[pointer + index]);
     const tailStart = Math.max(head, bytes - 16);
-    for (let index = tailStart; index < bytes; index += 1) hashByte(ring.heap[pointer + index]);
+    for (let index = tailStart; index < bytes; index += 1) {
+      hashPayloadByte(ring.heap[pointer + index]);
+    }
   }
 
-  function hashWord(value) {
-    hashByte(value & 0xff);
-    hashByte((value >>> 8) & 0xff);
-    hashByte((value >>> 16) & 0xff);
-    hashByte((value >>> 24) & 0xff);
+  function hashStreamWord(value) {
+    hashPayloadByte(value & 0xff);
+    hashPayloadByte((value >>> 8) & 0xff);
+    hashPayloadByte((value >>> 16) & 0xff);
+    hashPayloadByte((value >>> 24) & 0xff);
   }
 
-  function hashByte(value) {
+  function hashSubmitWord(value) {
+    for (const byte of [
+      value & 0xff,
+      (value >>> 8) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 24) & 0xff,
+    ]) submitDigest = Math.imul((submitDigest ^ byte) >>> 0, 16777619) >>> 0;
+  }
+
+  function hashPayloadByte(value) {
     digest = Math.imul((digest ^ value) >>> 0, 16777619) >>> 0;
-    submitDigest = Math.imul((submitDigest ^ value) >>> 0, 16777619) >>> 0;
   }
 
   function closeSubmitDigest() {
     submitDigests.push(hex(submitDigest));
-    if (submitDigests.length > 256) submitDigests.shift();
+    if (submitDigests.length > MAX_SUBMIT_DIGESTS) submitDigests.shift();
     submitDigest = 2166136261 >>> 0;
   }
 
@@ -700,7 +775,7 @@ export function createWgpuUploadProbeExecutor({
     onSnapshot(snapshot());
   }
 
-  return Object.freeze({ attach, drain, finalize, snapshot, stop });
+  return Object.freeze({ attach, beginMeasurement, drain, finalize, snapshot, stop });
 }
 
 function validateDescriptor(value) {

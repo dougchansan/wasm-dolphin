@@ -21,6 +21,8 @@ import {
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
+  evaluateWgpuUploadProbeWorkloadEquivalence,
+  validateWgpuUploadProbeFinalization,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -341,6 +343,129 @@ test("renderer worker canary evidence requires the nested-worker schema", () => 
     requested: "canary",
     telemetry: { rendererWorkerProbe: { requested: "canary", active: false } },
   }).failures.join("\n"), /active=0|schema mismatch/);
+});
+
+test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {
+  const opHistogram = new Array(25).fill(0);
+  opHistogram[5] = 2;
+  opHistogram[6] = 3;
+  opHistogram[7] = 1;
+  opHistogram[8] = 2;
+  opHistogram[12] = 4;
+  opHistogram[19] = 4;
+  opHistogram[22] = 2;
+  opHistogram[23] = 2;
+  const probe = {
+    requested: "worker-upload",
+    active: true,
+    passed: true,
+    schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
+    executorLocation: "worker",
+    blankOutput: true,
+    sharedHeap: true,
+    protocolVersion: 3,
+    claimedOwner: 2,
+    claimCount: 1,
+    conflictCount: 0,
+    handoffAckCount: 1,
+    observedRecordCount: 20,
+    consumedRecordCount: 20,
+    opHistogram,
+    uploadRecordCount: 5,
+    releasedUploadCount: 5,
+    totalUploadBytes: 4096,
+    invalidRecordCount: 0,
+    unknownOpcodeCount: 0,
+    invalidUploadSpanCount: 0,
+    uploadReleaseMismatchCount: 0,
+    missingResourceCount: 0,
+    quiesced: true,
+    backlog: 0,
+    fatalCount: 0,
+    consumerState: 1,
+    consumerError: 0,
+    streamDigest: "deadbeef",
+    submitDigests: ["11111111", "22222222"],
+    submissionCount: 2,
+    gpuCompletionCount: 2,
+    staging: { failed: false },
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "worker-upload",
+    telemetry: { rendererWorkerProbe: probe },
+  }).failures, []);
+  const invalid = evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "worker-upload",
+    telemetry: { rendererWorkerProbe: {
+      ...probe,
+      conflictCount: 1,
+      consumedRecordCount: 19,
+      releasedUploadCount: 4,
+      backlog: 1,
+      quiesced: false,
+    } },
+  }).failures.join("\n");
+  assert.match(invalid, /ownership claim is unique/);
+  assert.match(invalid, /every observed record was consumed/);
+  assert.match(invalid, /every upload record was released once/);
+  assert.match(invalid, /finalized at quiescence/);
+
+  const nullProbe = {
+    ...probe,
+    requested: "null-drain",
+    executorLocation: "null",
+    claimedOwner: 3,
+    submissionCount: 0,
+    gpuCompletionCount: 0,
+    staging: null,
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "null-drain",
+    telemetry: { rendererWorkerProbe: nullProbe },
+  }).failures, []);
+});
+
+test("upload-probe finalization binds forced causal telemetry to the quiesced snapshot", () => {
+  const snapshot = {
+    requested: "inline-upload",
+    schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
+    executorLocation: "inline",
+    observedRecordCount: 20,
+    consumedRecordCount: 20,
+    totalUploadBytes: 4096,
+    streamDigest: "deadbeef",
+    quiesced: true,
+    passed: true,
+  };
+  const valid = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: {
+      snapshot,
+      causalTelemetry: {
+        schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        webgpu: { rendererWorkerProbe: { ...snapshot } },
+      },
+    },
+  });
+  assert.deepEqual(valid.failures, []);
+
+  const missing = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: { snapshot },
+  });
+  assert.match(missing.failures.join("\n"), /schema|both be present/);
+
+  const disagreement = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: {
+      snapshot,
+      causalTelemetry: {
+        schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        webgpu: { rendererWorkerProbe: { ...snapshot, streamDigest: "bad0cafe" } },
+      },
+    },
+  });
+  assert.match(disagreement.failures.join("\n"), /streamDigest/);
 });
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {
@@ -1171,6 +1296,39 @@ test("screening block effects are sign-normalized but never promotable", () => {
     { a: [22, 22], b: [11, 11] },
   ]));
   assert.ok(lowerReport.medianEffectPercent > 0);
+});
+
+test("comparison rejects upload-probe runs with incomparable fixed workloads", () => {
+  const config = comparisonConfig({ mode: "screening", blockCount: 2 });
+  const runs = makeRuns(config, [
+    { a: [100, 100], b: [110, 110] },
+    { a: [101, 101], b: [111, 111] },
+  ]);
+  const workload = {
+    coreSha256: "a".repeat(64),
+    saveStateSha256: "b".repeat(64),
+    checkpointTicks: 1000,
+    checkpointPpcPc: 2000,
+    actualCoreTickDelta: 486_000_000,
+    actualFrameDelta: 480,
+    observedRecordCount: 1_000_000,
+    totalUploadBytes: 500_000_000,
+    submissionCount: 480,
+    submitDigests: ["11111111", "22222222"],
+  };
+  for (const run of runs) run.uploadProbeWorkload = { ...workload };
+  assert.deepEqual(evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)), []);
+  assert.equal(summarizeComparison(config, runs).outcome, "SCREENING_SIGNAL");
+
+  runs[1].uploadProbeWorkload = {
+    ...workload,
+    totalUploadBytes: workload.totalUploadBytes * 1.01,
+    submitDigests: ["11111111", "bad0cafe"],
+  };
+  const report = summarizeComparison(config, runs);
+  assert.equal(report.blocks[0].valid, false);
+  assert.match(report.blocks[0].invalidReasons.join("\n"), /totalUploadBytes|digest mismatch/);
+  assert.notEqual(report.outcome, "SCREENING_SIGNAL");
 });
 
 test("confirmation extends beyond five blocks until exact permutation evidence resolves", () => {

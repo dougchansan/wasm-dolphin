@@ -26,6 +26,7 @@ import {
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
+  validateWgpuUploadProbeFinalization,
   evaluateWgpuDirtyRangeProjection,
   evaluateQualificationProvenance,
   evaluateRunValidity,
@@ -336,11 +337,15 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
+  const uploadProbeMode = ["inline-upload", "worker-upload", "null-drain"].includes(
+    scenario.params?.wgpurenderprobe
+  );
+  const fixedWorkPollIntervalMs = uploadProbeMode ? 10 : FIXED_WORK_POLL_INTERVAL_MS;
   let fixedEmulatedWork = {
     enabled: context.targetCoreSeconds != null,
     targetCoreSeconds: context.targetCoreSeconds,
     wallTimeCapSeconds: context.durationSeconds,
-    pollIntervalMs: context.targetCoreSeconds != null ? FIXED_WORK_POLL_INTERVAL_MS : null,
+    pollIntervalMs: context.targetCoreSeconds != null ? fixedWorkPollIntervalMs : null,
     reachedTarget: false,
   };
   const url = new URL(context.baseUrl);
@@ -487,6 +492,46 @@ async function runScenario(scenario, context) {
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
     await page.waitForTimeout(context.settleSeconds * 1000);
+    let probeMeasurementBoundary = null;
+    if (uploadProbeMode) {
+      const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
+      if (!pause?.paused || pause?.coreStateName !== "Paused") {
+        throw new Error(`Upload probe core did not pause at measurement boundary: ${JSON.stringify(pause)}`);
+      }
+      const measurementReload = await loadStateFileWithTimeout(page, context.saveStateUrl);
+      if (!measurementReload?.loaded) {
+        throw new Error(
+          `Upload probe measurement save reload failed: ${measurementReload?.error || JSON.stringify(measurementReload)}`
+        );
+      }
+      const measurementCheckpoint = assertBattleCheckpoint(
+        parseBattleCheckpoint(measurementReload),
+        expectedBattleCheckpointForParams(scenario.params)
+      );
+      const begun = await requestWorkerRpc(
+        page,
+        "validationBeginWgpuRendererProbeMeasurement",
+        { timeoutMs: 10_000 },
+        20_000
+      );
+      const boundarySnapshot = begun?.snapshot;
+      if (!boundarySnapshot?.passed || boundarySnapshot.observedRecordCount !== 0 ||
+          boundarySnapshot.consumedRecordCount !== 0 || boundarySnapshot.backlog !== 0) {
+        throw new Error(`Upload probe measurement boundary is invalid: ${JSON.stringify(boundarySnapshot)}`);
+      }
+      begun.observedAtMs = await page.evaluate(() => performance.now());
+      probeMeasurementBoundary = begun;
+      await resumeAfterBattleCheckpoint(page);
+      manifest.benchmark.rendererWorkerProbeMeasurementBoundary = {
+        schema: boundarySnapshot.schema,
+        initialRead: boundarySnapshot.initialRead,
+        initialUploadRead: boundarySnapshot.initialUploadRead,
+        coreTicks: begun.coreTicks,
+        frame: begun.frame,
+        reloadedSaveState: true,
+        checkpoint: measurementCheckpoint,
+      };
+    }
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
     manifest.benchmark.timingStartedAt = new Date().toISOString();
@@ -500,7 +545,21 @@ async function runScenario(scenario, context) {
       : Math.ceil(wallTimeCapMs / context.sampleMs);
     let sampleIndex = 0;
     let inputIndex = 0;
-    let fixedWorkBaseline = null;
+    let fixedWorkBaseline = fixedWorkEnabled && probeMeasurementBoundary
+      ? fixedWorkObservation(probeMeasurementBoundary)
+      : null;
+    if (fixedWorkBaseline) {
+      manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
+      fixedEmulatedWork = summarizeFixedEmulatedWork({
+        targetCoreSeconds: context.targetCoreSeconds,
+        coreTicksPerSecond: Number(probeMeasurementBoundary.coreTicksPerSecond) || 0,
+        baseline: fixedWorkBaseline,
+        observation: fixedWorkBaseline,
+        wallTimeCapSeconds: context.durationSeconds,
+        pollIntervalMs: fixedWorkPollIntervalMs,
+      });
+      manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+    }
     const collectTimedSample = async (elapsedSeconds) => {
       const sample = deriveCoreRates(
         await readSample(page, elapsedSeconds),
@@ -536,7 +595,8 @@ async function runScenario(scenario, context) {
           baseline: fixedWorkBaseline,
           coreTicksPerSecond: fixedEmulatedWork.coreTicksPerSecond,
           deadlineMs: deadline,
-          pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+          pollIntervalMs: fixedWorkPollIntervalMs,
+          liveWorkerProgress: uploadProbeMode,
           targetCoreSeconds: context.targetCoreSeconds,
           wallTimeCapSeconds: context.durationSeconds,
         });
@@ -587,8 +647,10 @@ async function runScenario(scenario, context) {
 
       const sample = await collectTimedSample(elapsedSeconds);
       if (sampleIndex === 0) {
-        manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
-        if (fixedWorkEnabled) {
+        if (!manifest.benchmark.timingBaselineEstablishedAt) {
+          manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
+        }
+        if (fixedWorkEnabled && !fixedWorkBaseline) {
           const coreTicksPerSecond = Number(sample.coreTicksPerSecond) ||
             Number(saveStateLoad.response?.coreTicksPerSecond) || 0;
           fixedWorkBaseline = fixedWorkObservation(sample);
@@ -598,7 +660,7 @@ async function runScenario(scenario, context) {
             baseline: fixedWorkBaseline,
             observation: fixedWorkBaseline,
             wallTimeCapSeconds: context.durationSeconds,
-            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+            pollIntervalMs: fixedWorkPollIntervalMs,
           });
           manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
         }
@@ -612,7 +674,7 @@ async function runScenario(scenario, context) {
             baseline: fixedWorkBaseline,
             observation: fixedWorkObservation(sample),
             wallTimeCapSeconds: context.durationSeconds,
-            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+            pollIntervalMs: fixedWorkPollIntervalMs,
           });
         manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
       }
@@ -627,6 +689,49 @@ async function runScenario(scenario, context) {
       if (fixedWorkEnabled && (fixedEmulatedWork.reachedTarget || action.atMs >= wallTimeCapMs)) {
         break;
       }
+    }
+    if (uploadProbeMode) {
+      const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
+      if (!pause?.paused || pause?.coreStateName !== "Paused") {
+        throw new Error(`Upload probe core did not pause for finalization: ${JSON.stringify(pause)}`);
+      }
+      const finalized = await requestWorkerRpc(
+        page,
+        "validationFinalizeWgpuRendererProbe",
+        { timeoutMs: 10_000 },
+        20_000
+      );
+      const snapshot = finalized?.snapshot;
+      if (!snapshot?.quiesced || !snapshot?.passed) {
+        throw new Error(`Upload probe did not finalize cleanly: ${JSON.stringify(snapshot)}`);
+      }
+      const finalizationEvidence = validateWgpuUploadProbeFinalization({
+        requested: scenario.params.wgpurenderprobe,
+        finalized,
+      });
+      if (!finalizationEvidence.valid) {
+        throw new Error(
+          `Upload probe finalization telemetry is invalid: ${finalizationEvidence.failures.join("; ")}`
+        );
+      }
+      const finalSample = samples.at(-1);
+      if (!finalSample) throw new Error("Upload probe finalization has no timed sample to update");
+      finalSample.causalTelemetry = finalized.causalTelemetry;
+      Object.assign(
+        finalSample,
+        flattenCausalTelemetry(finalized.causalTelemetry),
+        flattenWgpuDirtyRangeProjection(
+          finalized.causalTelemetry?.webgpu?.dirtyRangeProjection
+        )
+      );
+      manifest.benchmark.rendererWorkerProbeFinalization = {
+        paused: true,
+        quiesced: true,
+        schema: snapshot.schema,
+        observedRecordCount: snapshot.observedRecordCount,
+        totalUploadBytes: snapshot.totalUploadBytes,
+        streamDigest: snapshot.streamDigest,
+      };
     }
     manifest.benchmark.inputScriptDeliveredEventCount = inputEvents.length;
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
@@ -706,6 +811,25 @@ async function runScenario(scenario, context) {
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
+  if (uploadProbeMode) {
+    const probe = summary.final?.causalTelemetry?.webgpu?.rendererWorkerProbe;
+    summary.uploadProbeWorkload = {
+      requested: scenario.params.wgpurenderprobe,
+      coreSha256: context.coreArtifact?.sha256 ?? null,
+      saveStateSha256: context.saveFixture?.sha256 ?? null,
+      checkpointTicks: manifest.fixture?.battleCheckpoint?.loadedCheckpointTicks ??
+        manifest.fixture?.battleCheckpoint?.coreTicks ?? null,
+      checkpointPpcPc: manifest.fixture?.battleCheckpoint?.loadedCheckpointPpcPc ??
+        manifest.fixture?.battleCheckpoint?.ppcPc ?? null,
+      actualCoreTickDelta: fixedEmulatedWork.actualCoreTickDelta,
+      actualFrameDelta: fixedEmulatedWork.actualFrameDelta,
+      observedRecordCount: probe?.observedRecordCount ?? null,
+      totalUploadBytes: probe?.totalUploadBytes ?? null,
+      submissionCount: probe?.submissionCount ?? null,
+      submitDigests: Array.isArray(probe?.submitDigests) ? [...probe.submitDigests] : null,
+      streamDigest: probe?.streamDigest ?? null,
+    };
+  }
   summary.postLoadInput = {
     mode: context.postLoadInputScript.length ? "post-load-only" : "none",
     scheduledEventCount: context.postLoadInputScript.length,
@@ -943,6 +1067,9 @@ function selectedScenarios() {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
+  const blankUploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    softwareParams.wgpurenderprobe
+  );
   const all = [
     {
       name: "software-stable",
@@ -950,11 +1077,11 @@ function selectedScenarios() {
       assertAfterSeconds: numberEnv("ASSERT_AFTER_SECONDS", 5),
       params: softwareParams,
       thresholds: {
-        minPresentFps: numberEnv("SOFTWARE_MIN_PRESENT_FPS", 50),
+        minPresentFps: blankUploadProbe ? 0 : numberEnv("SOFTWARE_MIN_PRESENT_FPS", 50),
         minCoreFps: numberEnv("SOFTWARE_MIN_CORE_FPS", 55),
         minGameSpeed: numberEnv("SOFTWARE_MIN_GAME_SPEED", 95),
         maxGapMs: numberEnv("SOFTWARE_MAX_GAP_MS", 90),
-        requireVisibleChange: true,
+        requireVisibleChange: !blankUploadProbe,
         requireNoGlError: false,
       },
     },
@@ -1070,7 +1197,7 @@ async function readRendererDiagnostics(page) {
   };
 }
 
-async function requestWorkerRpc(page, type, payload = {}) {
+async function requestWorkerRpc(page, type, payload = {}, timeoutMs = workerRpcTimeoutMs()) {
   return page.evaluate(async ({ type, payload, timeoutMs }) => {
     const adapter = window.__host?.adapter;
     if (!adapter?.request) throw new Error(`Active adapter does not expose worker RPC ${type}`);
@@ -1084,7 +1211,7 @@ async function requestWorkerRpc(page, type, payload = {}) {
         (error) => { clearTimeout(timer); reject(error); }
       );
     });
-  }, { type, payload, timeoutMs: workerRpcTimeoutMs() });
+  }, { type, payload, timeoutMs });
 }
 
 async function loadStateFileWithTimeout(page, saveUrl) {
@@ -1112,9 +1239,12 @@ function workerRpcTimeoutMs() {
 function withExpectedRendererIdentity(diagnostics, params = {}) {
   const expectedVideoBackend = expectedDolphinVideoBackend(params.video);
   const expectedRequestedPresenterBackend = normalizePresenterIdentity(params.presenter);
-  const expectedActivePresenterBackend = expectedVideoBackend === "OGL"
-    ? "ogl"
-    : expectedRequestedPresenterBackend;
+  const uploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    params.wgpurenderprobe
+  );
+  const expectedActivePresenterBackend = uploadProbe
+    ? "wgpu-upload-probe"
+    : expectedVideoBackend === "OGL" ? "ogl" : expectedRequestedPresenterBackend;
   return {
     ...diagnostics,
     expectedVideoBackend,
@@ -1280,7 +1410,15 @@ async function waitForInputMarkerCompletion(page, baseline, { pollIntervalMs, ti
   };
 }
 
-async function readFixedWorkProgress(page) {
+async function readFixedWorkProgress(page, { liveWorkerProgress = false } = {}) {
+  if (liveWorkerProgress) {
+    const progress = await requestWorkerRpc(page, "validationReadCoreProgress", {}, 5000);
+    return {
+      coreTicks: Number(progress?.coreTicks) || 0,
+      frame: Number(progress?.frame) || 0,
+      observedAtMs: await page.evaluate(() => performance.now()),
+    };
+  }
   return page.evaluate(() => {
     const info = window.__lastFrameInfo || {};
     return {
@@ -1296,6 +1434,7 @@ async function waitForFixedEmulatedWorkProgress(page, {
   coreTicksPerSecond,
   deadlineMs,
   pollIntervalMs,
+  liveWorkerProgress = false,
   targetCoreSeconds,
   wallTimeCapSeconds,
 }) {
@@ -1306,7 +1445,7 @@ async function waitForFixedEmulatedWorkProgress(page, {
       pollIntervalMs,
     });
     if (delayMs > 0) await page.waitForTimeout(delayMs);
-    const observation = await readFixedWorkProgress(page);
+    const observation = await readFixedWorkProgress(page, { liveWorkerProgress });
     const summary = summarizeFixedEmulatedWork({
       targetCoreSeconds,
       coreTicksPerSecond,

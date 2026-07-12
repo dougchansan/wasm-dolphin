@@ -74,8 +74,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 47840,
-      "sha256": "4def5b2201604fe62ae552b062e44c2e439fd9050163a2e986731ace33985e7c"
+      "size": 50648,
+      "sha256": "d62c47ef175ada373e301cd1b7fc7708ba001e33df56447a217f98b2dd22d3d1"
     },
     {
       "path": "src/core-host.js",
@@ -128,14 +128,20 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 401551,
-      "sha256": "34993c52b7079dfba2f3de3f1e152adc2c13e33001862024b2564bf1f08e3d76"
+      "size": 412984,
+      "sha256": "4b3bbce03fc522fdbe23f073a3bd9bbd9568762acd7db765c1c9377ad7068314"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
       "hashMode": "lf-normalized",
-      "size": 2620,
-      "sha256": "02558e41f52c36d18fd29e54bf33dac3db156323d86dc3306018161fd4e385d8"
+      "size": 6410,
+      "sha256": "e3573d4406f6c2177ecb1bdb3c376f7776f1ba4b43433236b1b6734b4a877386"
+    },
+    {
+      "path": "src/wgpu-upload-probe-executor.js",
+      "hashMode": "lf-normalized",
+      "size": 27954,
+      "sha256": "cc9153ff572bb8a1ad5d128cf85f949e5af8823845c8ef670256c97acd74dfd7"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -376,6 +382,9 @@
       "setAudioMuted",
       "setInputMask",
       "setInputState",
+      "validationBeginWgpuRendererProbeMeasurement",
+      "validationFinalizeWgpuRendererProbe",
+      "validationReadCoreProgress",
       "validationSetCorePaused"
     ],
     "notificationFields": {

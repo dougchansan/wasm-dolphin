@@ -771,7 +771,8 @@ export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], ren
   }
   if (
     renderer.requestedPresenterBackend === "webgpu" &&
-    renderer.activePresenterBackend !== "webgpu"
+    renderer.activePresenterBackend !== "webgpu" &&
+    renderer.activePresenterBackend !== "wgpu-upload-probe"
   ) {
     evidence.push(
       `renderer fallback: requested presenter webgpu, active ${renderer.activePresenterBackend || "unknown"}`
@@ -980,6 +981,8 @@ export function summarizeComparison(configValue, runs) {
     if (blockRuns.length !== 4 || armA.length !== 2 || armB.length !== 2) {
       invalidReasons.push(`${blockId}: expected exactly two A and two B runs`);
     }
+    invalidReasons.push(...evaluateWgpuUploadProbeWorkloadEquivalence(blockRuns)
+      .map((reason) => `${blockId}: ${reason}`));
     const valuesA = armA.map((run) => Number(readPath(run, config.primaryMetric)));
     const valuesB = armB.map((run) => Number(readPath(run, config.primaryMetric)));
     if ([...valuesA, ...valuesB].some((number) => !Number.isFinite(number))) {
@@ -1058,6 +1061,67 @@ export function summarizeComparison(configValue, runs) {
     promotable: false,
     blocks,
   };
+}
+
+export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
+  const workloads = runs.map((run) => run?.uploadProbeWorkload ?? null);
+  if (workloads.every((value) => value === null)) return [];
+  const failures = [];
+  if (workloads.some((value) => value === null)) {
+    return ["upload-probe workload evidence is missing from one or more runs"];
+  }
+  const reference = workloads[0];
+  for (const name of ["coreSha256", "saveStateSha256", "checkpointTicks", "checkpointPpcPc"]) {
+    if (workloads.some((value) => value[name] !== reference[name])) {
+      failures.push(`upload-probe ${name} differs across runs`);
+    }
+  }
+  const numeric = (name) => workloads.map((value) => Number(value[name]));
+  const requireFinite = (name, values) => {
+    if (values.some((value) => !Number.isFinite(value))) {
+      failures.push(`upload-probe ${name} is missing or non-numeric`);
+      return false;
+    }
+    return true;
+  };
+  const ticks = numeric("actualCoreTickDelta");
+  if (requireFinite("actualCoreTickDelta", ticks) && relativeSpread(ticks) > 0.0025) {
+    failures.push("upload-probe core tick deltas differ by more than 0.25%");
+  }
+  for (const name of ["actualFrameDelta", "submissionCount"]) {
+    const values = numeric(name);
+    if (requireFinite(name, values) && Math.max(...values) - Math.min(...values) > 1) {
+      failures.push(`upload-probe ${name} differs by more than one`);
+    }
+  }
+  for (const name of ["observedRecordCount", "totalUploadBytes"]) {
+    const values = numeric(name);
+    if (requireFinite(name, values) && relativeSpread(values) > 0.005) {
+      failures.push(`upload-probe ${name} differs by more than 0.5%`);
+    }
+  }
+  const digestLists = workloads.map((value) => value.submitDigests);
+  if (digestLists.some((value) => !Array.isArray(value) || value.length === 0)) {
+    failures.push("upload-probe submit digests are missing");
+  } else {
+    const commonLength = Math.min(...digestLists.map((value) => value.length));
+    outer: for (let index = 0; index < commonLength; index += 1) {
+      const expected = digestLists[0][index];
+      for (let run = 1; run < digestLists.length; run += 1) {
+        if (digestLists[run][index] !== expected) {
+          failures.push(`upload-probe submit digest mismatch at boundary ${index}`);
+          break outer;
+        }
+      }
+    }
+  }
+  return failures;
+}
+
+function relativeSpread(values) {
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  return (maximum - minimum) / Math.max(1, Math.abs(maximum), Math.abs(minimum));
 }
 
 export function summarizeNumeric(values) {
@@ -1632,7 +1696,97 @@ export function evaluateWgpuRendererWorkerProbeEvidence({ requested, telemetry }
   if (requested === "canary" && probe?.schema !== "wasm-dolphin.wgpu-renderer-worker-canary.v1") {
     failures.push(`WGPU renderer worker canary schema mismatch: ${probe?.schema || "unavailable"}`);
   }
+  if (["inline-upload", "worker-upload", "null-drain"].includes(requested)) {
+    const expectedExecutor = requested === "inline-upload"
+      ? "inline" : requested === "worker-upload" ? "worker" : "null";
+    const expectedOwner = expectedExecutor === "inline" ? 1 : expectedExecutor === "worker" ? 2 : 3;
+    const histogram = probe?.opHistogram;
+    const observed = Number(probe?.observedRecordCount);
+    const consumed = Number(probe?.consumedRecordCount);
+    const uploadRecords = Number(probe?.uploadRecordCount);
+    const releasedUploads = Number(probe?.releasedUploadCount);
+    const histogramTotal = Array.isArray(histogram)
+      ? histogram.reduce((sum, value) => sum + Number(value || 0), 0)
+      : -1;
+    const expectedUploadRecords = Array.isArray(histogram)
+      ? Number(histogram[6] || 0) + Number(histogram[8] || 0)
+      : -1;
+    if (probe?.schema !== "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1") {
+      failures.push(`WGPU upload probe schema mismatch: ${probe?.schema || "unavailable"}`);
+    }
+    for (const [condition, message] of [
+      [probe?.executorLocation === expectedExecutor, "executor location matches request"],
+      [probe?.blankOutput === true, "blank output is explicit"],
+      [probe?.sharedHeap === true, "shared heap is active"],
+      [probe?.protocolVersion === 3, "protocol v3 is active"],
+      [probe?.claimedOwner === expectedOwner, "owner token matches executor"],
+      [probe?.claimCount === 1 && probe?.conflictCount === 0, "ownership claim is unique"],
+      [probe?.handoffAckCount === 1, "ring handoff is acknowledged once"],
+      [Number.isSafeInteger(observed) && observed > 0, "records were observed"],
+      [consumed === observed, "every observed record was consumed"],
+      [Array.isArray(histogram) && histogram.length === 25 && histogramTotal === observed,
+        "opcode histogram conserves records"],
+      [uploadRecords === expectedUploadRecords && releasedUploads === uploadRecords,
+        "every upload record was released once"],
+      [Number(probe?.totalUploadBytes) > 0, "upload bytes are nonzero"],
+      [probe?.invalidRecordCount === 0 && probe?.unknownOpcodeCount === 0,
+        "record validation is clean"],
+      [probe?.invalidUploadSpanCount === 0 && probe?.uploadReleaseMismatchCount === 0,
+        "upload ownership is clean"],
+      [probe?.missingResourceCount === 0, "resource references are complete"],
+      [probe?.quiesced === true && probe?.backlog === 0, "probe finalized at quiescence"],
+      [probe?.fatalCount === 0 && probe?.consumerState === 1 && probe?.consumerError === 0,
+        "consumer remained healthy"],
+      [/^[0-9a-f]{8}$/.test(String(probe?.streamDigest || "")),
+        "stream digest is present"],
+      [Array.isArray(probe?.submitDigests) && probe.submitDigests.length > 0,
+        "submit-boundary digests are present"],
+    ]) {
+      if (!condition) failures.push(`WGPU upload probe invalid: ${message}`);
+    }
+    if (requested === "null-drain") {
+      if (probe?.submissionCount !== 0 || probe?.gpuCompletionCount !== 0 || probe?.staging !== null) {
+        failures.push("WGPU null-drain unexpectedly performed GPU work");
+      }
+    } else if (!(probe?.submissionCount > 0 &&
+                 probe?.gpuCompletionCount === probe?.submissionCount &&
+                 probe?.staging && probe.staging.failed === false)) {
+      failures.push("WGPU upload probe GPU submissions/completions are incomplete");
+    }
+  }
   return { required: true, requested, probe, failures };
+}
+
+export function validateWgpuUploadProbeFinalization({ requested, finalized } = {}) {
+  const failures = [];
+  const telemetry = finalized?.causalTelemetry;
+  const snapshot = finalized?.snapshot;
+  const captured = telemetry?.webgpu?.rendererWorkerProbe;
+  if (telemetry?.schemaVersion !== CAUSAL_TELEMETRY_SCHEMA_VERSION) {
+    failures.push(
+      `causal telemetry schema must be ${CAUSAL_TELEMETRY_SCHEMA_VERSION}`
+    );
+  }
+  if (!snapshot || !captured) {
+    failures.push("final probe snapshot and captured telemetry must both be present");
+    return { valid: false, failures };
+  }
+  if (captured.requested !== requested) failures.push("captured probe mode must match the request");
+  for (const name of [
+    "schema",
+    "executorLocation",
+    "observedRecordCount",
+    "consumedRecordCount",
+    "totalUploadBytes",
+    "streamDigest",
+    "quiesced",
+    "passed",
+  ]) {
+    if (captured[name] !== snapshot[name]) {
+      failures.push(`captured probe field ${name} must match the finalized snapshot`);
+    }
+  }
+  return { valid: failures.length === 0, failures };
 }
 
 const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =

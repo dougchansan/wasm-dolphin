@@ -203,6 +203,35 @@ export function createCausalTelemetry(overrides = {}) {
           mapMs: 0,
           totalMs: 0,
           error: "",
+          executorLocation: "",
+          blankOutput: false,
+          sharedHeap: false,
+          protocolVersion: 0,
+          claimedOwner: 0,
+          claimCount: 0,
+          conflictCount: 0,
+          handoffAckCount: 0,
+          observedRecordCount: 0,
+          consumedRecordCount: 0,
+          skippedRecordCount: 0,
+          invalidRecordCount: 0,
+          unknownOpcodeCount: 0,
+          opHistogram: new Array(25).fill(0),
+          streamDigest: "",
+          uploadRecordCount: 0,
+          releasedUploadCount: 0,
+          totalUploadBytes: 0,
+          invalidUploadSpanCount: 0,
+          uploadReleaseMismatchCount: 0,
+          submissionCount: 0,
+          gpuCompletionCount: 0,
+          gpuCompletionP95Ms: 0,
+          fatalCount: 0,
+          fatalScope: "",
+          consumerState: 0,
+          consumerError: 0,
+          backlog: 0,
+          quiesced: false,
         },
         producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
         producerUboPackEnabled: false,
@@ -788,6 +817,40 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.rendererWorkerProbe?.totalMs ?? 0,
     causalWgpuRendererWorkerProbeError:
       telemetry.webgpu.rendererWorkerProbe?.error ?? "",
+    causalWgpuRendererWorkerProbeExecutor:
+      telemetry.webgpu.rendererWorkerProbe?.executorLocation ?? "",
+    causalWgpuRendererWorkerProbeBlankOutput:
+      telemetry.webgpu.rendererWorkerProbe?.blankOutput ?? false,
+    causalWgpuRendererWorkerProbeProtocolVersion:
+      telemetry.webgpu.rendererWorkerProbe?.protocolVersion ?? 0,
+    causalWgpuRendererWorkerProbeClaimedOwner:
+      telemetry.webgpu.rendererWorkerProbe?.claimedOwner ?? 0,
+    causalWgpuRendererWorkerProbeClaimCount:
+      telemetry.webgpu.rendererWorkerProbe?.claimCount ?? 0,
+    causalWgpuRendererWorkerProbeConflictCount:
+      telemetry.webgpu.rendererWorkerProbe?.conflictCount ?? 0,
+    causalWgpuRendererWorkerProbeObservedRecords:
+      telemetry.webgpu.rendererWorkerProbe?.observedRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeConsumedRecords:
+      telemetry.webgpu.rendererWorkerProbe?.consumedRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeUploadRecords:
+      telemetry.webgpu.rendererWorkerProbe?.uploadRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeReleasedUploads:
+      telemetry.webgpu.rendererWorkerProbe?.releasedUploadCount ?? 0,
+    causalWgpuRendererWorkerProbeUploadBytes:
+      telemetry.webgpu.rendererWorkerProbe?.totalUploadBytes ?? 0,
+    causalWgpuRendererWorkerProbeSubmissions:
+      telemetry.webgpu.rendererWorkerProbe?.submissionCount ?? 0,
+    causalWgpuRendererWorkerProbeGpuCompletions:
+      telemetry.webgpu.rendererWorkerProbe?.gpuCompletionCount ?? 0,
+    causalWgpuRendererWorkerProbeBacklog:
+      telemetry.webgpu.rendererWorkerProbe?.backlog ?? 0,
+    causalWgpuRendererWorkerProbeQuiesced:
+      telemetry.webgpu.rendererWorkerProbe?.quiesced ?? false,
+    causalWgpuRendererWorkerProbeFatalCount:
+      telemetry.webgpu.rendererWorkerProbe?.fatalCount ?? 0,
+    causalWgpuRendererWorkerProbeStreamDigest:
+      telemetry.webgpu.rendererWorkerProbe?.streamDigest ?? "",
     causalWgpuProducerUboChangeMaskHistogram:
       telemetry.webgpu.producerUboChangeMaskHistogram,
     causalWgpuProducerUboPackEnabled: telemetry.webgpu.producerUboPackEnabled,

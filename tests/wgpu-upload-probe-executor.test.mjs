@@ -62,6 +62,82 @@ test("all upload-probe arms consume the same normalized workload", async () => {
   assert.equal(snapshots[2].staging, null);
 });
 
+test("measurement boundary resets workload evidence while preserving ownership", async () => {
+  const fixture = createWgpuCommandRingFixture([[0], [22]]);
+  const executor = createExecutor("null-drain", fixture);
+  executor.attach(fixture.descriptor);
+  executor.drain();
+  const boundary = await executor.beginMeasurement();
+  assert.equal(boundary.claimCount, 1);
+  assert.equal(boundary.claimedOwner, WGPU_UPLOAD_PROBE_OWNER.null);
+  assert.equal(boundary.observedRecordCount, 0);
+  assert.equal(boundary.submissionCount, 0);
+  assert.equal(boundary.streamDigest, "811c9dc5");
+  assert.deepEqual(boundary.submitDigests, []);
+
+  const words = new Uint32Array(fixture.heapBuffer);
+  const next = Atomics.load(fixture.header, 0) >>> 0;
+  const base = (fixture.descriptor.slotsPtr + (next % fixture.descriptor.capacity) * 32) >>> 2;
+  words[base] = 0;
+  Atomics.store(fixture.header, 0, (next + 1) | 0);
+  const final = await executor.finalize();
+  assert.equal(final.observedRecordCount, 1);
+  assert.equal(final.consumedRecordCount, 1);
+  assert.equal(final.initialRead, next);
+  assert.equal(final.finalRead, (next + 1) >>> 0);
+});
+
+test("workload digests normalize runtime resource identifiers", async () => {
+  const snapshots = [];
+  for (const [id, destinationOffset] of [[7, 0], [7007, 4096]]) {
+    const fixture = createWgpuCommandRingFixture([
+      [5, id, 64, 0x0c],
+      [6, id, destinationOffset, 4096, 4, 3],
+      [22],
+      [23, 1, id],
+    ]);
+    const executor = createExecutor("null-drain", fixture);
+    executor.attach(fixture.descriptor);
+    snapshots.push(await executor.finalize());
+  }
+  assert.equal(snapshots[0].streamDigest, snapshots[1].streamDigest);
+  assert.deepEqual(snapshots[0].submitDigests, snapshots[1].submitDigests);
+});
+
+test("submit digests compare structure while stream digest retains payload evidence", async () => {
+  const snapshots = [];
+  for (const payload of [[1, 2, 3, 4], [4, 3, 2, 1]]) {
+    const fixture = createWgpuCommandRingFixture([
+      [5, 1, 64, 0x0c],
+      [6, 1, 0, 4096, 4, 3],
+      [22],
+    ]);
+    new Uint8Array(fixture.heapBuffer, 4096, 4).set(payload);
+    const executor = createExecutor("null-drain", fixture);
+    executor.attach(fixture.descriptor);
+    snapshots.push(await executor.finalize());
+  }
+  assert.deepEqual(snapshots[0].submitDigests, snapshots[1].submitDigests);
+  assert.notEqual(snapshots[0].streamDigest, snapshots[1].streamDigest);
+});
+
+test("quiescence requires a stable empty ring and consumes a late publication", async () => {
+  const fixture = createWgpuCommandRingFixture([]);
+  const executor = createExecutor("null-drain", fixture);
+  executor.attach(fixture.descriptor);
+  const words = new Uint32Array(fixture.heapBuffer);
+  setTimeout(() => {
+    const base = fixture.descriptor.slotsPtr >>> 2;
+    words[base] = 0;
+    Atomics.store(fixture.header, 0, 1);
+  }, 0);
+  const final = await executor.finalize();
+  assert.equal(final.quiesced, true);
+  assert.equal(final.observedRecordCount, 1);
+  assert.equal(final.finalWrite, 1);
+  assert.equal(final.finalRead, 1);
+});
+
 test("mapped capacity retains the current record and upload bytes for one retry", async () => {
   const records = [
     [5, 1, 64, 0x0c],

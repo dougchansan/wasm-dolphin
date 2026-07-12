@@ -44,3 +44,30 @@ test("canary mode is URL-gated, worker-plumbed, and validation-gated", async () 
   assert.match(gate, /"wgpurenderprobe"/);
   assert.match(gate, /evaluateWgpuRendererWorkerProbeEvidence/);
 });
+
+test("upload probes share one executor and suppress normal visible replay", async () => {
+  const [nested, disc, gate] = await Promise.all([
+    readSource("../src/wgpu-renderer-worker-probe.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+  ]);
+  assert.match(nested, /createWgpuUploadProbeExecutor/);
+  assert.match(nested, /upload-probe-init/);
+  assert.match(nested, /upload-probe-attach/);
+  assert.match(nested, /upload-probe-finalize/);
+  assert.match(nested, /upload-probe-begin-measurement/);
+  assert.match(nested, /ownerBuffer instanceof SharedArrayBuffer/);
+  assert.match(disc, /isWgpuUploadProbeMode\(wgpuRendererWorkerProbe\)/);
+  assert.match(disc, /renderBackend = "wgpu-upload-probe"/);
+  assert.match(disc, /cmdRingOwnsCanvas = true/);
+  assert.match(disc, /validationFinalizeWgpuRendererProbe/);
+  assert.match(disc, /validationBeginWgpuRendererProbeMeasurement/);
+  assert.match(disc, /validationReadCoreProgress/);
+  assert.match(disc, /framePayload\(\{ forceCausalTelemetry: true \}\)/);
+  assert.match(disc, /maybeCreateCausalTelemetry\(videoStats, \{ force: forceCausalTelemetry \}\)/);
+  assert.match(disc, /attachWgpuUploadProbeRing\(data, heap\.buffer\)/);
+  assert.match(disc, /headerPtr \+ 7 \* 4 > heapBuffer\.byteLength/);
+  assert.match(disc, /failWgpuUploadProbeRing\("upload probe requires protocol v3 handoff"\)/);
+  assert.match(gate, /validateWgpuUploadProbeFinalization/);
+  assert.match(gate, /liveWorkerProgress: uploadProbeMode/);
+});
