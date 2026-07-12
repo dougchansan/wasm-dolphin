@@ -20,6 +20,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuMappedStagingSlotsEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -320,6 +321,18 @@ test("geometry range evidence requires both activation and the producer ABI", ()
     requested: "1",
     telemetry: null,
   }).failures[0], /active=unavailable/);
+});
+
+test("mapped staging slot evidence fails closed on inactive tuning", () => {
+  assert.deepEqual(evaluateWgpuMappedStagingSlotsEvidence({}).failures, []);
+  assert.deepEqual(evaluateWgpuMappedStagingSlotsEvidence({
+    requested: "6",
+    telemetry: { mappedStaging: { slotCount: 6 } },
+  }).failures, []);
+  assert.match(evaluateWgpuMappedStagingSlotsEvidence({
+    requested: "6",
+    telemetry: { mappedStaging: { slotCount: 3 } },
+  }).failures[0], /requested=6 active=3/);
 });
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {

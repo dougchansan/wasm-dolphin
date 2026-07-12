@@ -24,6 +24,7 @@ test("upload transport flows from URL parsing through the worker load payload", 
 test("mapped uploads are copied into a bounded pool and queue writes stay isolated", async () => {
   const worker = await readSource("../src/upstream-discio-worker.js");
   assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 3/);
+  assert.match(worker, /slotCount: wgpuMappedStagingSlots/);
   assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_BYTES = 16 \* 1024 \* 1024/);
   assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageBuffer\(\{/);
   assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageTexture\(\{/);
@@ -32,6 +33,20 @@ test("mapped uploads are copied into a bounded pool and queue writes stay isolat
   assert.match(worker, /mappedStagingCopyCount/);
   assert.match(worker, /mappedStagingCapacityWaitCount/);
   assert.match(worker, /mappedStagingRemapFailureCount/);
+});
+
+test("six-slot staging capacity is URL-gated and carried to the worker", async () => {
+  const [host, adapter, worker, gate] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStagingSlots\(window\.location\.search\)/);
+  assert.match(adapter, /wgpuMappedStagingSlots: this\.wgpuMappedStagingSlots/);
+  assert.match(worker, /wgpuMappedStagingSlots: payload\.wgpuMappedStagingSlots/);
+  assert.match(gate, /"wgpustagingslots"/);
+  assert.match(gate, /evaluateWgpuMappedStagingSlotsEvidence/);
 });
 
 test("submission orders upload before render and capacity never falls back", async () => {

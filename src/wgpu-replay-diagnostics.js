@@ -303,6 +303,12 @@ export function requestedWgpuUploadArenaMiB(
   return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
 }
 
+export function requestedWgpuMappedStagingSlots(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpustagingslots") === "6" ? 6 : 3;
+}
+
 export function requestedWgpuUboPack(
   search = globalThis.location?.search ?? "",
   enabledByDefault = false

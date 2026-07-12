@@ -179,6 +179,7 @@ let wgpuMappedCapacityBlocked = false;
 let wgpuMappedCapacityBlockedAt = 0;
 const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
 const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
+let wgpuMappedStagingSlots = WGPU_MAPPED_STAGING_SLOT_COUNT;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
@@ -671,6 +672,7 @@ async function handleMessage(type, payload) {
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
+        wgpuMappedStagingSlots: payload.wgpuMappedStagingSlots,
         wgpuUploadTransport: payload.wgpuUploadTransport,
         oglSabEnabled: oglPixelSabView !== null
       });
@@ -1001,6 +1003,7 @@ async function loadCore({
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
+  wgpuMappedStagingSlots: requestedWgpuMappedStagingSlots = 3,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   oglSabEnabled = false
 } = {}) {
@@ -1035,6 +1038,7 @@ async function loadCore({
   wgpuGeometryRangeEnabled =
     wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
+  wgpuMappedStagingSlots = Number(requestedWgpuMappedStagingSlots) === 6 ? 6 : 3;
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
   wgpuMappedStagingPool?.invalidate("core reloaded");
   wgpuMappedStagingPool = null;
@@ -5285,7 +5289,7 @@ function ensureWgpuMappedStagingPool(device) {
   if (!wgpuMappedStagingPool) {
     wgpuMappedStagingPool = createWgpuMappedStagingPool({
       device,
-      slotCount: WGPU_MAPPED_STAGING_SLOT_COUNT,
+      slotCount: wgpuMappedStagingSlots,
       slotSize: WGPU_MAPPED_STAGING_SLOT_BYTES,
       // MAP_WRITE | COPY_SRC and GPUMapMode.WRITE. Passing the numeric
       // values keeps the worker test seam independent of WebGPU globals.
