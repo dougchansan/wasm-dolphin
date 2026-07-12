@@ -39,6 +39,7 @@ const DEFAULT_MAX_RECORDS = 16384;
 const DEFAULT_SLOT_BYTES = 16 * 1024 * 1024;
 const MAX_SUBMIT_DIGESTS = 1024;
 const REQUIRED_STABLE_EMPTY_OBSERVATIONS = 2;
+const REQUIRED_STABLE_EMPTY_MS = 50;
 const TEXTURE_FORMATS = Object.freeze([
   "rgba8unorm", "bgra8unorm", "depth24plus", "depth32float",
   "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
@@ -492,6 +493,7 @@ export function createWgpuUploadProbeExecutor({
     const deadline = now() + timeoutMs;
     let stableEmptyObservations = 0;
     let stableWrite = null;
+    let stableSince = null;
     if (timer !== null) {
       cancelSchedule(timer);
       timer = null;
@@ -519,17 +521,20 @@ export function createWgpuUploadProbeExecutor({
       } else if (empty) {
         stableWrite = stats.finalWrite;
         stableEmptyObservations = 1;
+        stableSince = now();
       } else {
         stableWrite = null;
         stableEmptyObservations = 0;
+        stableSince = null;
       }
-      if (stableEmptyObservations >= REQUIRED_STABLE_EMPTY_OBSERVATIONS) {
+      if (stableEmptyObservations >= REQUIRED_STABLE_EMPTY_OBSERVATIONS &&
+          stableSince !== null && now() - stableSince >= REQUIRED_STABLE_EMPTY_MS) {
         stats.quiesced = true;
         destroyDeferredResources();
         emitSnapshot(true);
         return snapshot();
       }
-      await delay(1);
+      await delay(5);
     }
     stats.quiesced = false;
     markFatal("finalize-timeout", "upload probe did not quiesce before timeout");

@@ -140,8 +140,8 @@
     {
       "path": "src/wgpu-upload-probe-executor.js",
       "hashMode": "lf-normalized",
-      "size": 27954,
-      "sha256": "cc9153ff572bb8a1ad5d128cf85f949e5af8823845c8ef670256c97acd74dfd7"
+      "size": 28161,
+      "sha256": "ce77119ef6292def31d75967a8da9213f0746ba5c14d4ac9c0ab34ea616c4821"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",

@@ -130,7 +130,7 @@ test("quiescence requires a stable empty ring and consumes a late publication", 
     const base = fixture.descriptor.slotsPtr >>> 2;
     words[base] = 0;
     Atomics.store(fixture.header, 0, 1);
-  }, 0);
+  }, 10);
   const final = await executor.finalize();
   assert.equal(final.quiesced, true);
   assert.equal(final.observedRecordCount, 1);
