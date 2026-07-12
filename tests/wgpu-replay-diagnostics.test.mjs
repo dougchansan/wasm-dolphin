@@ -17,6 +17,7 @@ import {
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
   requestedWgpuGeometryPack,
+  requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuStateCache,
@@ -594,6 +595,13 @@ test("geometry upload packing is default-off with an explicit boolean override",
   assert.equal(requestedWgpuGeometryPack("", true), true);
   assert.equal(requestedWgpuGeometryPack("?wgpugeompack=1"), true);
   assert.equal(requestedWgpuGeometryPack("?wgpugeompack=0", true), false);
+});
+
+test("geometry upload ranging is default-off with an explicit boolean override", () => {
+  assert.equal(requestedWgpuGeometryRange(""), false);
+  assert.equal(requestedWgpuGeometryRange("", true), true);
+  assert.equal(requestedWgpuGeometryRange("?wgpugeomrange=1"), true);
+  assert.equal(requestedWgpuGeometryRange("?wgpugeomrange=0", true), false);
 });
 
 test("WGPU upload arena accepts only the independent 64 MiB screening arm", () => {

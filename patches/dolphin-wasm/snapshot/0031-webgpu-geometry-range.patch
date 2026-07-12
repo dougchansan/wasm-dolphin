@@ -1,0 +1,609 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index cf8b2b4dac..0a2d06b09f 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuUploadArenaMiB','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 2fb91529fd..b632adcfe9 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -71,6 +71,8 @@ std::atomic<u64> s_ubo_prepare_cpu_ns[3]{};
+ std::atomic<bool> s_ubo_packet_enabled{false};
+ std::atomic<bool> s_geometry_upload_pack_enabled{false};
+ std::atomic<u64> s_geometry_upload_pack_epoch{0};
++std::atomic<bool> s_geometry_upload_range_enabled{false};
++std::atomic<u64> s_geometry_upload_range_epoch{0};
+ }
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
+@@ -97,6 +99,14 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled(int enabled)
+   // The vertex manager observes this epoch and starts a fresh buffer id rather
+   // than reusing destination bytes that an old command suffix may reference.
+   InvalidateGeometryUploadPack();
++  InvalidateGeometryUploadRange();
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryRangeEnabled(int enabled)
++{
++  s_geometry_upload_range_enabled.store(enabled != 0, std::memory_order_relaxed);
++  // Re-applying the setting is also the reset/save-load invalidation seam.
++  InvalidateGeometryUploadRange();
+ }
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUboPackEnabled(int enabled)
+@@ -124,6 +134,24 @@ void InvalidateGeometryUploadPack()
+   s_geometry_upload_pack_epoch.fetch_add(1, std::memory_order_release);
+ }
+ 
++bool IsGeometryUploadRangeEnabled()
++{
++  // The coarse range layout is defined only for the single-buffer packed
++  // producer. Keep a stale range request inert whenever packing is disabled.
++  return IsGeometryUploadPackEnabled() &&
++         s_geometry_upload_range_enabled.load(std::memory_order_relaxed);
++}
++
++u64 GetGeometryUploadRangeEpoch()
++{
++  return s_geometry_upload_range_epoch.load(std::memory_order_acquire);
++}
++
++void InvalidateGeometryUploadRange()
++{
++  s_geometry_upload_range_epoch.fetch_add(1, std::memory_order_release);
++}
++
+ void RecordUboPrepareCpu(u32 class_index, double start_ms)
+ {
+   if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
+@@ -1036,6 +1064,8 @@ bool WebGPUGfx::SetRecordedIndexBuffer(u32 buffer_id, u32 format, u32 offset)
+ 
+ void WebGPUGfx::AbortRecordedPass()
+ {
++  if (g_vertex_manager)
++    static_cast<VertexManager*>(g_vertex_manager.get())->DiscardPendingGeometryRange();
+   m_cmd_stream.AbortPass();
+   m_pass_open = false;
+   InvalidateGeometryUploadPack();
+@@ -1044,10 +1074,33 @@ void WebGPUGfx::AbortRecordedPass()
+   ResetRecordedPassState();
+ }
+ 
++void WebGPUGfx::DiscardOrAbortPendingGeometryRange()
++{
++  if (!g_vertex_manager)
++    return;
++  auto* const manager = static_cast<VertexManager*>(g_vertex_manager.get());
++  if (!manager->HasPendingGeometryRange())
++    return;
++  if (m_pass_open)
++    AbortRecordedPass();
++  else
++    manager->DiscardPendingGeometryRange();
++}
++
+ bool WebGPUGfx::EndPassIfOpen()
+ {
+   if (!m_pass_open)
++  {
++    if (g_vertex_manager)
++      static_cast<VertexManager*>(g_vertex_manager.get())->DiscardPendingGeometryRange();
++    return false;
++  }
++  if (g_vertex_manager &&
++      !static_cast<VertexManager*>(g_vertex_manager.get())->FlushPendingGeometryRange())
++  {
++    AbortRecordedPass();
+     return false;
++  }
+   const bool committed = m_cmd_stream.PushEndPass();
+   m_pass_open = false;
+   ResetRecordedPassState();
+@@ -1850,6 +1903,7 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+ {
+   if (m_cur_pipeline_id == 0)
+   {
++    DiscardOrAbortPendingGeometryRange();
+     // Don't let an armed utility-uniform mode leak onto a later GX draw
+     // when this (utility) draw is skipped.
+     m_util_uniform_mode = false;
+@@ -1857,6 +1911,7 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+   }
+   if (!BeginPassIfNeeded())
+   {
++    DiscardOrAbortPendingGeometryRange();
+     m_util_uniform_mode = false;
+     return;
+   }
+@@ -1897,11 +1952,13 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+ {
+   if (m_cur_pipeline_id == 0 || num_indices == 0)
+   {
++    DiscardOrAbortPendingGeometryRange();
+     m_util_uniform_mode = false;
+     return;
+   }
+   if (!BeginPassIfNeeded())
+   {
++    DiscardOrAbortPendingGeometryRange();
+     m_util_uniform_mode = false;
+     return;
+   }
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 1a825f3367..06b952773f 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -164,6 +164,7 @@ private:
+   bool BeginPassIfNeeded();
+   bool EndPassIfOpen();
+   void AbortRecordedPass();
++  void DiscardOrAbortPendingGeometryRange();
+   void ResetRecordedPassState();
+   bool SetRecordedPipeline(u32 pipeline_id);
+   bool SetRecordedBindGroup(u32 slot, u32 bind_group_id, const u32* dynamic_offsets = nullptr,
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index c79a3c9370..fee9fcf67c 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "VideoBackends/WebGPU/WebGPUVertexManager.h"
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <iterator>
+ #include <limits>
+@@ -17,12 +18,16 @@
+ namespace WebGPU
+ {
+ extern "C" void SetWebGpuGeometryPackEnabled(int enabled);
++extern "C" void SetWebGpuGeometryRangeEnabled(int enabled);
+ 
+ // GPUBufferUsage numeric flags (DESIGN doc): VERTEX 0x20, INDEX 0x10,
+ // COPY_DST 0x8.
+ static constexpr u32 kUsageVertex = 0x20 | 0x8;
+ static constexpr u32 kUsageIndex = 0x10 | 0x8;
+ static constexpr u32 kUsageGeometry = 0x20 | 0x10 | 0x8;
++static constexpr u32 kGeometryRangeMaxGap = 64;
++static constexpr u32 kGeometryRangeMaxBytes = 8u * 1024u * 1024u;
++static constexpr u32 kGeometryRangeHardBytes = 16u * 1024u * 1024u;
+ 
+ VertexManager::VertexManager() = default;
+ VertexManager::~VertexManager() = default;
+@@ -49,6 +54,119 @@ void VertexManager::EnsureLegacyBuffers()
+     m_index_buffer_id = cs.PushCreateBuffer(kIndexBufferSize, kUsageIndex);
+ }
+ 
++void VertexManager::DiscardPendingGeometryRange()
++{
++  m_pending_geometry_range.bytes.clear();
++  m_pending_geometry_range.buffer_id = 0;
++  m_pending_geometry_range.destination_start = 0;
++  m_pending_geometry_range.destination_end = 0;
++  m_pending_geometry_range.generation = 0;
++  m_pending_geometry_range.epoch = GetGeometryUploadRangeEpoch();
++}
++
++bool VertexManager::FlushPendingGeometryRange()
++{
++  PendingGeometryRange& pending = m_pending_geometry_range;
++  if (pending.bytes.empty())
++    return true;
++
++  WebGPUCommandStream& cs = GetCommandStream();
++  if (!IsGeometryUploadRangeEnabled() || pending.epoch != GetGeometryUploadRangeEpoch() ||
++      pending.buffer_id == 0 || pending.bytes.size() > kGeometryRangeMaxBytes ||
++      pending.bytes.size() > kGeometryRangeHardBytes)
++  {
++    DiscardPendingGeometryRange();
++    cs.FailRequiredPublication();
++    return false;
++  }
++
++  // PushUploadBuffer intentionally uses the public FIFO even while draw
++  // records are pass-private. Thus this upload becomes visible before the
++  // later atomic BEGIN_PASS..END_PASS batch; a mapped-staging capacity wait
++  // can never occur while the JS consumer has an open render pass.
++  const u32 size = static_cast<u32>(pending.bytes.size());
++  const u32 source = cs.UploadAlloc(pending.bytes.data(), size, 4);
++  if (source == 0 ||
++      !cs.PushUploadBuffer(pending.buffer_id, pending.destination_start, source, size,
++                           BufferUploadRole::Geometry))
++  {
++    DiscardPendingGeometryRange();
++    InvalidateGeometryUploadRange();
++    InvalidateGeometryUploadPack();
++    cs.FailRequiredPublication();
++    return false;
++  }
++
++  DiscardPendingGeometryRange();
++  return true;
++}
++
++bool VertexManager::AppendPendingGeometryRange(u32 buffer_id, u32 destination_offset,
++                                               u64 generation, const void* vertices,
++                                               u32 vertex_bytes, const void* indices,
++                                               u32 index_bytes, u32 packet_bytes)
++{
++  WebGPUCommandStream& cs = GetCommandStream();
++  const u64 range_epoch = GetGeometryUploadRangeEpoch();
++  if (!IsGeometryUploadRangeEnabled() || buffer_id == 0 || packet_bytes == 0 ||
++      packet_bytes > kGeometryRangeMaxBytes || packet_bytes > kGeometryRangeHardBytes ||
++      destination_offset > std::numeric_limits<u32>::max() - packet_bytes ||
++      (vertex_bytes != 0 && vertices == nullptr) || (index_bytes != 0 && indices == nullptr) ||
++      vertex_bytes > packet_bytes || index_bytes > packet_bytes - vertex_bytes)
++  {
++    cs.FailRequiredPublication();
++    return false;
++  }
++
++  PendingGeometryRange& pending = m_pending_geometry_range;
++  if (!pending.bytes.empty() && pending.epoch != range_epoch)
++  {
++    DiscardPendingGeometryRange();
++    cs.FailRequiredPublication();
++    return false;
++  }
++
++  u32 gap = 0;
++  bool append = !pending.bytes.empty() && pending.buffer_id == buffer_id &&
++                pending.generation == generation && destination_offset >= pending.destination_end;
++  if (append)
++  {
++    gap = destination_offset - pending.destination_end;
++    const u64 merged_size = static_cast<u64>(pending.bytes.size()) + gap + packet_bytes;
++    append = gap <= kGeometryRangeMaxGap && merged_size <= kGeometryRangeMaxBytes &&
++             merged_size <= kGeometryRangeHardBytes;
++  }
++
++  if (!pending.bytes.empty() && !append)
++  {
++    // A buffer/generation boundary, a >64-byte alignment hole, or the 8 MiB
++    // experiment cap splits the range. The old upload may become an orphan if
++    // a later step fails, but no fallback path can partially publish a draw.
++    if (!FlushPendingGeometryRange())
++      return false;
++  }
++
++  if (pending.bytes.empty())
++  {
++    pending.buffer_id = buffer_id;
++    pending.destination_start = destination_offset;
++    pending.destination_end = destination_offset;
++    pending.generation = generation;
++    pending.epoch = range_epoch;
++    gap = 0;
++  }
++
++  const size_t old_size = pending.bytes.size();
++  pending.bytes.resize(old_size + gap + packet_bytes, 0);
++  u8* const destination = pending.bytes.data() + old_size + gap;
++  if (vertex_bytes != 0)
++    std::memcpy(destination, vertices, vertex_bytes);
++  if (index_bytes != 0)
++    std::memcpy(destination + vertex_bytes, indices, index_bytes);
++  pending.destination_end = destination_offset + packet_bytes;
++  return true;
++}
++
+ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_indices,
+                                  u32* out_base_vertex, u32* out_base_index)
+ {
+@@ -66,6 +184,8 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   const u64 geometry_pack_epoch = GetGeometryUploadPackEpoch();
+   if (geometry_pack_epoch != m_geometry_pack_epoch)
+   {
++    const bool discarded_pending_range = !m_pending_geometry_range.bytes.empty();
++    DiscardPendingGeometryRange();
+     m_geometry_pack_epoch = geometry_pack_epoch;
+     m_geometry_pack_active = geometry_pack_enabled;
+     if (geometry_pack_enabled)
+@@ -77,6 +197,11 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+       m_geometry_generations_since_submit = 0;
+       m_geometry_submit_serial = cs.GetSubmitSerial();
+     }
++    if (discarded_pending_range)
++    {
++      cs.FailRequiredPublication();
++      return;
++    }
+   }
+   else
+   {
+@@ -154,30 +279,45 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+       ++candidate_generations;
+     }
+ 
+-    const UploadPacket packet = cs.UploadAllocTwoSegments(
+-        m_base_buffer_pointer, vertex_bytes, m_cpu_index_buffer.data(), index_bytes, 4, 4);
+-    if (packet.src_heap_ptr == 0)
+-      return;
+-    if (packet.second_offset != vertex_bytes || packet.total_size != packet_bytes)
++    const bool geometry_range_enabled = IsGeometryUploadRangeEnabled();
++    if (geometry_range_enabled)
+     {
+-      cs.FailLastUpload(packet.src_heap_ptr, packet.total_size);
+-      return;
++      // Each buffer id is a resource generation. Submit serial additionally
++      // prevents a pending range from crossing the point where a persistent
++      // destination becomes reusable from offset zero.
++      const u64 range_generation = (submit_serial << 8) ^ candidate_generations;
++      if (!AppendPendingGeometryRange(candidate_buffer_id, packet_offset, range_generation,
++                                      m_base_buffer_pointer, vertex_bytes,
++                                      m_cpu_index_buffer.data(), index_bytes, packet_bytes))
++        return;
++    }
++    else
++    {
++      const UploadPacket packet = cs.UploadAllocTwoSegments(
++          m_base_buffer_pointer, vertex_bytes, m_cpu_index_buffer.data(), index_bytes, 4, 4);
++      if (packet.src_heap_ptr == 0)
++        return;
++      if (packet.second_offset != vertex_bytes || packet.total_size != packet_bytes)
++      {
++        cs.FailLastUpload(packet.src_heap_ptr, packet.total_size);
++        return;
++      }
++      if (!cs.PushUploadBuffer(candidate_buffer_id, packet_offset, packet.src_heap_ptr,
++                               packet.total_size, BufferUploadRole::Geometry))
++        return;
+     }
+-    if (!cs.PushUploadBuffer(candidate_buffer_id, packet_offset, packet.src_heap_ptr,
+-                             packet.total_size, BufferUploadRole::Geometry))
+-      return;
+ 
+     // Publish all producer-local placement state only after the arena copy and
+     // its single upload record are visible. A failed candidate buffer create
+     // may leak an unused resource id, but no draw can reference it.
+     m_geometry_buffer_id = candidate_buffer_id;
+-    m_geometry_offset = packet_offset + packet.total_size;
++    m_geometry_offset = packet_offset + packet_bytes;
+     m_geometry_generations_since_submit = candidate_generations;
+     m_geometry_submit_serial = submit_serial;
+     m_last_vertex_byte = packet_offset;
+-    m_last_index_byte = packet_offset + packet.second_offset;
++    m_last_index_byte = packet_offset + vertex_bytes;
+     *out_base_vertex = packet_offset / vertex_stride;
+-    *out_base_index = (packet_offset + packet.second_offset) / sizeof(u16);
++    *out_base_index = (packet_offset + vertex_bytes) / sizeof(u16);
+     return;
+   }
+ 
+@@ -349,6 +489,10 @@ struct VertexManagerTestPeer
+   static u32 GeometryOffset(const VertexManager& manager) { return manager.m_geometry_offset; }
+   static u32 VertexOffset(const VertexManager& manager) { return manager.m_vertex_offset; }
+   static u32 IndexOffset(const VertexManager& manager) { return manager.m_index_offset; }
++  static u32 PendingRangeSize(const VertexManager& manager)
++  {
++    return static_cast<u32>(manager.m_pending_geometry_range.bytes.size());
++  }
+ };
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryParitySmoke(int indexed,
+@@ -514,4 +658,145 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuVertexManagerGeometrySmokeE
+   return s_vertex_manager_geometry_smoke_error;
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryRangeSmoke()
++{
++  s_vertex_manager_geometry_smoke_error = "ok";
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(601, "refused to replace a live WebGPU command ring");
++
++  SetWebGpuGeometryPackEnabled(1);
++  SetWebGpuGeometryRangeEnabled(1);
++  constexpr u32 stride = 64;
++  constexpr u8 vertices_a[stride * 3] = {
++      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A,
++      0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
++      0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30,
++      0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B,
++      0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
++      0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
++  constexpr u8 vertices_b[stride * 3] = {0x80, 0x81, 0x82, 0x83};
++  constexpr u16 indices[] = {0, 1, 2};
++
++  VertexManager manager;
++  u32 first_base_vertex = UINT32_MAX;
++  u32 first_base_index = UINT32_MAX;
++  VertexManagerTestPeer::Seed(manager, vertices_a, sizeof(vertices_a), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(manager, 3, stride, static_cast<u32>(std::size(indices)),
++                                &first_base_vertex, &first_base_index);
++  WebGPUCommandStream& stream = GetCommandStream();
++  if (first_base_vertex != 0 || first_base_index != (stride * 3) / sizeof(u16) ||
++      VertexManagerTestPeer::PendingRangeSize(manager) != 200 ||
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != 1)
++    return FailVertexManagerSmoke(602, "first range packet was published before pass boundary");
++  if (!stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8) ||
++      !stream.PushDrawIndexed(static_cast<u32>(std::size(indices)), 1, first_base_index,
++                              first_base_vertex))
++    return FailVertexManagerSmoke(603, "range smoke could not stage first draw");
++
++  u32 second_base_vertex = UINT32_MAX;
++  u32 second_base_index = UINT32_MAX;
++  VertexManagerTestPeer::Seed(manager, vertices_b, sizeof(vertices_b), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(manager, 3, stride, static_cast<u32>(std::size(indices)),
++                                &second_base_vertex, &second_base_index);
++  if (second_base_vertex != 4 || second_base_index != (256 + stride * 3) / sizeof(u16) ||
++      VertexManagerTestPeer::PendingRangeSize(manager) != 456 ||
++      !stream.PushDrawIndexed(static_cast<u32>(std::size(indices)), 1, second_base_index,
++                              second_base_vertex))
++    return FailVertexManagerSmoke(604, "second range packet or draw placement differs");
++
++  if (!manager.FlushPendingGeometryRange())
++    return FailVertexManagerSmoke(605, "range flush failed");
++  if (s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != 2 ||
++      s_vertex_manager_smoke_fixture.slots[1].op != static_cast<u32>(CmdOp::UploadBuffer) ||
++      s_vertex_manager_smoke_fixture.slots[1].arg.u[1] != 0 ||
++      s_vertex_manager_smoke_fixture.slots[1].arg.u[3] != 456)
++    return FailVertexManagerSmoke(606, "coarse upload was not published before private pass");
++  const u8* range = reinterpret_cast<const u8*>(
++      static_cast<uintptr_t>(s_vertex_manager_smoke_fixture.slots[1].arg.u[2]));
++  if (std::memcmp(range, vertices_a, sizeof(vertices_a)) != 0 ||
++      std::memcmp(range + stride * 3, indices, sizeof(indices)) != 0 || range[198] != 0 ||
++      range[199] != 0 ||
++      std::any_of(range + 200, range + 256, [](u8 value) { return value != 0; }) ||
++      std::memcmp(range + 256, vertices_b, sizeof(vertices_b)) != 0 ||
++      std::memcmp(range + 256 + stride * 3, indices, sizeof(indices)) != 0 ||
++      range[454] != 0 || range[455] != 0)
++    return FailVertexManagerSmoke(607, "coarse upload changed payload or alignment padding");
++  if (!stream.PushEndPass() ||
++      s_vertex_manager_smoke_fixture.slots[2].op != static_cast<u32>(CmdOp::BeginPass))
++    return FailVertexManagerSmoke(608, "coarse upload did not precede atomic pass publication");
++
++  // Model the WebGPUGfx skip path: draw A is already private, commit B has
++  // extended the same pending upload, then draw B is rejected before it can
++  // be staged. The only safe action is to abort the whole pass; discarding B
++  // alone would publish draw A without either packet's upload.
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(609, "skipped-draw fixture reset failed");
++  SetWebGpuGeometryPackEnabled(1);
++  SetWebGpuGeometryRangeEnabled(1);
++  VertexManager skipped_manager;
++  VertexManagerTestPeer::Seed(skipped_manager, vertices_a, sizeof(vertices_a), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(skipped_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &first_base_vertex,
++                                &first_base_index);
++  if (!stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8) ||
++      !stream.PushDrawIndexed(static_cast<u32>(std::size(indices)), 1, first_base_index,
++                              first_base_vertex))
++    return FailVertexManagerSmoke(610, "skipped-draw fixture could not stage draw A");
++  VertexManagerTestPeer::Seed(skipped_manager, vertices_b, sizeof(vertices_b), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(skipped_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &second_base_vertex,
++                                &second_base_index);
++  if (!skipped_manager.HasPendingGeometryRange())
++    return FailVertexManagerSmoke(611, "commit B did not retain the owning range");
++  stream.AbortPass();
++  skipped_manager.DiscardPendingGeometryRange();
++  if (stream.PushEndPass() || skipped_manager.HasPendingGeometryRange() ||
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != 1)
++    return FailVertexManagerSmoke(612, "skipped draw published draw A without its upload");
++
++  // With no pass open, a missing first draw has no older draw to protect.
++  // Discarding only the private range avoids invalidating and rotating the
++  // 32 MiB destination on every unsupported pipeline.
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(613, "missing-first-draw fixture reset failed");
++  SetWebGpuGeometryPackEnabled(1);
++  SetWebGpuGeometryRangeEnabled(1);
++  VertexManager missing_draw_manager;
++  VertexManagerTestPeer::Seed(missing_draw_manager, vertices_a, sizeof(vertices_a), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(missing_draw_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &first_base_vertex,
++                                &first_base_index);
++  missing_draw_manager.DiscardPendingGeometryRange();
++  if (missing_draw_manager.HasPendingGeometryRange() || stream.pass_staging() ||
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != 1)
++    return FailVertexManagerSmoke(614, "missing first draw published or poisoned a pass");
++
++  // A failed flush may leave only an orphan upload; it must discard producer
++  // scratch, poison the pass, and never fall back to per-draw publication.
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(615, "range rollback fixture reset failed");
++  SetWebGpuGeometryPackEnabled(1);
++  SetWebGpuGeometryRangeEnabled(1);
++  VertexManager rollback_manager;
++  VertexManagerTestPeer::Seed(rollback_manager, vertices_a, sizeof(vertices_a), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(rollback_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &first_base_vertex,
++                                &first_base_index);
++  WebGPUCommandStreamTestPeer::FailConsumer(stream, 0x52414E47u);
++  if (rollback_manager.FlushPendingGeometryRange() ||
++      VertexManagerTestPeer::PendingRangeSize(rollback_manager) != 0 ||
++      stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8))
++    return FailVertexManagerSmoke(616, "failed range flush did not rollback and poison pass");
++
++  SetWebGpuGeometryRangeEnabled(0);
++  SetWebGpuGeometryPackEnabled(0);
++  return 0;
++}
++
+ }  // namespace WebGPU
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+index f905f71347..ff4f8aacfa 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+@@ -3,6 +3,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include "Common/CommonTypes.h"
+ #include "VideoCommon/VertexManagerBase.h"
+ 
+@@ -11,6 +13,9 @@ namespace WebGPU
+ bool IsGeometryUploadPackEnabled();
+ u64 GetGeometryUploadPackEpoch();
+ void InvalidateGeometryUploadPack();
++bool IsGeometryUploadRangeEnabled();
++u64 GetGeometryUploadRangeEpoch();
++void InvalidateGeometryUploadRange();
+ 
+ // Day-33 A3: a real VertexManagerBase for the remote WebGPU backend.
+ //
+@@ -52,6 +57,13 @@ public:
+     return m_geometry_pack_active ? m_geometry_buffer_id : m_index_buffer_id;
+   }
+ 
++  // The range path keeps geometry bytes private until the owning render pass
++  // is ready to publish. WebGPUGfx calls these at the transaction boundary so
++  // UPLOAD_BUFFER remains ordered before the staged BEGIN_PASS/draw suffix.
++  bool FlushPendingGeometryRange();
++  void DiscardPendingGeometryRange();
++  bool HasPendingGeometryRange() const { return !m_pending_geometry_range.bytes.empty(); }
++
+ protected:
+   void CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_indices, u32* out_base_vertex,
+                     u32* out_base_index) override;
+@@ -60,6 +72,19 @@ private:
+   friend struct VertexManagerTestPeer;
+ 
+   void EnsureLegacyBuffers();
++  bool AppendPendingGeometryRange(u32 buffer_id, u32 destination_offset, u64 generation,
++                                  const void* vertices, u32 vertex_bytes, const void* indices,
++                                  u32 index_bytes, u32 packet_bytes);
++
++  struct PendingGeometryRange
++  {
++    std::vector<u8> bytes;
++    u32 buffer_id = 0;
++    u32 destination_start = 0;
++    u32 destination_end = 0;
++    u64 generation = 0;
++    u64 epoch = 0;
++  };
+ 
+   // Persistent GPU buffers (bridge ids; 0 until created). Large
+   // ring-rolled regions — the consumer is ~1 frame behind and a
+@@ -88,6 +113,7 @@ private:
+   u64 m_geometry_submit_serial = 0;
+   u64 m_geometry_pack_epoch = 0;
+   bool m_geometry_pack_active = false;
++  PendingGeometryRange m_pending_geometry_range;
+ };
+ 
+ // Native wasm regression seams that exercise VertexManager::CommitBuffer
+@@ -95,5 +121,6 @@ private:
+ extern "C" int RunWebGpuVertexManagerGeometryParitySmoke(int indexed, int packed);
+ extern "C" int RunWebGpuVertexManagerGeometryRollbackSmoke(int packed);
+ extern "C" int RunWebGpuVertexManagerGeometryLifecycleSmoke();
++extern "C" int RunWebGpuVertexManagerGeometryRangeSmoke();
+ extern "C" const char* GetWebGpuVertexManagerGeometrySmokeError();
+ }  // namespace WebGPU

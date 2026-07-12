@@ -20,6 +20,7 @@ import {
   requestedWgpuReplayDiagnostics,
   requestedWgpuStateCache,
   requestedWgpuGeometryPack,
+  requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuUboCache,
@@ -103,6 +104,8 @@ export class EmulatorHost {
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
     this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
     this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
+    this.wgpuGeometryRange =
+      this.wgpuGeometryPack && requestedWgpuGeometryRange(window.location.search);
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
@@ -330,6 +333,7 @@ export class EmulatorHost {
             wgpuUboCache: this.wgpuUboCache,
             wgpuUboPack: this.wgpuUboPack,
             wgpuGeometryPack: this.wgpuGeometryPack,
+            wgpuGeometryRange: this.wgpuGeometryRange,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,

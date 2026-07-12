@@ -234,6 +234,9 @@ test("upstream full core executes live WebGPU VertexManager ownership smokes", a
     "number",
     []
   );
+  const runRange = typeof module._RunWebGpuVertexManagerGeometryRangeSmoke === "function"
+    ? module.cwrap("RunWebGpuVertexManagerGeometryRangeSmoke", "number", [])
+    : null;
   const lastError = module.cwrap(
     "GetWebGpuVertexManagerGeometrySmokeError",
     "string",
@@ -246,6 +249,8 @@ test("upstream full core executes live WebGPU VertexManager ownership smokes", a
     assert.equal(runRollback(packed), 0, `rollback packed=${packed}: ${lastError()}`);
   }
   assert.equal(runLifecycle(), 0, lastError());
+  if (runRange)
+    assert.equal(runRange(), 0, lastError());
   assert.equal(lastError(), "ok");
 });
 

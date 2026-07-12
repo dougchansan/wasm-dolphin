@@ -44,6 +44,7 @@ test("native smoke exports are either pending rebuild or present in the core", a
     "_RunWebGpuVertexManagerGeometryParitySmoke",
     "_RunWebGpuVertexManagerGeometryRollbackSmoke",
     "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "_RunWebGpuVertexManagerGeometryRangeSmoke",
     "_GetWebGpuVertexManagerGeometrySmokeError",
   ];
   for (const name of expected) {
@@ -71,6 +72,31 @@ test("standalone native harness invokes both parity modes and rollback", async (
   assert.match(harness, /RunWebGpuVertexManagerGeometryParitySmoke\(indexed_mode, packed\)/);
   assert.match(harness, /RunWebGpuVertexManagerGeometryRollbackSmoke\(packed\)/);
   assert.match(harness, /RunWebGpuVertexManagerGeometryLifecycleSmoke\(\)/);
+  assert.match(harness, /RunWebGpuVertexManagerGeometryRangeSmoke\(\)/);
+});
+
+test("native geometry range smoke locks ordering, padding, and rollback", async () => {
+  const patch = await readFile(
+    new URL(
+      "../patches/dolphin-wasm/snapshot/0031-webgpu-geometry-range.patch",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.match(patch, /RunWebGpuVertexManagerGeometryRangeSmoke\(\)/);
+  assert.match(patch, /FlushPendingGeometryRange\(\)/);
+  assert.match(patch, /PushUploadBuffer[\s\S]*?PushEndPass/);
+  assert.match(patch, /kGeometryRangeMaxGap = 64/);
+  assert.match(patch, /kGeometryRangeMaxBytes = 8u \* 1024u \* 1024u/);
+  assert.match(patch, /kGeometryRangeHardBytes = 16u \* 1024u \* 1024u/);
+  assert.match(patch, /std::any_of\(range \+ 200, range \+ 256/);
+  assert.match(patch, /constexpr u16 indices\[\] = \{0, 1, 2\}/);
+  assert.match(patch, /memcmp\(range \+ 256 \+ stride \* 3, indices/);
+  assert.match(patch, /failed range flush did not rollback and poison pass/);
+  assert.match(patch, /skipped draw published draw A without its upload/);
+  assert.match(patch, /missing first draw published or poisoned a pass/);
+  assert.match(patch, /stream\.AbortPass\(\);[\s\S]*?DiscardPendingGeometryRange\(\)/);
 });
 
 test("native VertexManager smoke crosses the real CommitBuffer boundary", async () => {

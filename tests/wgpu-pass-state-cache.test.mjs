@@ -444,9 +444,21 @@ test("opt-in geometry packing uses one transactional upload and a published-subm
   assert.match(vertexSource, /kUsageGeometry = 0x20 \| 0x10 \| 0x8/);
   assert.match(vertexSource, /if \(submit_serial != m_geometry_submit_serial\)/);
   assert.match(vertexSource, /PushUploadBuffer\(candidate_buffer_id,[\s\S]*?BufferUploadRole::Geometry\)/);
-  assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet\.total_size/);
+  assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet_bytes/);
   assert.match(vertexSource, /EnsureLegacyBuffers\(\)/);
   assert.match(gfxSource, /EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled\(int enabled\)/);
+  assert.match(
+    gfxSource,
+    /DiscardOrAbortPendingGeometryRange\(\)[\s\S]*?if \(m_pass_open\)[\s\S]*?AbortRecordedPass\(\);[\s\S]*?else[\s\S]*?DiscardPendingGeometryRange\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(m_cur_pipeline_id == 0\)[\s\S]*?DiscardOrAbortPendingGeometryRange\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(m_cur_pipeline_id == 0 \|\| num_indices == 0\)[\s\S]*?DiscardOrAbortPendingGeometryRange\(\)/
+  );
   assert.match(gfxSource, /void InvalidateGeometryUploadPack\(\)/);
   assert.match(
     gfxSource,

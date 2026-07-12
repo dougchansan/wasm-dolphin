@@ -66,7 +66,7 @@ test("adapter accounts for legacy acknowledgements and preserved one-way errors"
 });
 
 test("adapter forwards WebGPU runtime options in the load payload", async (t) => {
-  const originalWindow = globalThis.window;
+const originalWindow = globalThis.window;
   globalThis.window = { location: { href: "http://127.0.0.1:8080/" } };
   t.after(() => {
     if (originalWindow === undefined) {
@@ -81,6 +81,7 @@ test("adapter forwards WebGPU runtime options in the load payload", async (t) =>
     wgpuReplayBudgetMs: 6,
     wgpuPowerPreference: "low-power",
     wgpuGeometryPack: true,
+    wgpuGeometryRange: true,
     wgpuUploadArenaMiB: 64
   });
   adapter.worker = {
@@ -98,12 +99,14 @@ test("adapter forwards WebGPU runtime options in the load payload", async (t) =>
       wgpuReplayBudgetMs: posted.message.payload.wgpuReplayBudgetMs,
       wgpuPowerPreference: posted.message.payload.wgpuPowerPreference,
       wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
+      wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
       wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB
     },
     {
       wgpuReplayBudgetMs: 6,
       wgpuPowerPreference: "low-power",
       wgpuGeometryPack: true,
+      wgpuGeometryRange: true,
       wgpuUploadArenaMiB: 64
     }
   );
@@ -164,4 +167,19 @@ test("candidate preflight rollback records requested and active core before canv
     fallbackBeforeCanvasTransfer: true
   });
   assert.equal(posted.message.payload.xfbFastPaths, 3);
+});
+
+test("geometry ranging remains disabled unless packed geometry is enabled", () => {
+  const disabled = new UpstreamWorkerAdapter({
+    wgpuGeometryPack: false,
+    wgpuGeometryRange: true
+  });
+  assert.equal(disabled.wgpuGeometryPack, false);
+  assert.equal(disabled.wgpuGeometryRange, false);
+
+  const enabled = new UpstreamWorkerAdapter({
+    wgpuGeometryPack: true,
+    wgpuGeometryRange: true
+  });
+  assert.equal(enabled.wgpuGeometryRange, true);
 });

@@ -287,6 +287,16 @@ export function requestedWgpuGeometryPack(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuGeometryRange(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpugeomrange");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
 export function requestedWgpuUploadArenaMiB(
   search = globalThis.location?.search ?? ""
 ) {

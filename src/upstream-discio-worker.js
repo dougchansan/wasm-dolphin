@@ -170,6 +170,7 @@ let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuUboPackEnabled = false;
 let wgpuGeometryPackEnabled = false;
+let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
 let wgpuMappedStagingPool = null;
@@ -668,6 +669,7 @@ async function handleMessage(type, payload) {
         wgpuUboCache: payload.wgpuUboCache,
         wgpuUboPack: payload.wgpuUboPack,
         wgpuGeometryPack: payload.wgpuGeometryPack,
+        wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
         oglSabEnabled: oglPixelSabView !== null
@@ -708,6 +710,7 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       api?.setInputMask(inputMask);
       return framePayload();
@@ -721,11 +724,13 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       return { loaded, ...framePayload() };
     }
@@ -804,6 +809,7 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       const rc = api.loadStateFile(path) | 0;
       // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
       // step the core) — wait real wall-clock time so the restore
@@ -813,6 +819,7 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
       collectWebGpuProducerStateStats();
       const uploadTimeoutCountImmediatelyAfterLoad = webGpuCausalStats.uploadTimeoutCount;
@@ -992,6 +999,7 @@ async function loadCore({
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuUboPack: requestedWgpuUboPack = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
+  wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   oglSabEnabled = false
@@ -1024,6 +1032,8 @@ async function loadCore({
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
+  wgpuGeometryRangeEnabled =
+    wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
   wgpuMappedStagingPool?.invalidate("core reloaded");
@@ -1302,6 +1312,7 @@ async function loadCore({
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
   api.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
   api.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+  api.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
@@ -1384,6 +1395,10 @@ function bindApi(module) {
     setWebGpuGeometryPackEnabled:
       typeof module._SetWebGpuGeometryPackEnabled === "function"
         ? (enabled) => ccall("SetWebGpuGeometryPackEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
+    setWebGpuGeometryRangeEnabled:
+      typeof module._SetWebGpuGeometryRangeEnabled === "function"
+        ? (enabled) => ccall("SetWebGpuGeometryRangeEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
     setWebGpuUploadArenaMiB:
       typeof module._SetWebGpuUploadArenaMiB === "function"
@@ -2099,9 +2114,11 @@ function maybeCreateCausalTelemetry(videoStats) {
       uboCacheEnabled: wgpuUboCacheEnabled,
       uboPackEnabled: Boolean(webGpuUboPackMode()),
       geometryPackEnabled: wgpuGeometryPackEnabled,
+      geometryRangeEnabled: wgpuGeometryRangeEnabled,
       producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
       producerUboPackAvailable: Boolean(api?.setWebGpuUboPackEnabled),
       producerGeometryPackAvailable: Boolean(api?.setWebGpuGeometryPackEnabled),
+      producerGeometryRangeAvailable: Boolean(api?.setWebGpuGeometryRangeEnabled),
       producerUploadArenaAvailable: Boolean(api?.setWebGpuUploadArenaMiB),
       producerStateCacheEnabled:
         wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
@@ -3725,8 +3742,10 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       markFatal: markWgpuReplayFatal,
       cancelReplay: cancelWgpuReplayPump,
       clearReplayState: clearWgpuReplayStateAfterDeviceLoss,
-      invalidateGeometry: () =>
-        api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0),
+      invalidateGeometry: () => {
+        api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+        api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
+      },
       clearActiveDevice: () => { renderGpu = null; },
       setBackend: (backend) => { renderBackend = backend; },
       postStatus,

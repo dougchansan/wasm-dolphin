@@ -54,8 +54,12 @@ int main()
       Check("VertexManager geometry lifecycle",
             WebGPU::RunWebGpuVertexManagerGeometryLifecycleSmoke(),
             WebGPU::GetWebGpuVertexManagerGeometrySmokeError);
+  const bool vertex_manager_range =
+      Check("VertexManager geometry range",
+            WebGPU::RunWebGpuVertexManagerGeometryRangeSmoke(),
+            WebGPU::GetWebGpuVertexManagerGeometrySmokeError);
   if (!non_indexed || !indexed || !rollback || !dense_packet || !dense_rollback ||
-      !vertex_manager_parity || !vertex_manager_lifecycle)
+      !vertex_manager_parity || !vertex_manager_lifecycle || !vertex_manager_range)
     return 1;
   std::puts("WebGPU command-stream native smokes passed");
   return 0;
