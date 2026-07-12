@@ -28,6 +28,7 @@ import {
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   requestedWgpuUboMetrics,
+  requestedWgpuUniformFast,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
@@ -66,6 +67,13 @@ test("detailed UBO telemetry is independent and default-off", () => {
   assert.equal(requestedWgpuUboMetrics("?metrics=1"), false);
   assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=0&metrics=1"), false);
   assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=1&metrics=0"), true);
+});
+
+test("guarded uniform comparison fast path is explicit and default-off", () => {
+  assert.equal(requestedWgpuUniformFast(""), false);
+  assert.equal(requestedWgpuUniformFast("?metrics=1"), false);
+  assert.equal(requestedWgpuUniformFast("?wgpuuniformfast=1"), true);
+  assert.equal(requestedWgpuUniformFast("?wgpuuniformfast=0"), false);
 });
 
 test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () => {

@@ -138,6 +138,8 @@ export function parseWgpuProducerStateStats(text = "") {
   const uboPacket = /\bumask:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\s+upack:(\d+),(\d+),(\d+),(\d+)\s+ucpucall:(\d+),(\d+),(\d+)\s+ucpuns:(\d+),(\d+),(\d+)/i
     .exec(normalized);
   const denseUbo = /\bwgubopack:(\d+)/i.exec(normalized);
+  const uniformFast = /\bwguniformfast:(\d+)\s+ufskip:(\d+),(\d+),(\d+)\s+ufkeep:(\d+),(\d+),(\d+)\s+ufmiss:(\d+),(\d+),(\d+)/i
+    .exec(normalized);
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   const waits = /\bwgwait:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
@@ -154,6 +156,11 @@ export function parseWgpuProducerStateStats(text = "") {
     uboCacheEnabled: ubo?.[1] === "1",
     uboCacheMetricsEnabled: ubo?.[2] === "1",
     uboPackEnabled: denseUbo?.[1] === "1",
+    uniformFastEnabled: uniformFast?.[1] === "1",
+    uniformFastClassOrder: ["vs", "ps", "gs"],
+    uniformFastSkippedComparisons: numericTriple(uniformFast, 2),
+    uniformFastKeptComparisons: numericTriple(uniformFast, 5),
+    uniformFastChangedComparisons: numericTriple(uniformFast, 8),
     uboCacheClassOrder: ["vs", "ps", "gs"],
     uboCacheLookups: numericTriple(ubo, 3),
     uboCacheHits: numericTriple(ubo, 6),

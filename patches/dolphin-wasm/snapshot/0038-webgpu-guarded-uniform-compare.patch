@@ -1,0 +1,281 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index c866381..2a05acb 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -33,6 +33,7 @@
+ #include "VideoCommon/VideoConfig.h"
+ #include "VideoCommon/WasmWebGpuDrawProfile.h"
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
++#include "VideoCommon/WasmWebGpuUniformFastPath.h"
+ #include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+@@ -57,7 +58,7 @@ std::atomic<u64> s_pipeline_records_suppressed{0};
+ std::atomic<u64> s_bind_group_records_suppressed[3]{};
+ std::atomic<u64> s_vertex_buffer_records_suppressed{0};
+ std::atomic<u64> s_index_buffer_records_suppressed{0};
+-std::atomic<bool> s_ubo_cache_enabled{false};
++std::atomic<u32> s_ubo_control_mode{0};
+ std::atomic<bool> s_ubo_cache_metrics_enabled{false};
+ std::atomic<u64> s_ubo_cache_epoch{0};
+ std::atomic<u64> s_ubo_cache_lookups[3]{};
+@@ -72,6 +73,9 @@ std::atomic<u64> s_ubo_packet_payload_bytes{0};
+ std::atomic<u64> s_ubo_packet_aligned_bytes{0};
+ std::atomic<u64> s_ubo_prepare_cpu_calls[3]{};
+ std::atomic<u64> s_ubo_prepare_cpu_ns[3]{};
++std::atomic<u64> s_uniform_fast_skipped_comparisons[3]{};
++std::atomic<u64> s_uniform_fast_kept_comparisons[3]{};
++std::atomic<u64> s_uniform_fast_changed_comparisons[3]{};
+ std::atomic<bool> s_ubo_packet_enabled{false};
+ std::atomic<bool> s_geometry_upload_pack_enabled{false};
+ std::atomic<u64> s_geometry_upload_pack_epoch{0};
+@@ -89,7 +93,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuStateCacheEnabled(int enabled)
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUboCacheEnabled(int mode)
+ {
+-  s_ubo_cache_enabled.store((mode & 1) != 0, std::memory_order_relaxed);
++  s_ubo_control_mode.store(static_cast<u32>(mode) & 5u, std::memory_order_relaxed);
+   s_ubo_cache_metrics_enabled.store((mode & 2) != 0, std::memory_order_relaxed);
+   // Increment even when the boolean is unchanged. The JS state-load path
+   // deliberately re-applies the setting to invalidate producer-local slices.
+@@ -229,13 +233,13 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " wgbabort:" << GetCommandStream().GetBatchAbortCount()
+       << " wgboversize:" << GetCommandStream().GetBatchOversizeCount()
+       << " wguploadto:" << GetCommandStream().GetUploadTimeoutCount()
+-      << " wgubo:" << (s_ubo_cache_enabled.load(std::memory_order_relaxed) ? 1 : 0)
++      << " wgubo:" << ((s_ubo_control_mode.load(std::memory_order_relaxed) & 1u) ? 1 : 0)
+       << " wgubometrics:"
+       << (s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ? 1 : 0)
+       << " wgubopack:"
+       << (ShouldUseDenseUboPackets(
+               s_ubo_packet_enabled.load(std::memory_order_relaxed),
+-              s_ubo_cache_enabled.load(std::memory_order_relaxed)) ? 1 : 0)
++              (s_ubo_control_mode.load(std::memory_order_relaxed) & 1u) != 0) ? 1 : 0)
+       << " ulook:" << s_ubo_cache_lookups[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_cache_lookups[1].load(std::memory_order_relaxed) << ","
+       << s_ubo_cache_lookups[2].load(std::memory_order_relaxed)
+@@ -269,6 +273,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " ucpuns:" << s_ubo_prepare_cpu_ns[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_prepare_cpu_ns[1].load(std::memory_order_relaxed) << ","
+       << s_ubo_prepare_cpu_ns[2].load(std::memory_order_relaxed)
++      << " wguniformfast:"
++      << ((s_ubo_control_mode.load(std::memory_order_relaxed) & 4u) ? 1 : 0)
++      << " ufskip:" << s_uniform_fast_skipped_comparisons[0].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_skipped_comparisons[1].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_skipped_comparisons[2].load(std::memory_order_relaxed)
++      << " ufkeep:" << s_uniform_fast_kept_comparisons[0].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_kept_comparisons[1].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_kept_comparisons[2].load(std::memory_order_relaxed)
++      << " ufmiss:" << s_uniform_fast_changed_comparisons[0].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_changed_comparisons[1].load(std::memory_order_relaxed)
++      << "," << s_uniform_fast_changed_comparisons[2].load(std::memory_order_relaxed)
+       << " wggeom:" << (s_geometry_upload_pack_enabled.load(std::memory_order_relaxed) ? 1 : 0)
+       << " wggeomepoch:" << s_geometry_upload_pack_epoch.load(std::memory_order_relaxed)
+       << " wgarena:" << GetCommandStream().GetUploadArenaRequestedBytes() << ","
+@@ -1273,7 +1288,9 @@ bool WebGPUGfx::PrepareDrawResources()
+   auto& system = Core::System::GetInstance();
+   DolphinWeb::WebGpuDrawProfile::ScopedSample uniform_profile(
+       DolphinWeb::WebGpuDrawProfile::Phase::UniformPrepare);
+-  const bool ubo_cache_enabled = RefreshUboCacheState();
++  const u32 ubo_control_mode = RefreshUboControlMode();
++  const bool ubo_cache_enabled = (ubo_control_mode & 1u) != 0;
++  const bool uniform_fast_enabled = (ubo_control_mode & 4u) != 0;
+   const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
+       s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
+   u32 ubo_change_mask = 0;
+@@ -1454,19 +1471,30 @@ bool WebGPUGfx::PrepareDrawResources()
+   // kUboSliceStride (the shadow's size).
+   static_assert(sizeof(vsm.constants) <= sizeof(m_vs_shadow),
+                 "VS shadow must cover VertexShaderConstants");
+-  const bool vs_changed =
+-      !m_vs_shadow_valid ||
+-      std::memcmp(m_vs_shadow.data(), &vsm.constants,
+-                  sizeof(vsm.constants)) != 0;
+   const bool vs_expired = ubo_cache_enabled && m_vs_off != kUboOffNone &&
+                           !IsUboSliceLive(m_vs_publication_serial);
++  const auto vs_plan = DolphinWeb::WebGpuUniformFastPath::Plan(
++      uniform_fast_enabled, vsm.dirty, m_vs_off == kUboOffNone, m_vs_shadow_valid,
++      vs_expired);
++  const bool vs_changed =
++      vs_plan.compare_shadow &&
++      std::memcmp(m_vs_shadow.data(), &vsm.constants, sizeof(vsm.constants)) != 0;
++  if (uniform_fast_enabled && s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++  {
++    if (vs_plan.compare_shadow)
++      s_uniform_fast_kept_comparisons[0].fetch_add(1, std::memory_order_relaxed);
++    else if (m_vs_shadow_valid)
++      s_uniform_fast_skipped_comparisons[0].fetch_add(1, std::memory_order_relaxed);
++    if (vs_changed)
++      s_uniform_fast_changed_comparisons[0].fetch_add(1, std::memory_order_relaxed);
++  }
+   if (vs_expired)
+   {
+     ExpireUboClass(UboClass::Vertex);
+     m_vs_off = kUboOffNone;
+     m_vs_publication_serial = 0;
+   }
+-  if (vsm.dirty || m_vs_off == kUboOffNone || vs_changed)
++  if (vs_plan.ShouldUpload(vs_changed))
+   {
+     ubo_change_mask |= 1u << 0;
+     ubo_payload_sizes[0] = sizeof(vsm.constants);
+@@ -1495,19 +1523,30 @@ bool WebGPUGfx::PrepareDrawResources()
+   auto& psm = system.GetPixelShaderManager();
+   static_assert(sizeof(psm.constants) <= sizeof(m_ps_shadow),
+                 "PS shadow must cover PixelShaderConstants");
+-  const bool ps_changed =
+-      !m_ps_shadow_valid ||
+-      std::memcmp(m_ps_shadow.data(), &psm.constants,
+-                  sizeof(psm.constants)) != 0;
+   const bool ps_expired = ubo_cache_enabled && m_ps_off != kUboOffNone &&
+                           !IsUboSliceLive(m_ps_publication_serial);
++  const auto ps_plan = DolphinWeb::WebGpuUniformFastPath::Plan(
++      uniform_fast_enabled, psm.dirty, m_ps_off == kUboOffNone, m_ps_shadow_valid,
++      ps_expired);
++  const bool ps_changed =
++      ps_plan.compare_shadow &&
++      std::memcmp(m_ps_shadow.data(), &psm.constants, sizeof(psm.constants)) != 0;
++  if (uniform_fast_enabled && s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++  {
++    if (ps_plan.compare_shadow)
++      s_uniform_fast_kept_comparisons[1].fetch_add(1, std::memory_order_relaxed);
++    else if (m_ps_shadow_valid)
++      s_uniform_fast_skipped_comparisons[1].fetch_add(1, std::memory_order_relaxed);
++    if (ps_changed)
++      s_uniform_fast_changed_comparisons[1].fetch_add(1, std::memory_order_relaxed);
++  }
+   if (ps_expired)
+   {
+     ExpireUboClass(UboClass::Pixel);
+     m_ps_off = kUboOffNone;
+     m_ps_publication_serial = 0;
+   }
+-  if (psm.dirty || m_ps_off == kUboOffNone || ps_changed)
++  if (ps_plan.ShouldUpload(ps_changed))
+   {
+     ubo_change_mask |= 1u << 1;
+     ubo_payload_sizes[1] = sizeof(psm.constants);
+@@ -1563,19 +1602,30 @@ bool WebGPUGfx::PrepareDrawResources()
+   auto& gsm = system.GetGeometryShaderManager();
+   static_assert(sizeof(gsm.constants) <= sizeof(m_gs_shadow),
+                 "GS shadow must cover GeometryShaderConstants");
+-  const bool gs_changed =
+-      !m_gs_shadow_valid ||
+-      std::memcmp(m_gs_shadow.data(), &gsm.constants,
+-                  sizeof(gsm.constants)) != 0;
+   const bool gs_expired = ubo_cache_enabled && m_gs_off != kUboOffNone &&
+                           !IsUboSliceLive(m_gs_publication_serial);
++  const auto gs_plan = DolphinWeb::WebGpuUniformFastPath::Plan(
++      uniform_fast_enabled, gsm.dirty, m_gs_off == kUboOffNone, m_gs_shadow_valid,
++      gs_expired);
++  const bool gs_changed =
++      gs_plan.compare_shadow &&
++      std::memcmp(m_gs_shadow.data(), &gsm.constants, sizeof(gsm.constants)) != 0;
++  if (uniform_fast_enabled && s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++  {
++    if (gs_plan.compare_shadow)
++      s_uniform_fast_kept_comparisons[2].fetch_add(1, std::memory_order_relaxed);
++    else if (m_gs_shadow_valid)
++      s_uniform_fast_skipped_comparisons[2].fetch_add(1, std::memory_order_relaxed);
++    if (gs_changed)
++      s_uniform_fast_changed_comparisons[2].fetch_add(1, std::memory_order_relaxed);
++  }
+   if (gs_expired)
+   {
+     ExpireUboClass(UboClass::Geometry);
+     m_gs_off = kUboOffNone;
+     m_gs_publication_serial = 0;
+   }
+-  if (gsm.dirty || m_gs_off == kUboOffNone || gs_changed)
++  if (gs_plan.ShouldUpload(gs_changed))
+   {
+     ubo_change_mask |= 1u << 2;
+     ubo_payload_sizes[2] = sizeof(gsm.constants);
+@@ -1829,25 +1879,26 @@ void WebGPUGfx::SetSamplerState(u32 /* index */, const SamplerState& /* state */
+   // post-cutover refinement.
+ }
+ 
+-bool WebGPUGfx::RefreshUboCacheState()
++u32 WebGPUGfx::RefreshUboControlMode()
+ {
+-  const bool enabled = s_ubo_cache_enabled.load(std::memory_order_relaxed);
++  const u64 epoch = s_ubo_cache_epoch.load(std::memory_order_acquire);
++  const u32 control_mode = s_ubo_control_mode.load(std::memory_order_relaxed);
++  const bool enabled = (control_mode & 1u) != 0;
+   if (!enabled)
+   {
+     if (m_ubo_cache_active)
+       InvalidateUboSlices();
+     m_ubo_cache_active = false;
+-    return false;
++    return control_mode;
+   }
+ 
+-  const u64 epoch = s_ubo_cache_epoch.load(std::memory_order_acquire);
+   if (!m_ubo_cache_active || m_ubo_cache_epoch != epoch)
+   {
+     InvalidateUboSlices();
+     m_ubo_cache_epoch = epoch;
+     m_ubo_cache_active = true;
+   }
+-  return true;
++  return control_mode;
+ }
+ 
+ bool WebGPUGfx::IsUboSliceLive(u64 publication_serial) const
+@@ -2000,7 +2051,7 @@ void WebGPUGfx::UploadUtilityUniforms(const void* data, u32 size)
+   // it before publishing this utility slice; refreshing later from
+   // PrepareDrawResources would otherwise invalidate the just-written offset
+   // and clear m_util_uniform_mode before the utility draw can bind it.
+-  RefreshUboCacheState();
++  RefreshUboControlMode();
+   const u32 off = AllocUboSlice(data, size, BufferUploadRole::Utility);
+   if (off == kUboOffNone)
+     return;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 06b9527..cea68eb 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -190,7 +190,7 @@ private:
+   };
+   u32 AllocUboSlice(const void* data, u32 size, BufferUploadRole role);
+   u32 AcquireUboSlice(UboClass ubo_class, const void* data, u32 size);
+-  bool RefreshUboCacheState();
++  u32 RefreshUboControlMode();
+   bool IsUboSliceLive(u64 publication_serial) const;
+   void ResetUboSliceCache();
+   void ExpireUboClass(UboClass ubo_class);
+diff --git a/Source/Core/VideoCommon/WasmWebGpuUniformFastPath.h b/Source/Core/VideoCommon/WasmWebGpuUniformFastPath.h
+new file mode 100644
+index 0000000..8c1e840
+--- /dev/null
++++ b/Source/Core/VideoCommon/WasmWebGpuUniformFastPath.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++namespace DolphinWeb::WebGpuUniformFastPath
++{
++struct ComparisonPlan
++{
++  bool upload_mandatory;
++  bool compare_shadow;
++
++  constexpr bool ShouldUpload(bool bytes_changed) const
++  {
++    return upload_mandatory || bytes_changed;
++  }
++};
++
++// The fast path may bypass an exact whole-block comparison only when the draw
++// already has to publish a new slice. A valid, live, apparently-clean slice
++// always receives the exact comparison that protects against missed dirty bits.
++constexpr ComparisonPlan Plan(bool fast_enabled, bool dirty, bool offset_missing,
++                              bool shadow_valid, bool expired)
++{
++  const bool mandatory = dirty || offset_missing || !shadow_valid || expired;
++  return {mandatory, shadow_valid && (!fast_enabled || !mandatory)};
++}
++}  // namespace DolphinWeb::WebGpuUniformFastPath

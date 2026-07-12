@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "a3a4cc8994d490f69d6416a604da71b97759210b",
-    "changedPathCount": 107,
+    "resultTree": "af29d287f826110b39189af20a55d1229e61ae9b",
+    "changedPathCount": 108,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -632,18 +632,18 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "c86638118f14b4c1d6a612f8e3ebfdbc41e60a32",
-        "size": 85821,
-        "sha256": "f9d96163b4e1b867e8f412c0e090b2a10d5613710cc8d79861f3a9f6a22f0a14"
+        "resultBlob": "2a05acbb39a0afad5826bf038afec39587c00bfe",
+        "size": 88858,
+        "sha256": "5c44b3df40f720e6007346c0764acb0162a30f95473e20385fec1fcd23c2a907"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUGfx.h",
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "06b952773f9f58772d6bb2406e59f1b34ee0c3a4",
+        "resultBlob": "cea68eb6115cb191eacdb46f0c7d9fad9b58b608",
         "size": 15787,
-        "sha256": "77dd3d335cf0d5694130060c65bf39f8cb7b4d91a3eee1987fd20bf9a89f434e"
+        "sha256": "f7e7cad1d0a4124820e69c33f5b6a05b16f96598703c320c0958fc66bf00e9c6"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUShaderTranslator.cpp",
@@ -952,6 +952,15 @@
         "sha256": "92c80e01b00c24414d8f7252a625d37d01120a72c829a07987f708e4167e37b0"
       },
       {
+        "path": "Source/Core/VideoCommon/WasmWebGpuUniformFastPath.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "8c1e840f486136a628c5633127a66e9ddb2c1f3a",
+        "size": 939,
+        "sha256": "56cf3ea1fea08ffee64a345781f96afa6618a658cefb2c5ac03153ce3a990692"
+      },
+      {
         "path": "Source/Core/VideoCommon/WasmWgpuDeepDiagnostics.h",
         "status": "A",
         "mode": "100644",
@@ -1005,5 +1014,5 @@
       ]
     }
   ],
-  "contentSha256": "7c6e095441e87b96067f5d06422a7f4c59712713c1f703bdf06417e171689eb8"
+  "contentSha256": "e26398e3aa5fb9e07673174c3999ec119e6ea9ab40aa89205e017a14eb238ed6"
 }

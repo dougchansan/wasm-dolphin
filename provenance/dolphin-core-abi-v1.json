@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 55064,
-      "sha256": "14ad29e17ba6c4144a94049587bf451f6fa4d958a683aaff6c1dafbdc9e93047"
+      "size": 55763,
+      "sha256": "4b8b73c1f076bc4a7e98aeeb77f29be80f846e013c59977c76b26f72df72e66a"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 57542,
-      "sha256": "60a7b799e2bdb2a2fb7c930acc994366609bee6b77a3be645507e13af4d74562"
+      "size": 57849,
+      "sha256": "d4d5a43897a324cc9eee8a8bcf1ce7f96a6bf9e7222095ed3bf7fdb6eddc590b"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 424904,
-      "sha256": "380ff1fb8af4fbd4efe6c1d67c589dcedf0ddf4c6606ea28df87ea97df62af9d"
+      "size": 426516,
+      "sha256": "6fd52c20c4f31e6295722e5f183711fdf99832ba5ebacfe9908edae020aad07f"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 38451,
-      "sha256": "f05e4098517d64f8bcd1b0e50f40ab322d343b3881c0f7d6e5c7ae70bca5f329"
+      "size": 38700,
+      "sha256": "d18737fa23360cd0181eaa1f2e0e5ae1d636a9d4d913e9a8497d80baf1f5577b"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -170,8 +170,8 @@
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 18441,
-      "sha256": "e60dd405ae50f2b4fac5241e13af4005bab95952e8ced976a67e2c4b2edf50c7"
+      "size": 18884,
+      "sha256": "7d7dee46f2c847df32b65dc7a1057488f023f5bd26bf9f936f0159ba0381a051"
     },
     {
       "path": "src/wgpu-dirty-range-projection.js",
@@ -182,8 +182,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 35733,
-      "sha256": "85fd40fcd98e939b72879d7c4e87f17ca9b128fef2aff57262c22a859a715e62"
+      "size": 36049,
+      "sha256": "0244daad6ede15c744bfcdab3ba13b971576079707c410114c4aa5353aa25cc8"
     },
     {
       "path": "src/wgpu-upload-attribution.js",

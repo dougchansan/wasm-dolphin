@@ -92,6 +92,7 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       "usupcall:22,23,24 usupbyte:25,26,27 " +
       "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
       "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
+      "wguniformfast:1 ufskip:41,42,43 ufkeep:44,45,46 ufmiss:47,48,49 " +
       "wgarena:67108864,67108864,29,30,31,33554432 " +
       "wgwait:32,33000,3400,35,36000,3700"
     ),
@@ -108,6 +109,11 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheEnabled: true,
       uboCacheMetricsEnabled: true,
       uboPackEnabled: true,
+      uniformFastEnabled: true,
+      uniformFastClassOrder: ["vs", "ps", "gs"],
+      uniformFastSkippedComparisons: [41, 42, 43],
+      uniformFastKeptComparisons: [44, 45, 46],
+      uniformFastChangedComparisons: [47, 48, 49],
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [13, 14, 15],
       uboCacheHits: [16, 17, 18],
@@ -154,6 +160,11 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uboCacheEnabled: false,
       uboCacheMetricsEnabled: false,
       uboPackEnabled: false,
+      uniformFastEnabled: false,
+      uniformFastClassOrder: ["vs", "ps", "gs"],
+      uniformFastSkippedComparisons: [0, 0, 0],
+      uniformFastKeptComparisons: [0, 0, 0],
+      uniformFastChangedComparisons: [0, 0, 0],
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [0, 0, 0],
       uboCacheHits: [0, 0, 0],
@@ -445,11 +456,11 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
     readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8")
   ]);
 
-  assert.match(gfxSource, /std::atomic<bool> s_ubo_cache_enabled\{false\}/);
+  assert.match(gfxSource, /std::atomic<u32> s_ubo_control_mode\{0\}/);
   assert.match(gfxSource, /std::atomic<bool> s_ubo_cache_metrics_enabled\{false\}/);
   assert.match(gfxSource,
     /EMSCRIPTEN_KEEPALIVE void SetWebGpuUboCacheEnabled\(int mode\)/);
-  assert.match(gfxSource, /s_ubo_cache_enabled\.store\(\(mode & 1\) != 0/);
+  assert.match(gfxSource, /s_ubo_control_mode\.store\(static_cast<u32>\(mode\) & 5u/);
   assert.match(gfxSource, /s_ubo_cache_metrics_enabled\.store\(\(mode & 2\) != 0/);
   assert.match(coreCmake, /'_SetWebGpuUboCacheEnabled'/);
   assert.match(gfxHeader,
@@ -471,7 +482,7 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const acquireStart = gfxSource.indexOf("u32 WebGPUGfx::AcquireUboSlice");
   const acquireEnd = gfxSource.indexOf("u32 WebGPUGfx::AllocUboSlice", acquireStart);
   const acquireSource = gfxSource.slice(acquireStart, acquireEnd);
-  assert.doesNotMatch(acquireSource, /RefreshUboCacheState/,
+  assert.doesNotMatch(acquireSource, /RefreshUboControlMode/,
     "the synchronized caller must not pay redundant epoch refreshes per cache lookup");
   assert.match(acquireSource,
     /const bool record_metrics = s_ubo_cache_metrics_enabled\.load[\s\S]*?if \(record_metrics\)[\s\S]*?s_ubo_cache_lookups/);
@@ -493,7 +504,7 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityStart = gfxSource.indexOf("void WebGPUGfx::UploadUtilityUniforms");
   const utilityEnd = gfxSource.indexOf("void WebGPUGfx::Draw(", utilityStart);
   const utilitySource = gfxSource.slice(utilityStart, utilityEnd);
-  const utilityRefresh = utilitySource.indexOf("RefreshUboCacheState();");
+  const utilityRefresh = utilitySource.indexOf("RefreshUboControlMode();");
   const utilityAlloc = utilitySource.indexOf(
     "AllocUboSlice(data, size, BufferUploadRole::Utility)"
   );
@@ -508,7 +519,7 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   assert.match(worker,
     /api\.loadStateFile\(path\)[\s\S]*?setTimeout\(r, 1200\)[\s\S]*?setWebGpuUboCacheEnabled/);
   assert.match(worker,
-    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?wgpuUboMetricsEnabled \? 2 : 0/);
+    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?wgpuUboMetricsEnabled \? 2 : 0[\s\S]*?wgpuUniformFastEnabled \? 4 : 0/);
   assert.doesNotMatch(
     worker,
     /function webGpuUboCacheMode\(\)[\s\S]*?collectMetrics \? 2 : 0/,

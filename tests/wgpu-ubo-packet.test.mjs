@@ -116,9 +116,9 @@ test("patch 0029 integrates one transactional UBO upload with cache fallback", a
   assert.match(afterCommit, /m_gs_off = plan\.destination_offsets\[2\]/);
   assert.ok(commit < denseEnd, "dense publication must commit before legacy class tests");
   const legacy = gfx.slice(denseEnd, gfx.indexOf("RecordUboPacketOpportunity", denseEnd));
-  assert.match(legacy, /if \(vsm\.dirty \|\| m_vs_off == kUboOffNone \|\| vs_changed\)/);
-  assert.match(legacy, /if \(psm\.dirty \|\| m_ps_off == kUboOffNone \|\| ps_changed\)/);
-  assert.match(legacy, /if \(gsm\.dirty \|\| m_gs_off == kUboOffNone \|\| gs_changed\)/);
+  assert.match(legacy, /if \(vs_plan\.ShouldUpload\(vs_changed\)\)/);
+  assert.match(legacy, /if \(ps_plan\.ShouldUpload\(ps_changed\)\)/);
+  assert.match(legacy, /if \(gs_plan\.ShouldUpload\(gs_changed\)\)/);
   assert.equal((dense.match(/PushUploadBuffer/g) ?? []).length, 1);
   assert.match(afterCommit, /dense_vsm\.dirty = false[\s\S]*?m_vs_shadow_valid = true/);
   assert.match(afterCommit, /dense_psm\.dirty = false[\s\S]*?m_ps_shadow_valid = true/);

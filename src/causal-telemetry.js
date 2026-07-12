@@ -279,6 +279,11 @@ export function createCausalTelemetry(overrides = {}) {
         producerUboPacketAlignedBytes: 0,
         producerUboPrepareCpuCalls: [0, 0, 0],
         producerUboPrepareCpuNs: [0, 0, 0],
+        producerUniformFastEnabled: false,
+        producerUniformFastClassOrder: ["vs", "ps", "gs"],
+        producerUniformFastSkippedComparisons: [0, 0, 0],
+        producerUniformFastKeptComparisons: [0, 0, 0],
+        producerUniformFastChangedComparisons: [0, 0, 0],
         queueSubmissionCount: 0,
         uploadArenaRingHandoffBytes: 0,
         uploadArenaRingHandoffExpectedBytes: 0,
@@ -954,6 +959,13 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUboPacketAlignedBytes,
     causalWgpuProducerUboPrepareCpuCalls: telemetry.webgpu.producerUboPrepareCpuCalls,
     causalWgpuProducerUboPrepareCpuNs: telemetry.webgpu.producerUboPrepareCpuNs,
+    causalWgpuProducerUniformFastEnabled: telemetry.webgpu.producerUniformFastEnabled,
+    causalWgpuProducerUniformFastSkippedComparisons:
+      telemetry.webgpu.producerUniformFastSkippedComparisons,
+    causalWgpuProducerUniformFastKeptComparisons:
+      telemetry.webgpu.producerUniformFastKeptComparisons,
+    causalWgpuProducerUniformFastChangedComparisons:
+      telemetry.webgpu.producerUniformFastChangedComparisons,
     causalWgpuQueueSubmissionCount: telemetry.webgpu.queueSubmissionCount,
     causalWgpuUploadArenaRingHandoffBytes:
       telemetry.webgpu.uploadArenaRingHandoffBytes,

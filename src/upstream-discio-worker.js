@@ -191,6 +191,7 @@ let wgpuTailGateAvailable = false;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuUboMetricsEnabled = false;
+let wgpuUniformFastEnabled = false;
 let wgpuUboPackEnabled = false;
 let wgpuGeometryPackEnabled = false;
 let wgpuGeometryRangeEnabled = false;
@@ -505,7 +506,9 @@ function inputPhotonOverheadDiagnosticsPayload() {
 }
 
 function webGpuUboCacheMode() {
-  return (wgpuUboCacheEnabled ? 1 : 0) | (wgpuUboMetricsEnabled ? 2 : 0);
+  return (wgpuUboCacheEnabled ? 1 : 0) |
+    (wgpuUboMetricsEnabled ? 2 : 0) |
+    (wgpuUniformFastEnabled ? 4 : 0);
 }
 
 function webGpuUboPackMode() {
@@ -716,6 +719,7 @@ async function handleMessage(type, payload) {
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
         wgpuUboMetrics: payload.wgpuUboMetrics,
+        wgpuUniformFast: payload.wgpuUniformFast,
         wgpuUboPack: payload.wgpuUboPack,
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuGeometryRange: payload.wgpuGeometryRange,
@@ -1100,6 +1104,7 @@ async function loadCore({
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuUboMetrics: requestedWgpuUboMetrics = false,
+  wgpuUniformFast: requestedWgpuUniformFast = false,
   wgpuUboPack: requestedWgpuUboPack = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
@@ -1183,6 +1188,10 @@ async function loadCore({
     throw new Error("wgpuubometrics=1 requires video=wgpu");
   }
   wgpuUboMetricsEnabled = collectMetrics && Boolean(requestedWgpuUboMetrics);
+  if (requestedWgpuUniformFast && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuuniformfast=1 requires video=wgpu");
+  }
+  wgpuUniformFastEnabled = Boolean(requestedWgpuUniformFast);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
   wgpuGeometryRangeEnabled =
@@ -2022,6 +2031,7 @@ function collectWebGpuProducerStateStats() {
       );
     }
     webGpuCausalStats.producerUboCacheEnabled = parsed.uboCacheEnabled;
+    webGpuCausalStats.producerUniformFastEnabled = parsed.uniformFastEnabled;
     webGpuCausalStats.producerUboPackEnabled = parsed.uboPackEnabled;
     webGpuCausalStats.producerUboCacheMetricsEnabled = parsed.uboCacheMetricsEnabled;
     webGpuCausalStats.producerUboCacheClassOrder = parsed.uboCacheClassOrder;
@@ -2040,6 +2050,13 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.producerUboPacketAlignedBytes = parsed.uboPacketAlignedBytes;
     webGpuCausalStats.producerUboPrepareCpuCalls = parsed.uboPrepareCpuCalls;
     webGpuCausalStats.producerUboPrepareCpuNs = parsed.uboPrepareCpuNs;
+    webGpuCausalStats.producerUniformFastClassOrder = parsed.uniformFastClassOrder;
+    webGpuCausalStats.producerUniformFastSkippedComparisons =
+      parsed.uniformFastSkippedComparisons;
+    webGpuCausalStats.producerUniformFastKeptComparisons =
+      parsed.uniformFastKeptComparisons;
+    webGpuCausalStats.producerUniformFastChangedComparisons =
+      parsed.uniformFastChangedComparisons;
     webGpuCausalStats.producerGeometryPackEnabled = parsed.geometryPackEnabled;
     webGpuCausalStats.producerGeometryPackEpoch = parsed.geometryPackEpoch;
     webGpuCausalStats.producerUploadArenaRequestedBytes = parsed.uploadArenaRequestedBytes;
@@ -2430,6 +2447,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
+      uniformFastEnabled: wgpuUniformFastEnabled,
       uboPackEnabled: Boolean(webGpuUboPackMode()),
       geometryPackEnabled: wgpuGeometryPackEnabled,
       geometryRangeEnabled: wgpuGeometryRangeEnabled,
@@ -6600,6 +6618,7 @@ const webGpuCausalStats = {
     dirtyAtSkip: 0,
   },
   producerUboCacheEnabled: false,
+  producerUniformFastEnabled: false,
   producerUboPackEnabled: false,
   producerUboCacheMetricsEnabled: false,
   producerUboCacheClassOrder: ["vs", "ps", "gs"],
@@ -6615,6 +6634,10 @@ const webGpuCausalStats = {
   producerUboPacketAlignedBytes: 0,
   producerUboPrepareCpuCalls: [0, 0, 0],
   producerUboPrepareCpuNs: [0, 0, 0],
+  producerUniformFastClassOrder: ["vs", "ps", "gs"],
+  producerUniformFastSkippedComparisons: [0, 0, 0],
+  producerUniformFastKeptComparisons: [0, 0, 0],
+  producerUniformFastChangedComparisons: [0, 0, 0],
   producerGeometryPackEnabled: false,
   producerGeometryPackEpoch: 0,
   producerUploadArenaRequestedBytes: 0,

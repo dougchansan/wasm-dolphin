@@ -177,6 +177,10 @@ export function requestedWgpuUboMetrics(search = globalThis.location?.search ?? 
   return new URLSearchParams(search).get("wgpuubometrics") === "1";
 }
 
+export function requestedWgpuUniformFast(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuuniformfast") === "1";
+}
+
 export function requestedWgpuReplayBudgetMs(
   search = globalThis.location?.search ?? ""
 ) {
