@@ -44,26 +44,44 @@
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 40001,
-      "sha256": "df4042525e84bae6d9c3efd4c29d0427f0ab37501022e21496af9876a9d84b9a"
+      "size": 40075,
+      "sha256": "60c6505ac235ff5eed06b59c7e7b03df36b923bea1dcb78cec5235d3629beac0"
     },
     {
       "path": "src/audio.js",
       "hashMode": "lf-normalized",
-      "size": 8576,
-      "sha256": "a4d46dd19ce907d3bd57684e4902a3b00a916c81cfbc0daccf38bd8e503c7295"
+      "size": 12369,
+      "sha256": "20e2fa3c52124c1c4b1b3c42e3578e7a050056fee372e96012703516e2a93a34"
+    },
+    {
+      "path": "src/audio-pcm-ring.js",
+      "hashMode": "lf-normalized",
+      "size": 7901,
+      "sha256": "470a22753ad5b0563ab68f18c72a044aa700d6e51b780a1861c2a9faf4710dbc"
+    },
+    {
+      "path": "src/audio-pcm-producer.js",
+      "hashMode": "lf-normalized",
+      "size": 5337,
+      "sha256": "f872a01b75a19cca83a50ab7813250c694835136b9912ec6b16c2c716740caaf"
+    },
+    {
+      "path": "src/audio-worklet-processor.js",
+      "hashMode": "lf-normalized",
+      "size": 838,
+      "sha256": "30095d01d380741be97b540ed77490ad9e12b076d7c0712d67c0cc96346fc139"
     },
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 43624,
-      "sha256": "f5599614716557f8fa42871dec6ac7cc3abd888d37f760e25a8ec22f4b356f08"
+      "size": 44810,
+      "sha256": "31392eed31a3cea2525107720322af652b12c062266a82e31e1da724debfdf28"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 55801,
-      "sha256": "783a02f982a77e7e2d90a71e719d96596ca3dcffb041bc74c9d5e1ee03ad48bd"
+      "size": 56033,
+      "sha256": "56480f4d022a473e3a85596b02027d697d96a16028ea45c8c32c76e69975639e"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -110,8 +128,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 393167,
-      "sha256": "30073383e33a8a8b51cdab62492f11bcee90c6d3e115cc5d78b3f5be4133839e"
+      "size": 394282,
+      "sha256": "d38bb6949e74ead03cb3c9bc67c345bcfaa09dc02d80b843b062b66e0e7106e9"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -122,8 +140,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 36725,
-      "sha256": "9d0209b209b21c6c2b87417daccb6100fae0a6fe6ae3ce98bc39e943b0cec049"
+      "size": 37177,
+      "sha256": "00195424d96fabea47ce53181e1e54cf90e5c90ab32032c24379e76dc6b485b7"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -329,6 +347,7 @@
     ],
     "requestTypes": [
       "bootProbe",
+      "configureAudioWorklet",
       "load",
       "loadState",
       "loadStateFile",
