@@ -1529,6 +1529,329 @@ export function recordsToCsv(records) {
   return `${lines.join("\n")}\n`;
 }
 
+const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =
+  "wasm-dolphin.wgpu-dirty-range-projection.v1";
+const WGPU_DIRTY_RANGE_HAZARD_COUNTERS = Object.freeze([
+  "overlapUploadCount",
+  "overlapIntervalCount",
+  "overlapBytes",
+  "destinationOrderRegressionCount",
+  "sourceArenaWrapCount",
+  "sourceOutOfArenaCount",
+  "recordIndexWrapCount",
+  "recordOrderHazardCount",
+]);
+
+export function flattenWgpuDirtyRangeProjection(value) {
+  const snapshot = value ?? {};
+  const finalized = snapshot.finalized ?? {};
+  const flattened = {
+    causalWgpuDirtyRangeSchema: snapshot.schema ?? null,
+    causalWgpuDirtyRangeRequested:
+      typeof snapshot.requested === "boolean" ? snapshot.requested : null,
+    causalWgpuDirtyRangeActive:
+      typeof snapshot.active === "boolean" ? snapshot.active : null,
+    causalWgpuDirtyRangeFinalizedSegmentCount:
+      safeNonnegativeInteger(finalized.segmentCount),
+    causalWgpuDirtyRangeRawUploads: safeNonnegativeInteger(finalized.raw?.uploads),
+    causalWgpuDirtyRangeRawBytes: safeNonnegativeInteger(finalized.raw?.bytes),
+  };
+  for (const name of WGPU_DIRTY_RANGE_HAZARD_COUNTERS) {
+    flattened[`causalWgpuDirtyRangeHazard${upperFirst(name)}`] =
+      safeNonnegativeInteger(finalized.hazards?.[name]);
+  }
+  const thresholds = Array.isArray(snapshot.gapThresholds) ? snapshot.gapThresholds : [];
+  const copies = Array.isArray(finalized.projection?.intervalCopiesByGap)
+    ? finalized.projection.intervalCopiesByGap
+    : [];
+  const bytes = Array.isArray(finalized.projection?.copiedBytesByGap)
+    ? finalized.projection.copiedBytesByGap
+    : [];
+  flattened.causalWgpuDirtyRangeGapThresholds = thresholds;
+  for (let index = 0; index < thresholds.length; index += 1) {
+    const suffix = `Gap${thresholds[index]}`;
+    flattened[`causalWgpuDirtyRangeProjectedCopies${suffix}`] =
+      safeNonnegativeInteger(copies[index]);
+    flattened[`causalWgpuDirtyRangeProjectedBytes${suffix}`] =
+      safeNonnegativeInteger(bytes[index]);
+  }
+  return flattened;
+}
+
+export function evaluateWgpuDirtyRangeProjection(samples = []) {
+  const failures = [];
+  const candidates = Array.from(samples, extractDirtyRangeProjection);
+  const firstActiveSampleIndex = candidates.findIndex(hasDirtyRangeActivationSignal);
+  const firstValidSampleIndex = candidates.findIndex(isValidDirtyRangeSnapshot);
+  if (firstActiveSampleIndex < 0) {
+    return dirtyRangeEvaluationResult({
+      failures: ["no requested or active WGPU dirty-range projection snapshot was captured"],
+    });
+  }
+  if (firstValidSampleIndex < 0) {
+    for (let index = firstActiveSampleIndex; index < candidates.length; index += 1) {
+      validateDirtyRangeSnapshot(candidates[index], index, failures);
+    }
+    return dirtyRangeEvaluationResult({
+      failures: failures.length > 0
+        ? failures
+        : ["no active, schema-valid WGPU dirty-range projection snapshot was captured"],
+    });
+  }
+
+  let previous = null;
+  for (let sampleIndex = firstActiveSampleIndex; sampleIndex < candidates.length; sampleIndex += 1) {
+    const snapshot = candidates[sampleIndex];
+    validateDirtyRangeSnapshot(snapshot, sampleIndex, failures);
+    if (previous && snapshot) {
+      validateDirtyRangeMonotonic(previous, snapshot, sampleIndex, failures);
+    }
+    if (isValidDirtyRangeSnapshot(snapshot)) previous = snapshot;
+  }
+
+  const first = candidates[firstValidSampleIndex];
+  const finalSampleIndex = candidates.length - 1;
+  const final = candidates[finalSampleIndex];
+  if (!isValidDirtyRangeSnapshot(final)) {
+    failures.push(`final sample ${finalSampleIndex} is not an active, schema-valid snapshot`);
+    return dirtyRangeEvaluationResult({
+      failures,
+      firstValidSampleIndex,
+      finalSampleIndex,
+      gapThresholds: [...first.gapThresholds],
+    });
+  }
+
+  const finalizedSegmentCount =
+    final.finalized.segmentCount - first.finalized.segmentCount;
+  const rawUploads = final.finalized.raw.uploads - first.finalized.raw.uploads;
+  const rawBytes = final.finalized.raw.bytes - first.finalized.raw.bytes;
+  if (!(finalizedSegmentCount > 0)) {
+    failures.push(`finalized segment delta must be positive, got ${finalizedSegmentCount}`);
+  }
+  if (!(rawUploads > 0)) failures.push(`raw upload delta must be positive, got ${rawUploads}`);
+  if (!(rawBytes > 0)) failures.push(`raw byte delta must be positive, got ${rawBytes}`);
+
+  const hazardDeltas = Object.fromEntries(WGPU_DIRTY_RANGE_HAZARD_COUNTERS.map((name) => [
+    name,
+    final.finalized.hazards[name] - first.finalized.hazards[name],
+  ]));
+  const unresolvedHazardCount = Object.values(hazardDeltas).reduce(
+    (total, value) => total + value,
+    0
+  );
+  const zeroUnresolvedHazards = unresolvedHazardCount === 0;
+  const projections = first.gapThresholds.map((gapThresholdBytes, index) => {
+    const projectedCopies = final.finalized.projection.intervalCopiesByGap[index] -
+      first.finalized.projection.intervalCopiesByGap[index];
+    const projectedBytes = final.finalized.projection.copiedBytesByGap[index] -
+      first.finalized.projection.copiedBytesByGap[index];
+    const copyReductionRatio = rawUploads > 0 ? 1 - projectedCopies / rawUploads : null;
+    const byteInflationRatio = rawBytes > 0 ? projectedBytes / rawBytes - 1 : null;
+    const copyReductionAtLeast80Percent =
+      copyReductionRatio != null && copyReductionRatio >= 0.8;
+    const byteInflationAtMost20Percent =
+      byteInflationRatio != null && byteInflationRatio <= 0.2;
+    return {
+      gapThresholdBytes,
+      projectedCopies,
+      projectedBytes,
+      copyReductionRatio,
+      byteInflationRatio,
+      copyReductionAtLeast80Percent,
+      byteInflationAtMost20Percent,
+      zeroUnresolvedHazards,
+      qualifies:
+        copyReductionAtLeast80Percent &&
+        byteInflationAtMost20Percent &&
+        zeroUnresolvedHazards,
+    };
+  });
+  const qualifyingGapThresholds = projections
+    .filter((entry) => entry.qualifies)
+    .map((entry) => entry.gapThresholdBytes);
+
+  return dirtyRangeEvaluationResult({
+    failures,
+    firstValidSampleIndex,
+    finalSampleIndex,
+    gapThresholds: [...first.gapThresholds],
+    finalizedSegmentCount,
+    raw: { uploads: rawUploads, bytes: rawBytes },
+    hazards: hazardDeltas,
+    unresolvedHazardCount,
+    zeroUnresolvedHazards,
+    projections,
+    qualifyingGapThresholds,
+    selectedQualifyingGapThreshold: qualifyingGapThresholds[0] ?? null,
+  });
+}
+
+function dirtyRangeEvaluationResult(overrides = {}) {
+  const result = {
+    schema: "wasm-dolphin.wgpu-dirty-range-projection-evaluation.v1",
+    valid: false,
+    firstValidSampleIndex: null,
+    finalSampleIndex: null,
+    gapThresholds: [],
+    finalizedSegmentCount: null,
+    raw: null,
+    hazards: null,
+    unresolvedHazardCount: null,
+    zeroUnresolvedHazards: false,
+    projections: [],
+    qualifyingGapThresholds: [],
+    selectedQualifyingGapThreshold: null,
+    failures: [],
+    ...overrides,
+  };
+  result.valid = result.failures.length === 0;
+  return result;
+}
+
+function extractDirtyRangeProjection(sample) {
+  return sample?.causalTelemetry?.webgpu?.dirtyRangeProjection ??
+    sample?.webgpu?.dirtyRangeProjection ??
+    sample?.dirtyRangeProjection ??
+    sample ?? null;
+}
+
+function hasDirtyRangeActivationSignal(snapshot) {
+  return snapshot?.requested === true || snapshot?.active === true || snapshot?.enabled === true;
+}
+
+function isValidDirtyRangeSnapshot(snapshot) {
+  if (snapshot?.schema !== WGPU_DIRTY_RANGE_PROJECTION_SCHEMA ||
+      snapshot.requested !== true || snapshot.active !== true ||
+      snapshot.enabled !== true || snapshot.projectionOnly !== true) return false;
+  const thresholds = snapshot.gapThresholds;
+  const finalized = snapshot.finalized;
+  const copies = finalized?.projection?.intervalCopiesByGap;
+  const bytes = finalized?.projection?.copiedBytesByGap;
+  if (!Array.isArray(thresholds) || thresholds.length === 0 ||
+      !Array.isArray(copies) || !Array.isArray(bytes) ||
+      copies.length !== thresholds.length || bytes.length !== thresholds.length) return false;
+  const counters = [
+    finalized?.segmentCount,
+    finalized?.raw?.uploads,
+    finalized?.raw?.bytes,
+    ...copies,
+    ...bytes,
+  ];
+  return counters.every((value) => safeNonnegativeInteger(value) !== null) &&
+    WGPU_DIRTY_RANGE_HAZARD_COUNTERS.every(
+      (name) => safeNonnegativeInteger(finalized?.hazards?.[name]) !== null
+    ) && thresholds.every((value, index) =>
+      safeNonnegativeInteger(value) !== null && (index === 0 || value > thresholds[index - 1])
+    );
+}
+
+function validateDirtyRangeSnapshot(snapshot, sampleIndex, failures) {
+  if (!snapshot) {
+    failures.push(`sample ${sampleIndex} is missing WGPU dirty-range projection telemetry`);
+    return;
+  }
+  if (snapshot.schema !== WGPU_DIRTY_RANGE_PROJECTION_SCHEMA) {
+    failures.push(`sample ${sampleIndex} has unsupported schema ${snapshot.schema ?? "missing"}`);
+  }
+  for (const [field, value] of [
+    ["requested", snapshot.requested],
+    ["active", snapshot.active],
+    ["enabled", snapshot.enabled],
+    ["projectionOnly", snapshot.projectionOnly],
+  ]) {
+    if (value !== true) failures.push(`sample ${sampleIndex} ${field}=${String(value)} expected true`);
+  }
+  const thresholds = snapshot.gapThresholds;
+  const finalized = snapshot.finalized;
+  if (!finalized || typeof finalized !== "object" || Array.isArray(finalized)) {
+    failures.push(`sample ${sampleIndex} finalized contract is missing`);
+    return;
+  }
+  const copies = finalized.projection?.intervalCopiesByGap;
+  const bytes = finalized.projection?.copiedBytesByGap;
+  if (!Array.isArray(thresholds) || thresholds.length === 0) {
+    failures.push(`sample ${sampleIndex} gapThresholds must be a non-empty array`);
+    return;
+  }
+  if (!Array.isArray(copies) || copies.length !== thresholds.length ||
+      !Array.isArray(bytes) || bytes.length !== thresholds.length) {
+    failures.push(`sample ${sampleIndex} projection arrays do not match gapThresholds`);
+  }
+  validateSafeCounters(
+    finalized,
+    ["segmentCount"],
+    `sample ${sampleIndex} finalized`,
+    failures
+  );
+  validateSafeCounters(
+    finalized.raw,
+    ["uploads", "bytes"],
+    `sample ${sampleIndex} finalized.raw`,
+    failures
+  );
+  validateSafeCounters(
+    finalized.hazards,
+    WGPU_DIRTY_RANGE_HAZARD_COUNTERS,
+    `sample ${sampleIndex} finalized.hazards`,
+    failures
+  );
+  for (let index = 0; index < thresholds.length; index += 1) {
+    if (safeNonnegativeInteger(thresholds[index]) === null ||
+        (index > 0 && thresholds[index] <= thresholds[index - 1])) {
+      failures.push(`sample ${sampleIndex} gapThresholds must be increasing safe integers`);
+      break;
+    }
+  }
+  for (const [label, values] of [["intervalCopiesByGap", copies], ["copiedBytesByGap", bytes]]) {
+    if (Array.isArray(values) && values.some((value) => safeNonnegativeInteger(value) === null)) {
+      failures.push(`sample ${sampleIndex} ${label} contains a non-safe counter`);
+    }
+  }
+}
+
+function validateDirtyRangeMonotonic(previous, current, sampleIndex, failures) {
+  if (!isValidDirtyRangeSnapshot(current)) return;
+  if (JSON.stringify(current.gapThresholds) !== JSON.stringify(previous.gapThresholds)) {
+    failures.push(`sample ${sampleIndex} gapThresholds changed within the timed window`);
+    return;
+  }
+  const paths = [
+    ["finalized", "segmentCount"],
+    ["finalized", "raw", "uploads"],
+    ["finalized", "raw", "bytes"],
+    ...WGPU_DIRTY_RANGE_HAZARD_COUNTERS.map((name) => ["finalized", "hazards", name]),
+  ];
+  for (const path of paths) {
+    const before = path.reduce((value, key) => value[key], previous);
+    const after = path.reduce((value, key) => value[key], current);
+    if (after < before) failures.push(`sample ${sampleIndex} ${path.join(".")} regressed`);
+  }
+  for (const field of ["intervalCopiesByGap", "copiedBytesByGap"]) {
+    const before = previous.finalized.projection[field];
+    const after = current.finalized.projection[field];
+    if (after.some((value, index) => value < before[index])) {
+      failures.push(`sample ${sampleIndex} finalized.projection.${field} regressed`);
+    }
+  }
+}
+
+function validateSafeCounters(value, names, label, failures) {
+  for (const name of names) {
+    if (safeNonnegativeInteger(value?.[name]) === null) {
+      failures.push(`${label}.${name} is not a non-negative safe integer`);
+    }
+  }
+}
+
+function safeNonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function upperFirst(value) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
 function csvCell(value) {
   if (value === undefined || value === null) return "";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);

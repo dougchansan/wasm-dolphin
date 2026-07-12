@@ -22,12 +22,14 @@ import {
   describeFile,
   evaluateMetricsModeEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
+  evaluateWgpuDirtyRangeProjection,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
   fixedWorkPollDelayMs,
+  flattenWgpuDirtyRangeProjection,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   parseProfileMetrics,
@@ -502,7 +504,10 @@ async function runScenario(scenario, context) {
       const record = {
         ...sample,
         ...parseProfileMetrics(sample.helper, sample.profile),
-        ...flattenCausalTelemetry(sample.causalTelemetry)
+        ...flattenCausalTelemetry(sample.causalTelemetry),
+        ...flattenWgpuDirtyRangeProjection(
+          sample.causalTelemetry?.webgpu?.dirtyRangeProjection
+        )
       };
       samples.push(record);
       return record;
@@ -755,6 +760,7 @@ function summarizeScenario(
   const fullTimedWindow = windows.fullTimedWindow.metrics;
   const steadyState = steadyStateWindow.metrics;
   const causalFairness = summarizeCausalFairness(timedWindow, { expectedInputEvents });
+  const dirtyRangeProjection = evaluateWgpuDirtyRangeProjection(timedWindow);
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -778,6 +784,7 @@ function summarizeScenario(
     underrun: maxRegex(helperText, /underrun:(\d+)/g),
     drop: maxRegex(helperText, /drop:(\d+)/g),
     causalFairness,
+    wgpuDirtyRangeProjection: dirtyRangeProjection,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
@@ -791,6 +798,24 @@ function summarizeScenario(
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
   failures.push(...causalFairness.failures);
+  const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
+  if (requestedDirtyRanges != null) {
+    const expectedActive = String(requestedDirtyRanges) === "1";
+    const snapshot = final.causalTelemetry?.webgpu?.dirtyRangeProjection;
+    if (
+      snapshot?.requested !== expectedActive ||
+      snapshot?.active !== expectedActive ||
+      snapshot?.enabled !== expectedActive
+    ) {
+      failures.push(
+        `WGPU dirty-range projection mismatch: requested=${expectedActive ? 1 : 0} ` +
+        `capturedRequested=${snapshot?.requested == null ? "unavailable" : snapshot.requested ? 1 : 0} ` +
+        `active=${snapshot?.active == null ? "unavailable" : snapshot.active ? 1 : 0} ` +
+        `enabled=${snapshot?.enabled == null ? "unavailable" : snapshot.enabled ? 1 : 0}`
+      );
+    }
+    if (expectedActive) failures.push(...dirtyRangeProjection.failures);
+  }
   if (metrics.minPresentFps < scenario.thresholds.minPresentFps) {
     targetIssue(`min present FPS ${metrics.minPresentFps} < ${scenario.thresholds.minPresentFps}`);
   }
@@ -895,7 +920,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpuuploadmb", "wgpuuploadtransport", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpuuploadmb", "wgpuuploadtransport", "wgpudirtyranges", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
