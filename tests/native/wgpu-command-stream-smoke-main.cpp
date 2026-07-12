@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "VideoBackends/WebGPU/WebGPUCommandStream.h"
+#include "VideoBackends/WebGPU/WebGPUVertexManager.h"
 
 namespace
 {
@@ -34,7 +35,27 @@ int main()
   const bool dense_rollback =
       Check("dense UBO rollback", WebGPU::RunWebGpuDenseUboRollbackSmoke(),
             WebGPU::GetWebGpuDenseUboSmokeError);
-  if (!non_indexed || !indexed || !rollback || !dense_packet || !dense_rollback)
+  bool vertex_manager_parity = true;
+  for (const int packed : {0, 1})
+  {
+    for (const int indexed_mode : {0, 1})
+    {
+      vertex_manager_parity &=
+          Check("VertexManager geometry parity",
+                WebGPU::RunWebGpuVertexManagerGeometryParitySmoke(indexed_mode, packed),
+                WebGPU::GetWebGpuVertexManagerGeometrySmokeError);
+    }
+    vertex_manager_parity &=
+        Check("VertexManager geometry rollback",
+              WebGPU::RunWebGpuVertexManagerGeometryRollbackSmoke(packed),
+              WebGPU::GetWebGpuVertexManagerGeometrySmokeError);
+  }
+  const bool vertex_manager_lifecycle =
+      Check("VertexManager geometry lifecycle",
+            WebGPU::RunWebGpuVertexManagerGeometryLifecycleSmoke(),
+            WebGPU::GetWebGpuVertexManagerGeometrySmokeError);
+  if (!non_indexed || !indexed || !rollback || !dense_packet || !dense_rollback ||
+      !vertex_manager_parity || !vertex_manager_lifecycle)
     return 1;
   std::puts("WebGPU command-stream native smokes passed");
   return 0;

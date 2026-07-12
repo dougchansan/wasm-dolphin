@@ -182,7 +182,12 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [],
+  "sourceOnlyExportsPendingRebuild": [
+    "_GetWebGpuVertexManagerGeometrySmokeError",
+    "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "_RunWebGpuVertexManagerGeometryParitySmoke",
+    "_RunWebGpuVertexManagerGeometryRollbackSmoke"
+  ],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",

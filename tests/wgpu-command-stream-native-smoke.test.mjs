@@ -41,6 +41,10 @@ test("native smoke exports are either pending rebuild or present in the core", a
     "_RunWebGpuCommandStreamGeometryParitySmoke",
     "_RunWebGpuCommandStreamGeometryRollbackSmoke",
     "_GetWebGpuCommandStreamGeometrySmokeError",
+    "_RunWebGpuVertexManagerGeometryParitySmoke",
+    "_RunWebGpuVertexManagerGeometryRollbackSmoke",
+    "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "_GetWebGpuVertexManagerGeometrySmokeError",
   ];
   for (const name of expected) {
     assert.ok(
@@ -64,4 +68,29 @@ test("standalone native harness invokes both parity modes and rollback", async (
   assert.match(harness, /RunWebGpuCommandStreamGeometryParitySmoke\(1\)/);
   assert.match(harness, /RunWebGpuCommandStreamGeometryRollbackSmoke\(\)/);
   assert.match(harness, /GetWebGpuCommandStreamGeometrySmokeError/);
+  assert.match(harness, /RunWebGpuVertexManagerGeometryParitySmoke\(indexed_mode, packed\)/);
+  assert.match(harness, /RunWebGpuVertexManagerGeometryRollbackSmoke\(packed\)/);
+  assert.match(harness, /RunWebGpuVertexManagerGeometryLifecycleSmoke\(\)/);
+});
+
+test("native VertexManager smoke crosses the real CommitBuffer boundary", async () => {
+  const patch = await readFile(
+    new URL(
+      "../patches/dolphin-wasm/snapshot/0030-webgpu-vertex-manager-geometry-smokes.patch",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.match(patch, /manager\.CommitBuffer\(/);
+  assert.match(patch, /RunWebGpuVertexManagerGeometryParitySmoke\(int indexed,[\s\S]*?int packed\)/);
+  assert.match(patch, /RunWebGpuVertexManagerGeometryRollbackSmoke\(int packed\)/);
+  assert.match(patch, /RunWebGpuVertexManagerGeometryLifecycleSmoke\(\)/);
+  assert.match(patch, /SeedPackedWrap/);
+  assert.match(patch, /SeedLegacyWrap/);
+  assert.match(patch, /FailConsumer\(GetCommandStream\(\)/);
+  assert.match(patch, /InvalidateGeometryUploadPack\(\)/);
+  assert.match(patch, /PushDrawIndexed/);
+  assert.match(patch, /PushDraw\(3, 1, base_vertex\)/);
+  assert.match(patch, /refused to replace a live WebGPU command ring/);
 });

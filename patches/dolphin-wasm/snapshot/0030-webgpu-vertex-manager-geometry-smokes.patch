@@ -1,0 +1,437 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index a7d0d7f..0e785ef 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -1078,39 +1078,64 @@ WebGPUCommandStream& GetCommandStream()
+   return s_stream;
+ }
+ 
+-struct WebGPUCommandStreamTestPeer
++void WebGPUCommandStreamTestPeer::Initialize(WebGPUCommandStream& stream, CmdRingHeader& header,
++                                             CmdRecord* slots, u32 capacity, u8* upload,
++                                             u32 upload_size)
+ {
+-  static void Initialize(WebGPUCommandStream& stream, CmdRingHeader& header, CmdRecord* slots,
+-                         u32 capacity, u8* upload, u32 upload_size)
+-  {
+-    header.write.store(0, std::memory_order_relaxed);
+-    header.read.store(0, std::memory_order_relaxed);
+-    header.capacity = capacity;
+-    header.upload_read.store(0, std::memory_order_relaxed);
+-    header.protocol_flags.store(0, std::memory_order_relaxed);
+-    header.consumer_state.store(0, std::memory_order_relaxed);
+-    header.consumer_error.store(0, std::memory_order_relaxed);
+-    std::memset(slots, 0, sizeof(CmdRecord) * capacity);
+-    std::memset(upload, 0xCD, upload_size);
+-    stream.m_header = &header;
+-    stream.m_slots = slots;
+-    stream.m_capacity = capacity;
+-    stream.m_upload_base = upload;
+-    stream.m_upload_size = upload_size;
+-    stream.m_upload_write = 0;
+-  }
++  header.write.store(0, std::memory_order_relaxed);
++  header.read.store(0, std::memory_order_relaxed);
++  header.capacity = capacity;
++  header.upload_read.store(0, std::memory_order_relaxed);
++  header.protocol_flags.store(0, std::memory_order_relaxed);
++  header.consumer_state.store(0, std::memory_order_relaxed);
++  header.consumer_error.store(0, std::memory_order_relaxed);
++  std::memset(slots, 0, sizeof(CmdRecord) * capacity);
++  std::memset(upload, 0xCD, upload_size);
++  stream.m_header = &header;
++  stream.m_slots = slots;
++  stream.m_capacity = capacity;
++  stream.m_upload_base = upload;
++  stream.m_upload_size = upload_size;
++  stream.m_upload_write = 0;
++  stream.m_upload_wait_timeouts = 0;
++  stream.m_upload_handshake_timeouts = 0;
++  stream.m_last_upload_write_before = 0;
++  stream.m_last_upload_write_after = 0;
++  stream.m_last_upload_ptr = 0;
++  stream.m_last_upload_len = 0;
++  stream.m_submit_serial = 0;
++  stream.m_pass_records.clear();
++  stream.m_pass_staging = false;
++  stream.m_pass_poisoned = false;
++  stream.m_required_publication_failed = false;
++  stream.m_next_id = 1;
++  stream.m_dropped = 0;
++}
+ 
+-  static u32 UploadWrite(const WebGPUCommandStream& stream) { return stream.m_upload_write; }
++bool WebGPUCommandStreamTestPeer::InitializeGlobalSmoke(CmdRingHeader& header, CmdRecord* slots,
++                                                        u32 capacity, u8* upload,
++                                                        u32 upload_size)
++{
++  WebGPUCommandStream& stream = GetCommandStream();
++  if (stream.m_header != nullptr && stream.m_header != &header)
++    return false;
++  Initialize(stream, header, slots, capacity, upload, upload_size);
++  return true;
++}
+ 
+-  static void FailConsumer(WebGPUCommandStream& stream, u32 error)
+-  {
+-    stream.m_header->protocol_flags.store(kProtocolUploadWatermark |
+-                                              kProtocolNonDroppingBackpressure,
+-                                          std::memory_order_release);
+-    stream.m_header->consumer_error.store(error, std::memory_order_release);
+-    stream.m_header->consumer_state.store(kConsumerStateFailed, std::memory_order_release);
+-  }
+-};
++u32 WebGPUCommandStreamTestPeer::UploadWrite(const WebGPUCommandStream& stream)
++{
++  return stream.m_upload_write;
++}
++
++void WebGPUCommandStreamTestPeer::FailConsumer(WebGPUCommandStream& stream, u32 error)
++{
++  stream.m_header->protocol_flags.store(kProtocolUploadWatermark |
++                                            kProtocolNonDroppingBackpressure,
++                                        std::memory_order_release);
++  stream.m_header->consumer_error.store(error, std::memory_order_release);
++  stream.m_header->consumer_state.store(kConsumerStateFailed, std::memory_order_release);
++}
+ 
+ namespace
+ {
+warning: in the working copy of 'C:\Users\DOUGLA~1\AppData\Local\Temp\wgpu-live-vm-before\WebGPUCommandStream.cpp', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vendor\dolphin\Source\Core\VideoBackends\WebGPU\WebGPUCommandStream.cpp', LF will be replaced by CRLF the next time Git touches it
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index d5c05b4..bb78f36 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -432,6 +432,20 @@ private:
+ // reference through VideoCommon. EnsureRing() is idempotent.
+ WebGPUCommandStream& GetCommandStream();
+ 
++// Narrow native-test peer used by the exported geometry smokes. Production
++// code never calls this seam. It lets a smoke install a bounded in-memory ring
++// on the real process-global stream, while refusing to replace a ring already
++// owned by a live renderer.
++struct WebGPUCommandStreamTestPeer
++{
++  static void Initialize(WebGPUCommandStream& stream, CmdRingHeader& header, CmdRecord* slots,
++                         u32 capacity, u8* upload, u32 upload_size);
++  static bool InitializeGlobalSmoke(CmdRingHeader& header, CmdRecord* slots, u32 capacity,
++                                    u8* upload, u32 upload_size);
++  static u32 UploadWrite(const WebGPUCommandStream& stream);
++  static void FailConsumer(WebGPUCommandStream& stream, u32 error);
++};
++
+ // Native wasm regression seams. These execute the real command-stream upload,
+ // publication, pass-staging, and rollback methods against an isolated tiny
+ // ring; they do not require a browser GPU device or mutate the live stream.
+warning: in the working copy of 'C:\Users\DOUGLA~1\AppData\Local\Temp\wgpu-live-vm-before\WebGPUCommandStream.h', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vendor\dolphin\Source\Core\VideoBackends\WebGPU\WebGPUCommandStream.h', LF will be replaced by CRLF the next time Git touches it
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index 56d7925..c79a3c9 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -4,6 +4,7 @@
+ #include "VideoBackends/WebGPU/WebGPUVertexManager.h"
+ 
+ #include <cstring>
++#include <iterator>
+ #include <limits>
+ 
+ #include <emscripten/emscripten.h>
+@@ -15,6 +16,8 @@
+ 
+ namespace WebGPU
+ {
++extern "C" void SetWebGpuGeometryPackEnabled(int enabled);
++
+ // GPUBufferUsage numeric flags (DESIGN doc): VERTEX 0x20, INDEX 0x10,
+ // COPY_DST 0x8.
+ static constexpr u32 kUsageVertex = 0x20 | 0x8;
+@@ -258,4 +261,257 @@ void VertexManager::UploadUtilityUniforms(const void* uniforms, u32 uniforms_siz
+     static_cast<WebGPUGfx*>(g_gfx.get())->UploadUtilityUniforms(uniforms, uniforms_size);
+ }
+ 
++namespace
++{
++const char* s_vertex_manager_geometry_smoke_error = "ok";
++
++struct VertexManagerSmokeFixture
++{
++  CmdRingHeader header{};
++  CmdRecord slots[64]{};
++  alignas(16) u8 upload[1024]{};
++
++  bool Reset()
++  {
++    return WebGPUCommandStreamTestPeer::InitializeGlobalSmoke(
++        header, slots, static_cast<u32>(std::size(slots)), upload, sizeof(upload));
++  }
++};
++
++VertexManagerSmokeFixture s_vertex_manager_smoke_fixture;
++
++int FailVertexManagerSmoke(int code, const char* message)
++{
++  s_vertex_manager_geometry_smoke_error = message;
++  return code;
++}
++
++const CmdRecord* FindUpload(const VertexManagerSmokeFixture& fixture, BufferUploadRole role)
++{
++  const u32 write = fixture.header.write.load(std::memory_order_acquire);
++  for (u32 index = 0; index < write; ++index)
++  {
++    const CmdRecord& record = fixture.slots[index % std::size(fixture.slots)];
++    if (record.op == static_cast<u32>(CmdOp::UploadBuffer) &&
++        record.arg.u[4] == static_cast<u32>(role))
++      return &record;
++  }
++  return nullptr;
++}
++
++bool CheckBytes(const CmdRecord* record, const void* expected, u32 expected_size)
++{
++  return record != nullptr && record->arg.u[3] >= expected_size &&
++         std::memcmp(reinterpret_cast<const void*>(static_cast<uintptr_t>(record->arg.u[2])),
++                     expected, expected_size) == 0;
++}
++}  // namespace
++
++struct VertexManagerTestPeer
++{
++  static void Seed(VertexManager& manager, const void* vertices, u32 vertex_bytes,
++                   const u16* indices, u32 num_indices, u32 vertex_stride)
++  {
++    manager.ResetBuffer(vertex_stride);
++    std::memcpy(manager.m_base_buffer_pointer, vertices, vertex_bytes);
++    if (num_indices != 0)
++      std::memcpy(manager.m_cpu_index_buffer.data(), indices, num_indices * sizeof(u16));
++  }
++
++  static void Commit(VertexManager& manager, u32 num_vertices, u32 vertex_stride,
++                     u32 num_indices, u32* base_vertex, u32* base_index)
++  {
++    manager.CommitBuffer(num_vertices, vertex_stride, num_indices, base_vertex, base_index);
++  }
++
++  static void SeedPackedWrap(VertexManager& manager)
++  {
++    manager.m_geometry_pack_active = true;
++    manager.m_geometry_pack_epoch = GetGeometryUploadPackEpoch();
++    manager.m_geometry_buffer_id = 91;
++    manager.m_geometry_offset = VertexManager::kGeometryBufferSize - 8;
++    manager.m_geometry_generations_since_submit = 1;
++    manager.m_geometry_submit_serial = GetCommandStream().GetSubmitSerial();
++  }
++
++  static void SeedLegacyWrap(VertexManager& manager)
++  {
++    manager.m_geometry_pack_active = false;
++    manager.m_geometry_pack_epoch = GetGeometryUploadPackEpoch();
++    manager.m_vertex_buffer_id = 91;
++    manager.m_index_buffer_id = 92;
++    manager.m_vertex_offset = VertexManager::kVertexBufferSize - 8;
++    manager.m_index_offset = VertexManager::kIndexBufferSize - 4;
++  }
++
++  static u32 VertexId(const VertexManager& manager) { return manager.GetVertexBufferId(); }
++  static u32 IndexId(const VertexManager& manager) { return manager.GetIndexBufferId(); }
++  static u32 GeometryOffset(const VertexManager& manager) { return manager.m_geometry_offset; }
++  static u32 VertexOffset(const VertexManager& manager) { return manager.m_vertex_offset; }
++  static u32 IndexOffset(const VertexManager& manager) { return manager.m_index_offset; }
++};
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryParitySmoke(int indexed,
++                                                                               int packed)
++{
++  s_vertex_manager_geometry_smoke_error = "ok";
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(301, "refused to replace a live WebGPU command ring");
++
++  SetWebGpuGeometryPackEnabled(packed != 0 ? 1 : 0);
++  constexpr u32 stride = 16;
++  constexpr u8 vertices[48] = {
++      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
++      0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
++      0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33,
++      0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F};
++  constexpr u16 indices[] = {0, 1, 2, 2, 1, 0};
++  const u32 num_indices = indexed != 0 ? static_cast<u32>(std::size(indices)) : 0;
++
++  VertexManager manager;
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices, num_indices, stride);
++  u32 base_vertex = UINT32_MAX;
++  u32 base_index = UINT32_MAX;
++  VertexManagerTestPeer::Commit(manager, 3, stride, num_indices, &base_vertex, &base_index);
++
++  const BufferUploadRole vertex_role = packed != 0 ? BufferUploadRole::Geometry :
++                                                     BufferUploadRole::Vertex;
++  const CmdRecord* const vertex_upload = FindUpload(s_vertex_manager_smoke_fixture, vertex_role);
++  if (!CheckBytes(vertex_upload, vertices, sizeof(vertices)))
++    return FailVertexManagerSmoke(302, "VertexManager vertex bytes were not published exactly");
++  if (packed != 0)
++  {
++    if (VertexManagerTestPeer::VertexId(manager) == 0 ||
++        VertexManagerTestPeer::VertexId(manager) != VertexManagerTestPeer::IndexId(manager) ||
++        base_vertex != 0 || base_index != sizeof(vertices) / sizeof(u16))
++      return FailVertexManagerSmoke(303, "packed VertexManager ids or base offsets differ");
++    if (num_indices != 0 &&
++        std::memcmp(reinterpret_cast<const u8*>(static_cast<uintptr_t>(vertex_upload->arg.u[2])) +
++                        sizeof(vertices),
++                    indices, sizeof(indices)) != 0)
++      return FailVertexManagerSmoke(304, "packed VertexManager index bytes differ");
++  }
++  else
++  {
++    if (VertexManagerTestPeer::VertexId(manager) == 0 ||
++        VertexManagerTestPeer::IndexId(manager) == 0 || base_vertex != 0 || base_index != 0)
++      return FailVertexManagerSmoke(305, "legacy VertexManager ids or base offsets differ");
++    if (num_indices != 0 &&
++        !CheckBytes(FindUpload(s_vertex_manager_smoke_fixture, BufferUploadRole::Index), indices,
++                    sizeof(indices)))
++      return FailVertexManagerSmoke(306, "legacy VertexManager index bytes differ");
++  }
++
++  WebGPUCommandStream& stream = GetCommandStream();
++  if (!stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8) ||
++      !stream.PushSetVertexBuffer(0, VertexManagerTestPeer::VertexId(manager), 0))
++    return FailVertexManagerSmoke(307, "draw suffix rejected real VertexManager buffer output");
++  if (num_indices != 0 &&
++      !stream.PushSetIndexBuffer(VertexManagerTestPeer::IndexId(manager), 0,
++                                 base_index * sizeof(u16)))
++    return FailVertexManagerSmoke(308, "indexed suffix rejected real VertexManager offset");
++  const bool draw_ok = num_indices != 0 ? stream.PushDrawIndexed(num_indices, 1, base_index,
++                                                                 base_vertex) :
++                                          stream.PushDraw(3, 1, base_vertex);
++  if (!draw_ok || !stream.PushEndPass())
++    return FailVertexManagerSmoke(309, "draw suffix from real VertexManager output was not atomic");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryRollbackSmoke(int packed)
++{
++  s_vertex_manager_geometry_smoke_error = "ok";
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(401, "refused to replace a live WebGPU command ring");
++  SetWebGpuGeometryPackEnabled(packed != 0 ? 1 : 0);
++  constexpr u32 stride = 16;
++  constexpr u8 vertices[32] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
++                               17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32};
++  constexpr u16 indices[] = {0, 1, 0};
++  VertexManager manager;
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  u32 base_vertex = 0;
++  u32 base_index = 0;
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  const u32 vertex_id_before = VertexManagerTestPeer::VertexId(manager);
++  const u32 index_id_before = VertexManagerTestPeer::IndexId(manager);
++  const u32 geometry_offset_before = VertexManagerTestPeer::GeometryOffset(manager);
++  const u32 vertex_offset_before = VertexManagerTestPeer::VertexOffset(manager);
++  const u32 index_offset_before = VertexManagerTestPeer::IndexOffset(manager);
++  const u32 write_before =
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire);
++  const u32 upload_before = WebGPUCommandStreamTestPeer::UploadWrite(GetCommandStream());
++
++  WebGPUCommandStreamTestPeer::FailConsumer(GetCommandStream(), 0x564D4641u);
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  base_vertex = UINT32_MAX;
++  base_index = UINT32_MAX;
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  if (base_vertex != 0 || base_index != 0 ||
++      VertexManagerTestPeer::VertexId(manager) != vertex_id_before ||
++      VertexManagerTestPeer::IndexId(manager) != index_id_before ||
++      VertexManagerTestPeer::GeometryOffset(manager) != geometry_offset_before ||
++      VertexManagerTestPeer::VertexOffset(manager) != vertex_offset_before ||
++      VertexManagerTestPeer::IndexOffset(manager) != index_offset_before)
++    return FailVertexManagerSmoke(402, "failed publication changed VertexManager placement state");
++  if (s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != write_before ||
++      WebGPUCommandStreamTestPeer::UploadWrite(GetCommandStream()) != upload_before)
++    return FailVertexManagerSmoke(403, "failed publication advanced command or upload ring");
++  if (GetCommandStream().PushBeginPass(1, 0, 0, 0, 1, 0, 0))
++    return FailVertexManagerSmoke(404, "failed geometry publication did not reject owning pass");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryLifecycleSmoke()
++{
++  s_vertex_manager_geometry_smoke_error = "ok";
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(501, "refused to replace a live WebGPU command ring");
++  SetWebGpuGeometryPackEnabled(1);
++  constexpr u32 stride = 16;
++  constexpr u8 vertices[32] = {1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0,
++                               5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0};
++  constexpr u16 indices[] = {0, 1, 0};
++  VertexManager manager;
++  VertexManagerTestPeer::SeedPackedWrap(manager);
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  u32 base_vertex = UINT32_MAX;
++  u32 base_index = UINT32_MAX;
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  const u32 wrapped_id = VertexManagerTestPeer::VertexId(manager);
++  if (wrapped_id == 0 || wrapped_id == 91 || base_vertex != 0 || base_index != 16)
++    return FailVertexManagerSmoke(502, "packed exhaustion did not rotate before reuse");
++
++  InvalidateGeometryUploadPack();
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  const u32 invalidated_id = VertexManagerTestPeer::VertexId(manager);
++  if (invalidated_id == 0 || invalidated_id == wrapped_id || base_vertex != 0)
++    return FailVertexManagerSmoke(503, "epoch invalidation reused an old packed destination");
++
++  SetWebGpuGeometryPackEnabled(0);
++  VertexManagerTestPeer::SeedLegacyWrap(manager);
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  if (VertexManagerTestPeer::VertexId(manager) != 91 ||
++      VertexManagerTestPeer::IndexId(manager) != 92 || base_vertex != 0 || base_index != 0)
++    return FailVertexManagerSmoke(504, "legacy exhaustion did not wrap at aligned offsets");
++  return 0;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuVertexManagerGeometrySmokeError()
++{
++  return s_vertex_manager_geometry_smoke_error;
++}
++
+ }  // namespace WebGPU
+warning: in the working copy of 'C:\Users\DOUGLA~1\AppData\Local\Temp\wgpu-live-vm-before\WebGPUVertexManager.cpp', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vendor\dolphin\Source\Core\VideoBackends\WebGPU\WebGPUVertexManager.cpp', LF will be replaced by CRLF the next time Git touches it
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+index 0cb2ee3..f905f71 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+@@ -57,6 +57,8 @@ protected:
+                     u32* out_base_index) override;
+ 
+ private:
++  friend struct VertexManagerTestPeer;
++
+   void EnsureLegacyBuffers();
+ 
+   // Persistent GPU buffers (bridge ids; 0 until created). Large
+@@ -87,4 +89,11 @@ private:
+   u64 m_geometry_pack_epoch = 0;
+   bool m_geometry_pack_active = false;
+ };
++
++// Native wasm regression seams that exercise VertexManager::CommitBuffer
++// itself against an isolated ring. They are inert unless explicitly invoked.
++extern "C" int RunWebGpuVertexManagerGeometryParitySmoke(int indexed, int packed);
++extern "C" int RunWebGpuVertexManagerGeometryRollbackSmoke(int packed);
++extern "C" int RunWebGpuVertexManagerGeometryLifecycleSmoke();
++extern "C" const char* GetWebGpuVertexManagerGeometrySmokeError();
+ }  // namespace WebGPU
+warning: in the working copy of 'C:\Users\DOUGLA~1\AppData\Local\Temp\wgpu-live-vm-before\WebGPUVertexManager.h', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'vendor\dolphin\Source\Core\VideoBackends\WebGPU\WebGPUVertexManager.h', LF will be replaced by CRLF the next time Git touches it
+
