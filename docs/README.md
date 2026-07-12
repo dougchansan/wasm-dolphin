@@ -63,6 +63,9 @@
 - [WGPU draw-resource profile](perf-results/melee-wgpu-draw-profile-2026-07-12.md) —
   default-off TLS remediation, stability-gated overhead proof, visible smoke,
   and sampled draw-resource phase ranking.
+- [WGPU deep-diagnostic gate](perf-results/melee-wgpu-deep-diagnostic-gate-2026-07-12.md) —
+  reproducible header repair, balanced fixed-work screen, console-volume reduction,
+  rollback smoke, and visible GPU-completion evidence.
 - [WGPU idle FIFO-tail gate screen](perf-results/melee-wgpu-tail-gate-2026-07-12.md) —
   order-balanced activation evidence and rejection after state-proven no-op
   elision produced no fixed-work throughput gain.
