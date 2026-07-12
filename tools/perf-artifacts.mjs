@@ -1852,8 +1852,11 @@ export function evaluateWgpuTailGateEvidence({ requested, samples = [] } = {}) {
   const deltas = first && final ? Object.fromEntries(
     counters.map((name) => [name, final[name] - first[name]])
   ) : null;
-  if (final && final.payloadSamples <= 0) {
+  if (expectedEnabled && final && final.payloadSamples <= 0) {
     failures.push("WGPU tail gate payloadSamples must be positive");
+  }
+  if (!expectedEnabled && final && counters.some((name) => final[name] !== 0)) {
+    failures.push("disabled WGPU tail gate counters must remain zero");
   }
   if (expectedEnabled && final && final.bothCleanSamples <= 0) {
     failures.push("WGPU tail gate bothCleanSamples must be positive");
