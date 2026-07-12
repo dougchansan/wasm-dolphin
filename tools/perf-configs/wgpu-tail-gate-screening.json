@@ -3,7 +3,7 @@
   "blockCount": 2,
   "maxBlockCount": 2,
   "hypothesis": "Skipping sampled clean FIFO tail Flush/RefreshPeekCache work improves fixed-work hardware-WGPU throughput without changing emulated work.",
-  "primaryMetric": "metrics.fixedEmulatedWork.throughputGameSpeedPercent",
+  "primaryMetric": "fixedEmulatedWork.throughputGameSpeedPercent",
   "direction": "higher",
   "minimumEffectPercent": 1,
   "overheadGate": {

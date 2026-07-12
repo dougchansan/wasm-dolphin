@@ -1565,6 +1565,10 @@ test("tail-gate screening is a bounded null-drain A/B with semantic-work gates",
   assert.equal(config.mode, "screening");
   assert.equal(config.blockCount, 2);
   assert.equal(config.minimumEffectPercent, 1);
+  assert.equal(
+    config.primaryMetric,
+    "fixedEmulatedWork.throughputGameSpeedPercent"
+  );
   assert.deepEqual(tasklist.blocks.map((block) => block.order), [
     ["A", "B", "B", "A"],
     ["B", "A", "A", "B"],
