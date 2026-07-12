@@ -47,6 +47,8 @@
   record reduction, alignment repair, and audio-inconclusive balanced evidence.
 - [WGPU second-GPU availability](perf-results/melee-wgpu-second-gpu-2026-07-12.md) —
   forced-low-power adapter attempt and explicit single-GPU limitation.
+- [WGPU AudioWorklet screen](perf-results/melee-wgpu-audio-worklet-2026-07-12.md) —
+  SHA-verified headed A/B, underrun evidence, and default-off decision.
 - [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
   removed experiment, safety invariants, and next architecture.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
