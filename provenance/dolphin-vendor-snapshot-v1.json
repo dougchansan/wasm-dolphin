@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "623c2943d508493a7858516bb959d969ea01eab3",
-    "changedPathCount": 106,
+    "resultTree": "a3a4cc8994d490f69d6416a604da71b97759210b",
+    "changedPathCount": 107,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -155,9 +155,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "e411239d1774c945782e599ee48c375db65ee5c6",
-        "resultBlob": "3f1af48b01429259a47bc0e2ec0f309570b24009",
-        "size": 29603,
-        "sha256": "716a15d096ac6ad332fbb0ddad4c046c1411d83ba173852c7afb072302e4f68e"
+        "resultBlob": "487587b191f96d8d8ae54c8b91c3892665fe56ee",
+        "size": 29636,
+        "sha256": "f8087211404e2ef84838326a87891535ce6927fd5d7b5c78a25dd37fbb671207"
       },
       {
         "path": "Source/Core/Core/Core.cpp",
@@ -632,9 +632,9 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "a724559528070b0e308bff2e464aa14bfc5069e5",
-        "size": 85262,
-        "sha256": "05d557fab8c2e323d37464b5167cb9dee75a145dac88c8d7825d4cdaf81cdde8"
+        "resultBlob": "c86638118f14b4c1d6a612f8e3ebfdbc41e60a32",
+        "size": 85821,
+        "sha256": "f9d96163b4e1b867e8f412c0e090b2a10d5613710cc8d79861f3a9f6a22f0a14"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUGfx.h",
@@ -695,9 +695,9 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "29735b1ec1300c23b2151f250cb6f488e8de7d66",
-        "size": 36498,
-        "sha256": "aa8709768090ce1ae49114aadeb0e89dc25470c464314c3ac500abe2aae640ec"
+        "resultBlob": "19dadf4e44879f92655846cf482129c24d8561ef",
+        "size": 36601,
+        "sha256": "5fa75b5afcfaa802c62f1466f1f4b860bd653ccf10aaa063538baf879eacc887"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h",
@@ -740,9 +740,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "1dbf466f1c9f72a7498c0fd0711a297e16698e80",
-        "resultBlob": "3358214e8ef7e5523a52b100d28a8ea6ac15286e",
-        "size": 30214,
-        "sha256": "83ef6d0143ec846febd7c9537f146c6d3ab0c79151f85179da7782360761c0f2"
+        "resultBlob": "514be35358668c871f1fa0b7360b3a76fcf44fda",
+        "size": 30315,
+        "sha256": "0766806cef9f837e34e7e79f3b0bf54fd90fed4eb931fa863861b72db9769ab8"
       },
       {
         "path": "Source/Core/VideoCommon/DriverDetails.cpp",
@@ -767,9 +767,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "f183c9365514cc908bbc3641d55ff8db8c3acfe9",
-        "resultBlob": "142188966defedce3096de5353f920ad05d6596d",
-        "size": 25886,
-        "sha256": "f48f114a7fd7c72d394f662bd754c7a874219d6a68bb6c1261fd94b33624a842"
+        "resultBlob": "b44544f10225c8b6f670c0cf6a4095efa489b808",
+        "size": 26167,
+        "sha256": "5ecc0251aff884fbe699c03df128cdeaa67482babce9097f28cfdca0ca9819d3"
       },
       {
         "path": "Source/Core/VideoCommon/FramebufferManager.cpp",
@@ -938,9 +938,9 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "c84d50ebcee40115d6c03f00fad4899d10213f1e",
-        "size": 4985,
-        "sha256": "0a65f05770b2bd329e259bfe3ac01bd1cd03d84e55e127e5f3ae62fb417d1625"
+        "resultBlob": "dcb88b228a063bbe7d0d163d92acf0a71bfd154b",
+        "size": 5726,
+        "sha256": "527974fccb1c9e5076ca85e612c98d7a22e87e1746a4d8dd131fc78c8e5b66f9"
       },
       {
         "path": "Source/Core/VideoCommon/WasmWebGpuProducerProfile.h",
@@ -950,6 +950,15 @@
         "resultBlob": "e6a7e80cb9099a4fb4e8aa3f2ef2cf41430bbc2b",
         "size": 3459,
         "sha256": "92c80e01b00c24414d8f7252a625d37d01120a72c829a07987f708e4167e37b0"
+      },
+      {
+        "path": "Source/Core/VideoCommon/WasmWgpuDeepDiagnostics.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "efe3921a81c45bf9a5da7c390622b1aebfa5cc80",
+        "size": 455,
+        "sha256": "d685c3ffaf3b03a9cf35cabb1161897ef2d960f7fb45afeb8f61825b5218cf96"
       },
       {
         "path": "Source/Core/VideoCommon/WasmWgpuIdleFifoTailGate.h",
@@ -996,5 +1005,5 @@
       ]
     }
   ],
-  "contentSha256": "3a19ab8a37d71667ac33b8c4fccfa44eb26a216b1a5658c7ba2f07ab2c462631"
+  "contentSha256": "7c6e095441e87b96067f5d06422a7f4c59712713c1f703bdf06417e171689eb8"
 }

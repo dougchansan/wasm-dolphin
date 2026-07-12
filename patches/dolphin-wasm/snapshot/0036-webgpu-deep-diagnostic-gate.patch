@@ -1,0 +1,203 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index 3f1af48b01..487587b191 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuDeepDiagnosticsEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index a724559528..c86638118f 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -33,6 +33,7 @@
+ #include "VideoCommon/VideoConfig.h"
+ #include "VideoCommon/WasmWebGpuDrawProfile.h"
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
++#include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+ #include <algorithm>
+@@ -132,6 +133,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuDrawProfileEnabled(int enabled)
+   DolphinWeb::WebGpuDrawProfile::SetEnabled(enabled != 0);
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWgpuDeepDiagnosticsEnabled(int enabled)
++{
++  DolphinWeb::WgpuDeepDiagnostics::SetEnabled(enabled != 0);
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWgpuIdleFifoTailElisionEnabled(int enabled)
+ {
+   DolphinWeb::WgpuIdleFifoTailGate::SetEnabled(enabled != 0);
+@@ -545,7 +551,8 @@ WebGPUGfx::CreateShaderFromSource(ShaderStage stage, std::string_view source,
+     ++m_shader_fail;
+ 
+   const u32 total = m_shader_ok + m_shader_fail;
+-  if (total <= 64 || (total % 256) == 0)
++  if ((DolphinWeb::WgpuDeepDiagnostics::IsEnabled() || m_shader_fail != 0) &&
++      (total <= 64 || (total % 256) == 0))
+   {
+     EM_ASM(
+         {
+@@ -852,7 +859,8 @@ WebGPUGfx::CreatePipeline(const AbstractPipelineConfig& config,
+     else
+       ++s_pcfg_skip;
+     const u32 tot = s_pcfg_ok + s_pcfg_skip;
+-    if (tot <= 48 || (tot % 256) == 0)
++    if ((DolphinWeb::WgpuDeepDiagnostics::IsEnabled() || s_pcfg_skip != 0) &&
++        (tot <= 48 || (tot % 256) == 0))
+     {
+       EM_ASM(
+           {
+@@ -1377,6 +1385,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+ 
+   auto& vsm = system.GetVertexShaderManager();
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     // DIAG one-shot: is the VS UBO actually populated? Dump dirty +
+     // posnormalmatrix row0 + projection rows + the live viewport. A
+@@ -1524,6 +1533,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   // + ps_changed/dirty + m_ps_off so a dark-menu frame shows whether
+   // Dolphin computed them ≈0 (state/shadergen) or they're non-zero
+   // here (⇒ ring-slice/binding/layout delivery defect).
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     static u32 s_ps = 0;
+     const u32 n = s_ps++;
+@@ -1634,7 +1644,7 @@ bool WebGPUGfx::PrepareDrawResources()
+     // Pair with [s28ac-uu] (same utilOff value ⇒ the copy reads the
+     // bytes TextureCacheBase wrote). fbColor/vp identify the 640×480
+     // EFB-copy target.
+-    if (m_util_uniform_mode)
++    if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled() && m_util_uniform_mode)
+     {
+       static u32 s_pd = 0;
+       const u32 n = s_pd++;
+@@ -2007,6 +2017,7 @@ void WebGPUGfx::UploadUtilityUniforms(const void* data, u32 size)
+   // (vec3<u32> @byte16 = §28z member_2 COLSCALE), gamma_rcp@28,
+   // clamp@32/36, pixel_height@40. member_2[1] (@byte20) must be ≈64
+   // for a faithful copy (§28z out = efbTexel·255·member_2[1]/64).
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     static u32 s_uu = 0;
+     const u32 n = s_uu++;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index 29735b1ec1..19dadf4e44 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include "VideoCommon/AbstractGfx.h"
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
++#include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ 
+ namespace WebGPU
+ {
+@@ -348,7 +349,8 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+   // vertex's leading attribute, usually position). All-zero ⇒
+   // vertices collapse ⇒ black EFB.
+   static bool s_diag_v = false;
+-  if (!s_diag_v && vbytes != 0 && m_base_buffer_pointer)
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled() && !s_diag_v && vbytes != 0 &&
++      m_base_buffer_pointer)
+   {
+     s_diag_v = true;
+     EM_ASM(
+diff --git a/Source/Core/VideoCommon/CommandProcessor.cpp b/Source/Core/VideoCommon/CommandProcessor.cpp
+index 3358214e8e..514be35358 100644
+--- a/Source/Core/VideoCommon/CommandProcessor.cpp
++++ b/Source/Core/VideoCommon/CommandProcessor.cpp
+@@ -19,6 +19,7 @@
+ #include "Core/PowerPC/PowerPC.h"
+ #include "Core/System.h"
+ #include "VideoCommon/Fifo.h"
++#include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+@@ -347,6 +348,7 @@ void CommandProcessorManager::GatherPipeBursted()
+ #ifdef __EMSCRIPTEN__
+   // §27 diag: is the CPU bursting GP data post-load, and is the FIFO
+   // linked (else CPReadWriteDistance never grows → GPU idle → black)?
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     static std::atomic<u32> s_hb{0};
+     const u32 n = ++s_hb;
+diff --git a/Source/Core/VideoCommon/Fifo.cpp b/Source/Core/VideoCommon/Fifo.cpp
+index 142188966d..b44544f102 100644
+--- a/Source/Core/VideoCommon/Fifo.cpp
++++ b/Source/Core/VideoCommon/Fifo.cpp
+@@ -32,6 +32,7 @@
+ #include "VideoCommon/VertexManagerBase.h"
+ #include "VideoCommon/VideoBackendBase.h"
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
++#include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+ #ifdef __EMSCRIPTEN__
+@@ -311,6 +312,7 @@ void FifoManager::RunGpuLoop()
+ #ifdef __EMSCRIPTEN__
+         // §27 diag: is the GPU mainloop body running post-load, and
+         // what FIFO/run state does it see? Rate-limited heartbeat.
++        if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+         {
+           static std::atomic<u32> s_hb{0};
+           const u32 n = ++s_hb;
+@@ -356,6 +358,7 @@ void FifoManager::RunGpuLoop()
+ #ifdef __EMSCRIPTEN__
+           // §27 diag: which of the 4 drain gates blocks the GPU loop
+           // post-load (CPU is filling the FIFO but GPU never drains)?
++          if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+           {
+             static std::atomic<u32> s_hb{0};
+             const u32 n = ++s_hb;
+@@ -418,6 +421,7 @@ void FifoManager::RunGpuLoop()
+             // frozen ⇒ the producer (WebGPUGfx) stops recording
+             // post-load (backend re-init needed). If it never
+             // increments ⇒ the GPU genuinely never drains (FIFO sync).
++            if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+             {
+               static std::atomic<u32> s_dec{0};
+               const u32 d = ++s_dec;
+@@ -536,6 +540,7 @@ void FifoManager::RunGpu()
+ #ifdef __EMSCRIPTEN__
+   // §27 diag: is the CPU still issuing GP bursts post-load (i.e. is
+   // Wakeup being driven)? Rate-limited heartbeat.
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     static std::atomic<u32> s_hb{0};
+     const u32 n = ++s_hb;
+diff --git a/Source/Core/VideoCommon/WasmWgpuDeepDiagnostics.h b/Source/Core/VideoCommon/WasmWgpuDeepDiagnostics.h
+new file mode 100644
+index 0000000000..efe3921a81
+--- /dev/null
++++ b/Source/Core/VideoCommon/WasmWgpuDeepDiagnostics.h
+@@ -0,0 +1,21 @@
++// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <atomic>
++
++namespace DolphinWeb::WgpuDeepDiagnostics
++{
++inline std::atomic<bool> s_enabled{false};
++
++inline void SetEnabled(bool enabled)
++{
++  s_enabled.store(enabled, std::memory_order_relaxed);
++}
++
++inline bool IsEnabled()
++{
++  return s_enabled.load(std::memory_order_relaxed);
++}
++}  // namespace DolphinWeb::WgpuDeepDiagnostics

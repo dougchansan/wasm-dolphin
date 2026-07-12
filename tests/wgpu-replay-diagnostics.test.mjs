@@ -586,6 +586,11 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
+  assert.match(worker, /typeof module\._SetWgpuDeepDiagnosticsEnabled === "function"/);
+  assert.match(
+    worker,
+    /setWgpuDeepDiagnosticsEnabled\?\.\(wgpuDeepReplayDiagnostics \? 1 : 0\)/
+  );
   assert.match(worker, /wgpuDetachedPresenter: payload\.wgpuDetachedPresenter/);
   assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
   assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);

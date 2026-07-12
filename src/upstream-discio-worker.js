@@ -1450,6 +1450,7 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
+  api.setWgpuDeepDiagnosticsEnabled?.(wgpuDeepReplayDiagnostics ? 1 : 0);
   wgpuProducerProfileAvailable = Boolean(
     api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
   );
@@ -1606,6 +1607,12 @@ function bindApi(module) {
       typeof module._SetWebGpuDrawProfileEnabled === "function"
         ? (enabled) => ccall(
             "SetWebGpuDrawProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWgpuDeepDiagnosticsEnabled:
+      typeof module._SetWgpuDeepDiagnosticsEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWgpuDeepDiagnosticsEnabled", null, ["number"], [enabled ? 1 : 0]
           )
         : null,
     setWgpuIdleFifoTailElisionEnabled:

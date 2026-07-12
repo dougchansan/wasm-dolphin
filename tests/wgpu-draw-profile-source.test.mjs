@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -41,6 +42,37 @@ test("draw profile source preserves separate default-off sampled contract", asyn
   assert.match(worker, /wgpudrawprofile=1 requires video=wgpu/);
   for (const tag of ["wgdrd", "wgdrc", "wgdrs", "wgdrt", "wgdrm"])
     assert.match(gfx, new RegExp(`append_draw_phase_values\\("${tag}"`));
+});
+
+test("locked vendor snapshot contains the complete draw profiler header", async () => {
+  const sourceLock = JSON.parse(await readFile(
+    new URL("../provenance/dolphin-source.lock.json", import.meta.url),
+    "utf8"
+  ));
+  const snapshot = JSON.parse(await readFile(
+    new URL("../provenance/dolphin-vendor-snapshot-v1.json", import.meta.url),
+    "utf8"
+  ));
+  const record = snapshot.root.records.find(
+    ({ path }) => path === "Source/Core/VideoCommon/WasmWebGpuDrawProfile.h"
+  );
+  assert.ok(record, "draw profiler header must be represented in the locked vendor snapshot");
+  assert.ok(
+    sourceLock.patches.some(
+      ({ path }) => path ===
+        "patches/dolphin-wasm/snapshot/0037-webgpu-draw-profile-header-completion.patch"
+    ),
+    "the locked patch series must include the header-completion repair"
+  );
+
+  const header = (await readFile(
+    new URL("../vendor/dolphin/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h", import.meta.url),
+    "utf8"
+  )).replaceAll("\r\n", "\n");
+  const bytes = Buffer.from(header);
+  assert.equal(bytes.length, record.size);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), record.sha256);
+  assert.match(header, /};\n}  \/\/ namespace DolphinWeb::WebGpuDrawProfile\n$/);
 });
 
 test("native draw profiler cadence harness compiles and runs", {

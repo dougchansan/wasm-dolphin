@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 424590,
-      "sha256": "eb66d7b59d6fb013e23c750e4e6170024d2ee20e2a25ebb7027e98611e65590d"
+      "size": 424904,
+      "sha256": "380ff1fb8af4fbd4efe6c1d67c589dcedf0ddf4c6606ea28df87ea97df62af9d"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -229,6 +229,7 @@
     "_SetWebGpuGeometryRangeEnabled",
     "_SetWebGpuDrawProfileEnabled",
     "_SetWebGpuProducerProfileEnabled",
+    "_SetWgpuDeepDiagnosticsEnabled",
     "_SetWgpuIdleFifoTailElisionEnabled"
   ],
   "moduleExports": [
