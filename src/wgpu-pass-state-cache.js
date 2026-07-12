@@ -6,6 +6,7 @@ const NO_OFFSETS = Object.freeze([]);
 
 export const WGPU_PRODUCER_PROFILE_SCHEMA =
   "wasm-dolphin.wgpu-producer-profile.v1";
+export const WGPU_DRAW_PROFILE_SCHEMA = "wasm-dolphin.wgpu-draw-profile.v1";
 export const WGPU_TAIL_GATE_SCHEMA = "wasm-dolphin.wgpu-tail-gate.v1";
 // Phases are inclusive and may nest (for example, geometry_commit contains
 // upload_copy). Compare each phase independently; never sum phase estimates.
@@ -23,6 +24,16 @@ export const WGPU_PRODUCER_PROFILE_PHASE_ORDER = Object.freeze([
   "fifo_tail_flush",
   "reserved",
 ]);
+export const WGPU_DRAW_PROFILE_PHASE_ORDER = Object.freeze([
+  "pipeline_uid_build",
+  "pipeline_cache_lookup",
+  "draw_resource_init",
+  "uniform_prepare",
+  "texture_sampler_resolve",
+  "bind_resource_record",
+  "command_stage",
+]);
+export const WGPU_DRAW_PROFILE_PERIODS = Object.freeze([64, 64, 256, 64, 64, 64, 256]);
 
 export function parseWgpuProducerProfileStats(text = "") {
   const normalized = String(text || "");
@@ -52,6 +63,40 @@ export function parseWgpuProducerProfileStats(text = "") {
     epoch,
     phaseCount: Number(header[4]),
     phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods,
+    calls,
+    samples,
+    sampleTotalNs,
+    sampleMaxNs,
+    estimatedTotalNs,
+  };
+}
+
+export function parseWgpuDrawProfileStats(text = "") {
+  const normalized = String(text || "");
+  const header = /\bwgdraw:(\d+),(\d+),(\d+),(\d+)(?=\s|$)/i.exec(normalized);
+  const epoch = Number(header?.[3]);
+  if (!header || Number(header[1]) !== 1 || !["0", "1"].includes(header[2]) ||
+      !Number.isSafeInteger(epoch) ||
+      Number(header[4]) !== WGPU_DRAW_PROFILE_PHASE_ORDER.length) {
+    return null;
+  }
+  const count = WGPU_DRAW_PROFILE_PHASE_ORDER.length;
+  const periods = profileVector(normalized, "wgdrd", count);
+  const calls = profileVector(normalized, "wgdrc", count);
+  const samples = profileVector(normalized, "wgdrs", count);
+  const sampleTotalNs = profileVector(normalized, "wgdrt", count);
+  const sampleMaxNs = profileVector(normalized, "wgdrm", count);
+  if (![periods, calls, samples, sampleTotalNs, sampleMaxNs].every(Boolean)) return null;
+  const estimatedTotalNs = sampleTotalNs.map((value, index) => value * periods[index]);
+  if (estimatedTotalNs.some((value) => !Number.isSafeInteger(value))) return null;
+  return {
+    schema: WGPU_DRAW_PROFILE_SCHEMA,
+    version: 1,
+    enabled: header[2] === "1",
+    epoch,
+    phaseCount: Number(header[4]),
+    phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
     periods,
     calls,
     samples,
@@ -153,8 +198,7 @@ function numericValues(match, start, count) {
   );
 }
 
-function profileVector(text, label) {
-  const count = WGPU_PRODUCER_PROFILE_PHASE_ORDER.length;
+function profileVector(text, label, count = WGPU_PRODUCER_PROFILE_PHASE_ORDER.length) {
   const match = new RegExp(`\\b${label}:([0-9]+(?:,[0-9]+){${count - 1}})(?=\\s|$)`, "i")
     .exec(text);
   if (!match) return null;

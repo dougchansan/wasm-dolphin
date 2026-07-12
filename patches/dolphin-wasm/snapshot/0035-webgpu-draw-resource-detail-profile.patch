@@ -1,0 +1,476 @@
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index b5c7743..3f1af48 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuProducerProfileEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 7ef59b1..e609476 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -13,6 +13,7 @@
+ #include <emscripten/threading.h>
+ 
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
++#include "VideoCommon/WasmWebGpuDrawProfile.h"
+ 
+ namespace WebGPU
+ {
+@@ -346,6 +347,8 @@ bool WebGPUCommandStream::StagePassRecord(const CmdRecord& rec)
+ {
+   if (!m_pass_staging || m_pass_poisoned)
+     return false;
++  DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::CommandStage);
+   m_pass_records.push_back(rec);
+   return true;
+ }
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index c7e798c..a724559 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -31,6 +31,7 @@
+ #include "VideoCommon/TextureConfig.h"
+ #include "VideoCommon/VertexShaderGen.h"
+ #include "VideoCommon/VideoConfig.h"
++#include "VideoCommon/WasmWebGpuDrawProfile.h"
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+@@ -126,6 +127,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuProducerProfileEnabled(int enabled
+   DolphinWeb::WebGpuProducerProfile::SetEnabled(enabled != 0);
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuDrawProfileEnabled(int enabled)
++{
++  DolphinWeb::WebGpuDrawProfile::SetEnabled(enabled != 0);
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWgpuIdleFifoTailElisionEnabled(int enabled)
+ {
+   DolphinWeb::WgpuIdleFifoTailGate::SetEnabled(enabled != 0);
+@@ -302,6 +308,37 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+     return DolphinWeb::WebGpuProducerProfile::GetCounters(phase).sampled_max_ns.load(
+         std::memory_order_relaxed);
+   });
++  out << " wgdraw:1," << (DolphinWeb::WebGpuDrawProfile::IsEnabled() ? 1 : 0) << ","
++      << DolphinWeb::WebGpuDrawProfile::GetEpoch() << ","
++      << DolphinWeb::WebGpuDrawProfile::PHASE_COUNT;
++  const auto append_draw_phase_values = [&out](const char* name, const auto& value) {
++    out << " " << name << ":";
++    for (std::size_t index = 0; index < DolphinWeb::WebGpuDrawProfile::PHASE_COUNT; ++index)
++    {
++      if (index != 0)
++        out << ",";
++      out << value(static_cast<DolphinWeb::WebGpuDrawProfile::Phase>(index));
++    }
++  };
++  append_draw_phase_values("wgdrd", [](auto phase) {
++    return DolphinWeb::WebGpuDrawProfile::GetSamplePeriod(phase);
++  });
++  append_draw_phase_values("wgdrc", [](auto phase) {
++    return DolphinWeb::WebGpuDrawProfile::GetCounters(phase).calls.load(
++        std::memory_order_relaxed);
++  });
++  append_draw_phase_values("wgdrs", [](auto phase) {
++    return DolphinWeb::WebGpuDrawProfile::GetCounters(phase).samples.load(
++        std::memory_order_relaxed);
++  });
++  append_draw_phase_values("wgdrt", [](auto phase) {
++    return DolphinWeb::WebGpuDrawProfile::GetCounters(phase).sampled_total_ns.load(
++        std::memory_order_relaxed);
++  });
++  append_draw_phase_values("wgdrm", [](auto phase) {
++    return DolphinWeb::WebGpuDrawProfile::GetCounters(phase).sampled_max_ns.load(
++        std::memory_order_relaxed);
++  });
+   const auto& tail = DolphinWeb::WgpuIdleFifoTailGate::GetCounters();
+   out << " wgtail:1," << (DolphinWeb::WgpuIdleFifoTailGate::IsEnabled() ? 1 : 0) << ","
+       << DolphinWeb::WgpuIdleFifoTailGate::GetEpoch() << ","
+@@ -1226,28 +1263,33 @@ bool WebGPUGfx::PrepareDrawResources()
+   DolphinWeb::WebGpuProducerProfile::ScopedSample producer_profile(
+       DolphinWeb::WebGpuProducerProfile::Phase::DrawResources);
+   auto& system = Core::System::GetInstance();
++  DolphinWeb::WebGpuDrawProfile::ScopedSample uniform_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::UniformPrepare);
+   const bool ubo_cache_enabled = RefreshUboCacheState();
+   const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
+       s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
+   u32 ubo_change_mask = 0;
+   std::array<u32, 3> ubo_payload_sizes{};
++  uniform_profile.Pause();
+ 
+   // §16 per-draw uniform ring (created once). One big buffer; each
+   // dirty GX constant set bump-allocates a fresh 256-aligned slice so
+   // a later draw's upload can't overwrite this draw's constants.
+-  if (m_ubo_ring == 0)
+-    m_ubo_ring = m_cmd_stream.PushCreateBuffer(kUboRingSize, kUsageUniform);
+-  if (m_ssbo_bbox == 0)
+-    m_ssbo_bbox = m_cmd_stream.PushCreateBuffer(16u, kUsageStorage);
+-  if (m_dummy_tex == 0)
+   {
+-    // 1x1 RGBA8 (fmt code 0), usage TEXTURE_BINDING|COPY_DST|... so the
+-    // fixed group-1 layout is always satisfiable for unbound slots.
+-    m_dummy_tex = m_cmd_stream.PushCreateTexture(1, 1, 0, 1u | 2u | 4u | 0x10u);
++    DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++        DolphinWeb::WebGpuDrawProfile::Phase::DrawResourceInit);
++    if (m_ubo_ring == 0)
++      m_ubo_ring = m_cmd_stream.PushCreateBuffer(kUboRingSize, kUsageUniform);
++    if (m_ssbo_bbox == 0)
++      m_ssbo_bbox = m_cmd_stream.PushCreateBuffer(16u, kUsageStorage);
++    if (m_dummy_tex == 0)
++      m_dummy_tex = m_cmd_stream.PushCreateTexture(1, 1, 0, 1u | 2u | 4u | 0x10u);
+   }
+   if (m_ubo_ring == 0 || m_ssbo_bbox == 0 || m_dummy_tex == 0)
+     return false;
+ 
++  uniform_profile.Resume();
++
+   // Dense packets are deliberately incompatible with the independent-class
+   // UBO cache. Plan all three classes before touching renderer-visible state,
+   // reserve one monotonically owned destination interval, and publish every
+@@ -1543,10 +1585,9 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+   // Measurement only: no packet is emitted and all existing uploads remain unchanged.
+   RecordUboPacketOpportunity(ubo_change_mask, ubo_payload_sizes);
++  uniform_profile.Pause();
+ 
+   // One shared sampler (the Day-30 split uses a single samp_ss).
+-  if (m_sampler_id == 0)
+-    m_sampler_id = m_cmd_stream.PushCreateSampler(/*linear+repeat=*/0);
+ 
+   // Bind group 0 — the uniform ring at all 4 UBO bindings (b0 PS /
+   // utility PSBlock, b1 VS, b2 custom→reuse PS, b3 GS). Built ONCE: the
+@@ -1554,6 +1595,9 @@ bool WebGPUGfx::PrepareDrawResources()
+   // (carried on SET_BIND_GROUP), not in the bind group, so this one
+   // bind group serves every draw. Entry size = each class's block size
+   // (the dynamic-offset window WebGPU validates).
++  {
++  DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::BindResourceRecord);
+   if (m_bg0_id == 0 && m_ubo_ring != 0)
+   {
+     DolphinWeb::WebGpuProducerProfile::ScopedSample bind_group_profile(
+@@ -1620,17 +1664,31 @@ bool WebGPUGfx::PrepareDrawResources()
+   // ("writable usage and another usage in the same synchronization
+   // scope") — substitute the dummy texture for it; a genuine EFB
+   // copy renders into a different target so its id won't match.
++  }
++
+   auto resolve_tex = [&](u32 i) -> u32 {
+     const u32 t = m_tex_id[i];
+     if (t == 0 || t == m_fb_color_id || t == m_fb_depth_id)
+       return m_dummy_tex;
+     return t;
+   };
+-  u32 sig = m_sampler_id * 2654435761u + m_fb_color_id * 40503u + m_fb_depth_id;
+-  for (u32 i = 0; i < 8; i++)
+-    sig = sig * 16777619u + resolve_tex(i);
+-  Bg1Slot& slot = m_bg1_cache[sig % kBg1CacheSize];
+-  u32 bg1_id = (slot.id != 0 && slot.sig == sig) ? slot.id : 0;
++  u32 sig = 0;
++  Bg1Slot* slot = nullptr;
++  u32 bg1_id = 0;
++  {
++    DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++        DolphinWeb::WebGpuDrawProfile::Phase::TextureSamplerResolve);
++    if (m_sampler_id == 0)
++      m_sampler_id = m_cmd_stream.PushCreateSampler(/*linear+repeat=*/0);
++    sig = m_sampler_id * 2654435761u + m_fb_color_id * 40503u + m_fb_depth_id;
++    for (u32 i = 0; i < 8; i++)
++      sig = sig * 16777619u + resolve_tex(i);
++    slot = &m_bg1_cache[sig % kBg1CacheSize];
++    bg1_id = (slot->id != 0 && slot->sig == sig) ? slot->id : 0;
++  }
++  {
++  DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::BindResourceRecord);
+   if (bg1_id == 0)
+   {
+     DolphinWeb::WebGpuProducerProfile::ScopedSample bind_group_profile(
+@@ -1655,15 +1713,19 @@ bool WebGPUGfx::PrepareDrawResources()
+     const u32 id = m_cmd_stream.PushCreateBindGroup(b.data(), b.size(), 1);
+     if (id)
+     {
+-      slot.id = id;  // evicts any colliding entry (harmless rebuild)
+-      slot.sig = sig;
++      slot->id = id;  // evicts any colliding entry (harmless rebuild)
++      slot->sig = sig;
+       bg1_id = id;
+     }
+   }
+   if (bg1_id == 0 || !SetRecordedBindGroup(1, bg1_id))
+     return false;
++  }
+ 
+   // Bind group 2 — bbox SSBO (b0). Fixed ⇒ build once, reuse.
++  {
++  DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::BindResourceRecord);
+   if (m_bg2_id == 0)
+   {
+     DolphinWeb::WebGpuProducerProfile::ScopedSample bind_group_profile(
+@@ -1681,6 +1743,7 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+   if (m_bg2_id == 0 || !SetRecordedBindGroup(2, m_bg2_id))
+     return false;
++  }
+   return true;
+ }
+ 
+diff --git a/Source/Core/VideoCommon/ShaderCache.cpp b/Source/Core/VideoCommon/ShaderCache.cpp
+index 2627656..d54946b 100644
+--- a/Source/Core/VideoCommon/ShaderCache.cpp
++++ b/Source/Core/VideoCommon/ShaderCache.cpp
+@@ -24,6 +24,7 @@
+ #include "VideoCommon/VertexManagerBase.h"
+ #include "VideoCommon/VideoCommon.h"
+ #include "VideoCommon/VideoConfig.h"
++#include "VideoCommon/WasmWebGpuDrawProfile.h"
+ 
+ #include <imgui.h>
+ 
+@@ -122,7 +123,12 @@ void ShaderCache::Shutdown()
+ 
+ const AbstractPipeline* ShaderCache::GetPipelineForUid(const GXPipelineUid& uid)
+ {
+-  auto it = m_gx_pipeline_cache.find(uid);
++  auto it = m_gx_pipeline_cache.end();
++  {
++    DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++        DolphinWeb::WebGpuDrawProfile::Phase::PipelineCacheLookup);
++    it = m_gx_pipeline_cache.find(uid);
++  }
+   if (it != m_gx_pipeline_cache.end() && !it->second.second)
+     return it->second.first.get();
+ 
+@@ -138,7 +144,12 @@ const AbstractPipeline* ShaderCache::GetPipelineForUid(const GXPipelineUid& uid)
+ 
+ std::optional<const AbstractPipeline*> ShaderCache::GetPipelineForUidAsync(const GXPipelineUid& uid)
+ {
+-  auto it = m_gx_pipeline_cache.find(uid);
++  auto it = m_gx_pipeline_cache.end();
++  {
++    DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++        DolphinWeb::WebGpuDrawProfile::Phase::PipelineCacheLookup);
++    it = m_gx_pipeline_cache.find(uid);
++  }
+   if (it != m_gx_pipeline_cache.end())
+   {
+     // .second is the pending flag, i.e. compiling in the background.
+@@ -155,7 +166,12 @@ std::optional<const AbstractPipeline*> ShaderCache::GetPipelineForUidAsync(const
+ 
+ const AbstractPipeline* ShaderCache::GetUberPipelineForUid(const GXUberPipelineUid& uid)
+ {
+-  auto it = m_gx_uber_pipeline_cache.find(uid);
++  auto it = m_gx_uber_pipeline_cache.end();
++  {
++    DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++        DolphinWeb::WebGpuDrawProfile::Phase::PipelineCacheLookup);
++    it = m_gx_uber_pipeline_cache.find(uid);
++  }
+   if (it != m_gx_uber_pipeline_cache.end() && !it->second.second)
+     return it->second.first.get();
+ 
+diff --git a/Source/Core/VideoCommon/VertexManagerBase.cpp b/Source/Core/VideoCommon/VertexManagerBase.cpp
+index 2bc6d58..bc9eceb 100644
+--- a/Source/Core/VideoCommon/VertexManagerBase.cpp
++++ b/Source/Core/VideoCommon/VertexManagerBase.cpp
+@@ -41,6 +41,7 @@
+ #include "VideoCommon/VideoBackendBase.h"
+ #include "VideoCommon/VideoCommon.h"
+ #include "VideoCommon/VideoConfig.h"
++#include "VideoCommon/WasmWebGpuDrawProfile.h"
+ #include "VideoCommon/XFMemory.h"
+ #include "VideoCommon/XFStateManager.h"
+ 
+@@ -797,6 +798,8 @@ void VertexManagerBase::CalculateNormals(NativeVertexFormat* format)
+ 
+ void VertexManagerBase::UpdatePipelineConfig()
+ {
++  DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
++      DolphinWeb::WebGpuDrawProfile::Phase::PipelineUidBuild);
+   NativeVertexFormat* vertex_format = VertexLoaderManager::GetCurrentVertexFormat();
+   if (vertex_format != m_current_pipeline_config.vertex_format)
+   {
+diff --git a/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h b/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h
+new file mode 100644
+index 0000000..da7c0f6
+--- /dev/null
++++ b/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h
+@@ -0,0 +1,168 @@
++// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <cstddef>
++#include <cstdint>
++
++namespace DolphinWeb::WebGpuDrawProfile
++{
++// These scopes are intentionally independent. Some phases are nested in broader
++// renderer work, so their estimated totals must not be summed.
++enum class Phase : std::size_t
++{
++  PipelineUidBuild = 0,
++  PipelineCacheLookup,
++  DrawResourceInit,
++  UniformPrepare,
++  TextureSamplerResolve,
++  BindResourceRecord,
++  CommandStage,
++  Count,
++};
++
++constexpr std::size_t PHASE_COUNT = static_cast<std::size_t>(Phase::Count);
++constexpr std::array<std::uint32_t, PHASE_COUNT> SAMPLE_PERIODS = {
++    64, 64, 256, 64, 64, 64, 256,
++};
++constexpr std::array<std::uint32_t, PHASE_COUNT> SAMPLE_STRIDES = {
++    17, 29, 37, 43, 53, 59, 61,
++};
++constexpr std::array<std::uint32_t, PHASE_COUNT> SAMPLE_SEEDS = {
++    3, 7, 11, 13, 19, 23, 31,
++};
++constexpr bool ValidSampleConfiguration()
++{
++  for (std::size_t index = 0; index < PHASE_COUNT; ++index)
++  {
++    const std::uint32_t period = SAMPLE_PERIODS[index];
++    if (period == 0 || (period & (period - 1)) != 0 || (SAMPLE_STRIDES[index] & 1) == 0)
++      return false;
++  }
++  return true;
++}
++static_assert(ValidSampleConfiguration(),
++              "draw profile periods must be powers of two and strides must be odd");
++
++struct PhaseCounters
++{
++  std::atomic<std::uint64_t> calls{0};
++  std::atomic<std::uint64_t> samples{0};
++  std::atomic<std::uint64_t> sampled_total_ns{0};
++  std::atomic<std::uint64_t> sampled_max_ns{0};
++};
++
++inline std::atomic<bool> s_enabled{false};
++inline std::atomic<std::uint64_t> s_epoch{0};
++inline std::array<PhaseCounters, PHASE_COUNT> s_counters{};
++
++inline void SetEnabled(bool enabled)
++{
++  const bool previous = s_enabled.exchange(enabled, std::memory_order_acq_rel);
++  if (previous != enabled)
++    s_epoch.fetch_add(1, std::memory_order_relaxed);
++}
++
++inline bool IsEnabled()
++{
++  return s_enabled.load(std::memory_order_relaxed);
++}
++
++inline std::uint64_t GetEpoch()
++{
++  return s_epoch.load(std::memory_order_relaxed);
++}
++
++inline const PhaseCounters& GetCounters(Phase phase)
++{
++  return s_counters[static_cast<std::size_t>(phase)];
++}
++
++inline std::uint32_t GetSamplePeriod(Phase phase)
++{
++  return SAMPLE_PERIODS[static_cast<std::size_t>(phase)];
++}
++
++inline bool ShouldSample(Phase phase, std::uint64_t call)
++{
++  const std::size_t index = static_cast<std::size_t>(phase);
++  const std::uint64_t period = SAMPLE_PERIODS[index];
++  const std::uint64_t mask = period - 1;
++  const std::uint64_t block = call / period;
++  const std::uint64_t slot = call & mask;
++  const std::uint64_t target =
++      (block * SAMPLE_STRIDES[index] + SAMPLE_SEEDS[index]) & mask;
++  return slot == target;
++}
++
++class ScopedSample final
++{
++public:
++  explicit ScopedSample(Phase phase) : m_phase(phase)
++  {
++    if (!IsEnabled())
++      return;
++
++    PhaseCounters& counters = s_counters[static_cast<std::size_t>(phase)];
++    const std::uint64_t call = counters.calls.fetch_add(1, std::memory_order_relaxed);
++    if (!ShouldSample(phase, call))
++      return;
++
++    m_sampled = true;
++    m_active = true;
++    m_start = Clock::now();
++  }
++
++  ~ScopedSample()
++  {
++    if (!m_sampled)
++      return;
++    Pause();
++    const std::uint64_t duration_ns = m_elapsed_ns;
++    PhaseCounters& counters = s_counters[static_cast<std::size_t>(m_phase)];
++    counters.samples.fetch_add(1, std::memory_order_relaxed);
++    counters.sampled_total_ns.fetch_add(duration_ns, std::memory_order_relaxed);
++
++    std::uint64_t previous_max = counters.sampled_max_ns.load(std::memory_order_relaxed);
++    while (previous_max < duration_ns &&
++           !counters.sampled_max_ns.compare_exchange_weak(previous_max, duration_ns,
++                                                          std::memory_order_relaxed))
++    {
++    }
++  }
++
++  ScopedSample(const ScopedSample&) = delete;
++  ScopedSample& operator=(const ScopedSample&) = delete;
++
++  void Pause()
++  {
++    if (!m_sampled || !m_active)
++      return;
++    const auto duration =
++        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - m_start).count();
++    m_elapsed_ns += static_cast<std::uint64_t>(duration);
++    m_active = false;
++  }
++
++  void Resume()
++  {
++    if (!m_sampled || m_active)
++      return;
++    m_start = Clock::now();
++    m_active = true;
++  }
++
++private:
++  using Clock = std::chrono::steady_clock;
++
++  Phase m_phase;
++  Clock::time_point m_start{};
++  std::uint64_t m_elapsed_ns = 0;
++  bool m_sampled = false;
++  bool m_active = false;
++};
++}  // namespace DolphinWeb::WebGpuDrawProfile

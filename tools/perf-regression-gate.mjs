@@ -28,6 +28,7 @@ import {
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuDrawProfileEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
@@ -43,6 +44,7 @@ import {
   parsePostLoadInputScript,
   parseProfileMetrics,
   parseWgpuProducerProfileStats,
+  parseWgpuDrawProfileStats,
   recordsToCsv,
   resolveCoreArtifactPath,
   selectedCoreServedPaths,
@@ -577,6 +579,7 @@ async function runScenario(scenario, context) {
         ...sample,
         ...parseProfileMetrics(sample.helper, sample.profile),
         ...(parseWgpuProducerProfileStats(sample.helper) ?? {}),
+        ...(parseWgpuDrawProfileStats(sample.helper) ?? {}),
         ...flattenCausalTelemetry(sample.causalTelemetry),
         ...flattenWgpuDirtyRangeProjection(
           sample.causalTelemetry?.webgpu?.dirtyRangeProjection
@@ -785,6 +788,13 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...wgpuProducerProfile.failures);
+  const wgpuDrawProfile = evaluateWgpuDrawProfileEvidence({
+    requested: scenario.params.wgpudrawprofile,
+    metrics: scenario.params.metrics,
+    video: scenario.params.video,
+    samples,
+  });
+  invalidReasons.push(...wgpuDrawProfile.failures);
   const wgpuTailGate = evaluateWgpuTailGateEvidence({
     requested: scenario.params.wgputailgate,
     samples,
@@ -838,6 +848,7 @@ async function runScenario(scenario, context) {
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   summary.metrics.wgpuProducerProfile = wgpuProducerProfile;
+  summary.metrics.wgpuDrawProfile = wgpuDrawProfile;
   summary.metrics.wgpuTailGate = wgpuTailGate;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;

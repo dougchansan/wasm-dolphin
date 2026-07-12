@@ -1,5 +1,7 @@
 import { createWgpuUploadAttribution } from "./wgpu-upload-attribution.js";
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
 } from "./wgpu-pass-state-cache.js";
@@ -199,6 +201,22 @@ export function createCausalTelemetry(overrides = {}) {
           sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
           sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
           estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+        },
+        drawProfile: {
+          schema: WGPU_DRAW_PROFILE_SCHEMA,
+          requested: false,
+          available: false,
+          version: 1,
+          enabled: false,
+          epoch: 0,
+          phaseCount: WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+          phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+          periods: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          calls: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          samples: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleMaxNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          estimatedTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
         },
         producerUploadArenaRequestedBytes: 0,
         producerUploadArenaConfiguredBytes: 0,
@@ -833,6 +851,32 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerProfile?.sampleMaxNs ?? [],
     causalWgpuProducerProfileEstimatedTotalNs:
       telemetry.webgpu.producerProfile?.estimatedTotalNs ?? [],
+    causalWgpuDrawProfileSchema:
+      telemetry.webgpu.drawProfile?.schema ?? WGPU_DRAW_PROFILE_SCHEMA,
+    causalWgpuDrawProfileRequested:
+      telemetry.webgpu.drawProfile?.requested ?? false,
+    causalWgpuDrawProfileAvailable:
+      telemetry.webgpu.drawProfile?.available ?? false,
+    causalWgpuDrawProfileEnabled:
+      telemetry.webgpu.drawProfile?.enabled ?? false,
+    causalWgpuDrawProfileEpoch:
+      telemetry.webgpu.drawProfile?.epoch ?? 0,
+    causalWgpuDrawProfilePhaseCount:
+      telemetry.webgpu.drawProfile?.phaseCount ?? WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+    causalWgpuDrawProfilePhaseOrder:
+      telemetry.webgpu.drawProfile?.phaseOrder ?? [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    causalWgpuDrawProfilePeriods:
+      telemetry.webgpu.drawProfile?.periods ?? [],
+    causalWgpuDrawProfileCalls:
+      telemetry.webgpu.drawProfile?.calls ?? [],
+    causalWgpuDrawProfileSamples:
+      telemetry.webgpu.drawProfile?.samples ?? [],
+    causalWgpuDrawProfileSampleTotalNs:
+      telemetry.webgpu.drawProfile?.sampleTotalNs ?? [],
+    causalWgpuDrawProfileSampleMaxNs:
+      telemetry.webgpu.drawProfile?.sampleMaxNs ?? [],
+    causalWgpuDrawProfileEstimatedTotalNs:
+      telemetry.webgpu.drawProfile?.estimatedTotalNs ?? [],
     causalWgpuUploadArenaRequestedBytes:
       telemetry.webgpu.producerUploadArenaRequestedBytes,
     causalWgpuUploadArenaConfiguredBytes:

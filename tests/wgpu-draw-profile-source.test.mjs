@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const compiler = process.platform === "win32"
+  ? join(process.env.USERPROFILE ?? "", "emsdk", "upstream", "bin", "clang++.exe")
+  : "clang++";
+
+test("draw profile source preserves separate default-off sampled contract", async () => {
+  const header = await readFile(
+    new URL("../vendor/dolphin/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h", import.meta.url),
+    "utf8"
+  );
+  const gfx = await readFile(
+    new URL("../vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp", import.meta.url),
+    "utf8"
+  );
+  const worker = await readFile(
+    new URL("../src/upstream-discio-worker.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(header, /SAMPLE_PERIODS[^}]+64, 64, 256, 64, 64, 64, 256/s);
+  assert.match(header, /ValidSampleConfiguration/);
+  assert.match(header, /block \* SAMPLE_STRIDES\[index\] \+ SAMPLE_SEEDS\[index\]/);
+  assert.match(header, /s_enabled\{false\}/);
+  assert.match(gfx, /SetWebGpuDrawProfileEnabled/);
+  assert.match(gfx, /wgdraw:1/);
+  assert.match(worker, /wgpudrawprofile=1 requires metrics=1/);
+  assert.match(worker, /wgpudrawprofile=1 requires video=wgpu/);
+  for (const tag of ["wgdrd", "wgdrc", "wgdrs", "wgdrt", "wgdrm"])
+    assert.match(gfx, new RegExp(`append_draw_phase_values\\("${tag}"`));
+});
+
+test("native draw profiler cadence harness compiles and runs", {
+  skip: process.platform === "win32" && !existsSync(compiler),
+}, () => {
+  const outputDirectory = mkdtempSync(join(tmpdir(), "wgpu-draw-profile-"));
+  const executable = join(outputDirectory, process.platform === "win32" ? "profile.exe" : "profile");
+  try {
+    const compile = spawnSync(compiler, [
+      "-std=c++17",
+      "-I", join(root, "vendor", "dolphin", "Source", "Core"),
+      join(root, "tests", "native", "wgpu-draw-profile-main.cpp"),
+      "-o", executable,
+    ], { cwd: root, encoding: "utf8" });
+    assert.equal(compile.status, 0, compile.stderr || compile.stdout);
+    const run = spawnSync(executable, [], { cwd: root, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+  } finally {
+    rmSync(outputDirectory, { recursive: true, force: true });
+  }
+});

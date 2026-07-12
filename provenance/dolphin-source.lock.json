@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "cd3b918cd2d50d626d8d3caafc8556d29a335333a1496af11eb23a69ab655e93",
+  "patchSeriesSha256": "5f1d54b70de0e2d4b9e8c610dbb7951f0b001a0dd30cf101c2cfb457b76c04aa",
   "patches": [
     {
       "order": 1,
@@ -301,6 +301,14 @@
     },
     {
       "order": 35,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0035-webgpu-draw-resource-detail-profile.patch",
+      "size": 23098,
+      "sha256": "debd9ed225dd4a1938d6a7dbefcc0d641637248ebedcb83de42fc7c81c3c5931"
+    },
+    {
+      "order": 36,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -308,7 +316,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 36,
+      "order": 37,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

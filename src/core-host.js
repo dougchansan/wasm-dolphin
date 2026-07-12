@@ -21,6 +21,7 @@ import {
   requestedWgpuReplayDiagnostics,
   requestedWgpuDiagnosticQuiet,
   requestedWgpuProducerProfile,
+  requestedWgpuDrawProfile,
   requestedWgpuTailGate,
   requestedWgpuStateCache,
   requestedWgpuGeometryPack,
@@ -107,6 +108,7 @@ export class EmulatorHost {
     this.wgpuDiagnosticQuiet = requestedWgpuDiagnosticQuiet(window.location.search);
     this.wgpuProducerProfile = this.collectMetrics &&
       requestedWgpuProducerProfile(window.location.search);
+    this.wgpuDrawProfile = requestedWgpuDrawProfile(window.location.search);
     // Preserve the raw request so the worker can fail closed when the
     // correctness-sensitive experiment is used without metrics or true WGPU.
     this.wgpuTailGate = requestedWgpuTailGate(window.location.search);
@@ -342,6 +344,7 @@ export class EmulatorHost {
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
             wgpuDiagnosticQuiet: this.wgpuDiagnosticQuiet,
             wgpuProducerProfile: this.wgpuProducerProfile,
+            wgpuDrawProfile: this.wgpuDrawProfile,
             wgpuTailGate: this.wgpuTailGate,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,

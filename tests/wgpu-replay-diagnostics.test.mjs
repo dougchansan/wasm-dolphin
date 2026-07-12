@@ -20,6 +20,7 @@ import {
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
   requestedWgpuProducerProfile,
+  requestedWgpuDrawProfile,
   requestedWgpuGeometryPack,
   requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
@@ -690,6 +691,13 @@ test("producer phase profiling is default-off and accepts only an explicit one",
   assert.equal(requestedWgpuProducerProfile(""), false);
   assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=0"), false);
   assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=1"), true);
+});
+
+test("draw detail profiling is default-off and independent", () => {
+  assert.equal(requestedWgpuDrawProfile(""), false);
+  assert.equal(requestedWgpuDrawProfile("?wgpudrawprofile=0"), false);
+  assert.equal(requestedWgpuDrawProfile("?wgpudrawprofile=1"), true);
+  assert.equal(requestedWgpuDrawProfile("?wgpuprodprofile=1"), false);
 });
 
 test("renderer worker probes are explicit diagnostic modes", () => {

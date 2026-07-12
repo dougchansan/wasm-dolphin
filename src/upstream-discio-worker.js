@@ -59,10 +59,13 @@ import {
   rebaseWgpuStagedUploadWindow
 } from "./wgpu-upload-watermark.js";
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
   WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
+  parseWgpuDrawProfileStats,
   parseWgpuProducerProfileStats,
   parseWgpuProducerStateStats,
   parseWgpuTailGateStats
@@ -181,6 +184,8 @@ let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuProducerProfileRequested = false;
 let wgpuProducerProfileAvailable = false;
+let wgpuDrawProfileRequested = false;
+let wgpuDrawProfileAvailable = false;
 let wgpuTailGateRequested = false;
 let wgpuTailGateAvailable = false;
 let wgpuStateCacheEnabled = false;
@@ -705,6 +710,7 @@ async function handleMessage(type, payload) {
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuDiagnosticQuiet: payload.wgpuDiagnosticQuiet,
         wgpuProducerProfile: payload.wgpuProducerProfile,
+        wgpuDrawProfile: payload.wgpuDrawProfile,
         wgpuTailGate: payload.wgpuTailGate,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
@@ -750,13 +756,14 @@ async function handleMessage(type, payload) {
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
       applyWgpuTailGate("core reset");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
-      if (wgpuProducerProfileRequested) {
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
         verifyWgpuProducerProfileActivation("core reset");
       }
       api?.setInputMask(inputMask);
@@ -769,6 +776,7 @@ async function handleMessage(type, payload) {
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
       applyWgpuTailGate("slot state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
@@ -777,13 +785,14 @@ async function handleMessage(type, payload) {
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
       applyWgpuTailGate("slot state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
-      if (wgpuProducerProfileRequested) {
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
         verifyWgpuProducerProfileActivation("slot state reload");
       }
       return { loaded, ...framePayload() };
@@ -885,6 +894,7 @@ async function handleMessage(type, payload) {
       const beforeState = api?.getCoreStateName?.() ?? "";
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
       applyWgpuTailGate("save-state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
@@ -897,13 +907,14 @@ async function handleMessage(type, payload) {
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
       applyWgpuTailGate("save-state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
-      if (wgpuProducerProfileRequested) {
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
         verifyWgpuProducerProfileActivation("save-state reload");
       }
       collectWebGpuProducerStateStats();
@@ -1082,6 +1093,7 @@ async function loadCore({
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   wgpuDiagnosticQuiet: requestedWgpuDiagnosticQuiet = false,
   wgpuProducerProfile: requestedWgpuProducerProfile = false,
+  wgpuDrawProfile: requestedWgpuDrawProfile = false,
   wgpuTailGate: requestedWgpuTailGate = false,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
@@ -1124,12 +1136,26 @@ async function loadCore({
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
   wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
   wgpuProducerProfileAvailable = false;
+  wgpuDrawProfileRequested = Boolean(requestedWgpuDrawProfile);
+  wgpuDrawProfileAvailable = false;
   webGpuCausalStats.producerProfile = {
     ...webGpuCausalStats.producerProfile,
     requested: wgpuProducerProfileRequested,
     available: false,
     enabled: false,
   };
+  webGpuCausalStats.drawProfile = {
+    ...webGpuCausalStats.drawProfile,
+    requested: wgpuDrawProfileRequested,
+    available: false,
+    enabled: false,
+  };
+  if (wgpuDrawProfileRequested && !collectMetrics) {
+    throw new Error("wgpudrawprofile=1 requires metrics=1");
+  }
+  if (wgpuDrawProfileRequested && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpudrawprofile=1 requires video=wgpu");
+  }
   wgpuTailGateRequested = Boolean(requestedWgpuTailGate);
   wgpuTailGateAvailable = false;
   webGpuCausalStats.tailGate = {
@@ -1427,10 +1453,20 @@ async function loadCore({
   wgpuProducerProfileAvailable = Boolean(
     api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
   );
+  wgpuDrawProfileAvailable = Boolean(
+    api.setWebGpuDrawProfileEnabled && api.getWebGpuStateCacheStats
+  );
   webGpuCausalStats.producerProfile.available = wgpuProducerProfileAvailable;
+  webGpuCausalStats.drawProfile.available = wgpuDrawProfileAvailable;
   if (wgpuProducerProfileRequested && !wgpuProducerProfileAvailable) {
     throw new Error(
       "wgpuprodprofile=1 requires SetWebGpuProducerProfileEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
+  if (wgpuDrawProfileRequested && !wgpuDrawProfileAvailable) {
+    throw new Error(
+      "wgpudrawprofile=1 requires SetWebGpuDrawProfileEnabled and " +
       "GetWebGpuStateCacheStats exports"
     );
   }
@@ -1480,6 +1516,7 @@ async function loadCore({
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
   api.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+  api.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
   applyWgpuTailGate("core boot");
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
@@ -1495,7 +1532,8 @@ async function loadCore({
   api.setSoftwareRasterProfileEnabled?.(
     collectMetrics && videoBackend === "Software Renderer" ? 1 : 0
   );
-  if (wgpuProducerProfileRequested) verifyWgpuProducerProfileActivation("core boot");
+  if (wgpuProducerProfileRequested || wgpuDrawProfileRequested)
+    verifyWgpuProducerProfileActivation("core boot");
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -1562,6 +1600,12 @@ function bindApi(module) {
       typeof module._SetWebGpuProducerProfileEnabled === "function"
         ? (enabled) => ccall(
             "SetWebGpuProducerProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWebGpuDrawProfileEnabled:
+      typeof module._SetWebGpuDrawProfileEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuDrawProfileEnabled", null, ["number"], [enabled ? 1 : 0]
           )
         : null,
     setWgpuIdleFifoTailElisionEnabled:
@@ -1885,11 +1929,27 @@ function applyWgpuProducerProfileStats(profile) {
   return true;
 }
 
+function applyWgpuDrawProfileStats(profile) {
+  if (!profile) return false;
+  webGpuCausalStats.drawProfile = {
+    ...profile,
+    requested: wgpuDrawProfileRequested,
+    available: wgpuDrawProfileAvailable,
+  };
+  return true;
+}
+
 function verifyWgpuProducerProfileActivation(scope) {
   const text = api?.getWebGpuStateCacheStats?.() ?? "";
   const profile = parseWgpuProducerProfileStats(text);
-  if (!applyWgpuProducerProfileStats(profile) || profile.enabled !== true) {
-    throw new Error(`WGPU producer profile failed to activate during ${scope}`);
+  const drawProfile = parseWgpuDrawProfileStats(text);
+  const drawProfileValid = !wgpuDrawProfileRequested && !wgpuDrawProfileAvailable ||
+    applyWgpuDrawProfileStats(drawProfile) &&
+      drawProfile.enabled === wgpuDrawProfileRequested;
+  if (!applyWgpuProducerProfileStats(profile) ||
+      profile.enabled !== wgpuProducerProfileRequested ||
+      !drawProfileValid) {
+    throw new Error(`WGPU producer/draw profile failed to activate during ${scope}`);
   }
   return profile;
 }
@@ -1915,6 +1975,7 @@ function collectWebGpuProducerStateStats() {
   const text = api?.getWebGpuStateCacheStats?.() ?? null;
   const parsed = parseWgpuProducerStateStats(text);
   applyWgpuProducerProfileStats(parseWgpuProducerProfileStats(text));
+  applyWgpuDrawProfileStats(parseWgpuDrawProfileStats(text));
   const tailGate = parseWgpuTailGateStats(text);
   if (tailGate) {
     webGpuCausalStats.tailGate = {
@@ -6490,6 +6551,22 @@ const webGpuCausalStats = {
     sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
     sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
     estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+  },
+  drawProfile: {
+    schema: WGPU_DRAW_PROFILE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    phaseCount: WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+    phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    periods: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    calls: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    samples: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleMaxNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    estimatedTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
   },
   tailGate: {
     schema: WGPU_TAIL_GATE_SCHEMA,

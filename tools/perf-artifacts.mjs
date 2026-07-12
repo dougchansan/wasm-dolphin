@@ -6,15 +6,24 @@ import os from "node:os";
 import path from "node:path";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_PERIODS,
+  WGPU_DRAW_PROFILE_SCHEMA,
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
   WGPU_TAIL_GATE_SCHEMA,
+  parseWgpuDrawProfileStats as parseDrawProfileWire,
   parseWgpuProducerProfileStats as parseProducerProfileWire,
   parseWgpuTailGateStats as parseTailGateWire,
 } from "../src/wgpu-pass-state-cache.js";
 
-export { WGPU_PRODUCER_PROFILE_PHASE_ORDER, WGPU_TAIL_GATE_SCHEMA };
+export {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_TAIL_GATE_SCHEMA,
+};
 export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
+export const WGPU_DRAW_PROFILE_SCHEMA_VERSION = 1;
 export const WGPU_TAIL_GATE_SCHEMA_VERSION = 1;
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
@@ -1951,6 +1960,150 @@ export function parseWgpuProducerProfileStats(text = "") {
   };
 }
 
+export function parseWgpuDrawProfileStats(text = "") {
+  const profile = parseDrawProfileWire(text);
+  if (!profile) return null;
+  return {
+    wgpuDrawProfileSchema: profile.schema,
+    wgpuDrawProfileSchemaVersion: profile.version,
+    wgpuDrawProfileEnabled: profile.enabled,
+    wgpuDrawProfileEpoch: profile.epoch,
+    wgpuDrawProfilePhaseCount: profile.phaseCount,
+    wgpuDrawProfilePhaseOrder: profile.phaseOrder,
+    wgpuDrawProfilePeriods: profile.periods,
+    wgpuDrawProfileCalls: profile.calls,
+    wgpuDrawProfileSamples: profile.samples,
+    wgpuDrawProfileSampleTotalNs: profile.sampleTotalNs,
+    wgpuDrawProfileSampleMaxNs: profile.sampleMaxNs,
+    wgpuDrawProfileEstimatedTotalNs: profile.estimatedTotalNs,
+  };
+}
+
+export function evaluateWgpuDrawProfileEvidence({ requested, metrics, video, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const failures = [];
+  if (!["0", "1"].includes(String(requested))) {
+    failures.push(`wgpudrawprofile=${requested} is unsupported`);
+  }
+  if (String(metrics) !== "1") failures.push("wgpudrawprofile requires metrics=1");
+  if (video !== "wgpu") failures.push("wgpudrawprofile requires video=wgpu");
+  const expectedEnabled = String(requested) === "1";
+  const profiles = samples.map((sample) => {
+    const flattened = sample?.wgpuDrawProfileSchemaVersion != null ||
+        sample?.causalWgpuDrawProfileSchema != null
+      ? sample
+      : parseWgpuDrawProfileStats(sample?.helper);
+    return flattened ? drawProfileFromFlattenedSample(flattened) : null;
+  });
+  if (!profiles.length) failures.push("WGPU draw profile has no timed samples");
+  let previous = null;
+  let epoch = null;
+  let periods = null;
+  const validProfiles = [];
+  for (let index = 0; index < profiles.length; index += 1) {
+    const profile = profiles[index];
+    const rawSample = samples[index];
+    if (rawSample?.causalWgpuDrawProfileRequested !== expectedEnabled) {
+      failures.push(`WGPU draw profile sample ${index} requested state mismatch`);
+    }
+    if (rawSample?.causalWgpuDrawProfileAvailable !== true) {
+      failures.push(`WGPU draw profile sample ${index} ABI is unavailable`);
+    }
+    if (!profile) {
+      failures.push(`WGPU draw profile sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (profile.schemaVersion !== WGPU_DRAW_PROFILE_SCHEMA_VERSION ||
+        profile.schema !== WGPU_DRAW_PROFILE_SCHEMA) {
+      failures.push(`WGPU draw profile sample ${index} schema mismatch`);
+    }
+    if (profile.enabled !== expectedEnabled) {
+      failures.push(`WGPU draw profile sample ${index} enabled state mismatch`);
+    }
+    if (profile.phaseCount !== WGPU_DRAW_PROFILE_PHASE_ORDER.length ||
+        !sameArray(profile.phaseOrder, WGPU_DRAW_PROFILE_PHASE_ORDER)) {
+      failures.push(`WGPU draw profile sample ${index} phase contract mismatch`);
+    }
+    if (!Number.isSafeInteger(profile.epoch) || profile.epoch < (expectedEnabled ? 1 : 0)) {
+      failures.push(`WGPU draw profile sample ${index} epoch is invalid`);
+    } else if (epoch == null) epoch = profile.epoch;
+    else if (profile.epoch !== epoch) failures.push(`WGPU draw profile epoch changed ${epoch}->${profile.epoch}`);
+    let vectorsValid = validateProfileVector(
+      profile.periods, index, "periods", failures, WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+      { positive: true, label: "draw" }
+    );
+    for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs", "estimatedTotalNs"]) {
+      vectorsValid = validateProfileVector(
+        profile[name], index, name, failures, WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+        { label: "draw" }
+      ) && vectorsValid;
+    }
+    if (!vectorsValid) continue;
+    if (!expectedEnabled && ["calls", "samples", "sampleTotalNs", "sampleMaxNs"].some(
+      (name) => profile[name].some((value) => value !== 0)
+    )) failures.push(`WGPU draw profile sample ${index} disabled counters are nonzero`);
+    if (profile.samples.some((value, phase) => value > profile.calls[phase])) {
+      failures.push(`WGPU draw profile sample ${index} samples exceed calls`);
+    }
+    for (let phase = 0; phase < profile.calls.length; phase += 1) {
+      const calls = profile.calls[phase];
+      const period = profile.periods[phase];
+      const expectedFloor = Math.floor(calls / period);
+      const expectedCeil = Math.ceil(calls / period);
+      if (profile.samples[phase] < Math.max(0, expectedFloor - 1) ||
+          profile.samples[phase] > expectedCeil + 1) {
+        failures.push(
+          `WGPU draw profile sample ${index} phase ${phase} sample cadence mismatch`
+        );
+      }
+    }
+    if (periods == null) periods = profile.periods;
+    else if (!sameArray(profile.periods, periods)) failures.push("WGPU draw profile periods changed");
+    if (!sameArray(profile.periods, WGPU_DRAW_PROFILE_PERIODS)) {
+      failures.push(`WGPU draw profile sample ${index} periods mismatch`);
+    }
+    if (profile.sampleMaxNs.some((value, phase) => value > profile.sampleTotalNs[phase])) {
+      failures.push(`WGPU draw profile sample ${index} max exceeds sampled total`);
+    }
+    const derived = profile.sampleTotalNs.map((value, phase) => value * profile.periods[phase]);
+    if (!sameArray(profile.estimatedTotalNs, derived)) failures.push("WGPU draw profile estimates mismatch");
+    if (previous) {
+      for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+        if (profile[name].some((value, phase) => value < previous[name][phase])) {
+          failures.push(`WGPU draw profile sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = profile;
+    validProfiles.push(profile);
+  }
+  const first = validProfiles[0] ?? null;
+  const final = validProfiles.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"].map((name) => [
+      name, final[name].map((value, phase) => value - first[name][phase]),
+    ])
+  ) : null;
+  if (expectedEnabled && deltas) {
+    for (const name of ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"]) {
+      if (deltas[name].some((value) => value <= 0)) {
+        failures.push(`WGPU draw profile ${name} timed-window delta is not positive`);
+      }
+    }
+  }
+  return {
+    required: true,
+    activated: expectedEnabled && profiles.length > 0 &&
+      profiles.every((profile) => profile?.enabled === true),
+    epoch,
+    phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    periods: periods ? [...periods] : null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
 export function evaluateWgpuProducerProfileEvidence({
   requested,
   metrics,
@@ -2077,6 +2230,40 @@ function producerProfileFromFlattenedSample(sample) {
     sampleMaxNs: value("SampleMaxNs"),
     estimatedTotalNs: value("EstimatedTotalNs"),
   };
+}
+
+function drawProfileFromFlattenedSample(sample) {
+  const value = (name) => sample[`wgpuDrawProfile${name}`] ??
+    sample[`causalWgpuDrawProfile${name}`];
+  return {
+    schema: value("Schema"),
+    schemaVersion: value("SchemaVersion") ??
+      (value("Schema") === WGPU_DRAW_PROFILE_SCHEMA ? 1 : null),
+    enabled: value("Enabled"),
+    epoch: value("Epoch"),
+    phaseCount: value("PhaseCount"),
+    phaseOrder: value("PhaseOrder"),
+    periods: value("Periods"),
+    calls: value("Calls"),
+    samples: value("Samples"),
+    sampleTotalNs: value("SampleTotalNs"),
+    sampleMaxNs: value("SampleMaxNs"),
+    estimatedTotalNs: value("EstimatedTotalNs"),
+  };
+}
+
+function validateProfileVector(
+  values,
+  sampleIndex,
+  name,
+  failures,
+  phaseCount,
+  { positive = false, label = "profile" } = {}
+) {
+  const valid = Array.isArray(values) && values.length === phaseCount &&
+    values.every((value) => Number.isSafeInteger(value) && value >= (positive ? 1 : 0));
+  if (!valid) failures.push(`WGPU ${label} profile sample ${sampleIndex} ${name} is invalid`);
+  return valid;
 }
 
 function validateProducerProfileVector(values, sampleIndex, name, failures, { positive = false } = {}) {

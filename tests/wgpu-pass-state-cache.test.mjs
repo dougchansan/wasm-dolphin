@@ -6,14 +6,34 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
   WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
+  parseWgpuDrawProfileStats,
   parseWgpuProducerProfileStats,
   parseWgpuProducerStateStats,
   parseWgpuTailGateStats
 } from "../src/wgpu-pass-state-cache.js";
+
+test("draw profile parser preserves its independent fixed phase ABI", () => {
+  const parsed = parseWgpuDrawProfileStats(
+    "wgdraw:1,1,3,7 " +
+    "wgdrd:64,64,256,64,64,64,256 " +
+    "wgdrc:640,640,2560,640,640,640,2560 " +
+    "wgdrs:10,10,10,10,10,10,10 " +
+    "wgdrt:100,200,300,400,500,600,700 " +
+    "wgdrm:10,20,30,40,50,60,70"
+  );
+  assert.equal(parsed.schema, WGPU_DRAW_PROFILE_SCHEMA);
+  assert.equal(parsed.enabled, true);
+  assert.equal(parsed.epoch, 3);
+  assert.deepEqual(parsed.phaseOrder, [...WGPU_DRAW_PROFILE_PHASE_ORDER]);
+  assert.deepEqual(parsed.estimatedTotalNs, [6400, 12800, 76800, 25600, 32000, 38400, 179200]);
+  assert.equal(parseWgpuDrawProfileStats("wgdraw:1,1,3,7 wgdrd:64"), null);
+});
 
 test("producer profile parser preserves the fixed phase ABI and derives sampled totals", () => {
   const parsed = parseWgpuProducerProfileStats(

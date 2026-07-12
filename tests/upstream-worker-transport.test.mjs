@@ -204,3 +204,10 @@ test("producer profiling requires both its URL request and metrics collection", 
     wgpuProducerProfile: true,
   }).wgpuProducerProfile, true);
 });
+
+test("draw profiling preserves its raw request for worker-side fail-closed validation", () => {
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: false,
+    wgpuDrawProfile: true,
+  }).wgpuDrawProfile, true);
+});

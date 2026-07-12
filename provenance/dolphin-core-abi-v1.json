@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 52961,
-      "sha256": "3eb0736bab8e25ab0698cf519632decf200d66c7317857c5dbfb211f72260d5a"
+      "size": 55064,
+      "sha256": "14ad29e17ba6c4144a94049587bf451f6fa4d958a683aaff6c1dafbdc9e93047"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 57386,
-      "sha256": "faa4ee938b41f4f3cddb2ec0bc182c51d8bc932ecd76d90be57f4562a176d6bd"
+      "size": 57542,
+      "sha256": "60a7b799e2bdb2a2fb7c930acc994366609bee6b77a3be645507e13af4d74562"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 421323,
-      "sha256": "6a00d8231e26f2918091e8c70bdf79ecefb933cbc3c316283d2d432508f8ad8a"
+      "size": 424590,
+      "sha256": "eb66d7b59d6fb013e23c750e4e6170024d2ee20e2a25ebb7027e98611e65590d"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 38324,
-      "sha256": "bd75a304864919a4abc2601affb8906ddb32702401320550a37d54112de00e2b"
+      "size": 38451,
+      "sha256": "f05e4098517d64f8bcd1b0e50f40ab322d343b3881c0f7d6e5c7ae70bca5f329"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -170,8 +170,8 @@
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 16705,
-      "sha256": "9afab698acacba9e194a29be9f3862a0f78feeeb0c9094910340785e79f377ae"
+      "size": 18441,
+      "sha256": "e60dd405ae50f2b4fac5241e13af4005bab95952e8ced976a67e2c4b2edf50c7"
     },
     {
       "path": "src/wgpu-dirty-range-projection.js",
@@ -182,8 +182,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 35570,
-      "sha256": "ad9ba9ea5490c4db97695295e963f0649cc8b5ad5596c974285e46567a0b4729"
+      "size": 35733,
+      "sha256": "85fd40fcd98e939b72879d7c4e87f17ca9b128fef2aff57262c22a859a715e62"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -227,6 +227,7 @@
   "sourceOnlyExportsPendingRebuild": [
     "_RunWebGpuVertexManagerGeometryRangeSmoke",
     "_SetWebGpuGeometryRangeEnabled",
+    "_SetWebGpuDrawProfileEnabled",
     "_SetWebGpuProducerProfileEnabled",
     "_SetWgpuIdleFifoTailElisionEnabled"
   ],

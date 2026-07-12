@@ -9,6 +9,7 @@ import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
   assertBattleCheckpoint,
   assertRunProvenance,
   assertServedArtifactIdentity,
@@ -24,6 +25,7 @@ import {
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuDrawProfileEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
@@ -36,6 +38,7 @@ import {
   fixedWorkPollDelayMs,
   parseProfileMetrics,
   parseWgpuProducerProfileStats,
+  parseWgpuDrawProfileStats,
   parseWgpuTailGateStats,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
@@ -53,8 +56,64 @@ import {
   summarizeCausalFairness,
   summarizePostLoadInputDelivery,
   validateLockedBuildProvenance,
+  validateComparisonConfig,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
+
+test("draw detail evidence fails closed and validates independent off/on arms", () => {
+  const offSample = {
+    helper: drawProfileWire({ enabled: 0, epoch: 0, multiplier: 0 }),
+    causalWgpuDrawProfileRequested: false,
+    causalWgpuDrawProfileAvailable: true,
+  };
+  assert.deepEqual(evaluateWgpuDrawProfileEvidence({
+    requested: "0", metrics: "1", video: "wgpu", samples: [offSample],
+  }).failures, []);
+
+  const onSamples = [1, 2].map((multiplier) => ({
+    helper: drawProfileWire({ enabled: 1, epoch: 1, multiplier }),
+    causalWgpuDrawProfileRequested: true,
+    causalWgpuDrawProfileAvailable: true,
+  }));
+  const valid = evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: onSamples,
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.deepEqual(valid.phaseOrder, WGPU_DRAW_PROFILE_PHASE_ORDER);
+  assert.ok(valid.deltas.calls.every((value) => value > 0));
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "0", video: "wgpu", samples: onSamples,
+  }).failures.join("\n"), /requires metrics=1/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "software", samples: onSamples,
+  }).failures.join("\n"), /requires video=wgpu/);
+  assert.equal(parseWgpuDrawProfileStats(onSamples[0].helper).wgpuDrawProfileEnabled, true);
+  const wrongPeriods = structuredClone(onSamples);
+  wrongPeriods[1].helper = wrongPeriods[1].helper.replace(
+    "wgdrd:64,64,256,64,64,64,256",
+    "wgdrd:32,64,256,64,64,64,256"
+  );
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: wrongPeriods,
+  }).failures.join("\n"), /periods mismatch/);
+  const maxExceedsTotal = structuredClone(onSamples);
+  maxExceedsTotal[1].helper = maxExceedsTotal[1].helper.replace(
+    /wgdrm:\d+/, "wgdrm:999999"
+  );
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: maxExceedsTotal,
+  }).failures.join("\n"), /max exceeds sampled total/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: [onSamples[0], onSamples[0]],
+  }).failures.join("\n"), /timed-window delta is not positive/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "0", metrics: "1", video: "wgpu", samples: [{
+      helper: drawProfileWire({ enabled: 0, epoch: 0, multiplier: 1 }),
+      causalWgpuDrawProfileRequested: false,
+      causalWgpuDrawProfileAvailable: true,
+    }],
+  }).failures.join("\n"), /disabled counters are nonzero/);
+});
 
 test("causal fairness uses timed counter deltas and enforces marker parity", () => {
   const sample = (audio, marker, webgpu = {}, gpuCompletion = {}) => ({
@@ -1605,6 +1664,27 @@ test("diagnostic-quiet screening changes only the explicit log filter arm", asyn
   assert.deepEqual(withoutQuiet(config.armA.params), withoutQuiet(config.armB.params));
 });
 
+test("draw-detail overhead screening pins hardware null-drain and changes only its toggle", async () => {
+  const config = JSON.parse(await readFile(
+    new URL("../tools/perf-configs/wgpu-draw-profile-overhead.json", import.meta.url),
+    "utf8"
+  ));
+  assert.equal(validateComparisonConfig(config).overheadGate.maximumRegressionPercent, 2);
+  const paramsA = { ...config.armA.params };
+  const paramsB = { ...config.armB.params };
+  assert.equal(paramsA.wgpudrawprofile, "0");
+  assert.equal(paramsB.wgpudrawprofile, "1");
+  delete paramsA.wgpudrawprofile;
+  delete paramsB.wgpudrawprofile;
+  assert.deepEqual(paramsB, paramsA);
+  assert.equal(paramsA.video, "wgpu");
+  assert.equal(paramsA.presenter, "webgpu");
+  assert.equal(paramsA.wgpurenderprobe, "null-drain");
+  assert.equal(paramsA.wgpuprodprofile, "1");
+  assert.equal(paramsA.wgpuuploadtransport, "mapped");
+  assert.equal(paramsA.wasmjit, "0");
+});
+
 test("comparison runner consumes bounded replacements before final invalid-rate classification", async () => {
   const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
   assert.match(source,
@@ -2043,6 +2123,22 @@ function producerProfileWire({
     `wgprs:${samples.join(",")}`,
     `wgprt:${totals.join(",")}`,
     `wgprm:${maxima.join(",")}`,
+  ].join(" ");
+}
+
+function drawProfileWire({ enabled, epoch, multiplier }) {
+  const periods = [64, 64, 256, 64, 64, 64, 256];
+  const calls = periods.map((period) => period * multiplier);
+  const samples = periods.map(() => multiplier);
+  const totals = periods.map((_, index) => (index + 1) * 100 * multiplier);
+  const maxima = periods.map((_, index) => (index + 1) * 10 * multiplier);
+  return [
+    `wgdraw:1,${enabled},${epoch},7`,
+    `wgdrd:${periods.join(",")}`,
+    `wgdrc:${calls.join(",")}`,
+    `wgdrs:${samples.join(",")}`,
+    `wgdrt:${totals.join(",")}`,
+    `wgdrm:${maxima.join(",")}`,
   ].join(" ");
 }
 
