@@ -57,6 +57,9 @@
   valid batching A/B, critical-path regression, and no-merge decision.
 - [WGPU batched queue-staging smoke](perf-results/melee-wgpu-batched-queue-staging-2026-07-12.md) —
   synchronous queue-write stall, audio failure, and activation rejection.
+- [WGPU dirty-range projection](perf-results/melee-wgpu-dirty-range-projection-2026-07-12.md) —
+  two headed fixed-battle captures, global coalescing rejection, and the
+  geometry-only 99.2% projected copy-reduction candidate.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
   CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
   deterministic 32×32 input-marker results.
