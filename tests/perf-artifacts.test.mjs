@@ -1314,20 +1314,30 @@ test("comparison rejects upload-probe runs with incomparable fixed workloads", (
     observedRecordCount: 1_000_000,
     totalUploadBytes: 500_000_000,
     submissionCount: 480,
+    opHistogram: new Array(25).fill(1000),
     submitDigests: ["11111111", "22222222"],
   };
   for (const run of runs) run.uploadProbeWorkload = { ...workload };
   assert.deepEqual(evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)), []);
+  runs[1].uploadProbeWorkload = {
+    ...workload,
+    submitDigests: ["11111111", "different-later-boundary"],
+  };
+  assert.deepEqual(evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)), []);
+  runs[1].uploadProbeWorkload = { ...workload };
   assert.equal(summarizeComparison(config, runs).outcome, "SCREENING_SIGNAL");
 
   runs[1].uploadProbeWorkload = {
     ...workload,
     totalUploadBytes: workload.totalUploadBytes * 1.01,
-    submitDigests: ["11111111", "bad0cafe"],
+    submitDigests: ["bad0cafe", "22222222"],
   };
   const report = summarizeComparison(config, runs);
   assert.equal(report.blocks[0].valid, false);
-  assert.match(report.blocks[0].invalidReasons.join("\n"), /totalUploadBytes|digest mismatch/);
+  assert.match(
+    report.blocks[0].invalidReasons.join("\n"),
+    /totalUploadBytes per frame|initial submit structure/
+  );
   assert.notEqual(report.outcome, "SCREENING_SIGNAL");
 });
 

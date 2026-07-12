@@ -1094,25 +1094,37 @@ export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
       failures.push(`upload-probe ${name} differs by more than one`);
     }
   }
-  for (const name of ["observedRecordCount", "totalUploadBytes"]) {
-    const values = numeric(name);
-    if (requireFinite(name, values) && relativeSpread(values) > 0.005) {
-      failures.push(`upload-probe ${name} differs by more than 0.5%`);
+  const frames = numeric("actualFrameDelta");
+  if (requireFinite("actualFrameDelta", frames) && frames.every((value) => value > 0)) {
+    for (const name of ["observedRecordCount", "totalUploadBytes"]) {
+      const values = numeric(name);
+      if (requireFinite(name, values)) {
+        const perFrame = values.map((value, index) => value / frames[index]);
+        if (relativeSpread(perFrame) > 0.005) {
+          failures.push(`upload-probe ${name} per frame differs by more than 0.5%`);
+        }
+      }
+    }
+    const semanticOps = [6, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+    const histograms = workloads.map((value) => value.opHistogram);
+    if (histograms.some((value) => !Array.isArray(value) || value.length !== 25)) {
+      failures.push("upload-probe opcode histograms are missing");
+    } else {
+      for (const op of semanticOps) {
+        const perFrame = histograms.map((histogram, index) => Number(histogram[op]) / frames[index]);
+        if (perFrame.some((value) => !Number.isFinite(value)) || relativeSpread(perFrame) > 0.005) {
+          failures.push(`upload-probe opcode ${op} per frame differs by more than 0.5%`);
+        }
+      }
     }
   }
   const digestLists = workloads.map((value) => value.submitDigests);
   if (digestLists.some((value) => !Array.isArray(value) || value.length === 0)) {
     failures.push("upload-probe submit digests are missing");
   } else {
-    const commonLength = Math.min(...digestLists.map((value) => value.length));
-    outer: for (let index = 0; index < commonLength; index += 1) {
-      const expected = digestLists[0][index];
-      for (let run = 1; run < digestLists.length; run += 1) {
-        if (digestLists[run][index] !== expected) {
-          failures.push(`upload-probe submit digest mismatch at boundary ${index}`);
-          break outer;
-        }
-      }
+    const expected = digestLists[0][0];
+    if (digestLists.some((value) => value[0] !== expected)) {
+      failures.push("upload-probe initial submit structure differs across runs");
     }
   }
   return failures;

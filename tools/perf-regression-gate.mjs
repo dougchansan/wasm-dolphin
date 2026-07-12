@@ -817,15 +817,18 @@ async function runScenario(scenario, context) {
       requested: scenario.params.wgpurenderprobe,
       coreSha256: context.coreArtifact?.sha256 ?? null,
       saveStateSha256: context.saveFixture?.sha256 ?? null,
-      checkpointTicks: manifest.fixture?.battleCheckpoint?.loadedCheckpointTicks ??
-        manifest.fixture?.battleCheckpoint?.coreTicks ?? null,
-      checkpointPpcPc: manifest.fixture?.battleCheckpoint?.loadedCheckpointPpcPc ??
-        manifest.fixture?.battleCheckpoint?.ppcPc ?? null,
+      checkpointTicks:
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.loadedCheckpointTicks ??
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.coreTicks ?? null,
+      checkpointPpcPc:
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.loadedCheckpointPpcPc ??
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.ppcPc ?? null,
       actualCoreTickDelta: fixedEmulatedWork.actualCoreTickDelta,
       actualFrameDelta: fixedEmulatedWork.actualFrameDelta,
       observedRecordCount: probe?.observedRecordCount ?? null,
       totalUploadBytes: probe?.totalUploadBytes ?? null,
       submissionCount: probe?.submissionCount ?? null,
+      opHistogram: Array.isArray(probe?.opHistogram) ? [...probe.opHistogram] : null,
       submitDigests: Array.isArray(probe?.submitDigests) ? [...probe.submitDigests] : null,
       streamDigest: probe?.streamDigest ?? null,
     };
