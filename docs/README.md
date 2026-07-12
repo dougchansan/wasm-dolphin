@@ -66,6 +66,9 @@
 - [WGPU deep-diagnostic gate](perf-results/melee-wgpu-deep-diagnostic-gate-2026-07-12.md) —
   reproducible header repair, balanced fixed-work screen, console-volume reduction,
   rollback smoke, and visible GPU-completion evidence.
+- [WGPU detailed-UBO telemetry overhead](perf-results/melee-wgpu-ubo-metrics-overhead-2026-07-12.md) —
+  explicit diagnostic flag, two-block positive screening signal, visible validation,
+  and remaining GPU-completion tails.
 - [WGPU idle FIFO-tail gate screen](perf-results/melee-wgpu-tail-gate-2026-07-12.md) —
   order-balanced activation evidence and rejection after state-proven no-op
   elision produced no fixed-work throughput gain.
