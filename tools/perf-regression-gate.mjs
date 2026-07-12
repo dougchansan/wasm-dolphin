@@ -395,6 +395,7 @@ async function runScenario(scenario, context) {
     manifest.browser.actualChannel = browserLaunch.actualChannel;
     manifest.browser.executablePath = browserLaunch.executablePath;
     manifest.browser.launchSource = browserLaunch.source;
+    manifest.browser.launchArgs = browserLaunch.args;
     manifest.benchmark.inputScriptMode = context.postLoadInputScript.length
       ? "post-load-only"
       : "none";
@@ -1320,6 +1321,22 @@ async function launchBrowser(chromium, headed) {
   if (process.env.PERF_PROBE_AGGRESSIVE_GPU === "1") {
     args.push("--ignore-gpu-blocklist", "--use-angle=d3d11");
   }
+  const webGpuPowerOverride = process.env.PERF_WEBGPU_POWER_OVERRIDE?.trim();
+  const supportedPowerOverrides = new Set([
+    "default-low-power",
+    "default-high-performance",
+    "force-low-power",
+    "force-high-performance",
+  ]);
+  if (webGpuPowerOverride) {
+    if (!supportedPowerOverrides.has(webGpuPowerOverride)) {
+      throw new Error(
+        `Invalid PERF_WEBGPU_POWER_OVERRIDE "${webGpuPowerOverride}". ` +
+        `Use ${[...supportedPowerOverrides].join(", ")}.`
+      );
+    }
+    args.push(`--use-webgpu-power-preference=${webGpuPowerOverride}`);
+  }
   const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
   const configuredExecutable = process.env.BROWSER_EXECUTABLE
     ? path.resolve(process.env.BROWSER_EXECUTABLE)
@@ -1336,6 +1353,7 @@ async function launchBrowser(chromium, headed) {
         requestedChannel,
         actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
         executablePath: configuredExecutable,
+        args: [...args],
         source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
       };
     } catch (error) {
@@ -1349,6 +1367,7 @@ async function launchBrowser(chromium, headed) {
     requestedChannel,
     actualChannel: "bundled-chromium",
     executablePath,
+    args: [...args],
     source: "playwright-bundled",
   };
 }
