@@ -26,6 +26,7 @@ import {
   createWgpuReplayClassifier,
   createWgpuReplayBudgetGate,
   findPublishedAtomicPassEnd,
+  isIntentionalBlankWgpuProbe,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "./wgpu-replay-diagnostics.js";
@@ -524,7 +525,7 @@ function recordRendererError(kind, message) {
 }
 
 function wgpuOutputContractPayload() {
-  const intentionalBlankProbe = isWgpuUploadProbeMode(wgpuRendererWorkerProbe);
+  const intentionalBlankProbe = isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe);
   return {
     schema: "wasm-dolphin.wgpu-output-contract.v1",
     disposition: intentionalBlankProbe ? "intentional-blank-probe" : "visible-canvas",
@@ -1163,7 +1164,7 @@ async function loadCore({
       webGpuCausalStats.rendererWorkerProbe.error = String(error?.message || error);
       throw error;
     }
-  } else if (isWgpuUploadProbeMode(wgpuRendererWorkerProbe)) {
+  } else if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
     if (videoBackend !== "WebGPU-Real") {
       throw new Error("WGPU upload probes require the true hardware WebGPU backend");
     }
@@ -1266,7 +1267,7 @@ async function loadCore({
     workerOwnsCanvas = true;
   }
 
-  if (isWgpuUploadProbeMode(wgpuRendererWorkerProbe)) {
+  if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
     renderCanvas = null;
     renderBackend = "wgpu-upload-probe";
     rendererDiagnostics.activePresenterBackend = renderBackend;
@@ -5172,7 +5173,7 @@ function handleWebGpuCmdRing(event) {
     postStatus("webgpu-cmd-ring: wasm heap is not shared; bridge disabled");
     return;
   }
-  if (isWgpuUploadProbeMode(wgpuRendererWorkerProbe)) {
+  if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
     attachWgpuUploadProbeRing(data, heap.buffer);
     return;
   }
@@ -5473,10 +5474,6 @@ function ensureWgpuMappedStagingPool(device) {
   return wgpuMappedStagingPool;
 }
 
-function isWgpuUploadProbeMode(value) {
-  return value === "inline-upload" || value === "worker-upload" || value === "null-drain";
-}
-
 async function initializeWgpuUploadProbe(mode) {
   if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer !== "function") {
     throw new Error("WGPU upload probes require cross-origin isolation");
@@ -5685,7 +5682,7 @@ function requestWgpuUploadProbeWorker(type, payload = {}, timeoutMs = 15_000) {
 }
 
 async function finalizeWgpuUploadProbe(timeoutMs = 10_000) {
-  if (!isWgpuUploadProbeMode(wgpuRendererWorkerProbe)) {
+  if (!isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
     return { required: false, snapshot: null };
   }
   let snapshot;
@@ -5704,7 +5701,7 @@ async function finalizeWgpuUploadProbe(timeoutMs = 10_000) {
 }
 
 async function beginWgpuUploadProbeMeasurement(timeoutMs = 10_000) {
-  if (!isWgpuUploadProbeMode(wgpuRendererWorkerProbe)) {
+  if (!isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
     return { required: false, snapshot: null };
   }
   let snapshot;

@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   WGPU_REPLAY_OP_NAMES,
   createWgpuReplayOpMetrics,
+  isIntentionalBlankWgpuProbe,
   createWgpuReplayClassifier,
   createWgpuReplayBudgetGate,
   findPublishedAtomicPassEnd,
@@ -14,6 +15,7 @@ import {
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
   requestedWgpuRendererWorkerProbe,
+  shouldShowIntentionalBlankWgpuNotice,
   requestedWgpuReplayDiagnostics,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
@@ -27,6 +29,35 @@ import {
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
+
+test("only upload-isolation probes intentionally suppress visible output", () => {
+  for (const mode of ["inline-upload", "worker-upload", "null-drain"]) {
+    assert.equal(isIntentionalBlankWgpuProbe(mode), true, mode);
+  }
+
+  for (const mode of ["off", "canary", "", null, "unknown"]) {
+    assert.equal(isIntentionalBlankWgpuProbe(mode), false, String(mode));
+  }
+});
+
+test("blank-probe notice requires the hardware WGPU path", () => {
+  for (const mode of ["inline-upload", "worker-upload", "null-drain"]) {
+    assert.equal(
+      shouldShowIntentionalBlankWgpuNotice(`?video=wgpu&wgpurenderprobe=${mode}`),
+      true,
+      mode
+    );
+  }
+
+  for (const search of [
+    "?video=wgpu",
+    "?video=wgpu&wgpurenderprobe=canary",
+    "?video=software&wgpurenderprobe=null-drain",
+    "?wgpurenderprobe=null-drain"
+  ]) {
+    assert.equal(shouldShowIntentionalBlankWgpuNotice(search), false, search);
+  }
+});
 
 test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () => {
   const metrics = createWgpuReplayOpMetrics();

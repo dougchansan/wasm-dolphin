@@ -342,6 +342,18 @@ export function requestedWgpuRendererWorkerProbe(
     : "off";
 }
 
+export function isIntentionalBlankWgpuProbe(value) {
+  return value === "inline-upload" || value === "worker-upload" || value === "null-drain";
+}
+
+export function shouldShowIntentionalBlankWgpuNotice(
+  search = globalThis.location?.search ?? ""
+) {
+  const params = new URLSearchParams(search);
+  return params.get("video") === "wgpu" &&
+    isIntentionalBlankWgpuProbe(params.get("wgpurenderprobe"));
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }

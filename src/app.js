@@ -19,6 +19,10 @@ import {
   describeSettings,
   readSettingsFromSearch
 } from "./settings.js";
+import {
+  requestedWgpuRendererWorkerProbe,
+  shouldShowIntentionalBlankWgpuNotice
+} from "./wgpu-replay-diagnostics.js";
 
 const elements = {
   adapterStatus: document.querySelector("#adapterStatus"),
@@ -30,6 +34,7 @@ const elements = {
   bootFst: document.querySelector("#bootFst"),
   bootImage: document.querySelector("#bootImage"),
   bootStatus: document.querySelector("#bootStatus"),
+  blankProbeNotice: document.querySelector("#blankProbeNotice"),
   controlGrid: document.querySelector("#controlGrid"),
   coreLabel: document.querySelector("#coreLabel"),
   coreMode: document.querySelector("#coreMode"),
@@ -123,6 +128,13 @@ let lastFrameInfo = null;
 let lastCausalTelemetry = null;
 let lastCausalTelemetryCapturedAt = -1;
 let currentSettings = readSettingsFromSearch(window.location.search);
+const requestedWgpuProbe = requestedWgpuRendererWorkerProbe(window.location.search);
+
+if (elements.blankProbeNotice && shouldShowIntentionalBlankWgpuNotice(window.location.search)) {
+  elements.blankProbeNotice.hidden = false;
+  elements.blankProbeNotice.textContent =
+    `Intentional blank diagnostic: ${requestedWgpuProbe}. Remove wgpurenderprobe to render game output.`;
+}
 
 const audio = new AudioController();
 // Exposed for the validator: lets it unmute programmatically and tap the

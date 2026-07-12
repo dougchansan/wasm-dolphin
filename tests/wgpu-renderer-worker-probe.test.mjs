@@ -45,11 +45,13 @@ test("canary mode is URL-gated, worker-plumbed, and validation-gated", async () 
   assert.match(gate, /evaluateWgpuRendererWorkerProbeEvidence/);
 });
 
-test("upload probes share one executor and suppress normal visible replay", async () => {
-  const [nested, disc, gate] = await Promise.all([
+test("upload probes share one executor, suppress visible replay, and disclose blank output", async () => {
+  const [nested, disc, gate, app, page] = await Promise.all([
     readSource("../src/wgpu-renderer-worker-probe.js"),
     readSource("../src/upstream-discio-worker.js"),
     readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../src/app.js"),
+    readSource("../index.html"),
   ]);
   assert.match(nested, /createWgpuUploadProbeExecutor/);
   assert.match(nested, /upload-probe-init/);
@@ -57,7 +59,8 @@ test("upload probes share one executor and suppress normal visible replay", asyn
   assert.match(nested, /upload-probe-finalize/);
   assert.match(nested, /upload-probe-begin-measurement/);
   assert.match(nested, /ownerBuffer instanceof SharedArrayBuffer/);
-  assert.match(disc, /isWgpuUploadProbeMode\(wgpuRendererWorkerProbe\)/);
+  assert.match(disc, /isIntentionalBlankWgpuProbe\(wgpuRendererWorkerProbe\)/);
+  assert.doesNotMatch(disc, /function isWgpuUploadProbeMode/);
   assert.match(disc, /renderBackend = "wgpu-upload-probe"/);
   assert.match(disc, /cmdRingOwnsCanvas = true/);
   assert.match(disc, /disposition: intentionalBlankProbe \? "intentional-blank-probe" : "visible-canvas"/);
@@ -73,6 +76,9 @@ test("upload probes share one executor and suppress normal visible replay", asyn
   assert.match(disc, /failWgpuUploadProbeRing\("upload probe requires protocol v3 handoff"\)/);
   assert.match(gate, /validateWgpuUploadProbeFinalization/);
   assert.match(gate, /liveWorkerProgress: uploadProbeMode/);
+  assert.match(app, /requestedWgpuRendererWorkerProbe\(window\.location\.search\)/);
+  assert.match(app, /Intentional blank diagnostic:/);
+  assert.match(page, /id="blankProbeNotice"/);
 });
 
 test("visible replay classifies the existing failed-present branch", async () => {
