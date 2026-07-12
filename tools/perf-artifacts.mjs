@@ -8,11 +8,14 @@ import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 import {
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
   parseWgpuProducerProfileStats as parseProducerProfileWire,
+  parseWgpuTailGateStats as parseTailGateWire,
 } from "../src/wgpu-pass-state-cache.js";
 
-export { WGPU_PRODUCER_PROFILE_PHASE_ORDER };
+export { WGPU_PRODUCER_PROFILE_PHASE_ORDER, WGPU_TAIL_GATE_SCHEMA };
 export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
+export const WGPU_TAIL_GATE_SCHEMA_VERSION = 1;
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",
@@ -1747,6 +1750,183 @@ export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {})
     );
   }
   return { required: true, expectedActive, enabled, available, failures };
+}
+
+export function parseWgpuTailGateStats(text = "") {
+  const parsed = parseTailGateWire(text);
+  if (!parsed) return null;
+  return {
+    wgpuTailGateSchema: WGPU_TAIL_GATE_SCHEMA,
+    wgpuTailGateSchemaVersion: WGPU_TAIL_GATE_SCHEMA_VERSION,
+    wgpuTailGateEnabled: parsed.enabled,
+    wgpuTailGateEpoch: parsed.epoch,
+    wgpuTailGatePeriod: parsed.period,
+    wgpuTailGatePayloadSamples: parsed.payloadSamples,
+    wgpuTailGateFlushNeededSamples: parsed.flushNeededSamples,
+    wgpuTailGateRefreshNeededSamples: parsed.refreshNeededSamples,
+    wgpuTailGateBothCleanSamples: parsed.bothCleanSamples,
+    wgpuTailGateDirtyAtSkip: parsed.dirtyAtSkip,
+  };
+}
+
+export function evaluateWgpuTailGateEvidence({ requested, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedEnabled = String(requested) === "1";
+  const failures = [];
+  if (!expectedEnabled && String(requested) !== "0") {
+    failures.push(`wgputailgate=${requested} is unsupported`);
+  }
+  const observations = samples.map(tailGateFromSample);
+  if (!observations.length) failures.push("WGPU tail gate has no timed samples");
+  let epoch = null;
+  let previous = null;
+  const valid = [];
+  const counters = [
+    "payloadSamples",
+    "flushNeededSamples",
+    "refreshNeededSamples",
+    "bothCleanSamples",
+    "dirtyAtSkip",
+  ];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation) {
+      failures.push(`WGPU tail gate sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (observation.schema !== WGPU_TAIL_GATE_SCHEMA ||
+        observation.schemaVersion !== WGPU_TAIL_GATE_SCHEMA_VERSION) {
+      failures.push(`WGPU tail gate sample ${index} schema mismatch`);
+    }
+    if (observation.requested != null && observation.requested !== expectedEnabled) {
+      failures.push(`WGPU tail gate sample ${index} requested state mismatch`);
+    }
+    if (observation.available != null && observation.available !== true) {
+      failures.push(`WGPU tail gate sample ${index} producer ABI is unavailable`);
+    }
+    if (observation.enabled !== expectedEnabled) {
+      failures.push(
+        `WGPU tail gate sample ${index} enabled mismatch: requested=${expectedEnabled ? 1 : 0} ` +
+        `active=${observation.enabled == null ? "unavailable" : observation.enabled ? 1 : 0}`
+      );
+    }
+    if (!Number.isSafeInteger(observation.epoch) || observation.epoch < 0) {
+      failures.push(`WGPU tail gate sample ${index} epoch is invalid`);
+    } else if (expectedEnabled && observation.epoch === 0) {
+      failures.push(`WGPU tail gate sample ${index} enabled epoch is zero`);
+    } else if (epoch == null) {
+      epoch = observation.epoch;
+    } else if (observation.epoch !== epoch) {
+      failures.push(`WGPU tail gate epoch changed ${epoch}->${observation.epoch}`);
+    }
+    if (observation.period !== 256) {
+      failures.push(`WGPU tail gate sample ${index} period=${observation.period}, expected 256`);
+    }
+    for (const name of counters) {
+      if (!Number.isSafeInteger(observation[name]) || observation[name] < 0) {
+        failures.push(`WGPU tail gate sample ${index} ${name} is invalid`);
+      }
+    }
+    for (const name of ["flushNeededSamples", "refreshNeededSamples", "bothCleanSamples"]) {
+      if (Number.isSafeInteger(observation[name]) &&
+          Number.isSafeInteger(observation.payloadSamples) &&
+          observation[name] > observation.payloadSamples) {
+        failures.push(`WGPU tail gate sample ${index} ${name} exceeds payloadSamples`);
+      }
+    }
+    if (expectedEnabled && observation.dirtyAtSkip !== 0) {
+      failures.push(`WGPU tail gate sample ${index} dirtyAtSkip=${observation.dirtyAtSkip}`);
+    }
+    if (previous) {
+      for (const name of counters) {
+        if (observation[name] < previous[name]) {
+          failures.push(`WGPU tail gate sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = observation;
+    valid.push(observation);
+  }
+  const first = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    counters.map((name) => [name, final[name] - first[name]])
+  ) : null;
+  if (final && final.payloadSamples <= 0) {
+    failures.push("WGPU tail gate payloadSamples must be positive");
+  }
+  if (expectedEnabled && final && final.bothCleanSamples <= 0) {
+    failures.push("WGPU tail gate bothCleanSamples must be positive");
+  }
+  if (expectedEnabled && deltas && deltas.payloadSamples <= 0) {
+    failures.push("WGPU tail gate payloadSamples did not advance during timed window");
+  }
+  if (expectedEnabled && deltas && deltas.bothCleanSamples <= 0) {
+    failures.push("WGPU tail gate bothCleanSamples did not advance during timed window");
+  }
+  return {
+    required: true,
+    expectedEnabled,
+    activated: observations.length > 0 &&
+      observations.every((value) => value?.enabled === expectedEnabled),
+    schemaVersion: final?.schemaVersion ?? null,
+    epoch,
+    period: final?.period ?? null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
+function tailGateFromSample(sample) {
+  const nested = sample?.causalTelemetry?.webgpu?.tailGate;
+  if (nested) {
+    return {
+      schema: nested.schema ?? WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: nested.schemaVersion ?? 1,
+      requested: nested.requested,
+      available: nested.available,
+      enabled: nested.enabled,
+      epoch: nested.epoch,
+      period: nested.period,
+      payloadSamples: nested.payloadSamples,
+      flushNeededSamples: nested.flushNeededSamples,
+      refreshNeededSamples: nested.refreshNeededSamples,
+      bothCleanSamples: nested.bothCleanSamples,
+      dirtyAtSkip: nested.dirtyAtSkip,
+    };
+  }
+  const value = (name) => sample?.[`wgpuTailGate${name}`] ?? sample?.[`causalWgpuTailGate${name}`];
+  if (value("Enabled") != null || value("SchemaVersion") != null) {
+    return {
+      schema: value("Schema") ?? WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: value("SchemaVersion") ?? 1,
+      requested: value("Requested"),
+      available: value("Available"),
+      enabled: value("Enabled"),
+      epoch: value("Epoch"),
+      period: value("Period"),
+      payloadSamples: value("PayloadSamples"),
+      flushNeededSamples: value("FlushNeededSamples"),
+      refreshNeededSamples: value("RefreshNeededSamples"),
+      bothCleanSamples: value("BothCleanSamples"),
+      dirtyAtSkip: value("DirtyAtSkip"),
+    };
+  }
+  const parsed = parseWgpuTailGateStats(sample?.helper);
+  if (!parsed) return null;
+  return {
+    schema: parsed.wgpuTailGateSchema,
+    schemaVersion: parsed.wgpuTailGateSchemaVersion,
+    enabled: parsed.wgpuTailGateEnabled,
+    epoch: parsed.wgpuTailGateEpoch,
+    period: parsed.wgpuTailGatePeriod,
+    payloadSamples: parsed.wgpuTailGatePayloadSamples,
+    flushNeededSamples: parsed.wgpuTailGateFlushNeededSamples,
+    refreshNeededSamples: parsed.wgpuTailGateRefreshNeededSamples,
+    bothCleanSamples: parsed.wgpuTailGateBothCleanSamples,
+    dirtyAtSkip: parsed.wgpuTailGateDirtyAtSkip,
+  };
 }
 
 export function parseWgpuProducerProfileStats(text = "") {

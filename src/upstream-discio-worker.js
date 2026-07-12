@@ -61,9 +61,11 @@ import {
 import {
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
   parseWgpuProducerProfileStats,
-  parseWgpuProducerStateStats
+  parseWgpuProducerStateStats,
+  parseWgpuTailGateStats
 } from "./wgpu-pass-state-cache.js";
 import {
   WGPU_UPLOAD_ROLE,
@@ -179,6 +181,8 @@ let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
 let wgpuProducerProfileRequested = false;
 let wgpuProducerProfileAvailable = false;
+let wgpuTailGateRequested = false;
+let wgpuTailGateAvailable = false;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuUboPackEnabled = false;
@@ -701,6 +705,7 @@ async function handleMessage(type, payload) {
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
         wgpuDiagnosticQuiet: payload.wgpuDiagnosticQuiet,
         wgpuProducerProfile: payload.wgpuProducerProfile,
+        wgpuTailGate: payload.wgpuTailGate,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
         wgpuUboPack: payload.wgpuUboPack,
@@ -745,6 +750,7 @@ async function handleMessage(type, payload) {
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      applyWgpuTailGate("core reset");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -763,6 +769,7 @@ async function handleMessage(type, payload) {
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      applyWgpuTailGate("slot state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -770,6 +777,7 @@ async function handleMessage(type, payload) {
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      applyWgpuTailGate("slot state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -877,6 +885,7 @@ async function handleMessage(type, payload) {
       const beforeState = api?.getCoreStateName?.() ?? "";
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      applyWgpuTailGate("save-state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -888,6 +897,7 @@ async function handleMessage(type, payload) {
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      applyWgpuTailGate("save-state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -1072,6 +1082,7 @@ async function loadCore({
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
   wgpuDiagnosticQuiet: requestedWgpuDiagnosticQuiet = false,
   wgpuProducerProfile: requestedWgpuProducerProfile = false,
+  wgpuTailGate: requestedWgpuTailGate = false,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuUboPack: requestedWgpuUboPack = false,
@@ -1119,6 +1130,21 @@ async function loadCore({
     available: false,
     enabled: false,
   };
+  wgpuTailGateRequested = Boolean(requestedWgpuTailGate);
+  wgpuTailGateAvailable = false;
+  webGpuCausalStats.tailGate = {
+    ...webGpuCausalStats.tailGate,
+    schema: WGPU_TAIL_GATE_SCHEMA,
+    requested: wgpuTailGateRequested,
+    available: false,
+    enabled: false,
+  };
+  if (wgpuTailGateRequested && !collectMetrics) {
+    throw new Error("wgputailgate=1 requires metrics=1");
+  }
+  if (wgpuTailGateRequested && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgputailgate=1 requires the true hardware WebGPU backend");
+  }
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
@@ -1408,6 +1434,16 @@ async function loadCore({
       "GetWebGpuStateCacheStats exports"
     );
   }
+  wgpuTailGateAvailable = Boolean(
+    api.setWgpuIdleFifoTailElisionEnabled && api.getWebGpuStateCacheStats
+  );
+  webGpuCausalStats.tailGate.available = wgpuTailGateAvailable;
+  if (wgpuTailGateRequested && !wgpuTailGateAvailable) {
+    throw new Error(
+      "wgputailgate=1 requires SetWgpuIdleFifoTailElisionEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
   wgpuProducerStateCacheAvailable = Boolean(api.setWebGpuStateCacheEnabled);
   // The producer and consumer see the same ordered SET_* stream. Once the
   // producer suppresses exact repeats, comparing every remaining record again
@@ -1444,6 +1480,7 @@ async function loadCore({
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
   api.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+  applyWgpuTailGate("core boot");
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
   api.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
@@ -1525,6 +1562,12 @@ function bindApi(module) {
       typeof module._SetWebGpuProducerProfileEnabled === "function"
         ? (enabled) => ccall(
             "SetWebGpuProducerProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWgpuIdleFifoTailElisionEnabled:
+      typeof module._SetWgpuIdleFifoTailElisionEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWgpuIdleFifoTailElisionEnabled", null, ["number"], [enabled ? 1 : 0]
           )
         : null,
     setWebGpuUboCacheEnabled:
@@ -1851,11 +1894,35 @@ function verifyWgpuProducerProfileActivation(scope) {
   return profile;
 }
 
+function applyWgpuTailGate(scope) {
+  api?.setWgpuIdleFifoTailElisionEnabled?.(wgpuTailGateRequested ? 1 : 0);
+  if (!wgpuTailGateRequested) return null;
+  const text = api?.getWebGpuStateCacheStats?.() ?? "";
+  const stats = parseWgpuTailGateStats(text);
+  if (!stats || stats.enabled !== true) {
+    throw new Error(`WGPU idle FIFO tail elision failed to activate during ${scope}`);
+  }
+  webGpuCausalStats.tailGate = {
+    ...stats,
+    requested: true,
+    available: wgpuTailGateAvailable,
+  };
+  return stats;
+}
+
 function collectWebGpuProducerStateStats() {
   if (!collectMetrics) return null;
   const text = api?.getWebGpuStateCacheStats?.() ?? null;
   const parsed = parseWgpuProducerStateStats(text);
   applyWgpuProducerProfileStats(parseWgpuProducerProfileStats(text));
+  const tailGate = parseWgpuTailGateStats(text);
+  if (tailGate) {
+    webGpuCausalStats.tailGate = {
+      ...tailGate,
+      requested: wgpuTailGateRequested,
+      available: wgpuTailGateAvailable,
+    };
+  }
   if (parsed) {
     webGpuCausalStats.producerStateCacheEnabled = parsed.enabled;
     webGpuCausalStats.producerPipelineRecordsSuppressed =
@@ -6423,6 +6490,20 @@ const webGpuCausalStats = {
     sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
     sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
     estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+  },
+  tailGate: {
+    schema: WGPU_TAIL_GATE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    period: 0,
+    payloadSamples: 0,
+    flushNeededSamples: 0,
+    refreshNeededSamples: 0,
+    bothCleanSamples: 0,
+    dirtyAtSkip: 0,
   },
   producerUboCacheEnabled: false,
   producerUboPackEnabled: false,

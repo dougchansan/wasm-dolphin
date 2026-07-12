@@ -28,6 +28,7 @@ import {
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
   evaluateWgpuDirtyRangeProjection,
@@ -279,7 +280,8 @@ async function runComparison(configValue, context) {
   ) {
     if (validBlockCount >= tasklist.initialValidBlocks) {
       const current = summarizeComparison(config, results);
-      if (current.outcome !== "NEEDS_MORE_BLOCKS" && current.outcome !== "INCOMPLETE") break;
+      if (!["NEEDS_MORE_BLOCKS", "INCOMPLETE", "INFRASTRUCTURE_INCONCLUSIVE"]
+          .includes(current.outcome)) break;
     }
     const block = tasklist.blocks[nextBlockIndex++];
     block.status = "running";
@@ -316,8 +318,6 @@ async function runComparison(configValue, context) {
       }
     }
     await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
-    const current = summarizeComparison(config, results);
-    if (current.outcome === "INFRASTRUCTURE_INCONCLUSIVE") break;
   }
 
   const comparison = summarizeComparison(config, results);
@@ -785,6 +785,11 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...wgpuProducerProfile.failures);
+  const wgpuTailGate = evaluateWgpuTailGateEvidence({
+    requested: scenario.params.wgputailgate,
+    samples,
+  });
+  invalidReasons.push(...wgpuTailGate.failures);
   invalidReasons.push(...evaluateCoreSelectionEvidence({
     url: url.href,
     artifactSha256: context.coreArtifact?.sha256,
@@ -833,6 +838,7 @@ async function runScenario(scenario, context) {
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   summary.metrics.wgpuProducerProfile = wgpuProducerProfile;
+  summary.metrics.wgpuTailGate = wgpuTailGate;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
   if (uploadProbeMode) {
@@ -1090,7 +1096,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
@@ -2093,6 +2099,28 @@ function runSummaryCsv(results) {
       run.metrics.wgpuProducerProfile?.deltas?.estimatedTotalNs,
     wgpuProducerProfileFinalSampleMaxNs:
       run.metrics.wgpuProducerProfile?.final?.sampleMaxNs,
+    wgpuTailGateActivated: run.metrics.wgpuTailGate?.activated,
+    wgpuTailGateExpectedEnabled: run.metrics.wgpuTailGate?.expectedEnabled,
+    wgpuTailGateSchemaVersion: run.metrics.wgpuTailGate?.schemaVersion,
+    wgpuTailGateEpoch: run.metrics.wgpuTailGate?.epoch,
+    wgpuTailGatePeriod: run.metrics.wgpuTailGate?.period,
+    wgpuTailGateDeltaPayloadSamples: run.metrics.wgpuTailGate?.deltas?.payloadSamples,
+    wgpuTailGateDeltaFlushNeededSamples:
+      run.metrics.wgpuTailGate?.deltas?.flushNeededSamples,
+    wgpuTailGateDeltaRefreshNeededSamples:
+      run.metrics.wgpuTailGate?.deltas?.refreshNeededSamples,
+    wgpuTailGateDeltaBothCleanSamples: run.metrics.wgpuTailGate?.deltas?.bothCleanSamples,
+    wgpuTailGateDeltaDirtyAtSkip: run.metrics.wgpuTailGate?.deltas?.dirtyAtSkip,
+    wgpuTailGateFinalRequested: run.metrics.wgpuTailGate?.final?.requested,
+    wgpuTailGateFinalAvailable: run.metrics.wgpuTailGate?.final?.available,
+    wgpuTailGateFinalEnabled: run.metrics.wgpuTailGate?.final?.enabled,
+    wgpuTailGateFinalPayloadSamples: run.metrics.wgpuTailGate?.final?.payloadSamples,
+    wgpuTailGateFinalFlushNeededSamples:
+      run.metrics.wgpuTailGate?.final?.flushNeededSamples,
+    wgpuTailGateFinalRefreshNeededSamples:
+      run.metrics.wgpuTailGate?.final?.refreshNeededSamples,
+    wgpuTailGateFinalBothCleanSamples: run.metrics.wgpuTailGate?.final?.bothCleanSamples,
+    wgpuTailGateFinalDirtyAtSkip: run.metrics.wgpuTailGate?.final?.dirtyAtSkip,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,

@@ -6,6 +6,7 @@ const NO_OFFSETS = Object.freeze([]);
 
 export const WGPU_PRODUCER_PROFILE_SCHEMA =
   "wasm-dolphin.wgpu-producer-profile.v1";
+export const WGPU_TAIL_GATE_SCHEMA = "wasm-dolphin.wgpu-tail-gate.v1";
 // Phases are inclusive and may nest (for example, geometry_commit contains
 // upload_copy). Compare each phase independently; never sum phase estimates.
 export const WGPU_PRODUCER_PROFILE_PHASE_ORDER = Object.freeze([
@@ -57,6 +58,28 @@ export function parseWgpuProducerProfileStats(text = "") {
     sampleTotalNs,
     sampleMaxNs,
     estimatedTotalNs,
+  };
+}
+
+export function parseWgpuTailGateStats(text = "") {
+  const match = /\bwgtail:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?=\s|$)/i
+    .exec(String(text || ""));
+  if (!match || Number(match[1]) !== 1 || !["0", "1"].includes(match[2])) return null;
+  const values = match.slice(3).map(Number);
+  if (!values.every((value) => Number.isSafeInteger(value) && value >= 0) || values[1] < 1) {
+    return null;
+  }
+  return {
+    schema: WGPU_TAIL_GATE_SCHEMA,
+    version: 1,
+    enabled: match[2] === "1",
+    epoch: values[0],
+    period: values[1],
+    payloadSamples: values[2],
+    flushNeededSamples: values[3],
+    refreshNeededSamples: values[4],
+    bothCleanSamples: values[5],
+    dirtyAtSkip: values[6],
   };
 }
 

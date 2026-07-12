@@ -1,0 +1,91 @@
+{
+  "mode": "screening",
+  "blockCount": 2,
+  "maxBlockCount": 2,
+  "hypothesis": "Skipping sampled clean FIFO tail Flush/RefreshPeekCache work improves fixed-work hardware-WGPU throughput without changing emulated work.",
+  "primaryMetric": "metrics.fixedEmulatedWork.throughputGameSpeedPercent",
+  "direction": "higher",
+  "minimumEffectPercent": 1,
+  "overheadGate": {
+    "maximumRegressionPercent": 2,
+    "semanticWork": [
+      {
+        "path": "fixedEmulatedWork.actualCoreTickDelta",
+        "maximumDifferencePercent": 0.25
+      },
+      {
+        "path": "fixedEmulatedWork.actualFrameDelta",
+        "maximumDifferencePercent": 0.25
+      }
+    ]
+  },
+  "invalidationRules": [
+    "fixture, save-state checkpoint, selected core, or fixed emulated work differs",
+    "tail-gate evidence is missing, malformed, changes epoch or period, or does not match the requested arm",
+    "the enabled arm has no sampled clean tails or reports dirty state at a skipped tail",
+    "null-drain ownership, record conservation, quiescence, or workload equivalence fails",
+    "any core, worker, command-stream, audio, or input correctness gate fails"
+  ],
+  "armA": {
+    "name": "wgpu-tail-gate-off",
+    "cacheState": "disabled",
+    "params": {
+      "video": "wgpu",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "1",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "2",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "1",
+      "gpucomplete": "0",
+      "wgpupump": "1",
+      "wgpustatecache": "0",
+      "wgpuubocache": "0",
+      "wgpuubopack": "0",
+      "wgpugeompack": "1",
+      "wgpugeomrange": "0",
+      "wgpuuploadmb": "32",
+      "wgpuuploadtransport": "mapped",
+      "wgpurenderprobe": "null-drain",
+      "wgputailgate": "0"
+    }
+  },
+  "armB": {
+    "name": "wgpu-tail-gate-on",
+    "cacheState": "disabled",
+    "params": {
+      "video": "wgpu",
+      "presenter": "webgpu",
+      "cpu": "dual",
+      "speed": "1",
+      "present": "full",
+      "pacing": "tick",
+      "queue": "2",
+      "wasmjit": "0",
+      "nojitcache": "1",
+      "jittier": "guarded",
+      "jitwarmup": "700",
+      "oc": "1",
+      "fastsw": "1",
+      "metrics": "1",
+      "gpucomplete": "0",
+      "wgpupump": "1",
+      "wgpustatecache": "0",
+      "wgpuubocache": "0",
+      "wgpuubopack": "0",
+      "wgpugeompack": "1",
+      "wgpugeomrange": "0",
+      "wgpuuploadmb": "32",
+      "wgpuuploadtransport": "mapped",
+      "wgpurenderprobe": "null-drain",
+      "wgputailgate": "1"
+    }
+  }
+}

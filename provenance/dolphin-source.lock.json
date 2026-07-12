@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "0b5045c306dd83cd432ab8c3437555e3754ecde2c1f7383ad4632d87dfc071aa",
+  "patchSeriesSha256": "cd3b918cd2d50d626d8d3caafc8556d29a335333a1496af11eb23a69ab655e93",
   "patches": [
     {
       "order": 1,
@@ -293,6 +293,14 @@
     },
     {
       "order": 34,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0034-wgpu-idle-fifo-tail-elision.patch",
+      "size": 12750,
+      "sha256": "38896e79a7cad3c58a93b1b5700f765d1e46cdd3230e6f13c59ac01a1ce0af46"
+    },
+    {
+      "order": 35,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -300,7 +308,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 35,
+      "order": 36,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

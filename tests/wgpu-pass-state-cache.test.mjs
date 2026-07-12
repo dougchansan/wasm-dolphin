@@ -8,9 +8,11 @@ import test from "node:test";
 import {
   WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
   parseWgpuProducerProfileStats,
-  parseWgpuProducerStateStats
+  parseWgpuProducerStateStats,
+  parseWgpuTailGateStats
 } from "../src/wgpu-pass-state-cache.js";
 
 test("producer profile parser preserves the fixed phase ABI and derives sampled totals", () => {
@@ -37,6 +39,28 @@ test("producer profile parser preserves the fixed phase ABI and derives sampled 
   assert.equal(parseWgpuProducerProfileStats(
     "wgprod:1,1,7,12 wgprd:1,1,1,1,1,1,1,1,1,1,1,1"
   ), null);
+});
+
+test("idle FIFO tail gate parser preserves the stable sampled wire schema", () => {
+  assert.deepEqual(
+    parseWgpuTailGateStats("wgstate:0 pipe:0 wgtail:1,1,7,64,100,20,30,60,0"),
+    {
+      schema: WGPU_TAIL_GATE_SCHEMA,
+      version: 1,
+      enabled: true,
+      epoch: 7,
+      period: 64,
+      payloadSamples: 100,
+      flushNeededSamples: 20,
+      refreshNeededSamples: 30,
+      bothCleanSamples: 60,
+      dirtyAtSkip: 0,
+    }
+  );
+  assert.equal(parseWgpuTailGateStats("wgtail:2,1,7,64,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,2,7,64,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,0,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,64,100,20,30,60"), null);
 });
 
 test("producer stats expose suppression counts and invalidate dropped runs", () => {

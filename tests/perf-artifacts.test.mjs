@@ -24,6 +24,7 @@ import {
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
   validateWgpuUploadProbeFinalization,
@@ -35,6 +36,7 @@ import {
   fixedWorkPollDelayMs,
   parseProfileMetrics,
   parseWgpuProducerProfileStats,
+  parseWgpuTailGateStats,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   recordsToCsv,
@@ -515,6 +517,91 @@ test("WGPU producer profile evidence is fail-closed and monotonic across the tim
       causalWgpuProducerProfilePhaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
     }],
   }).failures.join("\n"), /periods is invalid|calls is invalid/);
+});
+
+test("WGPU tail-gate parser and evidence fail closed for both experiment arms", () => {
+  const wire = (enabled, epoch, payload, flush, refresh, clean, dirty) =>
+    `wgtail:1,${enabled},${epoch},256,${payload},${flush},${refresh},${clean},${dirty}`;
+  assert.deepEqual(parseWgpuTailGateStats(wire(1, 7, 100, 5, 3, 92, 0)), {
+    wgpuTailGateSchema: "wasm-dolphin.wgpu-tail-gate.v1",
+    wgpuTailGateSchemaVersion: 1,
+    wgpuTailGateEnabled: true,
+    wgpuTailGateEpoch: 7,
+    wgpuTailGatePeriod: 256,
+    wgpuTailGatePayloadSamples: 100,
+    wgpuTailGateFlushNeededSamples: 5,
+    wgpuTailGateRefreshNeededSamples: 3,
+    wgpuTailGateBothCleanSamples: 92,
+    wgpuTailGateDirtyAtSkip: 0,
+  });
+  assert.equal(parseWgpuTailGateStats("wgtail:2,1,7,256,1,0,0,1,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,256,1,0,0,1"), null);
+
+  const enabled = evaluateWgpuTailGateEvidence({
+    requested: "1",
+    samples: [
+      { helper: wire(1, 7, 100, 5, 3, 92, 0) },
+      { helper: wire(1, 7, 200, 10, 6, 184, 0) },
+    ],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.activated, true);
+  assert.equal(enabled.period, 256);
+  assert.deepEqual(enabled.deltas, {
+    payloadSamples: 100,
+    flushNeededSamples: 5,
+    refreshNeededSamples: 3,
+    bothCleanSamples: 92,
+    dirtyAtSkip: 0,
+  });
+
+  const disabled = evaluateWgpuTailGateEvidence({
+    requested: "0",
+    samples: [
+      {
+        causalWgpuTailGateSchema: "wasm-dolphin.wgpu-tail-gate.v1",
+        causalWgpuTailGateSchemaVersion: 1,
+        causalWgpuTailGateRequested: false,
+        causalWgpuTailGateAvailable: true,
+        causalWgpuTailGateEnabled: false,
+        causalWgpuTailGateEpoch: 0,
+        causalWgpuTailGatePeriod: 256,
+        causalWgpuTailGatePayloadSamples: 10,
+        causalWgpuTailGateFlushNeededSamples: 1,
+        causalWgpuTailGateRefreshNeededSamples: 1,
+        causalWgpuTailGateBothCleanSamples: 8,
+        causalWgpuTailGateDirtyAtSkip: 0,
+      },
+    ],
+  });
+  assert.deepEqual(disabled.failures, []);
+  assert.equal(disabled.final.enabled, false);
+
+  for (const [label, result, pattern] of [
+    ["enabled mismatch", evaluateWgpuTailGateEvidence({
+      requested: "0", samples: [{ helper: wire(1, 7, 10, 1, 1, 8, 0) }],
+    }), /enabled mismatch/],
+    ["epoch drift", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [
+        { helper: wire(1, 7, 10, 1, 1, 8, 0) },
+        { helper: wire(1, 8, 20, 2, 2, 16, 0) },
+      ],
+    }), /epoch changed/],
+    ["period", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: "wgtail:1,1,7,64,10,1,1,8,0" }],
+    }), /expected 256/],
+    ["no payload samples", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 0, 0, 0, 0, 0) }],
+    }), /payloadSamples must be positive/],
+    ["no clean samples", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 10, 5, 5, 0, 0) }],
+    }), /bothCleanSamples must be positive/],
+    ["dirty skip", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 10, 1, 1, 8, 1) }],
+    }), /dirtyAtSkip=1/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
 });
 
 test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {
@@ -1468,6 +1555,41 @@ test("screening block effects are sign-normalized but never promotable", () => {
     { a: [22, 22], b: [11, 11] },
   ]));
   assert.ok(lowerReport.medianEffectPercent > 0);
+});
+
+test("tail-gate screening is a bounded null-drain A/B with semantic-work gates", async () => {
+  const config = JSON.parse(await readFile(
+    "tools/perf-configs/wgpu-tail-gate-screening.json", "utf8"
+  ));
+  const tasklist = buildComparisonTasklist(config);
+  assert.equal(config.mode, "screening");
+  assert.equal(config.blockCount, 2);
+  assert.equal(config.minimumEffectPercent, 1);
+  assert.deepEqual(tasklist.blocks.map((block) => block.order), [
+    ["A", "B", "B", "A"],
+    ["B", "A", "A", "B"],
+  ]);
+  assert.equal(config.armA.params.wgpurenderprobe, "null-drain");
+  assert.equal(config.armB.params.wgpurenderprobe, "null-drain");
+  assert.equal(config.armA.params.wgputailgate, "0");
+  assert.equal(config.armB.params.wgputailgate, "1");
+  assert.deepEqual(
+    config.overheadGate.semanticWork.map((rule) => rule.path),
+    ["fixedEmulatedWork.actualCoreTickDelta", "fixedEmulatedWork.actualFrameDelta"]
+  );
+});
+
+test("comparison runner consumes bounded replacements before final invalid-rate classification", async () => {
+  const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
+  assert.match(source,
+    /\["NEEDS_MORE_BLOCKS", "INCOMPLETE", "INFRASTRUCTURE_INCONCLUSIVE"\][\s\S]*?\.includes\(current\.outcome\)/);
+  assert.doesNotMatch(source,
+    /if \(current\.outcome === "INFRASTRUCTURE_INCONCLUSIVE"\) break;/);
+  assert.match(source, /buildReplacementBlock\(config, block, replacementNumber\)/);
+  assert.match(source, /"wgputailgate"/);
+  assert.match(source, /wgpuTailGateDeltaPayloadSamples/);
+  assert.match(source, /wgpuTailGateFinalAvailable/);
+  assert.match(source, /wgpuTailGateFinalDirtyAtSkip/);
 });
 
 test("overhead screening enforces a strict regression ceiling and semantic work", () => {

@@ -327,6 +327,12 @@ export function requestedWgpuProducerProfile(
   return new URLSearchParams(search).get("wgpuprodprofile") === "1";
 }
 
+export function requestedWgpuTailGate(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgputailgate") === "1";
+}
+
 export function requestedWgpuDiagnosticQuiet(
   search = globalThis.location?.search ?? ""
 ) {

@@ -85,7 +85,8 @@ const originalWindow = globalThis.window;
     wgpuGeometryRange: true,
     wgpuUploadArenaMiB: 64,
     wgpuRendererWorkerProbe: "canary",
-    wgpuProducerProfile: true
+    wgpuProducerProfile: true,
+    wgpuTailGate: true
   });
   adapter.worker = {
     postMessage(message, transfer) {
@@ -105,7 +106,8 @@ const originalWindow = globalThis.window;
       wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
       wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB,
       wgpuRendererWorkerProbe: posted.message.payload.wgpuRendererWorkerProbe,
-      wgpuProducerProfile: posted.message.payload.wgpuProducerProfile
+      wgpuProducerProfile: posted.message.payload.wgpuProducerProfile,
+      wgpuTailGate: posted.message.payload.wgpuTailGate
     },
     {
       wgpuReplayBudgetMs: 6,
@@ -114,7 +116,8 @@ const originalWindow = globalThis.window;
       wgpuGeometryRange: true,
       wgpuUploadArenaMiB: 64,
       wgpuRendererWorkerProbe: "canary",
-      wgpuProducerProfile: true
+      wgpuProducerProfile: true,
+      wgpuTailGate: true
     }
   );
   assert.deepEqual(posted.transfer, []);

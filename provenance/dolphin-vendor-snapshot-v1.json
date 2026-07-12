@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "3ffde16705c4dc6e240f666c126510d15904285a",
-    "changedPathCount": 100,
+    "resultTree": "10d0fdabc493a1c016abcb3d88fd20c81e5ea9a7",
+    "changedPathCount": 103,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -155,9 +155,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "e411239d1774c945782e599ee48c375db65ee5c6",
-        "resultBlob": "ca253343847eedecb4508134516f76482f441d2e",
-        "size": 29535,
-        "sha256": "f523a538109d1542fe8710b4de0750a93d0247521e25764501d11a7293276795"
+        "resultBlob": "b5c7743496e6b72047c1fc68a3dcff24e567c340",
+        "size": 29572,
+        "sha256": "423f2810f279ae3df89a6e9b18bc98731c7fbb2b75c7236e1d44aac9d88476b6"
       },
       {
         "path": "Source/Core/Core/Core.cpp",
@@ -632,9 +632,9 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "63cab04bbf95c02955a53d19b6b51557ae0c68f9",
-        "size": 82091,
-        "sha256": "cb05209709afd676c002d098a1a459e87c6e1b0cbb3ccec0062163730bd99465"
+        "resultBlob": "c7e798c8eb24c73fdf3b6b2bf334adba6ca350c4",
+        "size": 82904,
+        "sha256": "fdd5b9852b9bc06f603236a6f97c5da6cb2c1d9fb5044c4e08a38ae52130ba6d"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUGfx.h",
@@ -767,9 +767,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "f183c9365514cc908bbc3641d55ff8db8c3acfe9",
-        "resultBlob": "41a5b4d06ca0b5710ab31219d59e5b584290d3e0",
-        "size": 24487,
-        "sha256": "3cc6075219782cce75d3ae855d8b090625e2a555c21c8d43c9c48f8d0ab2ffa3"
+        "resultBlob": "142188966defedce3096de5353f920ad05d6596d",
+        "size": 25886,
+        "sha256": "f48f114a7fd7c72d394f662bd754c7a874219d6a68bb6c1261fd94b33624a842"
       },
       {
         "path": "Source/Core/VideoCommon/FramebufferManager.cpp",
@@ -779,6 +779,15 @@
         "resultBlob": "c798b9032519d38fb34078b38b80d85750a71f9c",
         "size": 43369,
         "sha256": "fbf10ddee89981af0d8542c41a93ce61a0a2e4329e4b380ae7d63f81dd1f7210"
+      },
+      {
+        "path": "Source/Core/VideoCommon/FramebufferManager.h",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "9f10918ac227caf2126d00367f907c46e56f86b9",
+        "resultBlob": "f8af1cafab409b00c6d306ce7333f0ed3af9a72c",
+        "size": 9118,
+        "sha256": "70e07900d2166de471e9e1dc3939c50e016b65e158cff245f08578c4eb96395a"
       },
       {
         "path": "Source/Core/VideoCommon/FramebufferShaderGen.cpp",
@@ -871,6 +880,15 @@
         "sha256": "a2c8cf85f5de1eaa1961534fd9ac665cd1df7f5496809f30337a2296f4eac854"
       },
       {
+        "path": "Source/Core/VideoCommon/VertexManagerBase.h",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "715dbee6925b40d2aedc08b207c4422a63894bd2",
+        "resultBlob": "734c696c68f469f7b9dbd658130e5e47c9baca03",
+        "size": 9244,
+        "sha256": "061e585ab6835a003440a42df29dad94fffd6218e7d21686cd4dffdc5c17adc4"
+      },
+      {
         "path": "Source/Core/VideoCommon/VertexShaderGen.cpp",
         "status": "M",
         "mode": "100644",
@@ -905,6 +923,15 @@
         "resultBlob": "e6a7e80cb9099a4fb4e8aa3f2ef2cf41430bbc2b",
         "size": 3459,
         "sha256": "92c80e01b00c24414d8f7252a625d37d01120a72c829a07987f708e4167e37b0"
+      },
+      {
+        "path": "Source/Core/VideoCommon/WasmWgpuIdleFifoTailGate.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "ffb521dee50bd58d8873ba1aa3c38c7827c26dad",
+        "size": 1928,
+        "sha256": "9cff20bf9318d96222dc8fa46101a216882af7fb6ece71e2f2f0dc9a977d148e"
       }
     ]
   },
@@ -942,5 +969,5 @@
       ]
     }
   ],
-  "contentSha256": "fbb43486a0c706265c86648443072860fa5194d35ae1e62418975565072ef409"
+  "contentSha256": "48145fd3512917b3bb8b0345594d5157f6cf7db339345b51bddb832703dc052c"
 }

@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 57096,
-      "sha256": "165ce38f2813278b00fd5f0434cdb770592d50195cab92ad7344d22b19db390f"
+      "size": 57386,
+      "sha256": "faa4ee938b41f4f3cddb2ec0bc182c51d8bc932ecd76d90be57f4562a176d6bd"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 418658,
-      "sha256": "d74f614b30549012288fd85dfe2fe8d44895aba633c96ae1841ecf68dd9fb4de"
+      "size": 421323,
+      "sha256": "6a00d8231e26f2918091e8c70bdf79ecefb933cbc3c316283d2d432508f8ad8a"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 38212,
-      "sha256": "78016e66e80796aae0a8baded958b70ee4bbb13e76e770a1fe6d630e992bcfcf"
+      "size": 38324,
+      "sha256": "bd75a304864919a4abc2601affb8906ddb32702401320550a37d54112de00e2b"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -170,8 +170,8 @@
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 15904,
-      "sha256": "a45c771e50db139e269314f003d52d711cd08e340ecd2dfb4d491839434c8688"
+      "size": 16705,
+      "sha256": "9afab698acacba9e194a29be9f3862a0f78feeeb0c9094910340785e79f377ae"
     },
     {
       "path": "src/wgpu-dirty-range-projection.js",
@@ -182,8 +182,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 35413,
-      "sha256": "dde386a3871ca65774226ed554a095851f55e672865dda3e92f26236d3943c2d"
+      "size": 35570,
+      "sha256": "ad9ba9ea5490c4db97695295e963f0649cc8b5ad5596c974285e46567a0b4729"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -227,7 +227,8 @@
   "sourceOnlyExportsPendingRebuild": [
     "_RunWebGpuVertexManagerGeometryRangeSmoke",
     "_SetWebGpuGeometryRangeEnabled",
-    "_SetWebGpuProducerProfileEnabled"
+    "_SetWebGpuProducerProfileEnabled",
+    "_SetWgpuIdleFifoTailElisionEnabled"
   ],
   "moduleExports": [
     "_AudioBuffer",
