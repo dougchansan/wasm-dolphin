@@ -113,7 +113,15 @@ export class AudioController {
       return;
     }
 
-    this.context = new AudioContext();
+    if (this.requestedTransport === "worklet") {
+      try {
+        this.context = new AudioContext({ sampleRate: 48000 });
+      } catch {
+        this.context = new AudioContext();
+      }
+    } else {
+      this.context = new AudioContext();
+    }
     this.gain = this.context.createGain();
     this.gain.gain.value = this.muted ? 0 : 1;
     this.gain.connect(this.context.destination);

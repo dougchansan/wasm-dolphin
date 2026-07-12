@@ -573,6 +573,13 @@ export class EmulatorHost {
     }
   }
 
+  configureAudioWorklet(config) {
+    if (this.mode !== "dolphin" || typeof this.adapter.configureAudioWorklet !== "function") {
+      return Promise.resolve(false);
+    }
+    return this.adapter.configureAudioWorklet(config);
+  }
+
   loop = () => {
     if (!this.running) {
       return;

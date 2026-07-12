@@ -61,6 +61,19 @@ export function openAudioPcmRing(sab) {
   };
 }
 
+export function validateAudioPcmRing(ring) {
+  const capacity = Atomics.load(ring.header, AUDIO_PCM_HEADER.CAPACITY_FRAMES) >>> 0;
+  const channels = Atomics.load(ring.header, AUDIO_PCM_HEADER.CHANNELS) >>> 0;
+  const sampleRate = Atomics.load(ring.header, AUDIO_PCM_HEADER.SAMPLE_RATE) >>> 0;
+  if (capacity !== AUDIO_PCM_CAPACITY_FRAMES || ring.samples.length !== capacity * AUDIO_PCM_CHANNELS) {
+    throw new RangeError("audio PCM ring capacity does not match its SAB payload");
+  }
+  if (channels !== AUDIO_PCM_CHANNELS || sampleRate !== AUDIO_PCM_SAMPLE_RATE) {
+    throw new RangeError("audio PCM ring format must be stereo Int16 at 48 kHz");
+  }
+  return ring;
+}
+
 export function audioPcmAvailableFrames(header) {
   return (Atomics.load(header, AUDIO_PCM_HEADER.WRITE_INDEX) -
     Atomics.load(header, AUDIO_PCM_HEADER.READ_INDEX)) >>> 0;

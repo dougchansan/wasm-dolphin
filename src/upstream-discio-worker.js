@@ -78,6 +78,7 @@ import {
   failWgpuRingConsumer,
   publishWgpuRingProgress
 } from "./wgpu-ring-backpressure.js";
+import { AudioPcmProducer } from "./audio-pcm-producer.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -220,6 +221,18 @@ const causalAudioStats = {
   workerMixTotalMs: 0,
   workerMixMaxMs: 0
 };
+const workletAudioProducer = new AudioPcmProducer({
+  api: () => ({
+    mixAudio: api?.mixAudio,
+    audioBuffer: api?.audioBuffer,
+    audioBufferFrames: api?.audioBufferFrames,
+    audioChannels: api?.audioChannels,
+    audioSampleRate: api?.audioSampleRate,
+    heapU8: moduleInstance?.HEAPU8,
+  }),
+  recordMix: (requested, returned, durationMs) =>
+    recordWorkerAudioMix(requested, returned, durationMs),
+});
 const causalInputStats = {
   workerPostApplyCount: 0,
   workerSabApplyCount: 0,
@@ -677,6 +690,7 @@ async function handleMessage(type, payload) {
       }
       return framePayload();
     case "reset":
+      workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
@@ -690,6 +704,7 @@ async function handleMessage(type, payload) {
     case "saveState":
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
+      workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
@@ -721,6 +736,7 @@ async function handleMessage(type, payload) {
     case "rendererDiagnostics":
       return rendererDiagnosticsPayload();
     case "loadStateFile": {
+      workletAudioProducer.transition();
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
       // locked — a state from a different Dolphin will be rejected by
@@ -907,7 +923,19 @@ async function handleMessage(type, payload) {
     }
     case "setAudioMuted":
       api?.setAudioMuted?.(payload.muted ? 1 : 0);
+      workletAudioProducer.setMuted(Boolean(payload.muted));
       return {};
+    case "configureAudioWorklet": {
+      if (!payload.enabled) {
+        workletAudioProducer.stop();
+        return { active: false, reason: "disabled" };
+      }
+      const result = workletAudioProducer.install(payload.sab, {
+        muted: Boolean(payload.muted),
+      });
+      if (result.active) api?.setAudioMuted?.(payload.muted ? 1 : 0);
+      return result;
+    }
     default:
       throw new Error(`Unknown upstream worker message: ${type}`);
   }
@@ -2066,6 +2094,7 @@ function maybeCreateCausalTelemetry(videoStats) {
     },
     audio: {
       ...causalAudioStats,
+      ...workletAudioProducer.telemetry(),
     },
     input: {
       workerPostApplyCount: causalInputStats.workerPostApplyCount,
@@ -8422,6 +8451,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   if (budgetStopReason === "time-budget") {
     webGpuCausalStats.replayBudgetYieldCount += 1;
     webGpuCausalStats.replayBudgetSourceYieldCounts[normalizedSource] += 1;
+    workletAudioProducer.refill(1);
   }
   if (budgetSnapshot?.atomicOverrunCompleted) {
     const atomicOverrunMs = budgetSnapshot.atomicOverrunMs;

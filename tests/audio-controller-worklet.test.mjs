@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 
 function installBrowser({ search = "?audiotransport=worklet", isolated = true, sampleRate = 48000 } = {}) {
   const modules = [];
+  const contextOptions = [];
   class Context {
-    constructor() {
+    constructor(options) {
+      contextOptions.push(options);
       this.sampleRate = sampleRate;
       this.currentTime = 0;
       this.state = "running";
@@ -27,11 +29,11 @@ function installBrowser({ search = "?audiotransport=worklet", isolated = true, s
   };
   globalThis.crossOriginIsolated = isolated;
   globalThis.AudioWorkletNode = Node;
-  return { modules };
+  return { modules, contextOptions };
 }
 
 test("worklet transport activates only after feature, module, rate, and producer gates", async () => {
-  const { modules } = installBrowser();
+  const { modules, contextOptions } = installBrowser();
   const { AudioController } = await import(`../src/audio.js?active=${Date.now()}`);
   const audio = new AudioController();
   const calls = [];
@@ -40,6 +42,7 @@ test("worklet transport activates only after feature, module, rate, and producer
   await audio.ensureContext();
   assert.equal(audio.activeTransport, "worklet");
   assert.equal(modules.length, 1);
+  assert.deepEqual(contextOptions, [{ sampleRate: 48000 }]);
   assert.ok(calls[0].sab instanceof SharedArrayBuffer);
 });
 
@@ -54,11 +57,12 @@ test("worklet request falls back observably on missing isolation", async () => {
 });
 
 test("legacy remains the default and never loads a worklet module", async () => {
-  const { modules } = installBrowser({ search: "" });
+  const { modules, contextOptions } = installBrowser({ search: "" });
   const { AudioController } = await import(`../src/audio.js?legacy=${Date.now()}`);
   const audio = new AudioController();
   await audio.ensureContext();
   assert.equal(audio.requestedTransport, "legacy");
   assert.equal(audio.activeTransport, "legacy");
   assert.equal(modules.length, 0);
+  assert.deepEqual(contextOptions, [undefined]);
 });

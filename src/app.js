@@ -136,6 +136,7 @@ const host = new EmulatorHost({
   onMode: setMode
 });
 audio.setSource((frames) => host.mixAudio(frames));
+audio.setTransportBridge((config) => host.configureAudioWorklet(config));
 // §28cx: expose the host so the main-thread profiler can read the existing
 // >20ms stall counters (rAF loop vs worker→main message handler). LoAF's
 // 50ms floor is blind to the 33-50ms band that actually starves the audio
