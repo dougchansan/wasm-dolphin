@@ -45,6 +45,8 @@
   corrected single-arm mechanism evidence and the invalidated prior A/B.
 - [WGPU dense-UBO screen](perf-results/melee-wgpu-dense-ubo-2026-07-12.md) —
   record reduction, alignment repair, and audio-inconclusive balanced evidence.
+- [WGPU second-GPU availability](perf-results/melee-wgpu-second-gpu-2026-07-12.md) —
+  forced-low-power adapter attempt and explicit single-GPU limitation.
 - [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
   removed experiment, safety invariants, and next architecture.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
