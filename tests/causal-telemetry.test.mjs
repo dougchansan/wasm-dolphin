@@ -333,6 +333,21 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       replayPumpWakeDelayMaxMs: 2.5,
       stageBudgetYieldCount: 5,
       stageCopyDeadlineOverrunMaxMs: 0.4,
+      mappedStaging: {
+        slotCount: 6,
+        slotSize: 8 * 1024 * 1024,
+        capacityMissesNoMappedSlots: 9,
+        capacityMissesMappedSlotsFull: 2,
+        sealedSlotCountTotal: 123,
+        sealedBytesTotal: 456,
+        sealedBytesMax: 78,
+        sealedRecordsTotal: 90,
+        sealedRecordsMax: 12,
+        remapLatencyTotalMs: 34.5,
+        remapLatencyMaxMs: 8.5,
+        remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16],
+        remapLatencyHistogram: [0, 1, 2, 3, 4, 0],
+      },
     },
     audio: {
       workerMixCount: 11,
@@ -468,6 +483,19 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuBacklogSampleAverage, 6.5);
   assert.equal(flat.causalWgpuBacklogAfter, 2);
   assert.equal(flat.causalWgpuBacklogNonzeroAgeMaxMs, 44);
+  assert.equal(flat.causalWgpuMappedStagingSlotCount, 6);
+  assert.equal(flat.causalWgpuMappedStagingSlotSize, 8 * 1024 * 1024);
+  assert.equal(flat.causalWgpuMappedStagingCapacityMissesNoMappedSlots, 9);
+  assert.equal(flat.causalWgpuMappedStagingCapacityMissesMappedSlotsFull, 2);
+  assert.equal(flat.causalWgpuMappedStagingSealedSlotCountTotal, 123);
+  assert.equal(flat.causalWgpuMappedStagingSealedBytesTotal, 456);
+  assert.equal(flat.causalWgpuMappedStagingSealedBytesMax, 78);
+  assert.equal(flat.causalWgpuMappedStagingSealedRecordsTotal, 90);
+  assert.equal(flat.causalWgpuMappedStagingSealedRecordsMax, 12);
+  assert.equal(flat.causalWgpuMappedStagingRemapLatencyTotalMs, 34.5);
+  assert.equal(flat.causalWgpuMappedStagingRemapLatencyMaxMs, 8.5);
+  assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyBucketBoundsMs, [1, 2, 4, 8, 16]);
+  assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyHistogram, [0, 1, 2, 3, 4, 0]);
   assert.equal(flat.causalWgpuReplayBudgetMs, 4);
   assert.equal(flat.causalWgpuReplayBudgetYieldCount, 7);
   assert.equal(flat.causalWgpuReplayBudgetAtomicOverrunMaxMs, 1.5);

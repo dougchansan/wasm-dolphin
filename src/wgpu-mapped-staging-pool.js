@@ -3,6 +3,9 @@
 
 const COPY_ALIGNMENT = 4;
 const TEXTURE_ROW_ALIGNMENT = 256;
+const REMAP_LATENCY_BUCKET_BOUNDS_MS = Object.freeze([
+  1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000,
+]);
 
 export function createWgpuMappedStagingPool({
   device,
@@ -11,6 +14,7 @@ export function createWgpuMappedStagingPool({
   bufferUsage = resolveBufferUsage(),
   mapMode = resolveMapWriteMode(),
   watchDeviceLoss = true,
+  now = () => globalThis.performance.now(),
 } = {}) {
   if (!device?.createBuffer || !device?.createCommandEncoder) {
     throw new TypeError("device must provide WebGPU buffer and encoder creation");
@@ -24,6 +28,7 @@ export function createWgpuMappedStagingPool({
   if (!isNonnegativeInteger(bufferUsage) || !isNonnegativeInteger(mapMode)) {
     throw new TypeError("bufferUsage and mapMode must be numeric WebGPU flags");
   }
+  if (typeof now !== "function") throw new TypeError("now must be a function");
 
   const owner = Symbol("wgpu-mapped-staging-pool");
   const slots = Array.from({ length: slotCount }, (_, id) => {
@@ -57,11 +62,21 @@ export function createWgpuMappedStagingPool({
     stagedBytes: 0,
     capacityMisses: 0,
     oversizedMisses: 0,
+    capacityMissesNoMappedSlots: 0,
+    capacityMissesMappedSlotsFull: 0,
     batchesSealed: 0,
     batchesSubmitted: 0,
+    sealedSlotCountTotal: 0,
+    sealedBytesTotal: 0,
+    sealedBytesMax: 0,
+    sealedRecordsTotal: 0,
+    sealedRecordsMax: 0,
     remapsStarted: 0,
     remapsCompleted: 0,
     remapFailures: 0,
+    remapLatencyTotalMs: 0,
+    remapLatencyMaxMs: 0,
+    remapLatencyHistogram: new Array(REMAP_LATENCY_BUCKET_BOUNDS_MS.length + 1).fill(0),
     invalidations: 0,
   };
 
@@ -174,6 +189,8 @@ export function createWgpuMappedStagingPool({
 
     const encoder = device.createCommandEncoder({ label: "Dolphin mapped staging uploads" });
     try {
+      const sealedBytes = batchSlots.reduce((total, slot) => total + slot.cursor, 0);
+      const sealedRecords = batchSlots.reduce((total, slot) => total + slot.records.length, 0);
       for (const slot of batchSlots) {
         slot.buffer.unmap();
         slot.mappedBytes = null;
@@ -189,6 +206,11 @@ export function createWgpuMappedStagingPool({
       nextBatchId += 1;
       activeBatches.add(batch);
       metrics.batchesSealed += 1;
+      metrics.sealedSlotCountTotal += batchSlots.length;
+      metrics.sealedBytesTotal += sealedBytes;
+      metrics.sealedBytesMax = Math.max(metrics.sealedBytesMax, sealedBytes);
+      metrics.sealedRecordsTotal += sealedRecords;
+      metrics.sealedRecordsMax = Math.max(metrics.sealedRecordsMax, sealedRecords);
       return batch;
     } catch (error) {
       invalidate(error);
@@ -202,6 +224,7 @@ export function createWgpuMappedStagingPool({
     metrics.batchesSubmitted += 1;
     const generation = batch.id;
     const remaps = batch.slots.map((slot) => {
+      const remapStartedAt = now();
       slot.state = "remapping";
       slot.records = [];
       slot.cursor = 0;
@@ -212,6 +235,13 @@ export function createWgpuMappedStagingPool({
         slot.mappedBytes = new Uint8Array(slot.buffer.getMappedRange());
         slot.state = "mapped";
         metrics.remapsCompleted += 1;
+        const latencyMs = Math.max(0, now() - remapStartedAt);
+        metrics.remapLatencyTotalMs += latencyMs;
+        metrics.remapLatencyMaxMs = Math.max(metrics.remapLatencyMaxMs, latencyMs);
+        const bucket = REMAP_LATENCY_BUCKET_BOUNDS_MS.findIndex((bound) => latencyMs <= bound);
+        metrics.remapLatencyHistogram[
+          bucket < 0 ? REMAP_LATENCY_BUCKET_BOUNDS_MS.length : bucket
+        ] += 1;
         return true;
       }, (error) => {
         metrics.remapFailures += 1;
@@ -261,7 +291,9 @@ export function createWgpuMappedStagingPool({
       states,
       pendingUploads: slots.reduce((count, slot) => count + slot.records.length, 0),
       activeBatches: activeBatches.size,
+      remapLatencyBucketBoundsMs: [...REMAP_LATENCY_BUCKET_BOUNDS_MS],
       ...metrics,
+      remapLatencyHistogram: [...metrics.remapLatencyHistogram],
     };
   }
 
@@ -280,7 +312,13 @@ export function createWgpuMappedStagingPool({
 
   function miss(reason, oversized) {
     metrics.capacityMisses += 1;
-    if (oversized) metrics.oversizedMisses += 1;
+    if (oversized) {
+      metrics.oversizedMisses += 1;
+    } else if (slots.some((slot) => slot.state === "mapped")) {
+      metrics.capacityMissesMappedSlotsFull += 1;
+    } else {
+      metrics.capacityMissesNoMappedSlots += 1;
+    }
     return Object.freeze({ ok: false, reason });
   }
 

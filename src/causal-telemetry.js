@@ -704,6 +704,32 @@ export function flattenCausalTelemetry(value) {
     causalWgpuStageBudgetYieldCount: telemetry.webgpu.stageBudgetYieldCount,
     causalWgpuStageCopyDeadlineOverrunMaxMs:
       telemetry.webgpu.stageCopyDeadlineOverrunMaxMs,
+    causalWgpuMappedStagingSlotCount:
+      telemetry.webgpu.mappedStaging?.slotCount ?? 0,
+    causalWgpuMappedStagingSlotSize:
+      telemetry.webgpu.mappedStaging?.slotSize ?? 0,
+    causalWgpuMappedStagingCapacityMissesNoMappedSlots:
+      telemetry.webgpu.mappedStaging?.capacityMissesNoMappedSlots ?? 0,
+    causalWgpuMappedStagingCapacityMissesMappedSlotsFull:
+      telemetry.webgpu.mappedStaging?.capacityMissesMappedSlotsFull ?? 0,
+    causalWgpuMappedStagingSealedSlotCountTotal:
+      telemetry.webgpu.mappedStaging?.sealedSlotCountTotal ?? 0,
+    causalWgpuMappedStagingSealedBytesTotal:
+      telemetry.webgpu.mappedStaging?.sealedBytesTotal ?? 0,
+    causalWgpuMappedStagingSealedBytesMax:
+      telemetry.webgpu.mappedStaging?.sealedBytesMax ?? 0,
+    causalWgpuMappedStagingSealedRecordsTotal:
+      telemetry.webgpu.mappedStaging?.sealedRecordsTotal ?? 0,
+    causalWgpuMappedStagingSealedRecordsMax:
+      telemetry.webgpu.mappedStaging?.sealedRecordsMax ?? 0,
+    causalWgpuMappedStagingRemapLatencyTotalMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyTotalMs ?? 0,
+    causalWgpuMappedStagingRemapLatencyMaxMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyMaxMs ?? 0,
+    causalWgpuMappedStagingRemapLatencyBucketBoundsMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyBucketBoundsMs ?? [],
+    causalWgpuMappedStagingRemapLatencyHistogram:
+      telemetry.webgpu.mappedStaging?.remapLatencyHistogram ?? [],
     causalWgpuErrorCount: telemetry.webgpu.errorCount,
     causalWgpuProducerStateCacheEnabled: telemetry.webgpu.producerStateCacheEnabled,
     causalWgpuProducerPipelineRecordsSuppressed:

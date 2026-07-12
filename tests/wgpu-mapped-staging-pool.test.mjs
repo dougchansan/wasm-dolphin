@@ -158,6 +158,7 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     states: { mapped: 1, sealed: 0, remapping: 0, failed: 0 },
     pendingUploads: 1,
     activeBatches: 0,
+    remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000],
     bufferUploads: 1,
     bufferUploadsCoalesced: 0,
     textureUploads: 0,
@@ -166,11 +167,21 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     stagedBytes: 8,
     capacityMisses: 2,
     oversizedMisses: 1,
+    capacityMissesNoMappedSlots: 0,
+    capacityMissesMappedSlotsFull: 1,
     batchesSealed: 0,
     batchesSubmitted: 0,
+    sealedSlotCountTotal: 0,
+    sealedBytesTotal: 0,
+    sealedBytesMax: 0,
+    sealedRecordsTotal: 0,
+    sealedRecordsMax: 0,
     remapsStarted: 0,
     remapsCompleted: 0,
     remapFailures: 0,
+    remapLatencyTotalMs: 0,
+    remapLatencyMaxMs: 0,
+    remapLatencyHistogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     invalidations: 0,
   });
 });
@@ -216,6 +227,35 @@ test("submits upload before render and remaps slots only after acceptance", asyn
   assert.equal(await remapped, true);
   assert.equal(pool.snapshot().states.mapped, 1);
   assert.equal(pool.stageBuffer({ data: Uint8Array.of(9, 8, 7, 6), destination: {} }).ok, true);
+});
+
+test("records batch utilization, remap latency, and unavailable-slot misses", async () => {
+  const fake = createFakeDevice();
+  let clock = 10;
+  const pool = createPool(fake, {
+    slotCount: 1,
+    slotSize: 32,
+    now: () => clock,
+  });
+  pool.stageBuffer({ data: new Uint8Array(8), destination: {} });
+  const batch = pool.seal();
+  assert.equal(pool.snapshot().sealedSlotCountTotal, 1);
+  assert.equal(pool.snapshot().sealedBytesTotal, 8);
+  assert.equal(pool.snapshot().sealedRecordsTotal, 1);
+  const remapped = submitWgpuUploadBeforeRender({
+    queue: { submit() {} }, pool, batch,
+  });
+  assert.deepEqual(pool.stageBuffer({ data: new Uint8Array(4), destination: {} }), {
+    ok: false, reason: "no-capacity",
+  });
+  assert.equal(pool.snapshot().capacityMissesNoMappedSlots, 1);
+  clock = 29;
+  fake.buffers[0].maps[0].operation.resolve();
+  assert.equal(await remapped, true);
+  const snapshot = pool.snapshot();
+  assert.equal(snapshot.remapLatencyTotalMs, 19);
+  assert.equal(snapshot.remapLatencyMaxMs, 19);
+  assert.equal(snapshot.remapLatencyHistogram[5], 1);
 });
 
 test("submission failure invalidates all slots and rethrows", () => {
