@@ -38,6 +38,7 @@ import {
   parseProfileMetrics,
   recordsToCsv,
   resolveCoreArtifactPath,
+  selectedCoreServedPaths,
   selectNextFixedWorkBenchmarkAction,
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
@@ -125,7 +126,7 @@ async function main() {
 
   try {
     await verifyServedFixture(new URL(saveStateUrl, baseUrl), saveFixture.sha256);
-    const servedApplication = await verifyServedApplication(baseUrl, coreArtifact);
+    const servedApplication = await verifyServedApplication(baseUrl, coreArtifact, corePath);
     const buildProvenance = await collectBuildProvenance(coreArtifact, corePath);
     const context = {
       baseUrl,
@@ -1490,13 +1491,17 @@ async function verifyServedFixture(url, expectedSha256) {
   }
 }
 
-async function verifyServedApplication(baseUrl, coreArtifact) {
+async function verifyServedApplication(baseUrl, coreArtifact, corePath) {
+  const selectedCore = selectedCoreServedPaths(root, corePath);
   const roots = [
     "index.html",
     "src/app.js",
     "src/upstream-discio-worker.js",
     "cores/dolphin/dolphin-core-upstream.js",
   ];
+  for (const selectedPath of [selectedCore.js, selectedCore.wasm]) {
+    if (!roots.includes(selectedPath)) roots.push(selectedPath);
+  }
   const optionalRuntimeAssets = ["cores/dolphin/prebuilt-jit-cache.bin"];
   for (const asset of optionalRuntimeAssets) {
     if (existsSync(path.join(root, ...asset.split("/")))) roots.push(asset);
@@ -1506,7 +1511,7 @@ async function verifyServedApplication(baseUrl, coreArtifact) {
   const servedArtifacts = {};
   for (const relativePath of paths) {
     const localPath = path.join(root, ...relativePath.split("/"));
-    expectedArtifacts[relativePath] = relativePath === "cores/dolphin/dolphin-core-upstream.wasm"
+    expectedArtifacts[relativePath] = relativePath === selectedCore.wasm
       ? coreArtifact
       : await describeFile(localPath, { hash: true });
     const url = new URL(relativePath, baseUrl);

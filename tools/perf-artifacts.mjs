@@ -1484,6 +1484,20 @@ export function resolveCoreArtifactPath(root, urlValue) {
   );
 }
 
+export function selectedCoreServedPaths(root, wasmPath) {
+  const relative = path.relative(root, wasmPath).replaceAll("\\", "/");
+  if (relative === "cores/dolphin/dolphin-core-upstream.wasm") {
+    return { js: "cores/dolphin/dolphin-core-upstream.js", wasm: relative };
+  }
+  const match = /^build\/core-candidates\/([0-9a-f]{64})\/dolphin-core-upstream\.wasm$/i.exec(relative);
+  if (!match) throw new Error(`Selected core is outside a supported served location: ${relative}`);
+  const prefix = `build/core-candidates/${match[1].toLowerCase()}`;
+  return {
+    js: `${prefix}/dolphin-core-upstream.js`,
+    wasm: `${prefix}/dolphin-core-upstream.wasm`,
+  };
+}
+
 export function parseProfileMetrics(helper = "", frameProfile = "") {
   const core = /\bcoreprof\s+xfb_dt:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+decode:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+vo_sync:([\d.]+)\/max([\d.]+)\s+vo_pub:([\d.]+)\/max([\d.]+)\s+vo_total:([\d.]+)\/max([\d.]+)\s+swxfb:([\d.]+)\s+conv:([\d.]+)\s+copy:([\d.]+)/.exec(helper);
   const frame = /\bloop:([\d.]+)\s+pump:([\d.]+)\s+run:([\d.]+)\s+api:([\d.]+)\s+cap:([\d.]+)\s+copy:([\d.]+)\s+present:([\d.]+)\s+draw:([\d.]+)\s+hash:([\d.]+)\s+paced:([\d.]+)\s+copy:([\d.]+)MB\/s\s+cap:(\d+)\s+shown:(\d+)/.exec(frameProfile);

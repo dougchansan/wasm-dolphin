@@ -31,6 +31,7 @@ import {
   parsePostLoadInputScript,
   recordsToCsv,
   resolveCoreArtifactPath,
+  selectedCoreServedPaths,
   selectNextFixedWorkBenchmarkAction,
   summarizeComparison,
   summarizeJitMetrics,
@@ -221,6 +222,28 @@ test("run metadata resolves the core selected by coreid", () => {
   assert.throws(
     () => resolveCoreArtifactPath("repo", "http://127.0.0.1/?coreid=not-a-hash"),
     /SHA-256/
+  );
+});
+
+test("served core paths follow the selected content-addressed candidate", () => {
+  const hash = "a".repeat(64);
+  const root = path.join("repo");
+  assert.deepEqual(
+    selectedCoreServedPaths(root, path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm")),
+    {
+      js: "cores/dolphin/dolphin-core-upstream.js",
+      wasm: "cores/dolphin/dolphin-core-upstream.wasm",
+    }
+  );
+  assert.deepEqual(
+    selectedCoreServedPaths(
+      root,
+      path.join(root, "build", "core-candidates", hash, "dolphin-core-upstream.wasm")
+    ),
+    {
+      js: `build/core-candidates/${hash}/dolphin-core-upstream.js`,
+      wasm: `build/core-candidates/${hash}/dolphin-core-upstream.wasm`,
+    }
   );
 });
 
