@@ -332,11 +332,12 @@ export class AudioController {
 
   causalTelemetry() {
     const p = this.profile;
+    const workletRing = this.workletRing ? snapshotAudioPcmRing(this.workletRing) : null;
     return {
       requestedTransport: this.requestedTransport,
       activeTransport: this.activeTransport,
       transportFallbackReason: this.transportFallbackReason,
-      workletRing: this.workletRing ? snapshotAudioPcmRing(this.workletRing) : null,
+      workletRing,
       pumpCount: p.pumpCount,
       pumpPendingSkipCount: p.pumpPendingSkipCount,
       pumpMissCount: p.pumpMisses,
@@ -345,7 +346,9 @@ export class AudioController {
       pumpGapMaxMs: p.maxGapMs,
       mixRoundTripAverageMs: p.mixSamples > 0 ? p.sumMixMs / p.mixSamples : 0,
       mixRoundTripMaxMs: p.maxMixMs,
-      underrunCount: p.underrunCount,
+      underrunCount: this.activeTransport === "worklet"
+        ? workletRing?.underrunEvents || 0
+        : p.underrunCount,
       overrunCount: p.overrunCount,
       scheduleLeadSeconds: p.scheduleLeadSeconds,
       scheduleDriftSeconds: p.scheduleDriftSeconds
