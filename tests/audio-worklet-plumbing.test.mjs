@@ -37,3 +37,9 @@ test("replay budget yields offer a bounded cooperative producer refill", async (
   );
   assert.doesNotMatch(worker, /Atomics\.wait\(/);
 });
+
+test("the worker producer calls native timers through their global receiver", async () => {
+  const producer = await read("../src/audio-pcm-producer.js");
+  assert.match(producer, /globalThis\.setInterval\(callback, delay\)/);
+  assert.match(producer, /globalThis\.clearInterval\(timer\)/);
+});

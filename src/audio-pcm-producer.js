@@ -26,7 +26,12 @@ function atomicMax(header, index, value) {
 }
 
 export class AudioPcmProducer {
-  constructor({ api = () => null, recordMix = () => {}, setTimer = setInterval, clearTimer = clearInterval } = {}) {
+  constructor({
+    api = () => null,
+    recordMix = () => {},
+    setTimer = (callback, delay) => globalThis.setInterval(callback, delay),
+    clearTimer = (timer) => globalThis.clearInterval(timer),
+  } = {}) {
     this.api = api;
     this.recordMix = recordMix;
     this.setTimer = setTimer;
