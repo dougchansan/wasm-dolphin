@@ -15,8 +15,11 @@ import {
   buildReplacementBlock,
   classifyGateOutcome,
   collectRunMetadata,
+  evaluateCandidateCoreBundle,
   evaluateMetricsModeEvidence,
+  evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
+  evaluateWgpuGeometryRangeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -219,6 +222,81 @@ test("run metadata resolves the core selected by coreid", () => {
     () => resolveCoreArtifactPath("repo", "http://127.0.0.1/?coreid=not-a-hash"),
     /SHA-256/
   );
+});
+
+test("core selection evidence fails closed on artifact, runtime, or fallback mismatches", () => {
+  const hash = "a".repeat(64);
+  const valid = evaluateCoreSelectionEvidence({
+    url: `http://127.0.0.1/?coreid=sha256:${hash}`,
+    artifactSha256: hash,
+    diagnostics: {
+      coreSelection: {
+        requestedCoreSha256: hash,
+        activeCoreSha256: hash,
+        fallbackReason: null,
+      },
+    },
+  });
+  assert.deepEqual(valid.failures, []);
+
+  const invalid = evaluateCoreSelectionEvidence({
+    url: `http://127.0.0.1/?coreid=sha256:${hash}`,
+    artifactSha256: "b".repeat(64),
+    diagnostics: {
+      coreSelection: {
+        requestedCoreSha256: hash,
+        activeCoreSha256: "c".repeat(64),
+        fallbackReason: "candidate-preflight-failed",
+      },
+    },
+  });
+  assert.equal(invalid.failures.length, 3);
+  assert.match(invalid.failures.join("\n"), /core artifact SHA-256 mismatch/);
+  assert.match(invalid.failures.join("\n"), /runtime active/);
+  assert.match(invalid.failures.join("\n"), /unexpectedly fell back/);
+});
+
+test("candidate bundle evidence binds every packaged file to the selected WASM", () => {
+  const hash = "a".repeat(64);
+  const files = {
+    "dolphin-core-upstream.wasm": hash,
+    "dolphin-core-upstream.build.json": "b".repeat(64),
+    "dolphin-core-abi-v1.json": "c".repeat(64),
+  };
+  const manifest = {
+    schemaVersion: 1,
+    coreId: `sha256:${hash}`,
+    buildInfoSha256: files["dolphin-core-upstream.build.json"],
+    files: Object.entries(files).map(([name, sha256]) => ({ name, sha256 })),
+  };
+  assert.deepEqual(evaluateCandidateCoreBundle({ manifest, expectedSha256: hash, files }).failures, []);
+  const invalid = evaluateCandidateCoreBundle({
+    manifest,
+    expectedSha256: "d".repeat(64),
+    files: { ...files, "dolphin-core-abi-v1.json": "e".repeat(64) },
+  });
+  assert.equal(invalid.verified, false);
+  assert.match(invalid.failures.join("\n"), /coreId|hash mismatch|WASM hash/);
+});
+
+test("geometry range evidence requires both activation and the producer ABI", () => {
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({}).failures, []);
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({
+    requested: "0",
+    telemetry: { geometryRangeEnabled: false, producerGeometryRangeAvailable: false },
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: { geometryRangeEnabled: true, producerGeometryRangeAvailable: true },
+  }).failures, []);
+  assert.match(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: { geometryRangeEnabled: true, producerGeometryRangeAvailable: false },
+  }).failures[0], /producerAvailable=0/);
+  assert.match(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: null,
+  }).failures[0], /active=unavailable/);
 });
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {
@@ -725,6 +803,20 @@ test("locked build provenance rejects valid-looking source, toolchain, and JS mu
   const pendingResult = validateLockedBuildProvenance(pendingRebuild);
   assert.equal(pendingResult.verified, false);
   assert.ok(pendingResult.failures.some((failure) => failure.includes("sourceOnlyExportsPendingRebuild")));
+});
+
+test("content-addressed candidate bundle may supply its generated ABI manifest", () => {
+  const provenance = validLockedBuildProvenance();
+  provenance.evidenceFiles.abiManifest.trackedAtHead = false;
+  provenance.evidenceFiles.abiManifest.matchesHead = false;
+  provenance.evidenceFiles.abiManifest.candidateBundleMember = true;
+  provenance.candidateBundle = { verified: true };
+  assert.deepEqual(validateLockedBuildProvenance(provenance), { verified: true, failures: [] });
+
+  provenance.candidateBundle.verified = false;
+  const invalid = validateLockedBuildProvenance(provenance);
+  assert.equal(invalid.verified, false);
+  assert.ok(invalid.failures.some((failure) => failure.includes("abiManifest.trackedAtHead")));
 });
 
 test("qualification requires clean git, exact video/presenter identity, and locked evidence", () => {

@@ -530,8 +530,10 @@ export function validateLockedBuildProvenance(provenance = {}) {
     require(entry?.exists === true, `evidenceFiles.${key}.exists=true`);
     require(sha(entry?.sha256), `evidenceFiles.${key}.sha256`);
     if (committed) {
-      require(entry?.trackedAtHead === true, `evidenceFiles.${key}.trackedAtHead=true`);
-      require(entry?.matchesHead === true, `evidenceFiles.${key}.matchesHead=true`);
+      const candidateAbi = key === "abiManifest" && provenance.candidateBundle?.verified === true &&
+        entry?.candidateBundleMember === true;
+      require(entry?.trackedAtHead === true || candidateAbi, `evidenceFiles.${key}.trackedAtHead=true`);
+      require(entry?.matchesHead === true || candidateAbi, `evidenceFiles.${key}.matchesHead=true`);
     }
   };
 
@@ -1527,6 +1529,79 @@ export function recordsToCsv(records) {
     lines.push(columns.map((column) => csvCell(record[column])).join(","));
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function evaluateCoreSelectionEvidence({ url, artifactSha256, diagnostics } = {}) {
+  const requested = new URL(url, "http://127.0.0.1/")
+    .searchParams.get("coreid")
+    ?.toLowerCase()
+    .replace(/^sha256:/, "") ?? "";
+  const expected = requested || String(artifactSha256 || "").toLowerCase();
+  const selection = diagnostics?.coreSelection || {};
+  const normalize = (value) => String(value || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    failures.push("expected core SHA-256 is unavailable or invalid");
+    return { expectedSha256: expected || null, selection, failures };
+  }
+  if (normalize(artifactSha256) !== expected) {
+    failures.push(
+      `core artifact SHA-256 mismatch: requested=${expected} ` +
+      `artifact=${normalize(artifactSha256) || "unavailable"}`
+    );
+  }
+  for (const [field, label] of [
+    ["requestedCoreSha256", "runtime requested"],
+    ["activeCoreSha256", "runtime active"],
+  ]) {
+    const observed = normalize(selection[field]);
+    if (observed !== expected) {
+      failures.push(
+        `core selection SHA-256 mismatch: expected=${expected} ${label}=${observed || "unavailable"}`
+      );
+    }
+  }
+  if (selection.fallbackReason) {
+    failures.push(`core selection unexpectedly fell back: ${selection.fallbackReason}`);
+  }
+  return { expectedSha256: expected, selection, failures };
+}
+
+export function evaluateCandidateCoreBundle({ manifest, expectedSha256, files } = {}) {
+  const expected = String(expectedSha256 || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+  if (manifest?.schemaVersion !== 1) failures.push("candidate manifest schemaVersion=1");
+  if (manifest?.coreId !== `sha256:${expected}`) failures.push("candidate manifest coreId matches selected core");
+  const declared = new Map((manifest?.files || []).map((entry) => [entry?.name, entry?.sha256]));
+  for (const [name, actualSha256] of Object.entries(files || {})) {
+    if (declared.get(name) !== actualSha256) {
+      failures.push(`candidate manifest hash mismatch: ${name}`);
+    }
+  }
+  if (declared.get("dolphin-core-upstream.wasm") !== expected) {
+    failures.push("candidate manifest WASM hash matches selected core");
+  }
+  if (manifest?.buildInfoSha256 !== declared.get("dolphin-core-upstream.build.json")) {
+    failures.push("candidate manifest buildInfoSha256 matches bundled build info");
+  }
+  return { verified: failures.length === 0, failures };
+}
+
+export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const enabled = telemetry?.geometryRangeEnabled;
+  const available = telemetry?.producerGeometryRangeAvailable;
+  const failures = [];
+  if (enabled !== expectedActive || (expectedActive && available !== true)) {
+    failures.push(
+      `WGPU geometry range mismatch: requested=${expectedActive ? 1 : 0} ` +
+      `active=${enabled == null ? "unavailable" : enabled ? 1 : 0} ` +
+      `producerAvailable=${available == null ? "unavailable" : available ? 1 : 0}`
+    );
+  }
+  return { required: true, expectedActive, enabled, available, failures };
 }
 
 const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =

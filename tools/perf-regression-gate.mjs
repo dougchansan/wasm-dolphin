@@ -20,8 +20,11 @@ import {
   collectRunMetadata,
   classifyGateOutcome,
   describeFile,
+  evaluateCandidateCoreBundle,
   evaluateMetricsModeEvidence,
+  evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
+  evaluateWgpuGeometryRangeEvidence,
   evaluateWgpuDirtyRangeProjection,
   evaluateQualificationProvenance,
   evaluateRunValidity,
@@ -34,6 +37,7 @@ import {
   parsePostLoadInputScript,
   parseProfileMetrics,
   recordsToCsv,
+  resolveCoreArtifactPath,
   selectNextFixedWorkBenchmarkAction,
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
@@ -94,7 +98,7 @@ async function main() {
   const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
   const headed = process.env.PERF_PROBE_HEADED === "1";
   const continueInvalidCheckpoint = process.env.PERF_CONTINUE_INVALID_CHECKPOINT === "1";
-  const corePath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm");
+  const corePath = resolveCoreArtifactPath(root, baseUrl);
 
   if (requireBaseline && !baselinePath) {
     throw new Error("PERF_BASELINE or --baseline is required in regression-guard mode");
@@ -122,7 +126,7 @@ async function main() {
   try {
     await verifyServedFixture(new URL(saveStateUrl, baseUrl), saveFixture.sha256);
     const servedApplication = await verifyServedApplication(baseUrl, coreArtifact);
-    const buildProvenance = await collectBuildProvenance(coreArtifact);
+    const buildProvenance = await collectBuildProvenance(coreArtifact, corePath);
     const context = {
       baseUrl,
       buildProvenance,
@@ -660,6 +664,11 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...softwareRasterInstrumentation.failures);
+  invalidReasons.push(...evaluateCoreSelectionEvidence({
+    url: url.href,
+    artifactSha256: context.coreArtifact?.sha256,
+    diagnostics: renderer,
+  }).failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
   const postLoadInputDelivery = summarizePostLoadInputDelivery(inputEvents, {
     expectedCount: context.postLoadInputScript.length,
@@ -855,6 +864,10 @@ function summarizeScenario(
       );
     }
   }
+  failures.push(...evaluateWgpuGeometryRangeEvidence({
+    requested: scenario.params?.wgpugeomrange,
+    telemetry: final.causalTelemetry?.webgpu,
+  }).failures);
   const requestedAudioTransport = scenario.params?.audiotransport;
   if (requestedAudioTransport) {
     const activeAudioTransport = final.causalTelemetry?.audio?.activeTransport;
@@ -1568,27 +1581,33 @@ function normalizeServedPath(value) {
   return normalized;
 }
 
-async function collectBuildProvenance(coreArtifact) {
-  const buildInfoRelative = [
+async function collectBuildProvenance(coreArtifact, corePath) {
+  const normalizedCorePath = path.relative(root, corePath).replaceAll("\\", "/");
+  const candidateMatch = /^build\/core-candidates\/([0-9a-f]{64})\/dolphin-core-upstream\.wasm$/i.exec(
+    normalizedCorePath
+  );
+  const candidatePrefix = candidateMatch ? `build/core-candidates/${candidateMatch[1].toLowerCase()}` : null;
+  const buildInfoRelative = candidatePrefix ? `${candidatePrefix}/dolphin-core-upstream.build.json` : [
     "cores/dolphin/dolphin-core-upstream.build.json",
     "cores/dolphin/build-info.json",
   ].find((candidate) => existsSync(path.join(root, ...candidate.split("/")))) ||
     "cores/dolphin/dolphin-core-upstream.build.json";
   const evidenceSpecs = {
     buildInfo: { relativePath: buildInfoRelative, committed: false },
-    sourceLock: { relativePath: "provenance/dolphin-source.lock.json", committed: true },
-    abiManifest: { relativePath: "provenance/dolphin-core-abi-v1.json", committed: true },
-    toolchainLock: { relativePath: "provenance/wasm-toolchain.lock.json", committed: true },
-    vendorSnapshot: { relativePath: "provenance/dolphin-vendor-snapshot-v1.json", committed: true },
-    nagaCargoLock: { relativePath: "tools/naga-spirv-wgsl/Cargo.lock", committed: true, json: false },
+    sourceLock: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-source.lock.json` : "provenance/dolphin-source.lock.json", headPath: "provenance/dolphin-source.lock.json", committed: true },
+    abiManifest: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-core-abi-v1.json` : "provenance/dolphin-core-abi-v1.json", headPath: candidatePrefix ? null : "provenance/dolphin-core-abi-v1.json", committed: true, candidateBundleMember: Boolean(candidatePrefix) },
+    toolchainLock: { relativePath: candidatePrefix ? `${candidatePrefix}/wasm-toolchain.lock.json` : "provenance/wasm-toolchain.lock.json", headPath: "provenance/wasm-toolchain.lock.json", committed: true },
+    vendorSnapshot: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-vendor-snapshot-v1.json` : "provenance/dolphin-vendor-snapshot-v1.json", headPath: "provenance/dolphin-vendor-snapshot-v1.json", committed: true },
+    nagaCargoLock: { relativePath: candidatePrefix ? `${candidatePrefix}/Cargo.lock` : "tools/naga-spirv-wgsl/Cargo.lock", headPath: "tools/naga-spirv-wgsl/Cargo.lock", committed: true, json: false },
   };
   const loadedEntries = await Promise.all(
     Object.entries(evidenceSpecs).map(async ([key, spec]) => [key, await loadBuildEvidence(spec)])
   );
   const loaded = Object.fromEntries(loadedEntries);
-  const jsPath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.js");
+  const jsPath = candidatePrefix ? path.join(root, candidatePrefix, "dolphin-core-upstream.js") :
+    path.join(root, "cores", "dolphin", "dolphin-core-upstream.js");
   const actualArtifacts = {
-    js: await describeBuildArtifact(jsPath, "lf-normalized"),
+    js: { ...(await describeBuildArtifact(jsPath, "lf-normalized")), path: "cores/dolphin/dolphin-core-upstream.js" },
     wasm: {
       path: "cores/dolphin/dolphin-core-upstream.wasm",
       size: coreArtifact.bytes,
@@ -1646,6 +1665,23 @@ async function collectBuildProvenance(coreArtifact) {
     untrustedEnvironmentOverrides,
     verification: null,
   };
+  if (candidatePrefix) {
+    const candidateManifestPath = `${candidatePrefix}/manifest.json`;
+    const candidateManifest = await loadBuildEvidence({ relativePath: candidateManifestPath, committed: false });
+    const bundleFiles = {};
+    for (const entry of candidateManifest.value?.files || []) {
+      const candidateFile = path.join(root, candidatePrefix, String(entry?.name || ""));
+      if (existsSync(candidateFile)) bundleFiles[entry.name] = (await describeFile(candidateFile)).sha256;
+    }
+    buildProvenance.candidateBundle = {
+      path: candidateManifestPath,
+      ...evaluateCandidateCoreBundle({
+        manifest: candidateManifest.value,
+        expectedSha256: coreArtifact.sha256,
+        files: bundleFiles,
+      }),
+    };
+  }
   buildProvenance.verification = validateLockedBuildProvenance(buildProvenance);
   return {
     buildProvenance,
@@ -1659,7 +1695,7 @@ async function collectBuildProvenance(coreArtifact) {
   };
 }
 
-async function loadBuildEvidence({ relativePath, committed, json = true }) {
+async function loadBuildEvidence({ relativePath, headPath = relativePath, committed, json = true, candidateBundleMember = false }) {
   const absolutePath = path.join(root, ...relativePath.split("/"));
   if (!existsSync(absolutePath)) {
     return {
@@ -1688,11 +1724,11 @@ async function loadBuildEvidence({ relativePath, committed, json = true }) {
   }
   const rawBuffer = Buffer.from(raw);
   const normalizedBuffer = Buffer.from(raw.replace(/\r\n/g, "\n"));
-  const head = spawnSync("git", ["show", `HEAD:${relativePath}`], {
+  const head = headPath ? spawnSync("git", ["show", `HEAD:${headPath}`], {
     cwd: root,
     encoding: "buffer",
     windowsHide: true,
-  });
+  }) : { status: 1, stdout: Buffer.alloc(0) };
   const headNormalized = head.status === 0
     ? Buffer.from(head.stdout.toString("utf8").replace(/\r\n/g, "\n"))
     : null;
@@ -1709,6 +1745,7 @@ async function loadBuildEvidence({ relativePath, committed, json = true }) {
       trackedAtHead: head.status === 0,
       matchesHead: Boolean(headNormalized && sha256Buffer(headNormalized) === normalizedSha256),
       committedRequired: committed,
+      candidateBundleMember,
     },
   };
 }

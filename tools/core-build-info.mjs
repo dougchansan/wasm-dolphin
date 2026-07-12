@@ -4,6 +4,7 @@ import { basename, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadWasmToolchainLock, sha256File, sha256NormalizedTextFile } from "./wasm-toolchain.mjs";
+import { fileRecord, publicModuleExports } from "./dolphin-provenance.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -175,7 +176,6 @@ export function packageCoreCandidate(buildInfoPath) {
   copyFileSync(absoluteBuildInfo, resolve(destination, "dolphin-core-upstream.build.json"));
   for (const relativePath of [
     "provenance/dolphin-source.lock.json",
-    "provenance/dolphin-core-abi-v1.json",
     "provenance/dolphin-vendor-snapshot-v1.json",
     "provenance/wasm-toolchain.lock.json",
     "tools/naga-spirv-wgsl/Cargo.lock"
@@ -184,6 +184,15 @@ export function packageCoreCandidate(buildInfoPath) {
     const target = resolve(destination, basename(relativePath));
     copyFileSync(source, target);
   }
+  const candidateAbi = buildCandidateAbiManifest({
+    template: JSON.parse(readFileSync(resolve(root, "provenance/dolphin-core-abi-v1.json"), "utf8")),
+    jsPath: js.path,
+    wasmPath: wasm.path,
+  });
+  writeFileSync(
+    resolve(destination, "dolphin-core-abi-v1.json"),
+    `${JSON.stringify(candidateAbi, null, 2)}\n`
+  );
   const manifest = {
     schemaVersion: 1,
     coreId: info.coreId,
@@ -201,4 +210,39 @@ export function packageCoreCandidate(buildInfoPath) {
   };
   writeFileSync(resolve(destination, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   return { destination, manifest };
+}
+
+export function buildCandidateAbiManifest({ template, jsPath, wasmPath }) {
+  if (template?.schemaVersion !== 1 || template?.abiVersion !== 1) {
+    throw new Error("Core ABI template is not supported");
+  }
+  const js = fileInfo(resolve(jsPath), "lf-normalized");
+  const wasm = fileInfo(resolve(wasmPath));
+  const moduleExports = publicModuleExports(readFileSync(resolve(jsPath), "utf8"));
+  const logicalArtifact = (artifact, suffix, info) => ({
+    ...artifact,
+    path: artifact?.path || `cores/dolphin/${suffix}`,
+    ...(info.hashMode === "raw" ? {} : { hashMode: info.hashMode }),
+    size: info.size,
+    sha256: info.sha256,
+  });
+  const templateArtifacts = Array.isArray(template.artifacts) ? template.artifacts : [];
+  const findArtifact = (suffix) => templateArtifacts.find((entry) =>
+    String(entry?.path || "").replaceAll("\\", "/").endsWith(suffix)
+  );
+  const contractSources = (template.contractSources || []).map((source) =>
+    fileRecord(source.path, root, source.hashMode ?? "raw")
+  );
+  return {
+    ...template,
+    coreId: `sha256:${wasm.sha256}`,
+    artifacts: [
+      logicalArtifact(findArtifact("dolphin-core-upstream.js"), "dolphin-core-upstream.js", js),
+      logicalArtifact(findArtifact("dolphin-core-upstream.wasm"), "dolphin-core-upstream.wasm", wasm),
+    ],
+    contractSources,
+    sourceOnlyExportsPendingRebuild: (template.sourceOnlyExportsPendingRebuild || [])
+      .filter((name) => !moduleExports.includes(name)),
+    moduleExports,
+  };
 }
