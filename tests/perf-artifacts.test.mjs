@@ -1327,6 +1327,33 @@ test("comparison rejects upload-probe runs with incomparable fixed workloads", (
   runs[1].uploadProbeWorkload = { ...workload };
   assert.equal(summarizeComparison(config, runs).outcome, "SCREENING_SIGNAL");
 
+  const semanticMismatch = [...workload.opHistogram];
+  semanticMismatch[20] *= 1.01;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: semanticMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 20 per frame/
+  );
+
+  const lowRateBase = [...workload.opHistogram];
+  lowRateBase[8] = 2;
+  for (const run of runs) run.uploadProbeWorkload = { ...workload, opHistogram: lowRateBase };
+  const lowRateMismatch = [...lowRateBase];
+  lowRateMismatch[8] = 3;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: lowRateMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 8 per frame/
+  );
+  const blitMismatch = [...workload.opHistogram];
+  blitMismatch[24] = 1;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: blitMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 24 per frame/
+  );
+  for (const run of runs) run.uploadProbeWorkload = { ...workload };
+
   runs[1].uploadProbeWorkload = {
     ...workload,
     totalUploadBytes: workload.totalUploadBytes * 1.01,

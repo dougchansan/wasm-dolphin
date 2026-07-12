@@ -1105,7 +1105,7 @@ export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
         }
       }
     }
-    const semanticOps = [6, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+    const semanticOps = [6, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24];
     const histograms = workloads.map((value) => value.opHistogram);
     if (histograms.some((value) => !Array.isArray(value) || value.length !== 25)) {
       failures.push("upload-probe opcode histograms are missing");
@@ -1133,7 +1133,8 @@ export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
 function relativeSpread(values) {
   const minimum = Math.min(...values);
   const maximum = Math.max(...values);
-  return (maximum - minimum) / Math.max(1, Math.abs(maximum), Math.abs(minimum));
+  const scale = Math.max(Math.abs(maximum), Math.abs(minimum));
+  return scale === 0 ? 0 : (maximum - minimum) / scale;
 }
 
 export function summarizeNumeric(values) {
