@@ -1741,6 +1741,12 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.producerUploadArenaWrapCount = parsed.uploadArenaWrapCount;
     webGpuCausalStats.producerUploadArenaInflightHighWaterBytes =
       parsed.uploadArenaInflightHighWaterBytes;
+    webGpuCausalStats.producerRingWaitCount = parsed.ringWaitCount;
+    webGpuCausalStats.producerRingWaitTotalUs = parsed.ringWaitTotalUs;
+    webGpuCausalStats.producerRingWaitMaxUs = parsed.ringWaitMaxUs;
+    webGpuCausalStats.producerUploadWaitCount = parsed.uploadWaitCount;
+    webGpuCausalStats.producerUploadWaitTotalUs = parsed.uploadWaitTotalUs;
+    webGpuCausalStats.producerUploadWaitMaxUs = parsed.uploadWaitMaxUs;
   }
   return text;
 }

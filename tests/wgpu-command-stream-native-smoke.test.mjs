@@ -120,3 +120,17 @@ test("native VertexManager smoke crosses the real CommitBuffer boundary", async 
   assert.match(patch, /PushDraw\(3, 1, base_vertex\)/);
   assert.match(patch, /refused to replace a live WebGPU command ring/);
 });
+
+test("producer wait instrumentation measures only actual ring and upload stalls", async () => {
+  const patch = await readFile(
+    new URL(
+      "../patches/dolphin-wasm/snapshot/0032-webgpu-producer-wait-metrics.patch",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(patch, /WaitForRingSpace[\s\S]*?wait_started_ms = emscripten_get_now/);
+  assert.match(patch, /m_ring_wait_total_us\.fetch_add/);
+  assert.match(patch, /WaitForUploadSpace[\s\S]*?m_upload_wait_total_us\.fetch_add/);
+  assert.match(patch, /wgwait:/);
+});

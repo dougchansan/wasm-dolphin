@@ -42,6 +42,12 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(value.webgpu.commandDroppedCount, 0);
   assert.equal(value.webgpu.producerUploadArenaConfiguredBytes, 0);
+  assert.equal(value.webgpu.producerRingWaitCount, 0);
+  assert.equal(value.webgpu.producerRingWaitTotalUs, 0);
+  assert.equal(value.webgpu.producerRingWaitMaxUs, 0);
+  assert.equal(value.webgpu.producerUploadWaitCount, 0);
+  assert.equal(value.webgpu.producerUploadWaitTotalUs, 0);
+  assert.equal(value.webgpu.producerUploadWaitMaxUs, 0);
   assert.equal(value.webgpu.uploadArenaRingHandoffMismatch, false);
   assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
   assert.equal(
@@ -318,6 +324,12 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       },
     },
     webgpu: {
+      producerRingWaitCount: 11,
+      producerRingWaitTotalUs: 12_000,
+      producerRingWaitMaxUs: 1_300,
+      producerUploadWaitCount: 14,
+      producerUploadWaitTotalUs: 15_000,
+      producerUploadWaitMaxUs: 1_600,
       backlogLast: 3,
       backlogSampleP95: 12,
       backlogSampleAverage: 6.5,
@@ -483,6 +495,12 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuBacklogSampleAverage, 6.5);
   assert.equal(flat.causalWgpuBacklogAfter, 2);
   assert.equal(flat.causalWgpuBacklogNonzeroAgeMaxMs, 44);
+  assert.equal(flat.causalWgpuProducerRingWaitCount, 11);
+  assert.equal(flat.causalWgpuProducerRingWaitTotalUs, 12_000);
+  assert.equal(flat.causalWgpuProducerRingWaitMaxUs, 1_300);
+  assert.equal(flat.causalWgpuProducerUploadWaitCount, 14);
+  assert.equal(flat.causalWgpuProducerUploadWaitTotalUs, 15_000);
+  assert.equal(flat.causalWgpuProducerUploadWaitMaxUs, 1_600);
   assert.equal(flat.causalWgpuMappedStagingSlotCount, 6);
   assert.equal(flat.causalWgpuMappedStagingSlotSize, 8 * 1024 * 1024);
   assert.equal(flat.causalWgpuMappedStagingCapacityMissesNoMappedSlots, 9);

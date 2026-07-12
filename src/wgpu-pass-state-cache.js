@@ -16,6 +16,7 @@ export function parseWgpuProducerStateStats(text = "") {
   const denseUbo = /\bwgubopack:(\d+)/i.exec(normalized);
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
+  const waits = /\bwgwait:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   return {
     enabled: match[1] === "1",
     pipelineRecordsSuppressed: Number(match[2]),
@@ -49,7 +50,13 @@ export function parseWgpuProducerStateStats(text = "") {
     uploadArenaFallbackCount: Number(arena?.[3] || 0),
     uploadArenaLateRejectCount: Number(arena?.[4] || 0),
     uploadArenaWrapCount: Number(arena?.[5] || 0),
-    uploadArenaInflightHighWaterBytes: Number(arena?.[6] || 0)
+    uploadArenaInflightHighWaterBytes: Number(arena?.[6] || 0),
+    ringWaitCount: Number(waits?.[1] || 0),
+    ringWaitTotalUs: Number(waits?.[2] || 0),
+    ringWaitMaxUs: Number(waits?.[3] || 0),
+    uploadWaitCount: Number(waits?.[4] || 0),
+    uploadWaitTotalUs: Number(waits?.[5] || 0),
+    uploadWaitMaxUs: Number(waits?.[6] || 0)
   };
 }
 

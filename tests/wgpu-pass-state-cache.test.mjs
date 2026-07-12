@@ -19,7 +19,8 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       "usupcall:22,23,24 usupbyte:25,26,27 " +
       "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
       "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
-      "wgarena:67108864,67108864,29,30,31,33554432"
+      "wgarena:67108864,67108864,29,30,31,33554432 " +
+      "wgwait:32,33000,3400,35,36000,3700"
     ),
     {
       enabled: true,
@@ -54,7 +55,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadArenaFallbackCount: 29,
       uploadArenaLateRejectCount: 30,
       uploadArenaWrapCount: 31,
-      uploadArenaInflightHighWaterBytes: 33554432
+      uploadArenaInflightHighWaterBytes: 33554432,
+      ringWaitCount: 32,
+      ringWaitTotalUs: 33000,
+      ringWaitMaxUs: 3400,
+      uploadWaitCount: 35,
+      uploadWaitTotalUs: 36000,
+      uploadWaitMaxUs: 3700
     }
   );
   assert.deepEqual(
@@ -94,7 +101,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadArenaFallbackCount: 0,
       uploadArenaLateRejectCount: 0,
       uploadArenaWrapCount: 0,
-      uploadArenaInflightHighWaterBytes: 0
+      uploadArenaInflightHighWaterBytes: 0,
+      ringWaitCount: 0,
+      ringWaitTotalUs: 0,
+      ringWaitMaxUs: 0,
+      uploadWaitCount: 0,
+      uploadWaitTotalUs: 0,
+      uploadWaitMaxUs: 0
     }
   );
   assert.equal(parseWgpuProducerStateStats("wgstate:1 pipe:4"), null);
