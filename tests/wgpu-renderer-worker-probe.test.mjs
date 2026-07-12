@@ -1,0 +1,46 @@
+// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const readSource = (path) => readFile(new URL(path, import.meta.url), "utf8");
+
+test("nested renderer canary proves SAB and headless WebGPU completion", async () => {
+  const source = await readSource("../src/wgpu-renderer-worker-probe.js");
+  assert.match(source, /sharedCanary instanceof SharedArrayBuffer/);
+  assert.match(source, /Atomics\.store/);
+  assert.match(source, /navigator\.gpu\.requestAdapter/);
+  assert.match(source, /adapter\.requestDevice/);
+  assert.match(source, /copyBufferToBuffer/);
+  assert.match(source, /queue\.onSubmittedWorkDone/);
+  assert.match(source, /destination\.mapAsync/);
+  assert.match(source, /source\.destroy\(\)/);
+  assert.match(source, /destination\.destroy\(\)/);
+});
+
+test("disc worker runs the canary before touching visible renderer ownership", async () => {
+  const worker = await readSource("../src/upstream-discio-worker.js");
+  const canaryCall = worker.indexOf("await runWgpuRendererWorkerCanary()");
+  const canvasContext = worker.indexOf("createWebGpuPresenter(canvas");
+  assert.ok(canaryCall > 0 && canvasContext > canaryCall);
+  assert.match(worker, /new Worker\(new URL\("\.\/wgpu-renderer-worker-probe\.js"/);
+  assert.match(worker, /new SharedArrayBuffer\(4\)/);
+  assert.match(worker, /renderer worker canary timed out/);
+  assert.match(worker, /result\.schema !== expectedSchema/);
+  assert.match(worker, /result\.observed !== expectedCanary/);
+  assert.match(worker, /rendererWorkerProbe\.error = String/);
+});
+
+test("canary mode is URL-gated, worker-plumbed, and validation-gated", async () => {
+  const [host, adapter, gate] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuRendererWorkerProbe\(window\.location\.search\)/);
+  assert.match(adapter, /wgpuRendererWorkerProbe: this\.wgpuRendererWorkerProbe/);
+  assert.match(gate, /"wgpurenderprobe"/);
+  assert.match(gate, /evaluateWgpuRendererWorkerProbeEvidence/);
+});

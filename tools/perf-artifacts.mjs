@@ -1618,6 +1618,23 @@ export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {})
   return { required: true, expectedActive, enabled, available, failures };
 }
 
+export function evaluateWgpuRendererWorkerProbeEvidence({ requested, telemetry } = {}) {
+  if (requested == null || requested === "off") return { required: false, failures: [] };
+  const probe = telemetry?.rendererWorkerProbe;
+  const failures = [];
+  if (probe?.requested !== requested || probe?.active !== true || probe?.passed !== true) {
+    failures.push(
+      `WGPU renderer worker probe mismatch: requested=${requested} ` +
+      `reported=${probe?.requested ?? "unavailable"} active=${probe?.active ? 1 : 0} ` +
+      `passed=${probe?.passed ? 1 : 0}`
+    );
+  }
+  if (requested === "canary" && probe?.schema !== "wasm-dolphin.wgpu-renderer-worker-canary.v1") {
+    failures.push(`WGPU renderer worker canary schema mismatch: ${probe?.schema || "unavailable"}`);
+  }
+  return { required: true, requested, probe, failures };
+}
+
 const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =
   "wasm-dolphin.wgpu-dirty-range-projection.v1";
 const WGPU_DIRTY_RANGE_HAZARD_COUNTERS = Object.freeze([

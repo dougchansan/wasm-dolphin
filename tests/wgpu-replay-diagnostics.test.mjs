@@ -13,6 +13,7 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
+  requestedWgpuRendererWorkerProbe,
   requestedWgpuReplayDiagnostics,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
@@ -617,6 +618,13 @@ test("mapped upload transport is opt-in and queue remains the reference", () => 
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=queue"), "queue");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=mapped"), "mapped");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=MAPped"), "queue");
+});
+
+test("renderer worker probes are explicit diagnostic modes", () => {
+  assert.equal(requestedWgpuRendererWorkerProbe(""), "off");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=canary"), "canary");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=worker-upload"), "worker-upload");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=playable"), "off");
 });
 
 test("WGPU replay budget accepts only literal 4 ms and 6 ms screening arms", () => {

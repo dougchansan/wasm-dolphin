@@ -20,6 +20,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuRendererWorkerProbeEvidence,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -320,6 +321,26 @@ test("geometry range evidence requires both activation and the producer ABI", ()
     requested: "1",
     telemetry: null,
   }).failures[0], /active=unavailable/);
+});
+
+test("renderer worker canary evidence requires the nested-worker schema", () => {
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({}).failures, []);
+  const telemetry = {
+    rendererWorkerProbe: {
+      requested: "canary",
+      active: true,
+      passed: true,
+      schema: "wasm-dolphin.wgpu-renderer-worker-canary.v1",
+    },
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "canary",
+    telemetry,
+  }).failures, []);
+  assert.match(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "canary",
+    telemetry: { rendererWorkerProbe: { requested: "canary", active: false } },
+  }).failures.join("\n"), /active=0|schema mismatch/);
 });
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {

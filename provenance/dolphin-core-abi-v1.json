@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 46950,
-      "sha256": "6da91f775cfc34061311ea1175bea1ddef1325c27855c8a6cc9e6a50fb567289"
+      "size": 47840,
+      "sha256": "4def5b2201604fe62ae552b062e44c2e439fd9050163a2e986731ace33985e7c"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 56519,
-      "sha256": "32062486b9084cefc358d504534cf1423450207ff702f2538b621d2ddbd633b1"
+      "size": 56715,
+      "sha256": "e681405c1aced73c744d34c028f3d1cc78df491f9df9ff9140fc668762e3f4e6"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -128,8 +128,14 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 398483,
-      "sha256": "38cc8ed9d872b0be9105b9a2b691cd59f9be8929f3942b5280c9037c06aeea8a"
+      "size": 401551,
+      "sha256": "34993c52b7079dfba2f3de3f1e152adc2c13e33001862024b2564bf1f08e3d76"
+    },
+    {
+      "path": "src/wgpu-renderer-worker-probe.js",
+      "hashMode": "lf-normalized",
+      "size": 2620,
+      "sha256": "02558e41f52c36d18fd29e54bf33dac3db156323d86dc3306018161fd4e385d8"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -140,8 +146,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 37618,
-      "sha256": "cd4308f9d50ab7a45e056004b50072cffa09776ad57b4acf0496621aa63c40c3"
+      "size": 37895,
+      "sha256": "cc648d43fb17bb93d3829f17288b46d124c172ff1df360178bb5ca604387623e"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -164,8 +170,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 33430,
-      "sha256": "bf959fa581eb4415fcb7ffde9451331ead47698ae4f37d12266f752e233b5172"
+      "size": 33713,
+      "sha256": "280281d57c73cd7743a8bc8c54276948270fdbe4e92bc55bf588ccfbb98d871c"
     },
     {
       "path": "src/wgpu-upload-attribution.js",

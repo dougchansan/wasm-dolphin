@@ -15,6 +15,7 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
+  requestedWgpuRendererWorkerProbe,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
   requestedWgpuReplayDiagnostics,
@@ -108,6 +109,7 @@ export class EmulatorHost {
       this.wgpuGeometryPack && requestedWgpuGeometryRange(window.location.search);
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
+    this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
@@ -336,6 +338,7 @@ export class EmulatorHost {
             wgpuGeometryRange: this.wgpuGeometryRange,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,
+            wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,

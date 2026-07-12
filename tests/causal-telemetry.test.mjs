@@ -330,6 +330,14 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       producerUploadWaitCount: 14,
       producerUploadWaitTotalUs: 15_000,
       producerUploadWaitMaxUs: 1_600,
+      rendererWorkerProbe: {
+        requested: "canary",
+        active: true,
+        passed: true,
+        schema: "wasm-dolphin.wgpu-renderer-worker-canary.v1",
+        totalMs: 12.5,
+        error: "",
+      },
       backlogLast: 3,
       backlogSampleP95: 12,
       backlogSampleAverage: 6.5,
@@ -501,6 +509,11 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuProducerUploadWaitCount, 14);
   assert.equal(flat.causalWgpuProducerUploadWaitTotalUs, 15_000);
   assert.equal(flat.causalWgpuProducerUploadWaitMaxUs, 1_600);
+  assert.equal(flat.causalWgpuRendererWorkerProbeRequested, "canary");
+  assert.equal(flat.causalWgpuRendererWorkerProbeActive, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbePassed, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeSchema, "wasm-dolphin.wgpu-renderer-worker-canary.v1");
+  assert.equal(flat.causalWgpuRendererWorkerProbeTotalMs, 12.5);
   assert.equal(flat.causalWgpuMappedStagingSlotCount, 6);
   assert.equal(flat.causalWgpuMappedStagingSlotSize, 8 * 1024 * 1024);
   assert.equal(flat.causalWgpuMappedStagingCapacityMissesNoMappedSlots, 9);

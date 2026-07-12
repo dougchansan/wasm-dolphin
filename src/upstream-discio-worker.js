@@ -173,6 +173,7 @@ let wgpuGeometryPackEnabled = false;
 let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
+let wgpuRendererWorkerProbe = "off";
 let wgpuMappedStagingPool = null;
 let wgpuMappedRemapPromises = new Set();
 let wgpuMappedCapacityBlocked = false;
@@ -672,6 +673,7 @@ async function handleMessage(type, payload) {
         wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
+        wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -1002,6 +1004,7 @@ async function loadCore({
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
+  wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -1036,6 +1039,9 @@ async function loadCore({
     wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
+  wgpuRendererWorkerProbe = new Set([
+    "canary", "inline-upload", "worker-upload", "null-drain"
+  ]).has(requestedWgpuRendererWorkerProbe) ? requestedWgpuRendererWorkerProbe : "off";
   wgpuMappedStagingPool?.invalidate("core reloaded");
   wgpuMappedStagingPool = null;
   wgpuMappedRemapPromises = new Set();
@@ -1056,6 +1062,23 @@ async function loadCore({
   wgpuPowerPreference = requestedWgpuPowerPreference === "low-power"
     ? "low-power"
     : "high-performance";
+  webGpuCausalStats.rendererWorkerProbe = {
+    ...webGpuCausalStats.rendererWorkerProbe,
+    requested: wgpuRendererWorkerProbe,
+    active: false,
+    passed: false,
+    error: "",
+  };
+  if (wgpuRendererWorkerProbe === "canary") {
+    try {
+      await runWgpuRendererWorkerCanary();
+    } catch (error) {
+      webGpuCausalStats.rendererWorkerProbe.error = String(error?.message || error);
+      throw error;
+    }
+  } else if (wgpuRendererWorkerProbe !== "off") {
+    throw new Error(`WGPU renderer worker probe is not implemented: ${wgpuRendererWorkerProbe}`);
+  }
   wgpuReplayYieldPending = false;
   webGpuCausalStats.replayBudgetEnabled = wgpuReplayBudgetMs > 0;
   webGpuCausalStats.replayBudgetMs = wgpuReplayBudgetMs;
@@ -5301,6 +5324,62 @@ function ensureWgpuMappedStagingPool(device) {
     });
   }
   return wgpuMappedStagingPool;
+}
+
+async function runWgpuRendererWorkerCanary() {
+  if (!(globalThis.crossOriginIsolated && typeof SharedArrayBuffer === "function")) {
+    throw new Error("renderer worker canary requires cross-origin isolation");
+  }
+  const sharedCanary = new SharedArrayBuffer(4);
+  const atomics = new Int32Array(sharedCanary);
+  const worker = new Worker(new URL("./wgpu-renderer-worker-probe.js", import.meta.url), {
+    type: "module",
+    name: "dolphin-wgpu-renderer-probe",
+  });
+  const result = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("renderer worker canary timed out")), 10_000);
+    worker.addEventListener("message", (event) => {
+      if (event.data?.type !== "canary-result") return;
+      clearTimeout(timeout);
+      resolve(event.data);
+    }, { once: true });
+    worker.addEventListener("error", (event) => {
+      clearTimeout(timeout);
+      reject(new Error(event.message || "renderer worker canary failed"));
+    }, { once: true });
+    worker.postMessage({
+      type: "canary",
+      sharedCanary,
+      powerPreference: wgpuPowerPreference,
+    });
+  }).finally(() => worker.terminate());
+  const expectedCanary = 0x57a6cafe;
+  const expectedSchema = "wasm-dolphin.wgpu-renderer-worker-canary.v1";
+  const observedCanary = Atomics.load(atomics, 0) >>> 0;
+  if (
+    !result?.ok ||
+    result.schema !== expectedSchema ||
+    observedCanary !== expectedCanary ||
+    result.observed !== expectedCanary
+  ) {
+    throw new Error(result?.error || `renderer worker canary mismatch: ${observedCanary.toString(16)}`);
+  }
+  webGpuCausalStats.rendererWorkerProbe = {
+    requested: "canary",
+    active: true,
+    passed: true,
+    schema: expectedSchema,
+    adapterMs: Number(result.adapterMs) || 0,
+    deviceMs: Number(result.deviceMs) || 0,
+    gpuCompletionMs: Number(result.gpuCompletionMs) || 0,
+    mapMs: Number(result.mapMs) || 0,
+    totalMs: Number(result.totalMs) || 0,
+    error: "",
+  };
+  postStatus(
+    `WGPU renderer worker canary passed in ${webGpuCausalStats.rendererWorkerProbe.totalMs.toFixed(1)}ms`
+  );
+  return webGpuCausalStats.rendererWorkerProbe;
 }
 
 function trackWgpuMappedRemap(remapPromise) {

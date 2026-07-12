@@ -192,6 +192,18 @@ export function createCausalTelemetry(overrides = {}) {
         producerUploadWaitCount: 0,
         producerUploadWaitTotalUs: 0,
         producerUploadWaitMaxUs: 0,
+        rendererWorkerProbe: {
+          requested: "off",
+          active: false,
+          passed: false,
+          schema: "",
+          adapterMs: 0,
+          deviceMs: 0,
+          gpuCompletionMs: 0,
+          mapMs: 0,
+          totalMs: 0,
+          error: "",
+        },
         producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
         producerUboPackEnabled: false,
         producerUboPacketEligibleCount: 0,
@@ -764,6 +776,18 @@ export function flattenCausalTelemetry(value) {
     causalWgpuProducerUploadWaitCount: telemetry.webgpu.producerUploadWaitCount,
     causalWgpuProducerUploadWaitTotalUs: telemetry.webgpu.producerUploadWaitTotalUs,
     causalWgpuProducerUploadWaitMaxUs: telemetry.webgpu.producerUploadWaitMaxUs,
+    causalWgpuRendererWorkerProbeRequested:
+      telemetry.webgpu.rendererWorkerProbe?.requested ?? "off",
+    causalWgpuRendererWorkerProbeActive:
+      telemetry.webgpu.rendererWorkerProbe?.active ?? false,
+    causalWgpuRendererWorkerProbePassed:
+      telemetry.webgpu.rendererWorkerProbe?.passed ?? false,
+    causalWgpuRendererWorkerProbeSchema:
+      telemetry.webgpu.rendererWorkerProbe?.schema ?? "",
+    causalWgpuRendererWorkerProbeTotalMs:
+      telemetry.webgpu.rendererWorkerProbe?.totalMs ?? 0,
+    causalWgpuRendererWorkerProbeError:
+      telemetry.webgpu.rendererWorkerProbe?.error ?? "",
     causalWgpuProducerUboChangeMaskHistogram:
       telemetry.webgpu.producerUboChangeMaskHistogram,
     causalWgpuProducerUboPackEnabled: telemetry.webgpu.producerUboPackEnabled,

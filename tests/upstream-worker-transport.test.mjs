@@ -82,7 +82,8 @@ const originalWindow = globalThis.window;
     wgpuPowerPreference: "low-power",
     wgpuGeometryPack: true,
     wgpuGeometryRange: true,
-    wgpuUploadArenaMiB: 64
+    wgpuUploadArenaMiB: 64,
+    wgpuRendererWorkerProbe: "canary"
   });
   adapter.worker = {
     postMessage(message, transfer) {
@@ -100,14 +101,16 @@ const originalWindow = globalThis.window;
       wgpuPowerPreference: posted.message.payload.wgpuPowerPreference,
       wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
       wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
-      wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB
+      wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB,
+      wgpuRendererWorkerProbe: posted.message.payload.wgpuRendererWorkerProbe
     },
     {
       wgpuReplayBudgetMs: 6,
       wgpuPowerPreference: "low-power",
       wgpuGeometryPack: true,
       wgpuGeometryRange: true,
-      wgpuUploadArenaMiB: 64
+      wgpuUploadArenaMiB: 64,
+      wgpuRendererWorkerProbe: "canary"
     }
   );
   assert.deepEqual(posted.transfer, []);

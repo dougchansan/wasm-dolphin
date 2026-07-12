@@ -321,6 +321,15 @@ export function requestedWgpuUploadTransport(
     : "queue";
 }
 
+export function requestedWgpuRendererWorkerProbe(
+  search = globalThis.location?.search ?? ""
+) {
+  const value = new URLSearchParams(search).get("wgpurenderprobe");
+  return new Set(["canary", "inline-upload", "worker-upload", "null-drain"]).has(value)
+    ? value
+    : "off";
+}
+
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuatomic") !== "0";
 }
