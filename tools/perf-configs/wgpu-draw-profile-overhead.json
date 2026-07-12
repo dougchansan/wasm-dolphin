@@ -11,6 +11,7 @@
     "both arms require metrics=1 and wgpuprodprofile=1 with otherwise identical settings",
     "the reference arm must expose wgdraw v1 disabled with zero counters",
     "the detail arm must expose wgdraw v1 enabled with stable epoch, phase order, periods, stratified cadence, and monotonic counters",
+    "each arm's two primary-metric observations must remain within 10% of their arm mean",
     "each ABBA/BAAB block must remain below 2% incremental throughput regression",
     "actual core-tick and frame work must remain within 5% between arms"
   ],
@@ -27,6 +28,9 @@
         "maximumDifferencePercent": 5
       }
     ]
+  },
+  "stabilityGate": {
+    "maximumWithinArmSpreadPercent": 10
   },
   "armA": {
     "name": "draw-detail-off",

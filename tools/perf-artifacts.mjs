@@ -919,6 +919,7 @@ export function validateComparisonConfig(value) {
     throw new Error("minimumEffectPercent must be a non-negative number");
   }
   const overheadGate = normalizeOverheadGate(value.overheadGate);
+  const stabilityGate = normalizeStabilityGate(value.stabilityGate);
   return {
     schemaVersion: 1,
     mode,
@@ -928,6 +929,7 @@ export function validateComparisonConfig(value) {
     direction,
     minimumEffectPercent,
     overheadGate,
+    stabilityGate,
     hypothesis: String(value.hypothesis || "").trim() || null,
     invalidationRules: Array.isArray(value.invalidationRules)
       ? value.invalidationRules.map(String)
@@ -961,6 +963,7 @@ export function buildComparisonTasklist(configValue) {
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
     overheadGate: config.overheadGate,
+    stabilityGate: config.stabilityGate,
     hypothesis: config.hypothesis,
     invalidationRules: config.invalidationRules,
     stopRule: config.stopRule,
@@ -1010,6 +1013,31 @@ export function summarizeComparison(configValue, runs) {
     const valuesB = armB.map((run) => Number(readPath(run, config.primaryMetric)));
     if ([...valuesA, ...valuesB].some((number) => !Number.isFinite(number))) {
       invalidReasons.push(`${blockId}: primary metric ${config.primaryMetric} is missing or non-numeric`);
+    }
+    const withinArmStability = {
+      A: valuesA.length === 2 && valuesA.every(Number.isFinite)
+        ? summarizeWithinArmSpread(valuesA)
+        : null,
+      B: valuesB.length === 2 && valuesB.every(Number.isFinite)
+        ? summarizeWithinArmSpread(valuesB)
+        : null,
+    };
+    if (config.stabilityGate) {
+      for (const arm of ["A", "B"]) {
+        const evidence = withinArmStability[arm];
+        if (!evidence || !Number.isFinite(evidence.spreadPercent)) {
+          invalidReasons.push(
+            `${blockId}: primary metric ${config.primaryMetric} arm ${arm} ` +
+            "within-arm spread is unavailable"
+          );
+        } else if (evidence.spreadPercent > config.stabilityGate.maximumWithinArmSpreadPercent) {
+          invalidReasons.push(
+            `${blockId}: primary metric ${config.primaryMetric} arm ${arm} ` +
+            `within-arm spread ${evidence.spreadPercent.toFixed(3)}% exceeds maximum ` +
+            `${config.stabilityGate.maximumWithinArmSpreadPercent}%`
+          );
+        }
+      }
     }
     const initiallyValid = invalidReasons.length === 0;
     const meanA = initiallyValid ? mean(valuesA) : null;
@@ -1072,6 +1100,7 @@ export function summarizeComparison(configValue, runs) {
       effectPercent: Number.isFinite(effectPercent) ? effectPercent : null,
       overheadRegressionPercent,
       semanticWork,
+      withinArmStability,
     });
   }
   const validBlocks = blocks.filter((block) => block.valid);
@@ -1110,6 +1139,7 @@ export function summarizeComparison(configValue, runs) {
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
     overheadGate: config.overheadGate,
+    stabilityGate: config.stabilityGate,
     overheadGatePassed: config.overheadGate
       ? validBlocks.length >= config.blockCount && invalidBlocks.length === 0
       : null,
@@ -2827,6 +2857,29 @@ function normalizeOverheadGate(value) {
     return { path, maximumDifferencePercent };
   });
   return { maximumRegressionPercent, semanticWork };
+}
+
+function normalizeStabilityGate(value) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("stabilityGate must be an object");
+  }
+  const maximumWithinArmSpreadPercent = Number(value.maximumWithinArmSpreadPercent);
+  if (!Number.isFinite(maximumWithinArmSpreadPercent) || maximumWithinArmSpreadPercent < 0) {
+    throw new Error("stabilityGate.maximumWithinArmSpreadPercent must be non-negative");
+  }
+  return { maximumWithinArmSpreadPercent };
+}
+
+function summarizeWithinArmSpread(values) {
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const average = mean(values);
+  const spread = maximum - minimum;
+  const spreadPercent = average === 0
+    ? spread === 0 ? 0 : null
+    : spread / Math.abs(average) * 100;
+  return { min: minimum, max: maximum, mean: average, spreadPercent };
 }
 
 function numericValue(value) {

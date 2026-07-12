@@ -1669,7 +1669,9 @@ test("draw-detail overhead screening pins hardware null-drain and changes only i
     new URL("../tools/perf-configs/wgpu-draw-profile-overhead.json", import.meta.url),
     "utf8"
   ));
-  assert.equal(validateComparisonConfig(config).overheadGate.maximumRegressionPercent, 2);
+  const validated = validateComparisonConfig(config);
+  assert.equal(validated.overheadGate.maximumRegressionPercent, 2);
+  assert.equal(validated.stabilityGate.maximumWithinArmSpreadPercent, 10);
   const paramsA = { ...config.armA.params };
   const paramsB = { ...config.armB.params };
   assert.equal(paramsA.wgpudrawprofile, "0");
@@ -1683,6 +1685,56 @@ test("draw-detail overhead screening pins hardware null-drain and changes only i
   assert.equal(paramsA.wgpuprodprofile, "1");
   assert.equal(paramsA.wgpuuploadtransport, "mapped");
   assert.equal(paramsA.wasmjit, "0");
+});
+
+test("comparison stability gate rejects unstable arms and retains per-arm evidence", () => {
+  const config = comparisonConfig({
+    stabilityGate: { maximumWithinArmSpreadPercent: 10 },
+  });
+  const unstable = summarizeComparison(config, makeRuns(config, [
+    { a: [68.10, 46.85], b: [60, 61] },
+    { a: [60, 61], b: [64, 65] },
+  ]));
+  assert.equal(unstable.blocks[0].valid, false);
+  const unstableArmA = unstable.blocks[0].withinArmStability.A;
+  assert.equal(unstableArmA.min, 46.85);
+  assert.equal(unstableArmA.max, 68.10);
+  assert.equal(unstableArmA.mean, 57.474999999999994);
+  assert.ok(Math.abs(
+    unstableArmA.spreadPercent - 36.97259678120921
+  ) < 1e-12);
+  assert.equal(unstable.blocks[0].withinArmStability.B.spreadPercent, 1.6528925619834711);
+  assert.match(
+    unstable.blocks[0].invalidReasons.join("\n"),
+    /arm A within-arm spread 36\.973% exceeds maximum 10%/
+  );
+  assert.equal(unstable.invalidBlockCount, 1);
+  assert.equal(unstable.outcome, "INFRASTRUCTURE_INCONCLUSIVE");
+
+  const stable = summarizeComparison(config, makeRuns(config, [
+    { a: [68.10, 64], b: [70, 67] },
+    { a: [65, 68], b: [69, 72] },
+  ]));
+  assert.equal(stable.validBlockCount, 2);
+  assert.equal(stable.invalidBlockCount, 0);
+  assert.ok(stable.blocks.every((block) =>
+    block.withinArmStability.A.spreadPercent <= 10 &&
+    block.withinArmStability.B.spreadPercent <= 10
+  ));
+});
+
+test("comparison stability gate validation is optional and fail-closed", () => {
+  assert.equal(validateComparisonConfig(comparisonConfig()).stabilityGate, null);
+  assert.throws(
+    () => validateComparisonConfig(comparisonConfig({ stabilityGate: [] })),
+    /stabilityGate must be an object/
+  );
+  assert.throws(
+    () => validateComparisonConfig(comparisonConfig({
+      stabilityGate: { maximumWithinArmSpreadPercent: -1 },
+    })),
+    /maximumWithinArmSpreadPercent must be non-negative/
+  );
 });
 
 test("comparison runner consumes bounded replacements before final invalid-rate classification", async () => {
