@@ -142,6 +142,18 @@ test("builds the playable Melee preset href", () => {
   assert.equal(url.searchParams.get("fastsw"), null);
 });
 
+test("playable and settings links cannot retain blank WGPU probes", () => {
+  const diagnosticHref =
+    "http://localhost:5173/?video=wgpu&wgpurenderprobe=null-drain&metrics=1#play";
+  const settings = readSettingsFromSearch(diagnosticHref.slice(diagnosticHref.indexOf("?")));
+
+  const settingsUrl = new URL(buildSettingsHref(diagnosticHref, settings));
+  const playableUrl = new URL(buildPlayablePresetHref(diagnosticHref));
+
+  assert.equal(settingsUrl.searchParams.get("wgpurenderprobe"), null);
+  assert.equal(playableUrl.searchParams.get("wgpurenderprobe"), null);
+});
+
 test("describes selected settings for compact display", () => {
   assert.equal(
     describeSettings({ core: "upstream", video: "software", cpu: "dual", wasmjit: "1" }),

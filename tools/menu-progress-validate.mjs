@@ -21,6 +21,7 @@ import {
   recordsToCsv,
   resolveCoreArtifactPath,
 } from "./perf-artifacts.mjs";
+import { buildVisibleHarnessUrl } from "./benchmark-url.mjs";
 
 const root = process.cwd();
 const args = parseArgs(process.argv.slice(2));
@@ -131,7 +132,13 @@ const browserEngine = browserName === "firefox" ? firefox : chromium;
 await mkdir(outDir, { recursive: true });
 console.log(`[menu-progress] outDir=${outDir} duration=${durationSeconds}s headed=${headed}`);
 
-const url = new URL(baseUrl);
+const { url, removedProbe: removedInheritedWgpuProbe } = buildVisibleHarnessUrl(baseUrl);
+if (removedInheritedWgpuProbe) {
+  console.warn(
+    `[menu-progress] removed inherited wgpurenderprobe=${removedInheritedWgpuProbe}; ` +
+    "playthrough runs require visible output"
+  );
+}
 url.searchParams.set("core", "upstream");
 url.searchParams.set("video", videoMode);
 url.searchParams.set("cpu", process.env.CPU || "dual");

@@ -78,6 +78,11 @@ export function buildSettingsHref(href, settings) {
   const url = new URL(href);
   const nextSettings = normalizeSettings(settings);
 
+  // Renderer probes replace the visible executor with diagnostic sinks. The
+  // settings UI cannot select true hardware WGPU, so retaining one here can
+  // only turn Apply or Playable preset into an invalid/blank run.
+  url.searchParams.delete("wgpurenderprobe");
+
   writeSetting(url.searchParams, "core", nextSettings.core, DEFAULT_SETTINGS.core);
   writeSetting(url.searchParams, "video", nextSettings.video, DEFAULT_SETTINGS.video);
   writeSetting(url.searchParams, "cpu", nextSettings.cpu, DEFAULT_SETTINGS.cpu);

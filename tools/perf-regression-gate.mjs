@@ -59,6 +59,7 @@ import {
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "./perf-artifacts.mjs";
+import { buildPerfScenarioUrl } from "./benchmark-url.mjs";
 
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
@@ -344,8 +345,9 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
-  const uploadProbeMode = ["inline-upload", "worker-upload", "null-drain"].includes(
-    scenario.params?.wgpurenderprobe
+  const { url, uploadProbeMode } = buildPerfScenarioUrl(
+    context.baseUrl,
+    scenario.params
   );
   const fixedWorkPollIntervalMs = uploadProbeMode ? 10 : FIXED_WORK_POLL_INTERVAL_MS;
   let fixedEmulatedWork = {
@@ -355,8 +357,6 @@ async function runScenario(scenario, context) {
     pollIntervalMs: context.targetCoreSeconds != null ? fixedWorkPollIntervalMs : null,
     reachedTarget: false,
   };
-  const url = new URL(context.baseUrl);
-  for (const [key, value] of Object.entries(scenario.params)) url.searchParams.set(key, value);
   url.searchParams.set("probe", `${scenario.name}-${Date.now()}`);
 
   try {
