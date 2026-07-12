@@ -50,8 +50,8 @@
     {
       "path": "src/audio.js",
       "hashMode": "lf-normalized",
-      "size": 12369,
-      "sha256": "20e2fa3c52124c1c4b1b3c42e3578e7a050056fee372e96012703516e2a93a34"
+      "size": 12579,
+      "sha256": "f944d24d654cf8d0c433dac66a9f287e87671eafa3862380450918e892859935"
     },
     {
       "path": "src/audio-pcm-ring.js",
@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 56033,
-      "sha256": "56480f4d022a473e3a85596b02027d697d96a16028ea45c8c32c76e69975639e"
+      "size": 56072,
+      "sha256": "e2247c45eade5170f0e181a2b557a6ed994b922977a17d1833d45f27a55454b8"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -140,8 +140,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 37177,
-      "sha256": "00195424d96fabea47ce53181e1e54cf90e5c90ab32032c24379e76dc6b485b7"
+      "size": 37284,
+      "sha256": "1755e32e82b0581f015fb5f641952678ef854c0e4815239eb4312ae05f324275"
     },
     {
       "path": "src/upstream-worker-protocol.js",

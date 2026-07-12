@@ -536,7 +536,7 @@ export class UpstreamWorkerAdapter {
   }
 
   async configureAudioWorklet({ enabled, muted, sab }) {
-    if (!this.loaded) return false;
+    if (!this.loaded) return { active: false, reason: "core-not-loaded" };
     const response = await this.request("configureAudioWorklet", {
       enabled: Boolean(enabled),
       muted: Boolean(muted),
@@ -545,7 +545,10 @@ export class UpstreamWorkerAdapter {
     if (enabled && !response.active) {
       this.onStatus(`AudioWorklet producer unavailable; using legacy audio: ${response.reason || "unknown"}`);
     }
-    return Boolean(response.active);
+    return {
+      active: Boolean(response.active),
+      reason: String(response.reason || ""),
+    };
   }
 
   start() {

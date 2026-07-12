@@ -575,7 +575,7 @@ export class EmulatorHost {
 
   configureAudioWorklet(config) {
     if (this.mode !== "dolphin" || typeof this.adapter.configureAudioWorklet !== "function") {
-      return Promise.resolve(false);
+      return Promise.resolve({ active: false, reason: "core-not-loaded" });
     }
     return this.adapter.configureAudioWorklet(config);
   }

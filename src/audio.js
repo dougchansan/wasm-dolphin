@@ -158,12 +158,16 @@ export class AudioController {
       });
       node.connect(this.gain);
       this.workletNode = node;
-      const activated = await this.transportBridge({
+      const activation = await this.transportBridge({
         enabled: true,
         muted: this.muted,
         sab: this.workletRing.sab,
       });
-      if (activated === false) throw new Error("producer-rejected");
+      const activated = typeof activation === "object" ? activation?.active : activation;
+      if (!activated) {
+        const reason = typeof activation === "object" ? activation?.reason : "";
+        throw new Error(`producer-rejected${reason ? `:${reason}` : ""}`);
+      }
       node.onprocessorerror = () => void this.fallbackFromWorklet("processor-error");
       this.activeTransport = "worklet";
       this.transportFallbackReason = "";

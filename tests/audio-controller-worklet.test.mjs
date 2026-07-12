@@ -56,6 +56,19 @@ test("worklet request falls back observably on missing isolation", async () => {
   assert.equal(audio.transportFallbackReason, "cross-origin-isolation-required");
 });
 
+test("worklet fallback preserves the disc-worker producer rejection reason", async () => {
+  installBrowser();
+  const { AudioController } = await import(`../src/audio.js?producer-fallback=${Date.now()}`);
+  const audio = new AudioController();
+  audio.setTransportBridge(async () => ({ active: false, reason: "core-channel-count" }));
+  await audio.ensureContext();
+  assert.equal(audio.activeTransport, "legacy");
+  assert.equal(
+    audio.transportFallbackReason,
+    "worklet-init:producer-rejected:core-channel-count"
+  );
+});
+
 test("legacy remains the default and never loads a worklet module", async () => {
   const { modules, contextOptions } = installBrowser({ search: "" });
   const { AudioController } = await import(`../src/audio.js?legacy=${Date.now()}`);
