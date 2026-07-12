@@ -96,7 +96,13 @@ export function requestAudioPcmEpoch(ring, state = AUDIO_PCM_STATE_PREFILL) {
   return Atomics.add(ring.header, AUDIO_PCM_HEADER.EPOCH, 1) + 1 >>> 0;
 }
 
-export function consumeAudioPcm(ring, outputLeft, outputRight, frames = outputLeft.length) {
+export function consumeAudioPcm(
+  ring,
+  outputLeft,
+  outputRight,
+  frames = outputLeft.length,
+  result = {}
+) {
   const { header, samples } = ring;
   const count = Math.max(0, Math.min(frames | 0, outputLeft.length, outputRight.length));
   const epoch = Atomics.load(header, AUDIO_PCM_HEADER.EPOCH) >>> 0;
@@ -107,12 +113,20 @@ export function consumeAudioPcm(ring, outputLeft, outputRight, frames = outputLe
     Atomics.store(header, AUDIO_PCM_HEADER.EPOCH_ACK, epoch | 0);
     outputLeft.fill(0, 0, count);
     outputRight.fill(0, 0, count);
-    return { consumedFrames: 0, underrunFrames: 0, flushed: true, epoch };
+    result.consumedFrames = 0;
+    result.underrunFrames = 0;
+    result.flushed = true;
+    result.epoch = epoch;
+    return result;
   }
   if ((Atomics.load(header, AUDIO_PCM_HEADER.STATE) | 0) !== AUDIO_PCM_STATE_RUNNING) {
     outputLeft.fill(0, 0, count);
     outputRight.fill(0, 0, count);
-    return { consumedFrames: 0, underrunFrames: 0, flushed: false, epoch };
+    result.consumedFrames = 0;
+    result.underrunFrames = 0;
+    result.flushed = false;
+    result.epoch = epoch;
+    return result;
   }
 
   const capacity = Atomics.load(header, AUDIO_PCM_HEADER.CAPACITY_FRAMES) >>> 0;
@@ -135,7 +149,11 @@ export function consumeAudioPcm(ring, outputLeft, outputRight, frames = outputLe
     Atomics.add(header, AUDIO_PCM_HEADER.UNDERRUN_FRAMES, underrun);
     Atomics.add(header, AUDIO_PCM_HEADER.UNDERRUN_EVENTS, 1);
   }
-  return { consumedFrames: consumed, underrunFrames: underrun, flushed: false, epoch };
+  result.consumedFrames = consumed;
+  result.underrunFrames = underrun;
+  result.flushed = false;
+  result.epoch = epoch;
+  return result;
 }
 
 export function snapshotAudioPcmRing(ring) {

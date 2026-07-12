@@ -1,3 +1,8 @@
+import {
+  createAudioPcmRing,
+  snapshotAudioPcmRing,
+} from "./audio-pcm-ring.js";
+
 export class AudioController {
   constructor() {
     this.context = null;
@@ -15,6 +20,12 @@ export class AudioController {
     // latency vs robustness. URL param ?audiolead=N (seconds, 0.05-1.0)
     // overrides. ?audiopump=N (ms, 5-100) tunes pump interval.
     const params = new URLSearchParams(window.location.search);
+    this.requestedTransport = params.get("audiotransport") === "worklet" ? "worklet" : "legacy";
+    this.activeTransport = "legacy";
+    this.transportFallbackReason = this.requestedTransport === "worklet" ? "not-initialized" : "";
+    this.workletRing = null;
+    this.workletNode = null;
+    this.transportBridge = null;
     const leadParam = Number.parseFloat(params.get("audiolead") || "");
     this.targetLeadSeconds =
       Number.isFinite(leadParam) && leadParam >= 0.05 && leadParam <= 1
@@ -55,6 +66,10 @@ export class AudioController {
     };
   }
 
+  setTransportBridge(bridge) {
+    this.transportBridge = typeof bridge === "function" ? bridge : null;
+  }
+
   setSource(source) {
     this.source = typeof source === "function" ? source : null;
     this.available = Boolean(this.source);
@@ -69,10 +84,17 @@ export class AudioController {
     this.muted = Boolean(muted);
     if (!muted) {
       await this.ensureContext();
-      this.startPump();
-      await this.pump();
+      if (this.activeTransport === "worklet") {
+        await this.transportBridge?.({ enabled: true, muted: false, sab: this.workletRing.sab });
+      } else {
+        this.startPump();
+        await this.pump();
+      }
     } else {
       this.stopPump();
+      if (this.activeTransport === "worklet") {
+        await this.transportBridge?.({ enabled: true, muted: true, sab: this.workletRing.sab });
+      }
     }
     this.update();
     return !this.muted && this.available;
@@ -95,6 +117,70 @@ export class AudioController {
     this.gain = this.context.createGain();
     this.gain.gain.value = this.muted ? 0 : 1;
     this.gain.connect(this.context.destination);
+    if (this.requestedTransport === "worklet") {
+      await this.tryEnableWorkletTransport();
+    }
+  }
+
+  async tryEnableWorkletTransport() {
+    const fail = (reason) => {
+      this.activeTransport = "legacy";
+      this.transportFallbackReason = reason;
+      this.stats = `audio:legacy-fallback:${reason}`;
+      return false;
+    };
+    if (globalThis.crossOriginIsolated !== true || typeof SharedArrayBuffer !== "function") {
+      return fail("cross-origin-isolation-required");
+    }
+    if (!this.context?.audioWorklet || typeof globalThis.AudioWorkletNode !== "function") {
+      return fail("audio-worklet-unavailable");
+    }
+    if (this.context.sampleRate !== 48000) return fail(`sample-rate-${this.context.sampleRate}`);
+    if (!this.transportBridge) return fail("producer-bridge-unavailable");
+    try {
+      this.workletRing = createAudioPcmRing();
+      await this.context.audioWorklet.addModule(
+        new URL("./audio-worklet-processor.js", import.meta.url).href
+      );
+      const node = new AudioWorkletNode(this.context, "dolphin-pcm", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        processorOptions: { sab: this.workletRing.sab },
+      });
+      node.connect(this.gain);
+      this.workletNode = node;
+      const activated = await this.transportBridge({
+        enabled: true,
+        muted: this.muted,
+        sab: this.workletRing.sab,
+      });
+      if (activated === false) throw new Error("producer-rejected");
+      node.onprocessorerror = () => void this.fallbackFromWorklet("processor-error");
+      this.activeTransport = "worklet";
+      this.transportFallbackReason = "";
+      this.stats = "audio:worklet-ready";
+      this.stopPump();
+      return true;
+    } catch (error) {
+      this.workletNode?.disconnect?.();
+      this.workletNode = null;
+      this.workletRing = null;
+      return fail(`worklet-init:${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async fallbackFromWorklet(reason) {
+    this.workletNode?.disconnect?.();
+    this.workletNode = null;
+    await this.transportBridge?.({ enabled: false, muted: this.muted, sab: null });
+    this.activeTransport = "legacy";
+    this.transportFallbackReason = reason;
+    this.stats = `audio:legacy-fallback:${reason}`;
+    if (!this.muted) {
+      this.startPump();
+      await this.pump();
+    }
   }
 
   update() {
@@ -239,6 +325,10 @@ export class AudioController {
   causalTelemetry() {
     const p = this.profile;
     return {
+      requestedTransport: this.requestedTransport,
+      activeTransport: this.activeTransport,
+      transportFallbackReason: this.transportFallbackReason,
+      workletRing: this.workletRing ? snapshotAudioPcmRing(this.workletRing) : null,
       pumpCount: p.pumpCount,
       pumpPendingSkipCount: p.pumpPendingSkipCount,
       pumpMissCount: p.pumpMisses,
