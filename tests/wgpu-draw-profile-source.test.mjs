@@ -27,8 +27,14 @@ test("draw profile source preserves separate default-off sampled contract", asyn
   );
   assert.match(header, /SAMPLE_PERIODS[^}]+64, 64, 256, 64, 64, 64, 256/s);
   assert.match(header, /ValidSampleConfiguration/);
+  assert.match(header, /ENABLE_REFRESH_PERIOD = 1024/);
+  assert.match(header, /inline thread_local ThreadEnableCache/);
+  assert.match(header, /inline std::atomic<std::uint64_t> s_control\{0\}/);
+  assert.match(header, /s_control\.load\(std::memory_order_acquire\)/);
+  assert.match(header, /compare_exchange_weak\(control, desired, std::memory_order_release/);
+  assert.match(header, /if \(!IsEnabledCached\(\)\)/);
   assert.match(header, /block \* SAMPLE_STRIDES\[index\] \+ SAMPLE_SEEDS\[index\]/);
-  assert.match(header, /s_enabled\{false\}/);
+  assert.match(header, /s_control\{0\}/);
   assert.match(gfx, /SetWebGpuDrawProfileEnabled/);
   assert.match(gfx, /wgdraw:1/);
   assert.match(worker, /wgpudrawprofile=1 requires metrics=1/);

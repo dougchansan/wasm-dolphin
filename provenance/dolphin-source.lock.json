@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "5f1d54b70de0e2d4b9e8c610dbb7951f0b001a0dd30cf101c2cfb457b76c04aa",
+  "patchSeriesSha256": "17ba7df45aff733d9e191aeb607e363a3c80604d321eba2b021ac4963bcb1b03",
   "patches": [
     {
       "order": 1,
@@ -304,8 +304,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0035-webgpu-draw-resource-detail-profile.patch",
-      "size": 23098,
-      "sha256": "debd9ed225dd4a1938d6a7dbefcc0d641637248ebedcb83de42fc7c81c3c5931"
+      "size": 24267,
+      "sha256": "8911bc0ba61ad4a85c2d8984f147f70cc1444b1aadac7f004e7bb2486362423c"
     },
     {
       "order": 36,

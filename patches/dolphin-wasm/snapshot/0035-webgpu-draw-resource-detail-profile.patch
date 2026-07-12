@@ -316,6 +316,7 @@ index 0000000..da7c0f6
 +#include <chrono>
 +#include <cstddef>
 +#include <cstdint>
++#include <limits>
 +
 +namespace DolphinWeb::WebGpuDrawProfile
 +{
@@ -343,6 +344,7 @@ index 0000000..da7c0f6
 +constexpr std::array<std::uint32_t, PHASE_COUNT> SAMPLE_SEEDS = {
 +    3, 7, 11, 13, 19, 23, 31,
 +};
++constexpr std::uint32_t ENABLE_REFRESH_PERIOD = 1024;
 +constexpr bool ValidSampleConfiguration()
 +{
 +  for (std::size_t index = 0; index < PHASE_COUNT; ++index)
@@ -364,25 +366,57 @@ index 0000000..da7c0f6
 +  std::atomic<std::uint64_t> sampled_max_ns{0};
 +};
 +
-+inline std::atomic<bool> s_enabled{false};
-+inline std::atomic<std::uint64_t> s_epoch{0};
++constexpr std::uint64_t ENABLED_MASK = 1;
++inline std::atomic<std::uint64_t> s_control{0};
 +inline std::array<PhaseCounters, PHASE_COUNT> s_counters{};
++
++struct ThreadEnableCache
++{
++  std::uint64_t control_snapshot = std::numeric_limits<std::uint64_t>::max();
++  std::uint32_t calls_until_refresh = 0;
++  bool enabled = false;
++};
++inline thread_local ThreadEnableCache s_thread_enable_cache{};
 +
 +inline void SetEnabled(bool enabled)
 +{
-+  const bool previous = s_enabled.exchange(enabled, std::memory_order_acq_rel);
-+  if (previous != enabled)
-+    s_epoch.fetch_add(1, std::memory_order_relaxed);
++  const std::uint64_t enabled_bit = enabled ? ENABLED_MASK : 0;
++  std::uint64_t control = s_control.load(std::memory_order_acquire);
++  while ((control & ENABLED_MASK) != enabled_bit)
++  {
++    const std::uint64_t next_epoch = (control >> 1) + 1;
++    const std::uint64_t desired = (next_epoch << 1) | enabled_bit;
++    if (s_control.compare_exchange_weak(control, desired, std::memory_order_release,
++                                        std::memory_order_acquire))
++      return;
++  }
 +}
 +
 +inline bool IsEnabled()
 +{
-+  return s_enabled.load(std::memory_order_relaxed);
++  return (s_control.load(std::memory_order_acquire) & ENABLED_MASK) != 0;
 +}
 +
 +inline std::uint64_t GetEpoch()
 +{
-+  return s_epoch.load(std::memory_order_relaxed);
++  return s_control.load(std::memory_order_acquire) >> 1;
++}
++
++inline bool IsEnabledCached()
++{
++  ThreadEnableCache& cache = s_thread_enable_cache;
++  if (cache.calls_until_refresh == 0)
++  {
++    const std::uint64_t control = s_control.load(std::memory_order_acquire);
++    if (cache.control_snapshot != control)
++    {
++      cache.enabled = (control & ENABLED_MASK) != 0;
++      cache.control_snapshot = control;
++    }
++    cache.calls_until_refresh = ENABLE_REFRESH_PERIOD;
++  }
++  --cache.calls_until_refresh;
++  return cache.enabled;
 +}
 +
 +inline const PhaseCounters& GetCounters(Phase phase)
@@ -412,7 +446,7 @@ index 0000000..da7c0f6
 +public:
 +  explicit ScopedSample(Phase phase) : m_phase(phase)
 +  {
-+    if (!IsEnabled())
++    if (!IsEnabledCached())
 +      return;
 +
 +    PhaseCounters& counters = s_counters[static_cast<std::size_t>(phase)];
