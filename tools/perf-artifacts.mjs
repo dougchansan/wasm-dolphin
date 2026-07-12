@@ -5,6 +5,14 @@ import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
+import {
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
+  parseWgpuProducerProfileStats as parseProducerProfileWire,
+} from "../src/wgpu-pass-state-cache.js";
+
+export { WGPU_PRODUCER_PROFILE_PHASE_ORDER };
+export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",
@@ -898,6 +906,7 @@ export function validateComparisonConfig(value) {
   if (!Number.isFinite(minimumEffectPercent) || minimumEffectPercent < 0) {
     throw new Error("minimumEffectPercent must be a non-negative number");
   }
+  const overheadGate = normalizeOverheadGate(value.overheadGate);
   return {
     schemaVersion: 1,
     mode,
@@ -906,6 +915,7 @@ export function validateComparisonConfig(value) {
     primaryMetric: value.primaryMetric,
     direction,
     minimumEffectPercent,
+    overheadGate,
     hypothesis: String(value.hypothesis || "").trim() || null,
     invalidationRules: Array.isArray(value.invalidationRules)
       ? value.invalidationRules.map(String)
@@ -938,6 +948,7 @@ export function buildComparisonTasklist(configValue) {
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
+    overheadGate: config.overheadGate,
     hypothesis: config.hypothesis,
     invalidationRules: config.invalidationRules,
     stopRule: config.stopRule,
@@ -988,28 +999,67 @@ export function summarizeComparison(configValue, runs) {
     if ([...valuesA, ...valuesB].some((number) => !Number.isFinite(number))) {
       invalidReasons.push(`${blockId}: primary metric ${config.primaryMetric} is missing or non-numeric`);
     }
-    const valid = invalidReasons.length === 0;
-    const meanA = valid ? mean(valuesA) : null;
-    const meanB = valid ? mean(valuesB) : null;
-    const rawEffect = valid ? meanB - meanA : null;
-    const normalizedEffect = valid
+    const initiallyValid = invalidReasons.length === 0;
+    const meanA = initiallyValid ? mean(valuesA) : null;
+    const meanB = initiallyValid ? mean(valuesB) : null;
+    const rawEffect = initiallyValid ? meanB - meanA : null;
+    const normalizedEffect = initiallyValid
       ? config.direction === "higher" ? rawEffect : -rawEffect
       : null;
-    const effectPercent = valid
+    const effectPercent = initiallyValid
       ? meanA === 0 ? null : (normalizedEffect / Math.abs(meanA)) * 100
       : null;
-    if (valid && !Number.isFinite(effectPercent)) {
+    if (initiallyValid && !Number.isFinite(effectPercent)) {
       invalidReasons.push(`${blockId}: cannot compute relative effect from zero-valued arm A`);
     }
+    let overheadRegressionPercent = null;
+    const semanticWork = [];
+    if (initiallyValid && config.overheadGate) {
+      overheadRegressionPercent = Math.max(0, -effectPercent);
+      if (overheadRegressionPercent >= config.overheadGate.maximumRegressionPercent) {
+        invalidReasons.push(
+          `${blockId}: overhead regression ${overheadRegressionPercent.toFixed(3)}% ` +
+          `must be <${config.overheadGate.maximumRegressionPercent}%`
+        );
+      }
+      for (const rule of config.overheadGate.semanticWork) {
+        const workA = armA.map((run) => Number(readPath(run, rule.path)));
+        const workB = armB.map((run) => Number(readPath(run, rule.path)));
+        const values = [...workA, ...workB];
+        const meanWorkA = values.every(Number.isFinite) ? mean(workA) : null;
+        const meanWorkB = values.every(Number.isFinite) ? mean(workB) : null;
+        const differencePercent = meanWorkA && meanWorkB != null
+          ? (Math.max(...values) - Math.min(...values)) / Math.abs(meanWorkA) * 100
+          : null;
+        semanticWork.push({
+          path: rule.path,
+          meanA: meanWorkA,
+          meanB: meanWorkB,
+          differencePercent,
+          maximumDifferencePercent: rule.maximumDifferencePercent,
+        });
+        if (!Number.isFinite(differencePercent) ||
+            differencePercent > rule.maximumDifferencePercent) {
+          invalidReasons.push(
+            `${blockId}: semantic work ${rule.path} differs by ` +
+            `${Number.isFinite(differencePercent) ? differencePercent.toFixed(3) : "unavailable"}% ` +
+            `(max ${rule.maximumDifferencePercent}%)`
+          );
+        }
+      }
+    }
+    const valid = invalidReasons.length === 0 && Number.isFinite(effectPercent);
     blocks.push({
       blockId,
-      valid: valid && Number.isFinite(effectPercent),
+      valid,
       invalidReasons,
       runIds: blockRuns.map((run) => run.runId),
       meanA,
       meanB,
       rawEffect,
       effectPercent: Number.isFinite(effectPercent) ? effectPercent : null,
+      overheadRegressionPercent,
+      semanticWork,
     });
   }
   const validBlocks = blocks.filter((block) => block.valid);
@@ -1047,6 +1097,10 @@ export function summarizeComparison(configValue, runs) {
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
+    overheadGate: config.overheadGate,
+    overheadGatePassed: config.overheadGate
+      ? validBlocks.length >= config.blockCount && invalidBlocks.length === 0
+      : null,
     initialValidBlocks: config.blockCount,
     maximumValidBlocks: config.maxBlockCount,
     attemptedBlocks: blocks.length,
@@ -1695,6 +1749,168 @@ export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {})
   return { required: true, expectedActive, enabled, available, failures };
 }
 
+export function parseWgpuProducerProfileStats(text = "") {
+  const profile = parseProducerProfileWire(text);
+  if (!profile) return null;
+  return {
+    wgpuProducerProfileSchema: profile.schema,
+    wgpuProducerProfileSchemaVersion: profile.version,
+    wgpuProducerProfileEnabled: profile.enabled,
+    wgpuProducerProfileEpoch: profile.epoch,
+    wgpuProducerProfilePhaseCount: profile.phaseCount,
+    wgpuProducerProfilePhaseOrder: profile.phaseOrder,
+    wgpuProducerProfilePeriods: profile.periods,
+    wgpuProducerProfileCalls: profile.calls,
+    wgpuProducerProfileSamples: profile.samples,
+    wgpuProducerProfileSampleTotalNs: profile.sampleTotalNs,
+    wgpuProducerProfileSampleMaxNs: profile.sampleMaxNs,
+    wgpuProducerProfileEstimatedTotalNs: profile.estimatedTotalNs,
+  };
+}
+
+export function evaluateWgpuProducerProfileEvidence({
+  requested,
+  metrics,
+  samples = [],
+} = {}) {
+  if (requested == null || String(requested) === "0") {
+    return { required: false, failures: [] };
+  }
+  const failures = [];
+  if (String(requested) !== "1") failures.push(`wgpuprodprofile=${requested} is unsupported`);
+  if (String(metrics) !== "1") failures.push("wgpuprodprofile=1 requires metrics=1");
+  const profiles = samples.map((sample) => {
+    const flattened = sample?.wgpuProducerProfileSchemaVersion != null ||
+        sample?.causalWgpuProducerProfileSchema != null
+      ? sample
+      : parseWgpuProducerProfileStats(sample?.helper);
+    return flattened ? producerProfileFromFlattenedSample(flattened) : null;
+  });
+  if (!profiles.length) failures.push("WGPU producer profile has no timed samples");
+  let previous = null;
+  let epoch = null;
+  let periods = null;
+  const validProfiles = [];
+  for (let index = 0; index < profiles.length; index += 1) {
+    const profile = profiles[index];
+    const rawSample = samples[index];
+    if (rawSample?.causalWgpuProducerProfileRequested !== true) {
+      failures.push(`WGPU producer profile sample ${index} requested state is not active`);
+    }
+    if (rawSample?.causalWgpuProducerProfileAvailable !== true) {
+      failures.push(`WGPU producer profile sample ${index} producer ABI is unavailable`);
+    }
+    if (!profile) {
+      failures.push(`WGPU producer profile sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (profile.schemaVersion !== WGPU_PRODUCER_PROFILE_SCHEMA_VERSION) {
+      failures.push(`WGPU producer profile sample ${index} schema=${profile.schemaVersion}`);
+    }
+    if (profile.schema !== WGPU_PRODUCER_PROFILE_SCHEMA) {
+      failures.push(`WGPU producer profile sample ${index} schema name mismatch`);
+    }
+    if (profile.enabled !== true) failures.push(`WGPU producer profile sample ${index} is disabled`);
+    if (profile.phaseCount !== WGPU_PRODUCER_PROFILE_PHASE_ORDER.length) {
+      failures.push(`WGPU producer profile sample ${index} phaseCount=${profile.phaseCount}`);
+    }
+    if (!sameArray(profile.phaseOrder, WGPU_PRODUCER_PROFILE_PHASE_ORDER)) {
+      failures.push(`WGPU producer profile sample ${index} phase order mismatch`);
+    }
+    if (!Number.isSafeInteger(profile.epoch) || profile.epoch <= 0) {
+      failures.push(`WGPU producer profile sample ${index} epoch is not positive`);
+    } else if (epoch == null) {
+      epoch = profile.epoch;
+    } else if (profile.epoch !== epoch) {
+      failures.push(`WGPU producer profile epoch changed ${epoch}->${profile.epoch}`);
+    }
+    let vectorsValid = validateProducerProfileVector(
+      profile.periods, index, "periods", failures, { positive: true }
+    );
+    for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+      vectorsValid = validateProducerProfileVector(profile[name], index, name, failures) &&
+        vectorsValid;
+    }
+    vectorsValid = validateProducerProfileVector(
+      profile.estimatedTotalNs, index, "estimatedTotalNs", failures
+    ) && vectorsValid;
+    if (!vectorsValid) continue;
+    if (profile.samples.some((value, phase) => value > profile.calls[phase])) {
+      failures.push(`WGPU producer profile sample ${index} samples exceed calls`);
+    }
+    if (periods == null) periods = profile.periods;
+    else if (!sameArray(profile.periods, periods)) {
+      failures.push(`WGPU producer profile sample ${index} periods changed within timed window`);
+    }
+    const derived = profile.sampleTotalNs.map((value, phase) => value * profile.periods[phase]);
+    if (!sameArray(profile.estimatedTotalNs, derived)) {
+      failures.push(`WGPU producer profile sample ${index} estimated totals mismatch`);
+    }
+    if (previous) {
+      for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+        if (profile[name].some((value, phase) => value < previous[name][phase])) {
+          failures.push(`WGPU producer profile sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = profile;
+    validProfiles.push(profile);
+  }
+  const first = validProfiles[0] ?? null;
+  const final = validProfiles.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"].map((name) => [
+      name,
+      final[name].map((value, phase) => value - first[name][phase]),
+    ])
+  ) : null;
+  return {
+    required: true,
+    activated: profiles.length > 0 && profiles.every((profile) => profile?.enabled === true),
+    schemaVersion: final?.schemaVersion ?? null,
+    epoch,
+    phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods: periods ? [...periods] : null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
+function producerProfileFromFlattenedSample(sample) {
+  const value = (name) => sample[`wgpuProducerProfile${name}`] ??
+    sample[`causalWgpuProducerProfile${name}`];
+  return {
+    schema: value("Schema"),
+    schemaVersion: value("SchemaVersion") ?? (value("Schema") === WGPU_PRODUCER_PROFILE_SCHEMA ? 1 : null),
+    enabled: value("Enabled"),
+    epoch: value("Epoch"),
+    phaseCount: value("PhaseCount"),
+    phaseOrder: value("PhaseOrder"),
+    periods: value("Periods"),
+    calls: value("Calls"),
+    samples: value("Samples"),
+    sampleTotalNs: value("SampleTotalNs"),
+    sampleMaxNs: value("SampleMaxNs"),
+    estimatedTotalNs: value("EstimatedTotalNs"),
+  };
+}
+
+function validateProducerProfileVector(values, sampleIndex, name, failures, { positive = false } = {}) {
+  const valid = Array.isArray(values) &&
+    values.length === WGPU_PRODUCER_PROFILE_PHASE_ORDER.length &&
+    values.every((value) => Number.isSafeInteger(value) && value >= (positive ? 1 : 0));
+  if (!valid) {
+    failures.push(`WGPU producer profile sample ${sampleIndex} ${name} is invalid`);
+  }
+  return valid;
+}
+
+function sameArray(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+    left.every((value, index) => value === right[index]);
+}
+
 export function evaluateWgpuRendererWorkerProbeEvidence({ requested, telemetry } = {}) {
   if (requested == null || requested === "off") return { required: false, failures: [] };
   const probe = telemetry?.rendererWorkerProbe;
@@ -1821,6 +2037,24 @@ export function evaluateWgpuOutputContractEvidence({
     );
   }
   return { required: true, expected, contract, failures };
+}
+
+export function evaluateWgpuDiagnosticLogFilterEvidence({ requested, diagnostics } = {}) {
+  if (String(requested ?? "0") !== "1") return { required: false, failures: [] };
+  const snapshot = diagnostics?.diagnosticLogFilter;
+  const failures = [];
+  if (snapshot?.schema !== "wasm-dolphin.wgpu-diagnostic-log-filter.v1") {
+    failures.push(`WGPU diagnostic log filter schema mismatch: ${snapshot?.schema || "unavailable"}`);
+  }
+  if (snapshot?.enabled !== true) failures.push("WGPU diagnostic log filter is not active");
+  if (!Number.isSafeInteger(snapshot?.droppedCount) || snapshot.droppedCount < 0) {
+    failures.push("WGPU diagnostic log filter droppedCount is invalid");
+  }
+  if (!snapshot?.droppedByTag || typeof snapshot.droppedByTag !== "object" ||
+      Array.isArray(snapshot.droppedByTag)) {
+    failures.push("WGPU diagnostic log filter per-tag evidence is unavailable");
+  }
+  return { required: true, snapshot, failures };
 }
 
 export function validateWgpuUploadProbeFinalization({ requested, finalized } = {}) {
@@ -2200,6 +2434,29 @@ function normalizeArm(arm, label) {
     ),
     cacheState,
   };
+}
+
+function normalizeOverheadGate(value) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("overheadGate must be an object");
+  }
+  const maximumRegressionPercent = Number(value.maximumRegressionPercent);
+  if (!Number.isFinite(maximumRegressionPercent) || maximumRegressionPercent <= 0) {
+    throw new Error("overheadGate.maximumRegressionPercent must be positive");
+  }
+  if (!Array.isArray(value.semanticWork) || value.semanticWork.length === 0) {
+    throw new Error("overheadGate.semanticWork must contain at least one metric rule");
+  }
+  const semanticWork = value.semanticWork.map((rule, index) => {
+    const path = String(rule?.path || "").trim();
+    const maximumDifferencePercent = Number(rule?.maximumDifferencePercent);
+    if (!path || !Number.isFinite(maximumDifferencePercent) || maximumDifferencePercent < 0) {
+      throw new Error(`overheadGate.semanticWork[${index}] is invalid`);
+    }
+    return { path, maximumDifferencePercent };
+  });
+  return { maximumRegressionPercent, semanticWork };
 }
 
 function numericValue(value) {

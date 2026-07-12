@@ -58,7 +58,10 @@ import {
   rebaseWgpuStagedUploadWindow
 } from "./wgpu-upload-watermark.js";
 import {
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
   createWgpuPassStateCache,
+  parseWgpuProducerProfileStats,
   parseWgpuProducerStateStats
 } from "./wgpu-pass-state-cache.js";
 import {
@@ -84,6 +87,7 @@ import {
   createWgpuUploadProbeExecutor
 } from "./wgpu-upload-probe-executor.js";
 import { AudioPcmProducer } from "./audio-pcm-producer.js";
+import { installWgpuDiagnosticLogFilter } from "./diagnostic-log-filter.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -97,6 +101,8 @@ console.log(`[boot-phase] discio-worker module-eval at perf.now=${performance.no
 let coreUrl = DEFAULT_UPSTREAM_CORE_URL;
 let moduleInstance = null;
 let api = null;
+let wgpuDiagnosticQuiet = false;
+let wgpuDiagnosticLogFilter = installWgpuDiagnosticLogFilter({ enabled: false });
 let mounted = false;
 let inputMask = 0;
 let workerOwnsCanvas = false;
@@ -170,6 +176,8 @@ let wgpuInputBackbufferReadbackPending = false;
 let wgpuInputVisualBaselineReady = false;
 let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
+let wgpuProducerProfileRequested = false;
+let wgpuProducerProfileAvailable = false;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
 let wgpuUboPackEnabled = false;
@@ -537,6 +545,7 @@ function rendererDiagnosticsPayload() {
     statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
     fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
     workerTransport: workerTransportTelemetry(),
+    diagnosticLogFilter: wgpuDiagnosticLogFilter.snapshot(),
     outputContract: wgpuOutputContractPayload(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
@@ -689,6 +698,8 @@ async function handleMessage(type, payload) {
         wgpuReplayBudgetMs: payload.wgpuReplayBudgetMs,
         wgpuPowerPreference: payload.wgpuPowerPreference,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
+        wgpuDiagnosticQuiet: payload.wgpuDiagnosticQuiet,
+        wgpuProducerProfile: payload.wgpuProducerProfile,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
         wgpuUboPack: payload.wgpuUboPack,
@@ -732,11 +743,15 @@ async function handleMessage(type, payload) {
       workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested) {
+        verifyWgpuProducerProfileActivation("core reset");
+      }
       api?.setInputMask(inputMask);
       return framePayload();
     case "bootProbe":
@@ -746,17 +761,22 @@ async function handleMessage(type, payload) {
     case "loadState": {
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested) {
+        verifyWgpuProducerProfileActivation("slot state reload");
+      }
       return { loaded, ...framePayload() };
     }
     case "validationSetCorePaused": {
@@ -855,6 +875,7 @@ async function handleMessage(type, payload) {
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
@@ -865,11 +886,15 @@ async function handleMessage(type, payload) {
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested) {
+        verifyWgpuProducerProfileActivation("save-state reload");
+      }
       collectWebGpuProducerStateStats();
       const uploadTimeoutCountImmediatelyAfterLoad = webGpuCausalStats.uploadTimeoutCount;
       const uploadTimeoutBoundaryVerified = rc === 1 && collectMetrics;
@@ -1044,6 +1069,8 @@ async function loadCore({
   wgpuReplayBudgetMs: requestedWgpuReplayBudgetMs = 0,
   wgpuPowerPreference: requestedWgpuPowerPreference = "high-performance",
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
+  wgpuDiagnosticQuiet: requestedWgpuDiagnosticQuiet = false,
+  wgpuProducerProfile: requestedWgpuProducerProfile = false,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuUboPack: requestedWgpuUboPack = false,
@@ -1058,6 +1085,11 @@ async function loadCore({
     return moduleInstance;
   }
   rendererDiagnostics = createRendererDiagnostics();
+  wgpuDiagnosticQuiet = Boolean(requestedWgpuDiagnosticQuiet);
+  wgpuDiagnosticLogFilter.restore();
+  wgpuDiagnosticLogFilter = installWgpuDiagnosticLogFilter({
+    enabled: wgpuDiagnosticQuiet,
+  });
   rendererDiagnostics.coreSelection = normalizedCoreSelection(
     reportedCoreSelection,
     nextCoreUrl,
@@ -1078,6 +1110,14 @@ async function loadCore({
   wgpuInputVisualBaselineReady = false;
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
+  wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
+  wgpuProducerProfileAvailable = false;
+  webGpuCausalStats.producerProfile = {
+    ...webGpuCausalStats.producerProfile,
+    requested: wgpuProducerProfileRequested,
+    available: false,
+    enabled: false,
+  };
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
@@ -1357,6 +1397,16 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
+  wgpuProducerProfileAvailable = Boolean(
+    api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
+  );
+  webGpuCausalStats.producerProfile.available = wgpuProducerProfileAvailable;
+  if (wgpuProducerProfileRequested && !wgpuProducerProfileAvailable) {
+    throw new Error(
+      "wgpuprodprofile=1 requires SetWebGpuProducerProfileEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
   wgpuProducerStateCacheAvailable = Boolean(api.setWebGpuStateCacheEnabled);
   // The producer and consumer see the same ordered SET_* stream. Once the
   // producer suppresses exact repeats, comparing every remaining record again
@@ -1392,6 +1442,7 @@ async function loadCore({
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+  api.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
   api.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
@@ -1406,6 +1457,7 @@ async function loadCore({
   api.setSoftwareRasterProfileEnabled?.(
     collectMetrics && videoBackend === "Software Renderer" ? 1 : 0
   );
+  if (wgpuProducerProfileRequested) verifyWgpuProducerProfileActivation("core boot");
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -1467,6 +1519,12 @@ function bindApi(module) {
     setWebGpuStateCacheEnabled:
       typeof module._SetWebGpuStateCacheEnabled === "function"
         ? (enabled) => ccall("SetWebGpuStateCacheEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
+    setWebGpuProducerProfileEnabled:
+      typeof module._SetWebGpuProducerProfileEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuProducerProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
         : null,
     setWebGpuUboCacheEnabled:
       typeof module._SetWebGpuUboCacheEnabled === "function"
@@ -1773,10 +1831,30 @@ function readDetailedCoreStat(name, readStat) {
   return readStat();
 }
 
+function applyWgpuProducerProfileStats(profile) {
+  if (!profile) return false;
+  webGpuCausalStats.producerProfile = {
+    ...profile,
+    requested: wgpuProducerProfileRequested,
+    available: wgpuProducerProfileAvailable,
+  };
+  return true;
+}
+
+function verifyWgpuProducerProfileActivation(scope) {
+  const text = api?.getWebGpuStateCacheStats?.() ?? "";
+  const profile = parseWgpuProducerProfileStats(text);
+  if (!applyWgpuProducerProfileStats(profile) || profile.enabled !== true) {
+    throw new Error(`WGPU producer profile failed to activate during ${scope}`);
+  }
+  return profile;
+}
+
 function collectWebGpuProducerStateStats() {
   if (!collectMetrics) return null;
   const text = api?.getWebGpuStateCacheStats?.() ?? null;
   const parsed = parseWgpuProducerStateStats(text);
+  applyWgpuProducerProfileStats(parseWgpuProducerProfileStats(text));
   if (parsed) {
     webGpuCausalStats.producerStateCacheEnabled = parsed.enabled;
     webGpuCausalStats.producerPipelineRecordsSuppressed =
@@ -6333,6 +6411,22 @@ const webGpuCausalStats = {
   producerBindGroupRecordsSuppressed: [0, 0, 0],
   producerVertexBufferRecordsSuppressed: 0,
   producerIndexBufferRecordsSuppressed: 0,
+  producerProfile: {
+    schema: WGPU_PRODUCER_PROFILE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    phaseCount: WGPU_PRODUCER_PROFILE_PHASE_ORDER.length,
+    phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    calls: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    samples: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+  },
   producerUboCacheEnabled: false,
   producerUboPackEnabled: false,
   producerUboCacheMetricsEnabled: false,

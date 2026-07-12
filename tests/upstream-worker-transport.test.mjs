@@ -78,12 +78,14 @@ const originalWindow = globalThis.window;
 
   let posted = null;
   const adapter = new UpstreamWorkerAdapter({
+    collectMetrics: true,
     wgpuReplayBudgetMs: 6,
     wgpuPowerPreference: "low-power",
     wgpuGeometryPack: true,
     wgpuGeometryRange: true,
     wgpuUploadArenaMiB: 64,
-    wgpuRendererWorkerProbe: "canary"
+    wgpuRendererWorkerProbe: "canary",
+    wgpuProducerProfile: true
   });
   adapter.worker = {
     postMessage(message, transfer) {
@@ -102,7 +104,8 @@ const originalWindow = globalThis.window;
       wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
       wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
       wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB,
-      wgpuRendererWorkerProbe: posted.message.payload.wgpuRendererWorkerProbe
+      wgpuRendererWorkerProbe: posted.message.payload.wgpuRendererWorkerProbe,
+      wgpuProducerProfile: posted.message.payload.wgpuProducerProfile
     },
     {
       wgpuReplayBudgetMs: 6,
@@ -110,7 +113,8 @@ const originalWindow = globalThis.window;
       wgpuGeometryPack: true,
       wgpuGeometryRange: true,
       wgpuUploadArenaMiB: 64,
-      wgpuRendererWorkerProbe: "canary"
+      wgpuRendererWorkerProbe: "canary",
+      wgpuProducerProfile: true
     }
   );
   assert.deepEqual(posted.transfer, []);
@@ -185,4 +189,15 @@ test("geometry ranging remains disabled unless packed geometry is enabled", () =
     wgpuGeometryRange: true
   });
   assert.equal(enabled.wgpuGeometryRange, true);
+});
+
+test("producer profiling requires both its URL request and metrics collection", () => {
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: false,
+    wgpuProducerProfile: true,
+  }).wgpuProducerProfile, false);
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: true,
+    wgpuProducerProfile: true,
+  }).wgpuProducerProfile, true);
 });

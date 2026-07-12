@@ -48,6 +48,12 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.producerUploadWaitCount, 0);
   assert.equal(value.webgpu.producerUploadWaitTotalUs, 0);
   assert.equal(value.webgpu.producerUploadWaitMaxUs, 0);
+  assert.equal(value.webgpu.producerProfile.requested, false);
+  assert.equal(value.webgpu.producerProfile.available, false);
+  assert.equal(value.webgpu.producerProfile.enabled, false);
+  assert.equal(value.webgpu.producerProfile.phaseCount, 12);
+  assert.equal(value.webgpu.producerProfile.phaseOrder[0], "ring_publish");
+  assert.deepEqual(value.webgpu.producerProfile.estimatedTotalNs, new Array(12).fill(0));
   assert.equal(value.webgpu.uploadArenaRingHandoffMismatch, false);
   assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
   assert.equal(
@@ -324,6 +330,27 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       },
     },
     webgpu: {
+      producerProfile: {
+        schema: "wasm-dolphin.wgpu-producer-profile.v1",
+        requested: true,
+        available: true,
+        version: 1,
+        enabled: true,
+        epoch: 9,
+        phaseCount: 12,
+        phaseOrder: [
+          "ring_publish", "upload_copy", "geometry_commit", "draw_resources",
+          "shader_translate_emit", "pipeline_serialize_emit", "bind_group_prepare",
+          "xfb_show_image", "backbuffer_present", "fifo_decode", "fifo_tail_flush",
+          "reserved",
+        ],
+        periods: new Array(12).fill(2),
+        calls: Array.from({ length: 12 }, (_, index) => index + 10),
+        samples: Array.from({ length: 12 }, (_, index) => index + 1),
+        sampleTotalNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 100),
+        sampleMaxNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 10),
+        estimatedTotalNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 200),
+      },
       producerRingWaitCount: 11,
       producerRingWaitTotalUs: 12_000,
       producerRingWaitMaxUs: 1_300,
@@ -526,6 +553,21 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuProducerUploadWaitCount, 14);
   assert.equal(flat.causalWgpuProducerUploadWaitTotalUs, 15_000);
   assert.equal(flat.causalWgpuProducerUploadWaitMaxUs, 1_600);
+  assert.equal(flat.causalWgpuProducerProfileSchema, "wasm-dolphin.wgpu-producer-profile.v1");
+  assert.equal(flat.causalWgpuProducerProfileRequested, true);
+  assert.equal(flat.causalWgpuProducerProfileAvailable, true);
+  assert.equal(flat.causalWgpuProducerProfileEnabled, true);
+  assert.equal(flat.causalWgpuProducerProfileEpoch, 9);
+  assert.equal(flat.causalWgpuProducerProfilePhaseCount, 12);
+  assert.equal(flat.causalWgpuProducerProfilePhaseOrder[0], "ring_publish");
+  assert.deepEqual(flat.causalWgpuProducerProfilePeriods, new Array(12).fill(2));
+  assert.deepEqual(flat.causalWgpuProducerProfileCalls,
+    Array.from({ length: 12 }, (_, index) => index + 10));
+  assert.deepEqual(flat.causalWgpuProducerProfileSamples,
+    Array.from({ length: 12 }, (_, index) => index + 1));
+  assert.equal(flat.causalWgpuProducerProfileSampleTotalNs[11], 1200);
+  assert.equal(flat.causalWgpuProducerProfileSampleMaxNs[11], 120);
+  assert.equal(flat.causalWgpuProducerProfileEstimatedTotalNs[11], 2400);
   assert.equal(flat.causalWgpuRendererWorkerProbeRequested, "worker-upload");
   assert.equal(flat.causalWgpuRendererWorkerProbeActive, true);
   assert.equal(flat.causalWgpuRendererWorkerProbePassed, true);

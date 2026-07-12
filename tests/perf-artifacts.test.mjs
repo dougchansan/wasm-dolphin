@@ -8,6 +8,7 @@ import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
   assertBattleCheckpoint,
   assertRunProvenance,
   assertServedArtifactIdentity,
@@ -20,7 +21,9 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
+  evaluateWgpuProducerProfileEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
   validateWgpuUploadProbeFinalization,
@@ -31,6 +34,7 @@ import {
   findFatalRuntimeEvidence,
   fixedWorkPollDelayMs,
   parseProfileMetrics,
+  parseWgpuProducerProfileStats,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   recordsToCsv,
@@ -211,6 +215,10 @@ test("perf gate names presentation underruns explicitly and retains its compatib
   assert.match(source, /presentationUnderrun: maxRegex\(helperText, \/underrun:/);
   assert.match(source, /Deprecated alias retained[\s\S]*?underrun: maxRegex\(helperText/);
   assert.match(source, /failures\.push\(\.\.\.causalFairness\.failures\)/);
+  assert.match(source, /"wgpuprodprofile"/);
+  assert.match(source, /parseWgpuProducerProfileStats\(sample\.helper\)/);
+  assert.match(source, /evaluateWgpuProducerProfileEvidence/);
+  assert.match(source, /wgpuProducerProfileDeltaEstimatedTotalNs/);
 });
 
 test("run metadata resolves the core selected by coreid", () => {
@@ -398,6 +406,115 @@ test("WGPU output contracts distinguish intentional blank probes from visible ca
     video: "software",
     diagnostics: null,
   }).failures, []);
+});
+
+test("quiet WGPU diagnostic logging requires explicit activation evidence", () => {
+  const diagnostics = {
+    diagnosticLogFilter: {
+      schema: "wasm-dolphin.wgpu-diagnostic-log-filter.v1",
+      enabled: true,
+      droppedCount: 12,
+      droppedByTag: { "s28ah-ps": 12 },
+    },
+  };
+  assert.deepEqual(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "1",
+    diagnostics,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "0",
+    diagnostics: null,
+  }).failures, []);
+  assert.match(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "1",
+    diagnostics: { diagnosticLogFilter: { enabled: false } },
+  }).failures.join("\n"), /schema mismatch|not active|invalid|unavailable/);
+});
+
+test("WGPU producer profile parser retains raw and period-derived phase totals", () => {
+  const periods = Array.from({ length: 12 }, (_, index) => index + 1);
+  const calls = Array.from({ length: 12 }, (_, index) => (index + 1) * 10);
+  const samples = Array.from({ length: 12 }, (_, index) => index + 1);
+  const totals = Array.from({ length: 12 }, (_, index) => (index + 1) * 100);
+  const maxima = Array.from({ length: 12 }, (_, index) => (index + 1) * 7);
+  const parsed = parseWgpuProducerProfileStats(producerProfileWire({
+    periods, calls, samples, totals, maxima,
+  }));
+  assert.equal(parsed.wgpuProducerProfileSchemaVersion, 1);
+  assert.equal(parsed.wgpuProducerProfileEnabled, true);
+  assert.equal(parsed.wgpuProducerProfileEpoch, 9);
+  assert.equal(parsed.wgpuProducerProfilePhaseCount, 12);
+  assert.deepEqual(parsed.wgpuProducerProfilePhaseOrder, WGPU_PRODUCER_PROFILE_PHASE_ORDER);
+  assert.deepEqual(parsed.wgpuProducerProfileEstimatedTotalNs,
+    totals.map((value, index) => value * periods[index]));
+  assert.equal(parseWgpuProducerProfileStats("wgprod:1,1,9,12 wgprd:1,2"), null);
+});
+
+test("WGPU producer profile evidence is fail-closed and monotonic across the timed window", () => {
+  const makeSample = (multiplier, overrides = {}) => {
+    const periods = overrides.periods ?? Array(12).fill(8);
+    const calls = overrides.calls ?? Array(12).fill(100 * multiplier);
+    const samples = overrides.samples ?? Array(12).fill(10 * multiplier);
+    const totals = overrides.totals ?? Array(12).fill(1_000 * multiplier);
+    const maxima = overrides.maxima ?? Array(12).fill(100 * multiplier);
+    return {
+      helper: producerProfileWire({
+        enabled: overrides.enabled ?? 1,
+        epoch: overrides.epoch ?? 9,
+        phaseCount: overrides.phaseCount ?? 12,
+        periods,
+        calls,
+        samples,
+        totals,
+        maxima,
+      }),
+      causalWgpuProducerProfileRequested: true,
+      causalWgpuProducerProfileAvailable: true,
+    };
+  };
+  const valid = evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [makeSample(1), makeSample(2)],
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.equal(valid.activated, true);
+  assert.deepEqual(valid.deltas.calls, Array(12).fill(100));
+  assert.deepEqual(valid.deltas.estimatedTotalNs, Array(12).fill(8_000));
+
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "0", samples: [makeSample(1)],
+  }).failures.join("\n"), /requires metrics=1/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(1), makeSample(2, { epoch: 10 })],
+  }).failures.join("\n"), /epoch changed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(1), makeSample(2, { periods: Array(12).fill(0) })],
+  }).failures.join("\n"), /periods is invalid|periods changed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(2), makeSample(1)],
+  }).failures.join("\n"), /calls regressed|samples regressed|sampleTotalNs regressed|maxNs regressed|sampleMaxNs regressed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [makeSample(1, { calls: Array(12).fill(1), samples: Array(12).fill(2) })],
+  }).failures.join("\n"), /samples exceed calls/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [{ helper: "missing" }],
+  }).failures.join("\n"), /missing or malformed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [{
+      causalWgpuProducerProfileSchema: "wasm-dolphin.wgpu-producer-profile.v1",
+      causalWgpuProducerProfileRequested: true,
+      causalWgpuProducerProfileAvailable: true,
+      causalWgpuProducerProfileEnabled: true,
+      causalWgpuProducerProfileEpoch: 9,
+      causalWgpuProducerProfilePhaseCount: 12,
+      causalWgpuProducerProfilePhaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    }],
+  }).failures.join("\n"), /periods is invalid|calls is invalid/);
 });
 
 test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {
@@ -1353,6 +1470,50 @@ test("screening block effects are sign-normalized but never promotable", () => {
   assert.ok(lowerReport.medianEffectPercent > 0);
 });
 
+test("overhead screening enforces a strict regression ceiling and semantic work", () => {
+  const config = comparisonConfig({
+    mode: "screening",
+    blockCount: 2,
+    overheadGate: {
+      maximumRegressionPercent: 2,
+      semanticWork: [
+        { path: "fixedEmulatedWork.actualCoreTickDelta", maximumDifferencePercent: 5 },
+        { path: "fixedEmulatedWork.actualFrameDelta", maximumDifferencePercent: 5 },
+      ],
+    },
+  });
+  const runs = makeRuns(config, [
+    { a: [100, 100], b: [99, 99] },
+    { a: [100, 100], b: [99, 99] },
+  ]);
+  for (const run of runs) {
+    run.fixedEmulatedWork = {
+      actualCoreTickDelta: 486_000_000,
+      actualFrameDelta: 60,
+    };
+  }
+  let report = summarizeComparison(config, runs);
+  assert.equal(report.overheadGatePassed, true);
+  assert.equal(report.validBlockCount, 2);
+  assert.ok(report.blocks.every((block) => block.overheadRegressionPercent === 1));
+
+  const regression = structuredClone(runs);
+  for (const run of regression.filter((entry) => entry.arm === "B")) {
+    run.metrics.gameSpeed.mean = 98;
+  }
+  report = summarizeComparison(config, regression);
+  assert.equal(report.overheadGatePassed, false);
+  assert.match(report.blocks[0].invalidReasons.join("\n"), /must be <2%/);
+
+  const semanticMismatch = structuredClone(runs);
+  for (const run of semanticMismatch.filter((entry) => entry.arm === "B")) {
+    run.fixedEmulatedWork.actualFrameDelta = 70;
+  }
+  report = summarizeComparison(config, semanticMismatch);
+  assert.equal(report.overheadGatePassed, false);
+  assert.match(report.blocks[0].invalidReasons.join("\n"), /semantic work.*actualFrameDelta/);
+});
+
 test("comparison rejects upload-probe runs with incomparable fixed workloads", () => {
   const config = comparisonConfig({ mode: "screening", blockCount: 2 });
   const runs = makeRuns(config, [
@@ -1715,6 +1876,26 @@ function comparisonConfig(overrides = {}) {
     armB: { name: "candidate", params: { fastsw: 2 } },
     ...overrides,
   };
+}
+
+function producerProfileWire({
+  enabled = 1,
+  epoch = 9,
+  phaseCount = 12,
+  periods,
+  calls,
+  samples,
+  totals,
+  maxima,
+}) {
+  return [
+    `wgprod:1,${enabled},${epoch},${phaseCount}`,
+    `wgprd:${periods.join(",")}`,
+    `wgprc:${calls.join(",")}`,
+    `wgprs:${samples.join(",")}`,
+    `wgprt:${totals.join(",")}`,
+    `wgprm:${maxima.join(",")}`,
+  ].join(" ");
 }
 
 function makeRuns(config, valuesByBlock) {

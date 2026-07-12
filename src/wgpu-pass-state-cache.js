@@ -4,6 +4,62 @@
 const NO_RESOURCE = Symbol("no-wgpu-resource");
 const NO_OFFSETS = Object.freeze([]);
 
+export const WGPU_PRODUCER_PROFILE_SCHEMA =
+  "wasm-dolphin.wgpu-producer-profile.v1";
+// Phases are inclusive and may nest (for example, geometry_commit contains
+// upload_copy). Compare each phase independently; never sum phase estimates.
+export const WGPU_PRODUCER_PROFILE_PHASE_ORDER = Object.freeze([
+  "ring_publish",
+  "upload_copy",
+  "geometry_commit",
+  "draw_resources",
+  "shader_translate_emit",
+  "pipeline_serialize_emit",
+  "bind_group_prepare",
+  "xfb_show_image",
+  "backbuffer_present",
+  "fifo_decode",
+  "fifo_tail_flush",
+  "reserved",
+]);
+
+export function parseWgpuProducerProfileStats(text = "") {
+  const normalized = String(text || "");
+  const header = /\bwgprod:(\d+),(\d+),(\d+),(\d+)(?=\s|$)/i.exec(normalized);
+  const epoch = Number(header?.[3]);
+  if (!header || Number(header[1]) !== 1 || !["0", "1"].includes(header[2]) ||
+      !Number.isSafeInteger(epoch) ||
+      Number(header[4]) !== WGPU_PRODUCER_PROFILE_PHASE_ORDER.length) {
+    return null;
+  }
+  const periods = profileVector(normalized, "wgprd");
+  const calls = profileVector(normalized, "wgprc");
+  const samples = profileVector(normalized, "wgprs");
+  const sampleTotalNs = profileVector(normalized, "wgprt");
+  const sampleMaxNs = profileVector(normalized, "wgprm");
+  if (![periods, calls, samples, sampleTotalNs, sampleMaxNs].every(Boolean)) {
+    return null;
+  }
+  const estimatedTotalNs = sampleTotalNs.map((value, index) =>
+    value * periods[index]
+  );
+  if (estimatedTotalNs.some((value) => !Number.isSafeInteger(value))) return null;
+  return {
+    schema: WGPU_PRODUCER_PROFILE_SCHEMA,
+    version: 1,
+    enabled: header[2] === "1",
+    epoch,
+    phaseCount: Number(header[4]),
+    phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods,
+    calls,
+    samples,
+    sampleTotalNs,
+    sampleMaxNs,
+    estimatedTotalNs,
+  };
+}
+
 export function parseWgpuProducerStateStats(text = "") {
   const normalized = String(text || "");
   const match = /\bwgstate:(\d+)\s+pipe:(\d+)\s+bg:(\d+),(\d+),(\d+)\s+vb:(\d+)\s+ib:(\d+)\s+wgdrop:(\d+)(?:\s+wgbabort:(\d+)\s+wgboversize:(\d+)\s+wguploadto:(\d+))?/i
@@ -72,6 +128,18 @@ function numericValues(match, start, count) {
   return Array.from({ length: count }, (_, index) =>
     Number(match?.[start + index] || 0)
   );
+}
+
+function profileVector(text, label) {
+  const count = WGPU_PRODUCER_PROFILE_PHASE_ORDER.length;
+  const match = new RegExp(`\\b${label}:([0-9]+(?:,[0-9]+){${count - 1}})(?=\\s|$)`, "i")
+    .exec(text);
+  if (!match) return null;
+  const values = match[1].split(",").map(Number);
+  return values.length === count &&
+    values.every((value) => Number.isSafeInteger(value) && value >= 0)
+    ? values
+    : null;
 }
 
 export function createWgpuPassStateCache() {

@@ -17,6 +17,7 @@ import {
   requestedWgpuReplayDiagnostics,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
+  requestedWgpuProducerProfile,
   requestedWgpuGeometryPack,
   requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
@@ -532,6 +533,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     /requestedWgpuReplayPump\(\s*window\.location\.search,\s*this\.videoBackend === "WebGPU-Real"\s*\)/
   );
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuProducerProfile\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuGeometryPack\(window\.location\.search\)/);
@@ -543,6 +545,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuLoadEpochFence: this\.wgpuLoadEpochFence/);
   assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
+  assert.match(adapter, /wgpuProducerProfile: this\.wgpuProducerProfile/);
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
   assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
@@ -555,6 +558,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
   assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
   assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
+  assert.match(worker, /wgpuProducerProfile: payload\.wgpuProducerProfile/);
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
   assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
@@ -649,6 +653,12 @@ test("mapped upload transport is opt-in and queue remains the reference", () => 
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=queue"), "queue");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=mapped"), "mapped");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=MAPped"), "queue");
+});
+
+test("producer phase profiling is default-off and accepts only an explicit one", () => {
+  assert.equal(requestedWgpuProducerProfile(""), false);
+  assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=0"), false);
+  assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=1"), true);
 });
 
 test("renderer worker probes are explicit diagnostic modes", () => {

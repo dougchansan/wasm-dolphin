@@ -6,9 +6,38 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
   createWgpuPassStateCache,
+  parseWgpuProducerProfileStats,
   parseWgpuProducerStateStats
 } from "../src/wgpu-pass-state-cache.js";
+
+test("producer profile parser preserves the fixed phase ABI and derives sampled totals", () => {
+  const parsed = parseWgpuProducerProfileStats(
+    "wgstate:0 pipe:0 bg:0,0,0 vb:0 ib:0 wgdrop:0 " +
+    "wgprod:1,1,7,12 " +
+    "wgprd:1,2,3,4,5,6,7,8,9,10,11,12 " +
+    "wgprc:10,20,30,40,50,60,70,80,90,100,110,120 " +
+    "wgprs:5,10,15,20,25,30,35,40,45,50,55,60 " +
+    "wgprt:100,200,300,400,500,600,700,800,900,1000,1100,1200 " +
+    "wgprm:11,22,33,44,55,66,77,88,99,111,122,133"
+  );
+  assert.equal(parsed.schema, WGPU_PRODUCER_PROFILE_SCHEMA);
+  assert.equal(parsed.enabled, true);
+  assert.equal(parsed.epoch, 7);
+  assert.equal(parsed.phaseCount, 12);
+  assert.deepEqual(parsed.phaseOrder, [...WGPU_PRODUCER_PROFILE_PHASE_ORDER]);
+  assert.deepEqual(parsed.periods, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(parsed.estimatedTotalNs, [
+    100, 400, 900, 1600, 2500, 3600, 4900, 6400, 8100, 10000, 12100, 14400,
+  ]);
+  assert.deepEqual(parsed.sampleMaxNs, [11, 22, 33, 44, 55, 66, 77, 88, 99, 111, 122, 133]);
+  assert.equal(parseWgpuProducerProfileStats("wgprod:1,1,7,11"), null);
+  assert.equal(parseWgpuProducerProfileStats(
+    "wgprod:1,1,7,12 wgprd:1,1,1,1,1,1,1,1,1,1,1,1"
+  ), null);
+});
 
 test("producer stats expose suppression counts and invalidate dropped runs", () => {
   assert.deepEqual(
@@ -294,6 +323,15 @@ test("worker integrates the cache without crossing pass, load, or destroy bounda
     /wgpuConsumerStateCacheEnabled =\s*wgpuStateCacheEnabled && !wgpuProducerStateCacheAvailable/);
   assert.match(worker,
     /producerStateCacheEnabled:\s*wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable/);
+  assert.match(worker, /_SetWebGpuProducerProfileEnabled/);
+  assert.match(worker, /parseWgpuProducerProfileStats/);
+  assert.match(worker,
+    /wgpuprodprofile=1 requires SetWebGpuProducerProfileEnabled/);
+  assert.match(worker,
+    /setWebGpuProducerProfileEnabled\?\.\(wgpuProducerProfileRequested \? 1 : 0\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("core reset"\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("slot state reload"\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("save-state reload"\)/);
   assert.match(worker,
     /case WGPU_CMD_OP_SET_PIPELINE:[\s\S]*?passHasPipe = false;[\s\S]*?passHasPipe = true;/);
   assert.match(worker,

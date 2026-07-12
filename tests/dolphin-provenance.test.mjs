@@ -290,9 +290,9 @@ function createDependentLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 34);
+  assert.equal(result.patches.count, 35);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
-  assert.equal(result.vendorSnapshot.rootPaths, 99);
+  assert.equal(result.vendorSnapshot.rootPaths, 100);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
   assert.equal(result.core.abiVersion, 1);
   assert.equal(result.core.memoryContract.jsGlue.initialPages, 24576);

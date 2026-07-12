@@ -25,7 +25,9 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
+  evaluateWgpuProducerProfileEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
   evaluateWgpuDirtyRangeProjection,
@@ -39,6 +41,7 @@ import {
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   parseProfileMetrics,
+  parseWgpuProducerProfileStats,
   recordsToCsv,
   resolveCoreArtifactPath,
   selectedCoreServedPaths,
@@ -176,6 +179,9 @@ async function main() {
     const comparisonFailures = [];
     const comparisonWarnings = [];
     if (comparisonConfig) {
+      if (comparisonConfig.overheadGate && comparison.overheadGatePassed !== true) {
+        comparisonFailures.push("Comparison failed the configured overhead or semantic-work gate");
+      }
       if (comparison.outcome === "INFRASTRUCTURE_INCONCLUSIVE") {
         comparisonFailures.push("Comparison stopped because the invalid-block limit was exceeded");
       } else if (["NEEDS_MORE_BLOCKS", "INCONCLUSIVE", "INCOMPLETE"].includes(comparison.outcome)) {
@@ -570,6 +576,7 @@ async function runScenario(scenario, context) {
       const record = {
         ...sample,
         ...parseProfileMetrics(sample.helper, sample.profile),
+        ...(parseWgpuProducerProfileStats(sample.helper) ?? {}),
         ...flattenCausalTelemetry(sample.causalTelemetry),
         ...flattenWgpuDirtyRangeProjection(
           sample.causalTelemetry?.webgpu?.dirtyRangeProjection
@@ -772,6 +779,12 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...softwareRasterInstrumentation.failures);
+  const wgpuProducerProfile = evaluateWgpuProducerProfileEvidence({
+    requested: scenario.params.wgpuprodprofile,
+    metrics: scenario.params.metrics,
+    samples,
+  });
+  invalidReasons.push(...wgpuProducerProfile.failures);
   invalidReasons.push(...evaluateCoreSelectionEvidence({
     url: url.href,
     artifactSha256: context.coreArtifact?.sha256,
@@ -780,6 +793,10 @@ async function runScenario(scenario, context) {
   invalidReasons.push(...evaluateWgpuOutputContractEvidence({
     video: scenario.params.video,
     requestedProbe: scenario.params.wgpurenderprobe,
+    diagnostics: renderer,
+  }).failures);
+  invalidReasons.push(...evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: scenario.params.wgpudiagquiet,
     diagnostics: renderer,
   }).failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
@@ -815,6 +832,7 @@ async function runScenario(scenario, context) {
     { expectedInputEvents: context.postLoadInputScript.length }
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
+  summary.metrics.wgpuProducerProfile = wgpuProducerProfile;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
   if (uploadProbeMode) {
@@ -1072,7 +1090,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
@@ -2062,6 +2080,19 @@ function runSummaryCsv(results) {
     fixedWorkThroughputGameSpeedPercent:
       run.metrics.fixedEmulatedWork?.throughputGameSpeedPercent,
     fixedWorkThroughputCoreFps: run.metrics.fixedEmulatedWork?.throughputCoreFps,
+    wgpuProducerProfileActivated: run.metrics.wgpuProducerProfile?.activated,
+    wgpuProducerProfileSchemaVersion: run.metrics.wgpuProducerProfile?.schemaVersion,
+    wgpuProducerProfileEpoch: run.metrics.wgpuProducerProfile?.epoch,
+    wgpuProducerProfilePhaseOrder: run.metrics.wgpuProducerProfile?.phaseOrder,
+    wgpuProducerProfilePeriods: run.metrics.wgpuProducerProfile?.periods,
+    wgpuProducerProfileDeltaCalls: run.metrics.wgpuProducerProfile?.deltas?.calls,
+    wgpuProducerProfileDeltaSamples: run.metrics.wgpuProducerProfile?.deltas?.samples,
+    wgpuProducerProfileDeltaSampleTotalNs:
+      run.metrics.wgpuProducerProfile?.deltas?.sampleTotalNs,
+    wgpuProducerProfileDeltaEstimatedTotalNs:
+      run.metrics.wgpuProducerProfile?.deltas?.estimatedTotalNs,
+    wgpuProducerProfileFinalSampleMaxNs:
+      run.metrics.wgpuProducerProfile?.final?.sampleMaxNs,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,

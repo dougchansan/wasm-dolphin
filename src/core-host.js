@@ -19,6 +19,8 @@ import {
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
   requestedWgpuReplayDiagnostics,
+  requestedWgpuDiagnosticQuiet,
+  requestedWgpuProducerProfile,
   requestedWgpuStateCache,
   requestedWgpuGeometryPack,
   requestedWgpuGeometryRange,
@@ -101,6 +103,9 @@ export class EmulatorHost {
     this.wgpuReplayBudgetMs = requestedWgpuReplayBudgetMs(window.location.search);
     this.wgpuPowerPreference = requestedWgpuPowerPreference(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
+    this.wgpuDiagnosticQuiet = requestedWgpuDiagnosticQuiet(window.location.search);
+    this.wgpuProducerProfile = this.collectMetrics &&
+      requestedWgpuProducerProfile(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
     this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
@@ -331,6 +336,8 @@ export class EmulatorHost {
             wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
             wgpuPowerPreference: this.wgpuPowerPreference,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+            wgpuDiagnosticQuiet: this.wgpuDiagnosticQuiet,
+            wgpuProducerProfile: this.wgpuProducerProfile,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
             wgpuUboPack: this.wgpuUboPack,
