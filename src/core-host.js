@@ -29,6 +29,7 @@ import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
+import { requestedWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import {
   requestedInputLatencyDiagnostics,
   requestedInputReadbackDiagnostics
@@ -105,6 +106,7 @@ export class EmulatorHost {
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
+    this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
       requestedInputLatencyDiagnostics(window.location.search) || this.inputPhotonMarker.enabled;
@@ -331,6 +333,7 @@ export class EmulatorHost {
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+            wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,
             inputPhotonDiagnostics: this.inputPhotonMarker.enabled,

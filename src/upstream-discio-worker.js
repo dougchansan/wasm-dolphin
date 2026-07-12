@@ -65,6 +65,7 @@ import {
   WGPU_UPLOAD_ROLE,
   createWgpuUploadAttribution
 } from "./wgpu-upload-attribution.js";
+import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 import {
   attemptRetainedWgpuUpload,
@@ -182,6 +183,9 @@ let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
 let wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
 let wgpuUploadAttribution = createWgpuUploadAttribution();
+let wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
+let wgpuDirtyRangeProjectionRequested = false;
+let wgpuDirtyRangeProjectionActive = false;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -512,6 +516,10 @@ function rendererDiagnosticsPayload() {
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
     wgpuUploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
+    wgpuDirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
+      requested: wgpuDirtyRangeProjectionRequested,
+      active: wgpuDirtyRangeProjectionActive
+    }),
   };
 }
 
@@ -575,6 +583,10 @@ async function handleMessage(type, payload) {
       metricsDiagnostics.enabled = collectMetrics;
       wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
       wgpuUploadAttribution = createWgpuUploadAttribution();
+      wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
+      wgpuDirtyRangeProjectionRequested = Boolean(payload.wgpuDirtyRangeProjection);
+      wgpuDirtyRangeProjectionActive =
+        wgpuDirtyRangeProjectionRequested && causalMetricsEnabled;
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
         enabled: gpuCompletionDiagnostics
@@ -2078,6 +2090,10 @@ function maybeCreateCausalTelemetry(videoStats) {
         : 0,
       replayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
       uploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
+      dirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
+        requested: wgpuDirtyRangeProjectionRequested,
+        active: wgpuDirtyRangeProjectionActive
+      }),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
@@ -6105,7 +6121,15 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     const discardedRecords = (discardTo - read) >>> 0;
     if (discardedRecords > 0) {
-      if (causalMetricsEnabled) wgpuUploadAttribution.recordIncompletePass();
+      if (causalMetricsEnabled) {
+        wgpuUploadAttribution.recordIncompletePass();
+        if (wgpuDirtyRangeProjectionActive) {
+          wgpuDirtyRangeProjection.recordSegmentBoundary({
+            kind: "load-fence",
+            complete: false
+          });
+        }
+      }
       publishWgpuReadIndex(ring, discardTo);
       wgpuReplayClassifier?.recordLoadFence({
         discardedRecords,
@@ -6469,6 +6493,12 @@ function drainWebGpuCmdRing(source = "presentation") {
         } else {
           wgpuUploadAttribution.recordIncompletePass();
         }
+        if (wgpuDirtyRangeProjectionActive) {
+          wgpuDirtyRangeProjection.recordSegmentBoundary({
+            kind: reason,
+            complete: reason === "explicit" || reason === "submit-present"
+          });
+        }
       }
       pass = null;
       if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset(reason);
@@ -6547,7 +6577,9 @@ function drainWebGpuCmdRing(source = "presentation") {
           readback?.destroy();
         }
       }
+      return true;
     }
+    return false;
   };
   const heapCopy = (off, len) => heap.slice(off, off + len);
   // Atomic replay normally stops before an incomplete BEGIN_PASS and leaves
@@ -6849,6 +6881,19 @@ function drainWebGpuCmdRing(source = "presentation") {
                     uploadBytes,
                     u32[recWord + 2] & ~3
                   );
+                  if (wgpuDirtyRangeProjectionActive) {
+                    wgpuDirtyRangeProjection.recordUpload({
+                      bufferId,
+                      destinationOffset: u32[recWord + 2] & ~3,
+                      bytes: len,
+                      role: uploadRole,
+                      sourcePointer: srcP,
+                      sourceBytes: len,
+                      sourceArenaBase: ring.uploadBase,
+                      sourceArenaSize: ring.uploadSize,
+                      recordIndex: read,
+                    });
+                  }
                 }
               } else {
               let uploadPayload = stagedUpload?.data;
@@ -6882,6 +6927,19 @@ function drainWebGpuCmdRing(source = "presentation") {
                   uploadBytes,
                   u32[recWord + 2] & ~3
                 );
+                if (wgpuDirtyRangeProjectionActive) {
+                  wgpuDirtyRangeProjection.recordUpload({
+                    bufferId,
+                    destinationOffset: u32[recWord + 2] & ~3,
+                    bytes: len,
+                    role: uploadRole,
+                    sourcePointer: srcP,
+                    sourceBytes: len,
+                    sourceArenaBase: ring.uploadBase,
+                    sourceArenaSize: ring.uploadSize,
+                    recordIndex: read,
+                  });
+                }
                 wgpuReplayOpMetrics.recordQueueUpload(
                   WGPU_CMD_OP_UPLOAD_BUFFER,
                   uploadPayload.byteLength
@@ -7963,7 +8021,12 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
-          endPass("submit-present", read);
+          if (!endPass("submit-present", read) && wgpuDirtyRangeProjectionActive) {
+            wgpuDirtyRangeProjection.recordSegmentBoundary({
+              kind: "submit-present",
+              complete: true
+            });
+          }
           let presentAlreadySubmitted = false;
           const hardwareInputMarkerCoreFrame = api?.getFrame?.() ?? 0;
           const hardwareInputMarker = prepareInputVisualMarker(hardwareInputMarkerCoreFrame);
