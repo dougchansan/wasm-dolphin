@@ -51,6 +51,8 @@
   SHA-verified headed A/B, underrun evidence, and default-off decision.
 - [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
   removed experiment, safety invariants, and next architecture.
+- [WGPU staging-slot results](perf-results/melee-wgpu-staging-slots-2026-07-12.md) —
+  valid equal-memory A/B and rejection of additional remap slots.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
   CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
   deterministic 32×32 input-marker results.
