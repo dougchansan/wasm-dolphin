@@ -5,13 +5,317 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  WGPU_GEOMETRY_COARSE_RANGE_REASON,
   WGPU_GEOMETRY_PACKET_MAX_OFFSET,
   checkedAlignUp,
   createWgpuGeometryPacketArena,
+  packWgpuGeometryCoarseRanges,
   packWgpuGeometryPacket,
+  planWgpuGeometryCoarseRanges,
   planWgpuGeometryPacketLayout,
   reconstructWgpuGeometryPacket,
 } from "../src/wgpu-geometry-packet.js";
+
+const DEFAULT_PASS = Symbol("pass");
+const DEFAULT_TRANSACTION = Symbol("transaction");
+
+function coarseSpan(options) {
+  return {
+    generation: 1,
+    passId: DEFAULT_PASS,
+    transactionId: DEFAULT_TRANSACTION,
+    ...options,
+  };
+}
+
+test("coarse ranges merge gaps through 64 bytes and materialize legacy destinations", () => {
+  const buffer = {};
+  const first = Uint8Array.of(1, 2, 3, 4);
+  const second = Uint8Array.of(5, 6, 7, 8);
+  const spans = [
+    coarseSpan({ buffer, generation: 2, destinationOffset: 8, bytes: first }),
+    coarseSpan({
+      buffer,
+      generation: 2,
+      destinationOffset: 76,
+      bytes: second,
+      paddingBeforeBytes: 64,
+    }),
+  ];
+  const packed = packWgpuGeometryCoarseRanges({ spans });
+
+  assert.equal(packed.ok, true);
+  assert.equal(packed.ranges.length, 1);
+  assert.deepEqual(packed.ranges[0], {
+    buffer,
+    generation: 2,
+    passId: DEFAULT_PASS,
+    transactionId: DEFAULT_TRANSACTION,
+    startOffset: 8,
+    endOffset: 80,
+    byteLength: 72,
+    spanIndexes: [0, 1],
+    gapBytes: 64,
+  });
+  assert.deepEqual([...packed.packedRanges[0].bytes.slice(0, 4)], [...first]);
+  assert.ok(packed.packedRanges[0].bytes.slice(4, 68).every((byte) => byte === 0));
+  assert.deepEqual([...packed.packedRanges[0].bytes.slice(68)], [...second]);
+  assert.deepEqual(first, Uint8Array.of(1, 2, 3, 4));
+  assert.deepEqual(second, Uint8Array.of(5, 6, 7, 8));
+  assert.equal(spans[0].destinationOffset, 8);
+  const destination = new Uint8Array(88).fill(0xa5);
+  destination.set(packed.packedRanges[0].bytes, packed.ranges[0].startOffset);
+  const expected = new Uint8Array(88).fill(0xa5);
+  expected.set(first, 8);
+  expected.fill(0, 12, 76);
+  expected.set(second, 76);
+  assert.deepEqual(destination, expected);
+
+  const splitAt65 = planWgpuGeometryCoarseRanges({
+    alignment: 1,
+    spans: [
+      coarseSpan({ buffer, generation: 2, destinationOffset: 0, bytes: Uint8Array.of(1) }),
+      coarseSpan({
+        buffer,
+        generation: 2,
+        destinationOffset: 66,
+        bytes: Uint8Array.of(2),
+        paddingBeforeBytes: 65,
+      }),
+    ],
+  });
+  assert.equal(
+    splitAt65.splits[0].reason,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.GAP_EXCEEDS_LIMIT
+  );
+});
+
+test("coarse ranges expose deterministic split reasons", () => {
+  const a = {};
+  const b = {};
+  const pass2 = {};
+  const transaction2 = {};
+  const bytes = new Uint8Array(4);
+  const plan = planWgpuGeometryCoarseRanges({
+    maxRangeBytes: 80,
+    spans: [
+      coarseSpan({ buffer: a, destinationOffset: 0, bytes }),
+      coarseSpan({ buffer: a, destinationOffset: 72, bytes, paddingBeforeBytes: 68 }),
+      coarseSpan({ buffer: a, destinationOffset: 80, bytes, boundaryBefore: true }),
+      coarseSpan({ buffer: b, destinationOffset: 0, bytes }),
+      coarseSpan({ buffer: b, generation: 2, destinationOffset: 8, bytes }),
+      coarseSpan({
+        buffer: b, generation: 2, passId: pass2, destinationOffset: 0, bytes,
+      }),
+      coarseSpan({
+        buffer: b,
+        generation: 2,
+        passId: pass2,
+        transactionId: transaction2,
+        destinationOffset: 0,
+        bytes,
+      }),
+      coarseSpan({
+        buffer: b,
+        generation: 2,
+        passId: pass2,
+        transactionId: transaction2,
+        destinationOffset: 68,
+        bytes,
+        paddingBeforeBytes: 64,
+      }),
+      coarseSpan({
+        buffer: b,
+        generation: 2,
+        passId: pass2,
+        transactionId: transaction2,
+        destinationOffset: 136,
+        bytes,
+        paddingBeforeBytes: 64,
+      }),
+    ],
+  });
+
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.splits.map(({ reason }) => reason), [
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.GAP_EXCEEDS_LIMIT,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.EXPLICIT_BOUNDARY,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.BUFFER_CHANGED,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.GENERATION_CHANGED,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.PASS_CHANGED,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.TRANSACTION_CHANGED,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.RANGE_EXCEEDS_CAP,
+  ]);
+});
+
+test("coarse ranges preserve unauthorized gaps and reject mismatched padding", () => {
+  const buffer = {};
+  const first = coarseSpan({
+    buffer, destinationOffset: 4, bytes: Uint8Array.of(1, 2, 3, 4),
+  });
+  const second = coarseSpan({
+    buffer, destinationOffset: 16, bytes: Uint8Array.of(5, 6, 7, 8),
+  });
+  const packed = packWgpuGeometryCoarseRanges({ spans: [first, second] });
+  assert.equal(packed.ok, true);
+  assert.equal(packed.ranges.length, 2);
+  assert.equal(
+    packed.splits[0].reason,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.PADDING_NOT_AUTHORIZED
+  );
+  const destination = new Uint8Array(24).fill(0xa5);
+  for (const range of packed.packedRanges) {
+    destination.set(range.bytes, range.startOffset);
+  }
+  const expected = new Uint8Array(24).fill(0xa5);
+  expected.set(first.bytes, first.destinationOffset);
+  expected.set(second.bytes, second.destinationOffset);
+  assert.deepEqual(destination, expected);
+
+  const mismatch = packWgpuGeometryCoarseRanges({
+    spans: [first, { ...second, paddingBeforeBytes: 7 }],
+  });
+  assert.equal(mismatch.ok, false);
+  assert.equal(
+    mismatch.fallbacks[0].reason,
+    WGPU_GEOMETRY_COARSE_RANGE_REASON.PADDING_MISMATCH
+  );
+  assert.deepEqual(mismatch.packedRanges, []);
+});
+
+test("coarse ranges fail closed for unsafe logical spans", () => {
+  const buffer = {};
+  const cases = [
+    {
+      spans: [coarseSpan({ buffer, destinationOffset: 2, bytes: new Uint8Array(4) })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.MISALIGNED_SPAN,
+    },
+    {
+      spans: [
+        coarseSpan({ buffer, destinationOffset: 16, bytes: new Uint8Array(4) }),
+        coarseSpan({ buffer, destinationOffset: 12, bytes: new Uint8Array(4) }),
+      ],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.DESTINATION_REGRESSION,
+    },
+    {
+      spans: [
+        coarseSpan({ buffer, destinationOffset: 16, bytes: new Uint8Array(8) }),
+        coarseSpan({ buffer, destinationOffset: 20, bytes: new Uint8Array(4) }),
+      ],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.OVERLAPPING_SPAN,
+    },
+    {
+      spans: [coarseSpan({
+        buffer,
+        destinationOffset: 0xfffffffc,
+        bytes: new Uint8Array(8),
+      })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.UNSAFE_INTEGER_OVERFLOW,
+    },
+    {
+      maxRangeBytes: 8,
+      spans: [coarseSpan({ buffer, destinationOffset: 0, bytes: new Uint8Array(12) })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.LOGICAL_SPAN_EXCEEDS_CAP,
+    },
+    {
+      spans: [coarseSpan({ buffer: null, destinationOffset: 0, bytes: new Uint8Array(4) })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_IDENTITY,
+    },
+    {
+      spans: [coarseSpan({
+        buffer, passId: Number.NaN, destinationOffset: 0, bytes: new Uint8Array(4),
+      })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_IDENTITY,
+    },
+    {
+      spans: [{
+        buffer,
+        generation: 1,
+        passId: DEFAULT_PASS,
+        destinationOffset: 0,
+        bytes: new Uint8Array(4),
+      }],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_IDENTITY,
+    },
+    {
+      spans: [coarseSpan({ buffer, destinationOffset: 0, bytes: new Uint8Array(0) })],
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.ZERO_LENGTH_SPAN,
+    },
+  ];
+
+  for (const options of cases) {
+    const packed = packWgpuGeometryCoarseRanges(options);
+    assert.equal(packed.ok, false);
+    assert.equal(packed.fallbacks.at(-1).reason, options.reason);
+    assert.deepEqual(packed.packedRanges, []);
+  }
+
+  assert.equal(planWgpuGeometryCoarseRanges({
+    spans: [], maxRangeBytes: (16 * 1024 * 1024) + 1,
+  }).fallbacks[0].reason, WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_OPTIONS);
+});
+
+test("randomized coarse packing exactly matches legacy destination writes", () => {
+  let seed = 0x9e3779b9;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  };
+
+  for (let run = 0; run < 500; run += 1) {
+    const buffer = {};
+    const spans = [];
+    let destinationOffset = (random() % 8) * 4;
+    const spanCount = 1 + (random() % 20);
+    for (let index = 0; index < spanCount; index += 1) {
+      destinationOffset += (random() % 17) * 4;
+      const bytes = Uint8Array.from(
+        { length: (1 + (random() % 16)) * 4 },
+        () => random() & 0xff
+      );
+      const priorEnd = spans.length === 0
+        ? null
+        : spans.at(-1).destinationOffset + spans.at(-1).bytes.byteLength;
+      const authorizePadding = priorEnd !== null && (random() & 1) === 1;
+      spans.push(coarseSpan({
+        buffer,
+        destinationOffset,
+        bytes,
+        ...(authorizePadding
+          ? { paddingBeforeBytes: destinationOffset - priorEnd }
+          : {}),
+      }));
+      destinationOffset += bytes.byteLength;
+    }
+
+    const packed = packWgpuGeometryCoarseRanges({ spans, maxRangeBytes: 512 });
+    assert.equal(packed.ok, true);
+    const legacy = new Uint8Array(destinationOffset).fill(0xa5);
+    for (const range of packed.ranges) {
+      for (let index = 1; index < range.spanIndexes.length; index += 1) {
+        const previous = spans[range.spanIndexes[index - 1]];
+        const current = spans[range.spanIndexes[index]];
+        legacy.fill(
+          0,
+          previous.destinationOffset + previous.bytes.byteLength,
+          current.destinationOffset
+        );
+      }
+    }
+    for (const span of spans) legacy.set(span.bytes, span.destinationOffset);
+    const actual = new Uint8Array(destinationOffset).fill(0xa5);
+    for (const range of packed.packedRanges) actual.set(range.bytes, range.startOffset);
+    for (const span of spans) {
+      assert.deepEqual(
+        actual.slice(span.destinationOffset, span.destinationOffset + span.bytes.byteLength),
+        span.bytes
+      );
+    }
+    assert.deepEqual(actual, legacy);
+  }
+});
 
 test("checked alignment rejects invalid inputs and uint32 overflow", () => {
   assert.equal(checkedAlignUp(5, 4), 8);
