@@ -14,6 +14,25 @@ average, and utilization remained 2.67% for three slots versus 5.29% for six.
 This confirms premature drain-boundary sealing rather than total mapped memory
 as the current lifecycle problem.
 
+## Additional-capacity follow-up
+
+A later default-off screen kept the 16 MiB slot size and increased the pool
+from three to six slots (48 to 96 MiB). Two headed fixed-save runs reached
+63.517% and 66.507% game speed, for a 65.012% mean. Their contemporary
+three-slot controls averaged 65.860%, so doubling capacity was 1.287% slower.
+
+The larger pool did reduce the mean maximum capacity wait from about 1,172 ms
+to 714 ms and mean cumulative capacity wait by roughly 6%, but cumulative
+remap latency rose from about 22.6 seconds to 37.4 seconds. Both six-slot runs
+added two audio underruns and were therefore non-promotable. This follow-up
+closes the remaining capacity question: neither redistributing 48 MiB across
+more slots nor doubling total mapped memory improves fixed-work throughput.
+The experimental URL plumbing was removed after measurement.
+
+The follow-up used content-addressed core
+`2fc5e3cd52a77ac1850549eb1a766ab166733d4875e5fd3ec477b1d7222b16ea`.
+Raw ignored artifacts are under `.omx/wgpu-no-lag/hardware-wgpu-staging-6x16-*`.
+
 ## Fixed campaign
 
 - Scene: direct `__battle.sav` load into Kirby versus Link.
