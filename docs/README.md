@@ -55,6 +55,8 @@
   valid equal-memory A/B and rejection of additional remap slots.
 - [WGPU renderer-worker canary](perf-results/melee-wgpu-renderer-worker-canary-2026-07-12.md) —
   nested-worker, shared-memory, and headless WebGPU feasibility evidence.
+- [WGPU upload-isolation screen](perf-results/melee-wgpu-upload-isolation-2026-07-12.md) —
+  renderer-worker rejection, null-drain ceiling, and the intentional-blank probe boundary.
 - [WGPU transaction-staging results](perf-results/melee-wgpu-transaction-staging-2026-07-12.md) —
   valid batching A/B, critical-path regression, and no-merge decision.
 - [WGPU batched queue-staging smoke](perf-results/melee-wgpu-batched-queue-staging-2026-07-12.md) —
