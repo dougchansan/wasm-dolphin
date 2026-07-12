@@ -60,6 +60,9 @@
 - [WGPU producer phase profile](perf-results/melee-wgpu-producer-profile-2026-07-12.md) —
   validated profiler overhead, visible WGPU confirmation, and the 22.2-million-per-second
   idle FIFO-tail call pattern.
+- [WGPU draw-resource profile](perf-results/melee-wgpu-draw-profile-2026-07-12.md) —
+  default-off TLS remediation, stability-gated overhead proof, visible smoke,
+  and sampled draw-resource phase ranking.
 - [WGPU idle FIFO-tail gate screen](perf-results/melee-wgpu-tail-gate-2026-07-12.md) —
   order-balanced activation evidence and rejection after state-proven no-op
   elision produced no fixed-work throughput gain.
