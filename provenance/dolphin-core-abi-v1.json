@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:3eefba46d25513691797735d408c71c2be4f05b003083807e2ef185f0cb3dd13",
+  "coreId": "sha256:2576faf651de4dd6cd9677e2770c6285271e63ceb30e39489b978f9b43bab245",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 263218,
-      "sha256": "83924befee921623795502e9cdc4541c865eeb19b07f4240e0c101b94700eb0d"
+      "size": 263858,
+      "sha256": "ceda63f22527297af8b51f5b63e52b9b65824f4e1dccdcced68dce3ec0ce45ba"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12887803,
-      "sha256": "3eefba46d25513691797735d408c71c2be4f05b003083807e2ef185f0cb3dd13"
+      "size": 12893772,
+      "sha256": "2576faf651de4dd6cd9677e2770c6285271e63ceb30e39489b978f9b43bab245"
     }
   ],
   "contractSources": [
@@ -129,7 +129,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "9594adf01005b6921f3846e2d70dc58675fb8da84f00debda859e213d73257d9"
+      "sha256": "3102b1bcdaba0770748dae0e11cf69314b16797d0c5d2b2f378655ab2e3c23b9"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
@@ -182,12 +182,7 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [
-    "_GetWebGpuVertexManagerGeometrySmokeError",
-    "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
-    "_RunWebGpuVertexManagerGeometryParitySmoke",
-    "_RunWebGpuVertexManagerGeometryRollbackSmoke"
-  ],
+  "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
     "_AudioBuffer",
     "_AudioBufferFrames",
@@ -251,6 +246,7 @@
     "_GetWebGpuCommandStreamGeometrySmokeError",
     "_GetWebGpuDenseUboSmokeError",
     "_GetWebGpuStateCacheStats",
+    "_GetWebGpuVertexManagerGeometrySmokeError",
     "_LoadCoreState",
     "_LoadState",
     "_LoadStateFile",
@@ -276,6 +272,9 @@
     "_RunWebGpuCommandStreamGeometryRollbackSmoke",
     "_RunWebGpuDenseUboPacketSmoke",
     "_RunWebGpuDenseUboRollbackSmoke",
+    "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "_RunWebGpuVertexManagerGeometryParitySmoke",
+    "_RunWebGpuVertexManagerGeometryRollbackSmoke",
     "_SaveCoreState",
     "_SaveState",
     "_SaveStateFile",

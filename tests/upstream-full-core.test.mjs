@@ -207,6 +207,48 @@ test("upstream full core executes native WebGPU dense UBO parity and rollback sm
   assert.equal(lastError(), "ok");
 });
 
+test("upstream full core executes live WebGPU VertexManager ownership smokes", async (t) => {
+  if (!existsSync(coreJs) || !existsSync(coreWasm)) {
+    t.skip("upstream full core has not been built");
+    return;
+  }
+
+  const { default: createDolphinCore } = await import(coreJs);
+  const module = await createDolphinCore({
+    wasmBinary: readFileSync(coreWasm),
+    noInitialRun: true
+  });
+
+  const runParity = module.cwrap(
+    "RunWebGpuVertexManagerGeometryParitySmoke",
+    "number",
+    ["number", "number"]
+  );
+  const runRollback = module.cwrap(
+    "RunWebGpuVertexManagerGeometryRollbackSmoke",
+    "number",
+    ["number"]
+  );
+  const runLifecycle = module.cwrap(
+    "RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "number",
+    []
+  );
+  const lastError = module.cwrap(
+    "GetWebGpuVertexManagerGeometrySmokeError",
+    "string",
+    []
+  );
+  for (const packed of [0, 1]) {
+    for (const indexed of [0, 1]) {
+      assert.equal(runParity(indexed, packed), 0, `indexed=${indexed} packed=${packed}: ${lastError()}`);
+    }
+    assert.equal(runRollback(packed), 0, `rollback packed=${packed}: ${lastError()}`);
+  }
+  assert.equal(runLifecycle(), 0, lastError());
+  assert.equal(lastError(), "ok");
+});
+
 test("upstream full core guards risky PPC WASM JIT op tiers", async (t) => {
   if (!existsSync(coreJs) || !existsSync(coreWasm)) {
     t.skip("upstream full core has not been built");
