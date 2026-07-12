@@ -173,7 +173,7 @@ index c79a3c9370..fee9fcf67c 100644
  static constexpr u32 kUsageIndex = 0x10 | 0x8;
  static constexpr u32 kUsageGeometry = 0x20 | 0x10 | 0x8;
 +static constexpr u32 kGeometryRangeMaxGap = 64;
-+static constexpr u32 kGeometryRangeMaxBytes = 8u * 1024u * 1024u;
++static constexpr u32 kGeometryRangeMaxBytes = 256u * 1024u;
 +static constexpr u32 kGeometryRangeHardBytes = 16u * 1024u * 1024u;
  
  VertexManager::VertexManager() = default;
@@ -267,8 +267,8 @@ index c79a3c9370..fee9fcf67c 100644
 +
 +  if (!pending.bytes.empty() && !append)
 +  {
-+    // A buffer/generation boundary, a >64-byte alignment hole, or the 8 MiB
-+    // experiment cap splits the range. The old upload may become an orphan if
++    // A buffer/generation boundary, a >64-byte alignment hole, or the bounded
++    // range cap splits the upload. The old upload may become an orphan if
 +    // a later step fails, but no fallback path can partially publish a draw.
 +    if (!FlushPendingGeometryRange())
 +      return false;

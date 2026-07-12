@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "373a6048a8611c41a27c067d9360ecd2f1938088c628d49585fd92c6975f67db",
+  "patchSeriesSha256": "00feb3e4ca6683219c418cd10c0221028c089981b8304bf9d53e5a04a8d679e2",
   "patches": [
     {
       "order": 1,
@@ -272,8 +272,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0031-webgpu-geometry-range.patch",
-      "size": 32272,
-      "sha256": "63705211f9f1f2f78832ebf8f31870baa30e63f0d5b834751ac15b560442d40c"
+      "size": 32264,
+      "sha256": "871e328e68e36f7f4916c41ff6dd4729f799aded9830c988986cc967b306252a"
     },
     {
       "order": 32,

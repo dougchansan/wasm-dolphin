@@ -88,7 +88,7 @@ test("native geometry range smoke locks ordering, padding, and rollback", async 
   assert.match(patch, /FlushPendingGeometryRange\(\)/);
   assert.match(patch, /PushUploadBuffer[\s\S]*?PushEndPass/);
   assert.match(patch, /kGeometryRangeMaxGap = 64/);
-  assert.match(patch, /kGeometryRangeMaxBytes = 8u \* 1024u \* 1024u/);
+  assert.match(patch, /kGeometryRangeMaxBytes = 256u \* 1024u/);
   assert.match(patch, /kGeometryRangeHardBytes = 16u \* 1024u \* 1024u/);
   assert.match(patch, /std::any_of\(range \+ 200, range \+ 256/);
   assert.match(patch, /constexpr u16 indices\[\] = \{0, 1, 2\}/);
