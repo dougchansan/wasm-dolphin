@@ -60,6 +60,12 @@
 - [WGPU producer phase profile](perf-results/melee-wgpu-producer-profile-2026-07-12.md) —
   validated profiler overhead, visible WGPU confirmation, and the 22.2-million-per-second
   idle FIFO-tail call pattern.
+- [WGPU idle FIFO-tail gate screen](perf-results/melee-wgpu-tail-gate-2026-07-12.md) —
+  order-balanced activation evidence and rejection after state-proven no-op
+  elision produced no fixed-work throughput gain.
+- [WGPU diagnostic-log suppression screen](perf-results/melee-wgpu-diagnostic-quiet-2026-07-12.md) —
+  exact filter activation evidence and rejection after only one known-safe
+  record was suppressed per enabled run.
 - [WGPU transaction-staging results](perf-results/melee-wgpu-transaction-staging-2026-07-12.md) —
   valid batching A/B, critical-path regression, and no-merge decision.
 - [WGPU batched queue-staging smoke](perf-results/melee-wgpu-batched-queue-staging-2026-07-12.md) —
