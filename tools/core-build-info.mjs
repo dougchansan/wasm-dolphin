@@ -217,6 +217,7 @@ export function buildCandidateAbiManifest({ template, jsPath, wasmPath }) {
     throw new Error("Core ABI template is not supported");
   }
   const js = fileInfo(resolve(jsPath), "lf-normalized");
+  js.size = Buffer.byteLength(readFileSync(resolve(jsPath), "utf8").replace(/\r\n/g, "\n"));
   const wasm = fileInfo(resolve(wasmPath));
   const moduleExports = publicModuleExports(readFileSync(resolve(jsPath), "utf8"));
   const logicalArtifact = (artifact, suffix, info) => ({

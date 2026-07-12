@@ -33,7 +33,8 @@ test("candidate ABI manifest is bound to candidate artifacts and exports", async
   try {
     const jsPath = path.join(directory, "dolphin-core-upstream.js");
     const wasmPath = path.join(directory, "dolphin-core-upstream.wasm");
-    await writeFile(jsPath, 'Module["_ExistingExport"]=_ExistingExport;\nModule["_NewExport"]=_NewExport;\n');
+    const normalizedGlue = 'Module["_ExistingExport"]=_ExistingExport;\nModule["_NewExport"]=_NewExport;\n';
+    await writeFile(jsPath, normalizedGlue.replaceAll("\n", "\r\n"));
     await writeFile(wasmPath, Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
     const template = JSON.parse(await readFile(
       new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url),
@@ -48,6 +49,7 @@ test("candidate ABI manifest is bound to candidate artifacts and exports", async
     assert.deepEqual(manifest.moduleExports, ["_ExistingExport", "_NewExport"]);
     assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_StillMissing"]);
     assert.equal(manifest.artifacts[0].path, "cores/dolphin/dolphin-core-upstream.js");
+    assert.equal(manifest.artifacts[0].size, Buffer.byteLength(normalizedGlue));
     assert.equal(manifest.artifacts[1].path, "cores/dolphin/dolphin-core-upstream.wasm");
     assert.equal(manifest.artifacts[1].sha256, manifest.coreId.slice("sha256:".length));
     assert.ok(manifest.contractSources.length > 0);
