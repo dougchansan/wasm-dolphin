@@ -87,3 +87,30 @@ the validating worktree. Their retained hashes are recorded in the adjacent
 JSON file. Because only one run per arm passed the audio gate, do not promote
 the flag or cite the descriptive +3.383% as a measured speed improvement.
 
+## Muted direct-save rescreen — 2026-07-13
+
+The audio gate was made explicit and muted for automated validation, allowing a
+complete visible ABBA+BAAB block on the accepted core
+`fe4448a07a726b67c9b7bd73f2515118b353414a66ac48cc4b1cdd92fb42f2c8`.
+All eight runs reached 12 emulated core seconds, changed the canvas in 19
+samples, reported the requested packet mode, and remained valid. The machine
+was in a lower absolute-throughput regime than earlier campaigns, so only the
+balanced within-block comparison is used.
+
+| Metric | Off mean | On mean | Change |
+| --- | ---: | ---: | ---: |
+| Game speed | 65.683% | 64.852% | -1.266% |
+| Logical uploads | 675,020 | 462,108 | -31.542% |
+| Encoded GPU copies | 658,567 | 442,855 | -32.755% |
+| Upload bytes | 1,462,094,728 | 1,520,601,055 | +4.002% |
+| Capacity waits | 81.25 | 82.75 | +1.846% |
+| Capacity-wait time | 4,591.99 ms | 4,717.41 ms | +2.731% |
+
+Both ordering blocks favored packets off. This resolves the earlier
+inconclusive performance decision: keep `wgpuubopack=1` default-off and do not
+promote it as a speed optimization. It materially reduces command volume, but
+the wider aligned transfers and persistent mapped-staging capacity waits leave
+end-to-end throughput slightly worse.
+
+Raw ignored artifacts are under
+`.omx/wgpu-realtime-100/dense-ubo-current-visible/`.
