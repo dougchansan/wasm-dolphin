@@ -115,9 +115,9 @@ export function createWgpuSemanticParitySink({
     digest.markOverflow();
   }
 
-  function snapshot() {
-    const digestState = digest.snapshot();
-    const resourceState = tracker.snapshot();
+  function snapshot({ detailed = true } = {}) {
+    const digestState = digest.snapshot({ includeRecentCommits: detailed });
+    const resourceState = tracker.snapshot({ includeResources: detailed });
     const independentlyDecoded =
       !failed && independentDecodedEventCount === digestState.committedEventCount;
     return Object.freeze({
@@ -132,6 +132,8 @@ export function createWgpuSemanticParitySink({
       independentDecodedEventCount,
       dependencyEncodingReady: independentlyDecoded,
       independentDecodingReady: independentlyDecoded,
+      // The worker observer is reported by wgpu-semantic-runtime. This field
+      // remains false until a real package path consumes equivalent evidence.
       runtimeIntegrationReady: false,
     });
   }
@@ -189,6 +191,7 @@ export function createWgpuSemanticParitySink({
     markMismatch,
     markOverflow,
     snapshot,
+    summary: () => snapshot({ detailed: false }),
   });
 }
 

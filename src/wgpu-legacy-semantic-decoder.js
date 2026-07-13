@@ -61,10 +61,17 @@ const EMPTY_PAYLOAD_BYTES = new Uint8Array(0);
  * Returned payload bytes are an exact view of that declared span; callers
  * which need an immutable snapshot must copy the view before producer reuse.
  */
-export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
+export function decodeLegacyWgpuCommandRecord(
+  record,
+  heapBytes = null,
+  { payloadBytes: retainedPayloadBytes = null } = {}
+) {
   const words = readCommandWords(record);
   const opcode = words[0];
   const u = (index) => words[index + 1];
+  const payload = (pointer, length, label) => retainedPayloadBytes == null
+    ? declaredPayloadView(heapBytes, pointer, length, label)
+    : retainedPayloadView(retainedPayloadBytes, length, label);
   const result = (resourceClass, resourceId, args, payloadBytes = EMPTY_PAYLOAD_BYTES) => ({
     kind: WGPU_SEMANTIC_EVENT_KIND.COMMAND,
     opcode,
@@ -86,7 +93,7 @@ export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
 
     case WGPU_LEGACY_COMMAND_OPCODE.CREATE_SHADER: {
       const id = requireResourceId(u(0), "CREATE_SHADER");
-      const payloadBytes = declaredPayloadView(heapBytes, u(1), u(2), "CREATE_SHADER");
+      const payloadBytes = payload(u(1), u(2), "CREATE_SHADER");
       return result(WGPU_RESOURCE_CLASS.SHADER, id, [id, u(3)], payloadBytes);
     }
 
@@ -114,7 +121,7 @@ export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
       if (uploadRole > 6) {
         throw new RangeError(`UPLOAD_BUFFER role ${uploadRole} is outside the protocol ABI`);
       }
-      const payloadBytes = declaredPayloadView(heapBytes, u(2), length, "UPLOAD_BUFFER");
+      const payloadBytes = payload(u(2), length, "UPLOAD_BUFFER");
       return result(
         WGPU_RESOURCE_CLASS.BUFFER,
         id,
@@ -141,7 +148,7 @@ export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
       requirePositive(u(3), "UPLOAD_TEXTURE width");
       const height = requirePositive(u(4), "UPLOAD_TEXTURE height");
       const length = checkedU32Product(bytesPerRow, height, "UPLOAD_TEXTURE byte length");
-      const payloadBytes = declaredPayloadView(heapBytes, u(1), length, "UPLOAD_TEXTURE");
+      const payloadBytes = payload(u(1), length, "UPLOAD_TEXTURE");
       return result(
         WGPU_RESOURCE_CLASS.TEXTURE,
         id,
@@ -152,7 +159,7 @@ export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
 
     case WGPU_LEGACY_COMMAND_OPCODE.CREATE_PIPELINE_CFG: {
       const id = requireResourceId(u(0), "CREATE_PIPELINE_CFG");
-      const payloadBytes = declaredPayloadView(heapBytes, u(1), u(2), "CREATE_PIPELINE_CFG");
+      const payloadBytes = payload(u(1), u(2), "CREATE_PIPELINE_CFG");
       return result(WGPU_RESOURCE_CLASS.PIPELINE, id, [id], payloadBytes);
     }
 
@@ -163,7 +170,7 @@ export function decodeLegacyWgpuCommandRecord(record, heapBytes = null) {
 
     case WGPU_LEGACY_COMMAND_OPCODE.CREATE_BIND_GROUP: {
       const id = requireResourceId(u(0), "CREATE_BIND_GROUP");
-      const payloadBytes = declaredPayloadView(heapBytes, u(1), u(2), "CREATE_BIND_GROUP");
+      const payloadBytes = payload(u(1), u(2), "CREATE_BIND_GROUP");
       return result(WGPU_RESOURCE_CLASS.BIND_GROUP, id, [id, u(3)], payloadBytes);
     }
 
@@ -299,6 +306,17 @@ function declaredPayloadView(heapBytes, pointer, lengthValue, label) {
     );
   }
   return heap.subarray(pointer, pointer + length);
+}
+
+function retainedPayloadView(payloadBytes, lengthValue, label) {
+  const length = requirePositive(lengthValue, `${label} payload length`);
+  const payload = asExactByteView(payloadBytes, `${label} retained payload`);
+  if (payload.byteLength !== length) {
+    throw new RangeError(
+      `${label} retained payload length ${payload.byteLength} != declared ${length}`
+    );
+  }
+  return payload;
 }
 
 function asExactByteView(value, label) {

@@ -14,6 +14,9 @@ import {
 import { WGPU_RESOURCE_EPOCH_KIND as EPOCH } from
   "../src/wgpu-resource-generation-tracker.js";
 import { createWgpuSemanticParitySink } from "../src/wgpu-semantic-parity-sink.js";
+import {
+  captureInitialWgpuConsumerResetAttestation,
+} from "../src/wgpu-consumer-reset-attestation.js";
 
 const EMPTY = new Uint8Array(0);
 
@@ -167,6 +170,40 @@ test("real correlator and parity sink reject an unproven initial resource baseli
   assert.equal(sink.snapshot().independentDecodedEventCount, 0);
 });
 
+test("an independently captured empty startup consumer establishes the initial baseline", () => {
+  const sink = createWgpuSemanticParitySink({ now: () => 0 });
+  const correlator = createWgpuOwnershipCommandCorrelator({
+    semanticSink: sink,
+    initialConsumerResetAttestation: captureInitialWgpuConsumerResetAttestation({
+      resourceMaps: emptyResourceMaps(),
+      videoBackend: "WebGPU-Real",
+      renderDeviceReady: true,
+      capturedBeforeTraceAttach: true,
+      commandRingRegistered: false,
+      commandsProcessed: 0,
+      canvasOwnedByCommandRing: false,
+      replayFatal: null,
+    }),
+  });
+  correlator.pushOwnership([ownership(WGPU_OWNERSHIP_EVENT.EPOCH, {
+    epoch: 1,
+    resourceId: 1,
+  })]);
+  correlator.pushOwnership([ownership(WGPU_OWNERSHIP_EVENT.COMMAND, {
+    epoch: 1,
+    commandSerial: 1,
+    opcode: OP.CREATE_BUFFER,
+    resourceId: 7,
+  })]);
+  correlator.pushLegacy([{
+    ...event(OP.CREATE_BUFFER, RESOURCE.BUFFER, 7, { args: [7, 64, 1] }),
+    recordIndex: 0,
+  }]);
+  assert.equal(correlator.checkpoint().valid, true);
+  assert.equal(correlator.checkpoint().initialConsumerResetAttested, true);
+  assert.equal(sink.snapshot().resourceTracker.consumerResetEpochCount, 1);
+});
+
 function readySink() {
   const sink = createWgpuSemanticParitySink({ now: () => 0 });
   sink.beginEpoch(1, { kind: EPOCH.CONSUMER_RESET });
@@ -210,4 +247,17 @@ function ownership(event, {
     payloadLength,
     auxiliary,
   };
+}
+
+function emptyResourceMaps() {
+  return Object.fromEntries([
+    "shaders",
+    "pipelines",
+    "buffers",
+    "textures",
+    "samplers",
+    "bindGroups",
+    "pipeTpl",
+    "pipeVar",
+  ].map((name) => [name, new Map()]));
 }

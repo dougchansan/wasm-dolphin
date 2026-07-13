@@ -3,6 +3,7 @@
 - [WGPU visible upload closure](perf-results/melee-wgpu-visible-upload-closure-2026-07-12.md) - corrected queue/mapped fairness failure, dense-UBO queue no-go, and the immutable pass-package next gate.
 - [WGPU pass-package projection](perf-results/melee-wgpu-pass-package-projection-2026-07-12.md) - passive direct-battle publication accounting, unresolved native ownership, observer-control limits, and the semantic-digest gate before runtime work.
 - [WGPU native ownership trace](perf-results/melee-wgpu-native-ownership-trace-2026-07-12.md) - zero-drop pending/active/outside attribution, upload ownership, observer limits, and the semantic-digest handoff.
+- [WGPU semantic replay evidence](wgpu-semantic-replay-evidence.md) - default-off runtime ownership/legacy correlation, trusted startup reset attestation, independent WDS2 decoding, and current parity limits.
 
 - [WGPU guarded uniform-comparison screen](perf-results/melee-wgpu-uniform-fast-2026-07-12.md) - default-off correctness evidence, unresolved throughput screen, and upload/replay backlog diagnosis.
 

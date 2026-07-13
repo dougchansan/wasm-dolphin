@@ -10,6 +10,9 @@ import {
   WGPU_COMMAND_PUBLICATION,
   WGPU_OWNERSHIP_EVENT,
 } from "./wgpu-ownership-trace.js";
+import {
+  isAuthenticInitialWgpuConsumerResetAttestation,
+} from "./wgpu-consumer-reset-attestation.js";
 
 export { WGPU_COMMAND_PUBLICATION, WGPU_OWNERSHIP_EVENT };
 
@@ -32,9 +35,12 @@ const EMPTY_BYTES = new Uint8Array(0);
 export function createWgpuOwnershipCommandCorrelator({
   semanticSink,
   maxPendingRecords = 262_144,
+  initialConsumerResetAttestation = null,
 } = {}) {
   const sink = normalizeSink(semanticSink);
   const pendingLimit = positiveSafeInteger(maxPendingRecords, "maxPendingRecords");
+  const initialConsumerResetAttested =
+    isAuthenticInitialWgpuConsumerResetAttestation(initialConsumerResetAttestation);
   const immediatePublished = [];
   const stagedPublished = [];
   const publicationOrder = [];
@@ -176,10 +182,13 @@ export function createWgpuOwnershipCommandCorrelator({
         epochOpened = true;
         try {
           // The native initial epoch attests only that ownership tracing was
-          // enabled. It does not prove that the browser consumer cleared its
-          // resource maps, so a generation-aware sink must fail closed until
-          // it receives an independent consumer-reset attestation.
-          sink.beginEpoch(epoch, { kind: WGPU_CORRELATION_EPOCH_KIND.OBSERVATION_START });
+          // enabled. Upgrade it to a reset boundary only when the trusted JS
+          // capture proved every browser resource map empty before attach.
+          sink.beginEpoch(epoch, {
+            kind: initialConsumerResetAttested
+              ? WGPU_CORRELATION_EPOCH_KIND.CONSUMER_RESET
+              : WGPU_CORRELATION_EPOCH_KIND.OBSERVATION_START,
+          });
         } catch (error) {
           return fail(`semantic sink epoch begin failed: ${error?.message || error}`);
         }
@@ -508,8 +517,8 @@ export function createWgpuOwnershipCommandCorrelator({
     legacyRead = compactQueue(legacy, legacyRead);
   }
 
-  function checkpoint() {
-    const sinkSnapshot = snapshotSink(semanticSink);
+  function checkpoint({ compact = false } = {}) {
+    const sinkSnapshot = snapshotSink(semanticSink, { compact });
     const openTransactions = Array.from(transactions.values()).filter(
       (state) => !state.completed
     );
@@ -538,6 +547,7 @@ export function createWgpuOwnershipCommandCorrelator({
       reasons: Object.freeze([...new Set(checkpointReasons)]),
       generation,
       epoch: epoch ?? 0,
+      initialConsumerResetAttested,
       pairedRecords,
       pendingOwnershipRecords: pendingOwnership,
       pendingLegacyRecords: pendingLegacy,
@@ -556,6 +566,7 @@ export function createWgpuOwnershipCommandCorrelator({
       schema: WGPU_OWNERSHIP_COMMAND_CORRELATOR_SCHEMA,
       generation,
       epoch: epoch ?? 0,
+      initialConsumerResetAttested,
       failed,
       reasons: [...reasons],
       historicalFailureCount,
@@ -686,7 +697,8 @@ function normalizeSink(sink) {
   };
 }
 
-function snapshotSink(sink) {
+function snapshotSink(sink, { compact = false } = {}) {
+  if (compact && typeof sink?.summary === "function") return sink.summary();
   return typeof sink?.snapshot === "function" ? sink.snapshot() : null;
 }
 

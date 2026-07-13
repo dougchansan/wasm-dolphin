@@ -41,12 +41,14 @@ if (pinnedCoreSha256 !== wasm.sha256) {
 const contractSourceDeclarations = [...previous.contractSources];
 for (const requiredPath of [
   "src/incremental-sha256.js",
+  "src/wgpu-consumer-reset-attestation.js",
   "src/wgpu-legacy-semantic-decoder.js",
   "src/wgpu-ownership-command-correlator.js",
   "src/wgpu-pass-package-projection.js",
   "src/wgpu-resource-generation-tracker.js",
   "src/wgpu-semantic-digest.js",
   "src/wgpu-semantic-parity-sink.js",
+  "src/wgpu-semantic-runtime.js",
   "src/wgpu-semantic-v2-decoder.js",
   "src/wgpu-ownership-trace.js",
 ]) {

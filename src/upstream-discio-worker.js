@@ -80,6 +80,10 @@ import {
   attachWgpuOwnershipTraceFromApi,
   createWgpuOwnershipTrace
 } from "./wgpu-ownership-trace.js";
+import {
+  captureInitialWgpuConsumerResetAttestation,
+} from "./wgpu-consumer-reset-attestation.js";
+import { createWgpuSemanticRuntime } from "./wgpu-semantic-runtime.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 import {
   attemptRetainedWgpuUpload,
@@ -230,6 +234,9 @@ let wgpuPassPackageProjectionActive = false;
 let wgpuOwnershipTrace = createWgpuOwnershipTrace();
 let wgpuOwnershipTraceRequested = false;
 let wgpuOwnershipTraceActive = false;
+let wgpuSemanticRuntime = createWgpuSemanticRuntime();
+let wgpuSemanticRuntimeRequested = false;
+let wgpuSemanticRuntimeActive = false;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -584,6 +591,7 @@ function rendererDiagnosticsPayload() {
       active: wgpuPassPackageProjectionActive
     }),
     wgpuOwnershipTrace: wgpuOwnershipTrace.snapshot(),
+    wgpuSemanticRuntime: wgpuSemanticRuntime.snapshot(),
   };
 }
 
@@ -656,7 +664,11 @@ async function handleMessage(type, payload) {
       wgpuPassPackageProjectionActive = wgpuPassPackageProjectionRequested &&
         causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
       wgpuOwnershipTrace = createWgpuOwnershipTrace();
-      wgpuOwnershipTraceRequested = Boolean(payload.wgpuOwnershipTrace);
+      wgpuSemanticRuntimeRequested = Boolean(payload.wgpuSemanticRuntime);
+      wgpuSemanticRuntimeActive = wgpuSemanticRuntimeRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
+      wgpuOwnershipTraceRequested = Boolean(payload.wgpuOwnershipTrace) ||
+        wgpuSemanticRuntimeRequested;
       wgpuOwnershipTraceActive = wgpuOwnershipTraceRequested &&
         causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
@@ -752,6 +764,7 @@ async function handleMessage(type, payload) {
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
         wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
+        wgpuSemanticRuntime: payload.wgpuSemanticRuntime,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -1139,6 +1152,7 @@ async function loadCore({
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
   wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
   wgpuOwnershipTrace: requestedWgpuOwnershipTrace = false,
+  wgpuSemanticRuntime: requestedWgpuSemanticRuntime = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -1181,6 +1195,12 @@ async function loadCore({
   }
   if (requestedWgpuOwnershipTrace && videoBackend !== "WebGPU-Real") {
     throw new Error("wgpuownershiptrace=1 requires video=wgpu");
+  }
+  if (requestedWgpuSemanticRuntime && !collectMetrics) {
+    throw new Error("wgpusemantic=1 requires metrics=1");
+  }
+  if (requestedWgpuSemanticRuntime && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpusemantic=1 requires video=wgpu");
   }
   wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
   wgpuProducerProfileAvailable = false;
@@ -1573,13 +1593,34 @@ async function loadCore({
     if (!heap || !(heap.buffer instanceof SharedArrayBuffer)) {
       throw new Error("wgpuownershiptrace=1 requires a shared wasm heap");
     }
+    const initialConsumerResetAttestation = wgpuSemanticRuntimeActive
+      ? captureInitialWgpuConsumerResetAttestation({
+          resourceMaps: webGpuObjects,
+          videoBackend,
+          renderDeviceReady: Boolean(renderGpu?.device),
+          capturedBeforeTraceAttach: true,
+          commandRingRegistered: Boolean(webGpuCmdRing),
+          commandsProcessed: webGpuCausalStats.commandsProcessed,
+          canvasOwnedByCommandRing: cmdRingOwnsCanvas,
+          replayFatal: wgpuReplayFatal,
+        })
+      : null;
     attachWgpuOwnershipTraceFromApi(
       wgpuOwnershipTrace,
       api,
       heap.buffer
     );
+    wgpuSemanticRuntime = createWgpuSemanticRuntime({
+      requested: wgpuSemanticRuntimeRequested,
+      active: wgpuSemanticRuntimeActive,
+      initialConsumerResetAttestation,
+    });
   } else {
     api.setWebGpuOwnershipTraceEnabled?.(0);
+    wgpuSemanticRuntime = createWgpuSemanticRuntime({
+      requested: wgpuSemanticRuntimeRequested,
+      active: false,
+    });
   }
   if (api.setVideoBackend) {
     api.setVideoBackend(videoBackend);
@@ -2463,7 +2504,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
     return null;
   }
   lastCausalTelemetryAt = now;
-  if (wgpuOwnershipTraceActive) wgpuOwnershipTrace.drain();
+  if (wgpuOwnershipTraceActive) drainWgpuSemanticOwnership();
   const loadedCheckpoint = readLastLoadedCheckpoint();
   return createCausalTelemetry({
     enabled: true,
@@ -2533,6 +2574,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
         active: wgpuPassPackageProjectionActive
       }),
       ownershipTrace: wgpuOwnershipTrace.snapshot(),
+      semanticRuntime: wgpuSemanticRuntime.snapshot(),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
@@ -5696,6 +5738,11 @@ function cancelWgpuReplayPump() {
 }
 
 function clearWgpuReplayStateAfterDeviceLoss() {
+  if (wgpuSemanticRuntimeActive) {
+    wgpuSemanticRuntime.invalidate(
+      "device loss does not clear all browser WebGPU resource maps"
+    );
+  }
   wgpuMappedStagingPool?.invalidate("WebGPU device lost");
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
@@ -5727,6 +5774,14 @@ function ensureWgpuMappedStagingPool(device) {
     });
   }
   return wgpuMappedStagingPool;
+}
+
+function drainWgpuSemanticOwnership() {
+  if (!wgpuOwnershipTraceActive) return 0;
+  if (!wgpuSemanticRuntimeActive) return wgpuOwnershipTrace.drain();
+  const records = wgpuOwnershipTrace.drain({ collect: true });
+  wgpuSemanticRuntime.pushOwnership(records, wgpuOwnershipTrace.snapshot());
+  return records.length;
 }
 
 async function initializeWgpuUploadProbe(mode) {
@@ -6859,6 +6914,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   if (wgpuReplayFatal) return;
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
+  if (wgpuSemanticRuntimeActive) drainWgpuSemanticOwnership();
   if (wgpuUploadTransport === "mapped" && wgpuMappedCapacityBlocked &&
       wgpuMappedRemapPromises.size > 0) {
     return;
@@ -6924,6 +6980,11 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     const discardedRecords = (discardTo - read) >>> 0;
     if (discardedRecords > 0) {
+      if (wgpuSemanticRuntimeActive) {
+        wgpuSemanticRuntime.invalidate(
+          `load fence permanently discarded ${discardedRecords} published records`
+        );
+      }
       if (causalMetricsEnabled) {
         wgpuUploadAttribution.recordIncompletePass();
         if (wgpuDirtyRangeProjectionActive) {
@@ -7460,6 +7521,20 @@ function drainWebGpuCmdRing(source = "presentation") {
     } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
       self._wgBpDefer = 0;
     }
+    const retainedSemanticPayload = ring.stagedUploads?.get(read)?.data ?? null;
+    const exactRetainedSemanticPayload = retainedSemanticPayload &&
+        op === WGPU_CMD_OP_UPLOAD_BUFFER
+      ? retainedSemanticPayload.subarray(0, u32[recWord + 4])
+      : retainedSemanticPayload;
+    const preparedSemanticRecord = wgpuSemanticRuntimeActive
+      ? wgpuSemanticRuntime.prepareLegacy(
+          u32.subarray(recWord, recWord + 8),
+          heap,
+          exactRetainedSemanticPayload
+            ? { payloadBytes: exactRetainedSemanticPayload }
+            : undefined
+        )
+      : null;
     const replayOpStartedAt = causalMetricsEnabled ? performance.now() : 0;
     let replayRecordAccepted = true;
     try {
@@ -9243,6 +9318,18 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     if (causalMetricsEnabled) {
       wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
+    }
+    if (wgpuSemanticRuntimeActive) {
+      if (replayRecordAccepted && !wgpuReplayFatal && !mappedCapacityHold) {
+        wgpuSemanticRuntime.acceptPrepared(preparedSemanticRecord, read);
+      } else if (mappedCapacityHold && !wgpuReplayFatal) {
+        wgpuSemanticRuntime.retryPrepared(preparedSemanticRecord);
+      } else {
+        wgpuSemanticRuntime.discardPrepared(
+          preparedSemanticRecord,
+          `consumer rejected record ${read} opcode ${op}`
+        );
+      }
     }
     if (wgpuReplayFatal) break;
     if (mappedCapacityHold) {

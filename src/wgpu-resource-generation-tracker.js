@@ -58,6 +58,7 @@ export function createWgpuResourceGenerationTracker({
   let useCount = 0;
   let destroyCount = 0;
   let dependencyCount = 0;
+  let liveResourceCount = 0;
   let committedTransactionCount = 0;
   let abortedTransactionCount = 0;
 
@@ -97,6 +98,7 @@ export function createWgpuResourceGenerationTracker({
     // every browser-side resource map. It is not an ordinary core reset.
     registry.clear();
     revisions.clear();
+    liveResourceCount = 0;
     transaction = null;
     baselineKnown = true;
     failed = false;
@@ -325,7 +327,7 @@ export function createWgpuResourceGenerationTracker({
       }
     }
     for (const [key, entry] of state.overlay) {
-      registry.set(key, entry);
+      applyCommittedEntry(key, entry);
       revisions.set(key, (revisions.get(key) ?? 0) + 1);
     }
     applyCommittedCounters(state.counters);
@@ -341,12 +343,14 @@ export function createWgpuResourceGenerationTracker({
     abortedTransactionCount += 1;
   }
 
-  function snapshot() {
-    const resources = Array.from(registry.values())
-      .sort((left, right) =>
-        left.resourceClass - right.resourceClass || left.resourceId - right.resourceId
-      )
-      .map((entry) => ({ ...entry }));
+  function snapshot({ includeResources = true } = {}) {
+    const resources = includeResources
+      ? Array.from(registry.values())
+          .sort((left, right) =>
+            left.resourceClass - right.resourceClass || left.resourceId - right.resourceId
+          )
+          .map((entry) => ({ ...entry }))
+      : [];
     return Object.freeze({
       schema: WGPU_RESOURCE_GENERATION_TRACKER_SCHEMA,
       initialized,
@@ -367,8 +371,9 @@ export function createWgpuResourceGenerationTracker({
       dependencyCount,
       maxTrackedResources: resourceLimit,
       maxDependencyPayloadBytes: payloadLimit,
-      // WDS2 can encode these ordered annotations, but an independent package
-      // decoder and a boundary-aware runtime adapter still do not exist.
+      // This tracker is wired into the default-off worker observer, but these
+      // readiness fields deliberately refer to a future executable package
+      // path. The tracker alone cannot attest package decoding or replay.
       dependencyEncodingAvailable: true,
       dependencyEncodingReady: false,
       independentDependencyDecodingReady: false,
@@ -376,8 +381,9 @@ export function createWgpuResourceGenerationTracker({
       committedTransactionCount,
       abortedTransactionCount,
       openTransactionCount: transaction ? 1 : 0,
-      liveResourceCount: resources.filter((entry) => entry.alive).length,
-      knownResourceCount: resources.length,
+      liveResourceCount,
+      knownResourceCount: registry.size,
+      resourcesIncluded: Boolean(includeResources),
       resources: Object.freeze(resources.map((entry) => Object.freeze(entry))),
     });
   }
@@ -456,8 +462,14 @@ export function createWgpuResourceGenerationTracker({
       transaction.overlay.set(key, entry);
       return;
     }
-    registry.set(key, entry);
+    applyCommittedEntry(key, entry);
     bumpRevision(key);
+  }
+
+  function applyCommittedEntry(key, entry) {
+    const previous = registry.get(key);
+    if (previous?.alive !== entry.alive) liveResourceCount += entry.alive ? 1 : -1;
+    registry.set(key, entry);
   }
 
   function bumpRevision(key) {
@@ -528,6 +540,7 @@ export function createWgpuResourceGenerationTracker({
     commit: sticky(commit),
     abort: sticky(abort),
     snapshot,
+    summary: () => snapshot({ includeResources: false }),
   });
 
   function sticky(operation) {

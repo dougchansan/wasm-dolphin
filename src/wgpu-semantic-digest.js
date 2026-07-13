@@ -255,7 +255,7 @@ function createSemanticDigest({ recentCommitLimit, now }, codec) {
     overflow = true;
   }
 
-  function snapshot() {
+  function snapshot({ includeRecentCommits = true } = {}) {
     return {
       schema: codec.schema,
       domain: codec.domain,
@@ -277,7 +277,10 @@ function createSemanticDigest({ recentCommitLimit, now }, codec) {
       unresolvedCount,
       mismatchCount,
       overflow,
-      recentCommits: recentCommits.map((entry) => ({ ...entry })),
+      recentCommitsIncluded: Boolean(includeRecentCommits),
+      recentCommits: includeRecentCommits
+        ? recentCommits.map((entry) => ({ ...entry }))
+        : [],
     };
   }
 

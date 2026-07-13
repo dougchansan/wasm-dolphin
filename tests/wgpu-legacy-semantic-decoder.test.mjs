@@ -291,6 +291,24 @@ test("legacy decoder validates every declared payload boundary without wrapping"
   );
 });
 
+test("retained upload payloads can be decoded after their transport span is released", () => {
+  const retained = Uint8Array.of(7, 8, 9, 10);
+  const decoded = decodeLegacyWgpuCommandRecord(
+    command(OP.UPLOAD_BUFFER, 4, 12, 0xfffffff0, 4, 2),
+    null,
+    { payloadBytes: retained }
+  );
+  assert.deepEqual(Array.from(decoded.payloadBytes), [7, 8, 9, 10]);
+  assert.throws(
+    () => decodeLegacyWgpuCommandRecord(
+      command(OP.UPLOAD_BUFFER, 4, 12, 0xfffffff0, 4, 2),
+      null,
+      { payloadBytes: retained.subarray(0, 3) }
+    ),
+    /retained payload length 3 != declared 4/
+  );
+});
+
 test("texture payload arithmetic uses an exact non-wrapping u32 product", () => {
   const textureHeap = Uint8Array.from({ length: 64 }, (_, index) => index + 1);
   const decoded = decodeLegacyWgpuCommandRecord(
