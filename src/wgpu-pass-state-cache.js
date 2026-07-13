@@ -143,6 +143,36 @@ export function parseWgpuProducerStateStats(text = "") {
   const geometry = /\bwggeom:(\d+)\s+wggeomepoch:(\d+)/i.exec(normalized);
   const arena = /\bwgarena:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
   const waits = /\bwgwait:(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/i.exec(normalized);
+  const uboDiffHeader = /\bubodiff:(\d+),([01]),(\d+),(\d+)(?=\s|$)/i.exec(normalized);
+  const uboDiffVectors = [
+    statTriple(normalized, "uchgcall"),
+    statTriple(normalized, "uchgfull"),
+    statTriple(normalized, "uchgbyte"),
+    statTriple(normalized, "ubaseline"),
+    statTriple(normalized, "ubasebyte"),
+    statTriple(normalized, "u16byte"),
+    statTriple(normalized, "u16range"),
+    statTriple(normalized, "u256byte"),
+    statTriple(normalized, "u256range"),
+  ];
+  const uboDiffEpoch = Number(uboDiffHeader?.[3]);
+  const uboChangeAvailable = uboDiffHeader?.[1] === "1" &&
+    uboDiffHeader?.[4] === "3" && Number.isSafeInteger(uboDiffEpoch) &&
+    uboDiffEpoch >= 0 && uboDiffVectors.every(Boolean);
+  const uboChangeValues = uboChangeAvailable
+    ? uboDiffVectors
+    : uboDiffVectors.map(() => [0, 0, 0]);
+  const [
+    uboChangeUploadCalls,
+    uboChangeFullBytes,
+    uboChangedBytes,
+    uboChangeBaselineFullCount,
+    uboChangeBaselineFullBytes,
+    uboDirty16Bytes,
+    uboDirty16Ranges,
+    uboDirty256Bytes,
+    uboDirty256Ranges,
+  ] = uboChangeValues;
   return {
     enabled: match[1] === "1",
     pipelineRecordsSuppressed: Number(match[2]),
@@ -174,6 +204,20 @@ export function parseWgpuProducerStateStats(text = "") {
     uboPacketAlignedBytes: Number(uboPacket?.[12] || 0),
     uboPrepareCpuCalls: numericTriple(uboPacket, 13),
     uboPrepareCpuNs: numericTriple(uboPacket, 16),
+    uboChangeClassOrder: ["vs", "ps", "gs"],
+    uboChangeSchemaVersion: uboChangeAvailable ? 1 : 0,
+    uboChangeAvailable,
+    uboChangeEnabled: uboChangeAvailable && uboDiffHeader[2] === "1",
+    uboChangeEpoch: uboChangeAvailable ? uboDiffEpoch : 0,
+    uboChangeUploadCalls,
+    uboChangeFullBytes,
+    uboChangedBytes,
+    uboChangeBaselineFullCount,
+    uboChangeBaselineFullBytes,
+    uboDirty16Bytes,
+    uboDirty16Ranges,
+    uboDirty256Bytes,
+    uboDirty256Ranges,
     geometryPackEnabled: geometry?.[1] === "1",
     geometryPackEpoch: Number(geometry?.[2] || 0),
     uploadArenaRequestedBytes: Number(arena?.[1] || 0),
@@ -203,6 +247,16 @@ function numericValues(match, start, count) {
   return Array.from({ length: count }, (_, index) =>
     Number(match?.[start + index] || 0)
   );
+}
+
+function statTriple(text, label) {
+  const match = new RegExp(`\\b${label}:(\\d+),(\\d+),(\\d+)(?=\\s|$)`, "i")
+    .exec(text);
+  if (!match) return null;
+  const values = match.slice(1).map(Number);
+  return values.every((value) => Number.isSafeInteger(value) && value >= 0)
+    ? values
+    : null;
 }
 
 function profileVector(text, label, count = WGPU_PRODUCER_PROFILE_PHASE_ORDER.length) {

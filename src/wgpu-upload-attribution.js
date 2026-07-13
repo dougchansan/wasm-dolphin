@@ -62,6 +62,11 @@ export function createWgpuUploadAttribution() {
   const queueWriteCallsByRole = new Float64Array(ROLE_COUNT);
   const queueWriteTotalMsByRole = new Float64Array(ROLE_COUNT);
   const queueWriteMaxMsByRole = new Float64Array(ROLE_COUNT);
+  const capacityWaitAttemptsByRole = new Float64Array(ROLE_COUNT);
+  const capacityWaitEpisodesByRole = new Float64Array(ROLE_COUNT);
+  const capacityWaitCompletedByRole = new Float64Array(ROLE_COUNT);
+  const capacityWaitTotalMsByRole = new Float64Array(ROLE_COUNT);
+  const capacityWaitMaxMsByRole = new Float64Array(ROLE_COUNT);
 
   let totalCalls = 0;
   let totalBytes = 0;
@@ -78,6 +83,13 @@ export function createWgpuUploadAttribution() {
   let queueWriteTotalCalls = 0;
   let queueWriteTotalMs = 0;
   let queueWriteMaxMs = 0;
+  let capacityWaitTotalAttempts = 0;
+  let capacityWaitTotalEpisodes = 0;
+  let capacityWaitCompletedEpisodes = 0;
+  let capacityWaitTotalMs = 0;
+  let capacityWaitMaxMs = 0;
+  let capacityWaitActiveRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+  let capacityWaitActive = false;
   let slowQueueWriteObservedCount = 0;
   let queueWriteSequence = 0;
   const slowQueueWriteEvents = [];
@@ -144,6 +156,48 @@ export function createWgpuUploadAttribution() {
     return roleIndex;
   }
 
+  function recordCapacityWaitAttempt(role) {
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    capacityWaitTotalAttempts += 1;
+    capacityWaitAttemptsByRole[roleIndex] += 1;
+    return roleIndex;
+  }
+
+  function beginCapacityWait(role) {
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    if (capacityWaitActive) return capacityWaitActiveRole;
+    capacityWaitActive = true;
+    capacityWaitActiveRole = roleIndex;
+    capacityWaitTotalEpisodes += 1;
+    capacityWaitEpisodesByRole[roleIndex] += 1;
+    return roleIndex;
+  }
+
+  function recordCapacityWaitDuration(role, durationMs) {
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    const elapsedMs = finiteNonnegative(durationMs);
+    capacityWaitTotalMs += elapsedMs;
+    capacityWaitMaxMs = Math.max(capacityWaitMaxMs, elapsedMs);
+    capacityWaitTotalMsByRole[roleIndex] += elapsedMs;
+    capacityWaitMaxMsByRole[roleIndex] = Math.max(
+      capacityWaitMaxMsByRole[roleIndex], elapsedMs
+    );
+    if (capacityWaitActive) {
+      capacityWaitCompletedEpisodes += 1;
+      capacityWaitCompletedByRole[capacityWaitActiveRole] += 1;
+      capacityWaitActive = false;
+      capacityWaitActiveRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+    }
+    return roleIndex;
+  }
+
+  function cancelCapacityWait() {
+    const wasActive = capacityWaitActive;
+    capacityWaitActive = false;
+    capacityWaitActiveRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+    return wasActive;
+  }
+
   function recordPassBegin() {
     if (passOpen) {
       incompletePassCount += 1;
@@ -199,6 +253,11 @@ export function createWgpuUploadAttribution() {
     queueWriteCallsByRole.fill(0);
     queueWriteTotalMsByRole.fill(0);
     queueWriteMaxMsByRole.fill(0);
+    capacityWaitAttemptsByRole.fill(0);
+    capacityWaitEpisodesByRole.fill(0);
+    capacityWaitCompletedByRole.fill(0);
+    capacityWaitTotalMsByRole.fill(0);
+    capacityWaitMaxMsByRole.fill(0);
     totalCalls = 0;
     totalBytes = 0;
     maxBytes = 0;
@@ -211,6 +270,13 @@ export function createWgpuUploadAttribution() {
     queueWriteTotalCalls = 0;
     queueWriteTotalMs = 0;
     queueWriteMaxMs = 0;
+    capacityWaitTotalAttempts = 0;
+    capacityWaitTotalEpisodes = 0;
+    capacityWaitCompletedEpisodes = 0;
+    capacityWaitTotalMs = 0;
+    capacityWaitMaxMs = 0;
+    capacityWaitActiveRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+    capacityWaitActive = false;
     slowQueueWriteObservedCount = 0;
     queueWriteSequence = 0;
     slowQueueWriteEvents.length = 0;
@@ -245,6 +311,21 @@ export function createWgpuUploadAttribution() {
         slowEvents: slowQueueWriteEvents
           .map((event) => ({ ...event }))
           .sort((left, right) => right.durationMs - left.durationMs),
+      },
+      capacityWait: {
+        schema: "wasm-dolphin.wgpu-capacity-wait-attribution.v1",
+        totalAttempts: capacityWaitTotalAttempts,
+        totalEpisodes: capacityWaitTotalEpisodes,
+        completedEpisodes: capacityWaitCompletedEpisodes,
+        totalMs: capacityWaitTotalMs,
+        maxMs: capacityWaitMaxMs,
+        active: capacityWaitActive,
+        activeRole: capacityWaitActiveRole,
+        attemptsByRole: Array.from(capacityWaitAttemptsByRole),
+        episodesByRole: Array.from(capacityWaitEpisodesByRole),
+        completedByRole: Array.from(capacityWaitCompletedByRole),
+        totalMsByRole: Array.from(capacityWaitTotalMsByRole),
+        maxMsByRole: Array.from(capacityWaitMaxMsByRole),
       },
       passAssociation: {
         definition: "uploads-after-previous-boundary-through-following-end-pass",
@@ -291,6 +372,10 @@ export function createWgpuUploadAttribution() {
   return {
     recordUpload,
     recordQueueWrite,
+    recordCapacityWaitAttempt,
+    beginCapacityWait,
+    recordCapacityWaitDuration,
+    cancelCapacityWait,
     recordPassBegin,
     recordPassEnd,
     recordPassAbort,

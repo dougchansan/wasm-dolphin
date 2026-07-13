@@ -281,6 +281,20 @@ export function createCausalTelemetry(overrides = {}) {
         producerUboPacketAlignedBytes: 0,
         producerUboPrepareCpuCalls: [0, 0, 0],
         producerUboPrepareCpuNs: [0, 0, 0],
+        producerUboChangeClassOrder: ["vs", "ps", "gs"],
+        producerUboChangeSchemaVersion: 0,
+        producerUboChangeAvailable: false,
+        producerUboChangeEnabled: false,
+        producerUboChangeEpoch: 0,
+        producerUboChangeUploadCalls: [0, 0, 0],
+        producerUboChangeFullBytes: [0, 0, 0],
+        producerUboChangedBytes: [0, 0, 0],
+        producerUboChangeBaselineFullCount: [0, 0, 0],
+        producerUboChangeBaselineFullBytes: [0, 0, 0],
+        producerUboDirty16Bytes: [0, 0, 0],
+        producerUboDirty16Ranges: [0, 0, 0],
+        producerUboDirty256Bytes: [0, 0, 0],
+        producerUboDirty256Ranges: [0, 0, 0],
         producerUniformFastEnabled: false,
         producerUniformFastClassOrder: ["vs", "ps", "gs"],
         producerUniformFastSkippedComparisons: [0, 0, 0],
@@ -692,6 +706,7 @@ export function flattenCausalTelemetry(value) {
   );
   const uploadPassAssociation = uploadAttribution.passAssociation;
   const queueWrite = uploadAttribution.queueWrite;
+  const capacityWait = uploadAttribution.capacityWait;
   const passPackageProjection = deepMerge(
     createWgpuPassPackageProjection().snapshot({ requested: false, active: false }),
     telemetry.webgpu.passPackageProjection ?? {}
@@ -974,6 +989,23 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUboPacketAlignedBytes,
     causalWgpuProducerUboPrepareCpuCalls: telemetry.webgpu.producerUboPrepareCpuCalls,
     causalWgpuProducerUboPrepareCpuNs: telemetry.webgpu.producerUboPrepareCpuNs,
+    causalWgpuProducerUboChangeClassOrder: telemetry.webgpu.producerUboChangeClassOrder,
+    causalWgpuProducerUboChangeSchemaVersion:
+      telemetry.webgpu.producerUboChangeSchemaVersion,
+    causalWgpuProducerUboChangeAvailable: telemetry.webgpu.producerUboChangeAvailable,
+    causalWgpuProducerUboChangeEnabled: telemetry.webgpu.producerUboChangeEnabled,
+    causalWgpuProducerUboChangeEpoch: telemetry.webgpu.producerUboChangeEpoch,
+    causalWgpuProducerUboChangeUploadCalls: telemetry.webgpu.producerUboChangeUploadCalls,
+    causalWgpuProducerUboChangeFullBytes: telemetry.webgpu.producerUboChangeFullBytes,
+    causalWgpuProducerUboChangedBytes: telemetry.webgpu.producerUboChangedBytes,
+    causalWgpuProducerUboChangeBaselineFullCount:
+      telemetry.webgpu.producerUboChangeBaselineFullCount,
+    causalWgpuProducerUboChangeBaselineFullBytes:
+      telemetry.webgpu.producerUboChangeBaselineFullBytes,
+    causalWgpuProducerUboDirty16Bytes: telemetry.webgpu.producerUboDirty16Bytes,
+    causalWgpuProducerUboDirty16Ranges: telemetry.webgpu.producerUboDirty16Ranges,
+    causalWgpuProducerUboDirty256Bytes: telemetry.webgpu.producerUboDirty256Bytes,
+    causalWgpuProducerUboDirty256Ranges: telemetry.webgpu.producerUboDirty256Ranges,
     causalWgpuProducerUniformFastEnabled: telemetry.webgpu.producerUniformFastEnabled,
     causalWgpuProducerUniformFastSkippedComparisons:
       telemetry.webgpu.producerUniformFastSkippedComparisons,
@@ -1021,6 +1053,18 @@ export function flattenCausalTelemetry(value) {
     causalWgpuQueueWriteSlowEvents: queueWrite.slowEvents,
     causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
     causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
+    causalWgpuMappedCapacityWaitAttempts: capacityWait.totalAttempts,
+    causalWgpuMappedCapacityWaitEpisodes: capacityWait.totalEpisodes,
+    causalWgpuMappedCapacityWaitCompletedEpisodes: capacityWait.completedEpisodes,
+    causalWgpuMappedCapacityWaitTotalMs: capacityWait.totalMs,
+    causalWgpuMappedCapacityWaitMaxMs: capacityWait.maxMs,
+    causalWgpuMappedCapacityWaitActive: capacityWait.active,
+    causalWgpuMappedCapacityWaitActiveRole: capacityWait.activeRole,
+    causalWgpuMappedCapacityWaitAttemptsByRole: capacityWait.attemptsByRole,
+    causalWgpuMappedCapacityWaitEpisodesByRole: capacityWait.episodesByRole,
+    causalWgpuMappedCapacityWaitCompletedByRole: capacityWait.completedByRole,
+    causalWgpuMappedCapacityWaitTotalMsByRole: capacityWait.totalMsByRole,
+    causalWgpuMappedCapacityWaitMaxMsByRole: capacityWait.maxMsByRole,
     causalWgpuPassPackageProjectionSchema: passPackageProjection.schema,
     causalWgpuPassPackageProjectionRequested: passPackageProjection.requested,
     causalWgpuPassPackageProjectionActive: passPackageProjection.active,

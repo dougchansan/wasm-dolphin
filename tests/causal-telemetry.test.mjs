@@ -48,6 +48,8 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.producerUploadWaitCount, 0);
   assert.equal(value.webgpu.producerUploadWaitTotalUs, 0);
   assert.equal(value.webgpu.producerUploadWaitMaxUs, 0);
+  assert.equal(value.webgpu.producerUboChangeAvailable, false);
+  assert.deepEqual(value.webgpu.producerUboChangedBytes, [0, 0, 0]);
   assert.equal(value.webgpu.producerProfile.requested, false);
   assert.equal(value.webgpu.producerProfile.available, false);
   assert.equal(value.webgpu.producerProfile.enabled, false);
@@ -90,6 +92,42 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.input.marker.overhead.enabled, false);
   assert.equal(value.input.marker.overhead.softwareFrameCopyPaint.calls, 0);
   assert.equal(value.input.marker.overhead.padStatsPollParse.calls, 0);
+});
+
+test("flattens UBO change vectors and mapped capacity-wait roles", () => {
+  const uploadAttribution = createWgpuUploadAttribution();
+  uploadAttribution.recordCapacityWaitAttempt(WGPU_UPLOAD_ROLE.UBO);
+  uploadAttribution.beginCapacityWait(WGPU_UPLOAD_ROLE.UBO);
+  uploadAttribution.recordCapacityWaitDuration(WGPU_UPLOAD_ROLE.UBO, 12.5);
+  const value = createCausalTelemetry({
+    webgpu: {
+      producerUboChangeSchemaVersion: 1,
+      producerUboChangeAvailable: true,
+      producerUboChangeEnabled: true,
+      producerUboChangeEpoch: 4,
+      producerUboChangeUploadCalls: [10, 20, 30],
+      producerUboChangeFullBytes: [1000, 2000, 3000],
+      producerUboChangedBytes: [100, 200, 300],
+      producerUboChangeBaselineFullCount: [1, 1, 1],
+      producerUboChangeBaselineFullBytes: [100, 200, 300],
+      producerUboDirty16Bytes: [160, 320, 480],
+      producerUboDirty16Ranges: [2, 3, 4],
+      producerUboDirty256Bytes: [256, 512, 768],
+      producerUboDirty256Ranges: [1, 2, 3],
+      uploadAttribution: uploadAttribution.snapshot(),
+    },
+  });
+
+  const flat = flattenCausalTelemetry(value);
+  assert.equal(flat.causalWgpuProducerUboChangeAvailable, true);
+  assert.deepEqual(flat.causalWgpuProducerUboChangedBytes, [100, 200, 300]);
+  assert.deepEqual(flat.causalWgpuProducerUboDirty256Bytes, [256, 512, 768]);
+  assert.equal(flat.causalWgpuMappedCapacityWaitEpisodes, 1);
+  assert.equal(flat.causalWgpuMappedCapacityWaitTotalMs, 12.5);
+  assert.equal(
+    flat.causalWgpuMappedCapacityWaitTotalMsByRole[WGPU_UPLOAD_ROLE.UBO],
+    12.5
+  );
 });
 
 test("core profile text is promoted without changing the compatibility string", () => {

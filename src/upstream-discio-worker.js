@@ -233,6 +233,8 @@ let wgpuMappedStagingPool = null;
 let wgpuMappedRemapPromises = new Set();
 let wgpuMappedCapacityBlocked = false;
 let wgpuMappedCapacityBlockedAt = 0;
+let wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+let wgpuMappedStagingGeneration = 0;
 const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
 const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
 let wgpuProducerStateCacheAvailable = false;
@@ -672,6 +674,7 @@ self.addEventListener("message", async (event) => {
 async function handleMessage(type, payload) {
   switch (type) {
     case "load":
+      wgpuMappedStagingGeneration += 1;
       causalMetricsEnabled = Boolean(payload.collectMetrics);
       collectMetrics = Boolean(payload.collectMetrics);
       metricsDiagnostics = createMetricsDiagnostics();
@@ -1304,6 +1307,7 @@ async function loadCore({
   wgpuMappedRemapPromises = new Set();
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
+  wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -2230,6 +2234,22 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.producerUboPacketAlignedBytes = parsed.uboPacketAlignedBytes;
     webGpuCausalStats.producerUboPrepareCpuCalls = parsed.uboPrepareCpuCalls;
     webGpuCausalStats.producerUboPrepareCpuNs = parsed.uboPrepareCpuNs;
+    webGpuCausalStats.producerUboChangeClassOrder = parsed.uboChangeClassOrder;
+    webGpuCausalStats.producerUboChangeSchemaVersion = parsed.uboChangeSchemaVersion;
+    webGpuCausalStats.producerUboChangeAvailable = parsed.uboChangeAvailable;
+    webGpuCausalStats.producerUboChangeEnabled = parsed.uboChangeEnabled;
+    webGpuCausalStats.producerUboChangeEpoch = parsed.uboChangeEpoch;
+    webGpuCausalStats.producerUboChangeUploadCalls = parsed.uboChangeUploadCalls;
+    webGpuCausalStats.producerUboChangeFullBytes = parsed.uboChangeFullBytes;
+    webGpuCausalStats.producerUboChangedBytes = parsed.uboChangedBytes;
+    webGpuCausalStats.producerUboChangeBaselineFullCount =
+      parsed.uboChangeBaselineFullCount;
+    webGpuCausalStats.producerUboChangeBaselineFullBytes =
+      parsed.uboChangeBaselineFullBytes;
+    webGpuCausalStats.producerUboDirty16Bytes = parsed.uboDirty16Bytes;
+    webGpuCausalStats.producerUboDirty16Ranges = parsed.uboDirty16Ranges;
+    webGpuCausalStats.producerUboDirty256Bytes = parsed.uboDirty256Bytes;
+    webGpuCausalStats.producerUboDirty256Ranges = parsed.uboDirty256Ranges;
     webGpuCausalStats.producerUniformFastClassOrder = parsed.uniformFastClassOrder;
     webGpuCausalStats.producerUniformFastSkippedComparisons =
       parsed.uniformFastSkippedComparisons;
@@ -5959,6 +5979,8 @@ function cancelWgpuReplayPump() {
 }
 
 function clearWgpuReplayStateAfterDeviceLoss() {
+  wgpuMappedStagingGeneration += 1;
+  wgpuUploadAttribution.cancelCapacityWait();
   destroyWgpuVisualCadenceResources();
   if (wgpuSemanticRuntimeActive) {
     wgpuSemanticRuntime.invalidate(
@@ -5968,6 +5990,7 @@ function clearWgpuReplayStateAfterDeviceLoss() {
   wgpuMappedStagingPool?.invalidate("WebGPU device lost");
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
+  wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
   if (webGpuCmdRing) {
     webGpuCmdRing.heldReplayStart = null;
     webGpuCmdRing.stagedUploads?.clear();
@@ -6352,7 +6375,10 @@ async function runWgpuRendererWorkerCanary() {
 }
 
 function trackWgpuMappedRemap(remapPromise) {
+  const generation = wgpuMappedStagingGeneration;
+  const attribution = wgpuUploadAttribution;
   const tracked = Promise.resolve(remapPromise).then((ok) => {
+    if (generation !== wgpuMappedStagingGeneration) return ok;
     if (!ok) {
       webGpuCausalStats.mappedStagingRemapFailureCount += 1;
       markWgpuReplayFatal(
@@ -6362,12 +6388,14 @@ function trackWgpuMappedRemap(remapPromise) {
     }
     return ok;
   }, (error) => {
+    if (generation !== wgpuMappedStagingGeneration) return false;
     webGpuCausalStats.mappedStagingRemapFailureCount += 1;
     wgpuMappedStagingPool?.invalidate(error);
     markWgpuReplayFatal("staging-remap", error?.message || error);
     return false;
   }).finally(() => {
     wgpuMappedRemapPromises.delete(tracked);
+    if (generation !== wgpuMappedStagingGeneration) return;
     if (wgpuMappedCapacityBlocked) {
       const waitedMs = Math.max(0, performance.now() - wgpuMappedCapacityBlockedAt);
       webGpuCausalStats.mappedStagingCapacityWaitTotalMs += waitedMs;
@@ -6375,8 +6403,13 @@ function trackWgpuMappedRemap(remapPromise) {
         webGpuCausalStats.mappedStagingCapacityWaitMaxMs,
         waitedMs
       );
+      attribution.recordCapacityWaitDuration(
+        wgpuMappedCapacityBlockedRole,
+        waitedMs
+      );
       wgpuMappedCapacityBlocked = false;
       wgpuMappedCapacityBlockedAt = 0;
+      wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
     }
     if (!wgpuReplayFatal && webGpuCmdRing) startWgpuReplayPump();
   });
@@ -6384,11 +6417,14 @@ function trackWgpuMappedRemap(remapPromise) {
   return tracked;
 }
 
-function markWgpuMappedCapacityWait() {
+function markWgpuMappedCapacityWait(uploadRole = WGPU_UPLOAD_ROLE.UNKNOWN) {
   webGpuCausalStats.mappedStagingCapacityWaitCount += 1;
+  const normalizedRole = wgpuUploadAttribution.recordCapacityWaitAttempt(uploadRole);
   if (!wgpuMappedCapacityBlocked) {
     wgpuMappedCapacityBlocked = true;
     wgpuMappedCapacityBlockedAt = performance.now();
+    wgpuMappedCapacityBlockedRole = normalizedRole;
+    wgpuUploadAttribution.beginCapacityWait(normalizedRole);
   }
 }
 
@@ -7047,6 +7083,20 @@ const webGpuCausalStats = {
   producerUboPacketAlignedBytes: 0,
   producerUboPrepareCpuCalls: [0, 0, 0],
   producerUboPrepareCpuNs: [0, 0, 0],
+  producerUboChangeClassOrder: ["vs", "ps", "gs"],
+  producerUboChangeSchemaVersion: 0,
+  producerUboChangeAvailable: false,
+  producerUboChangeEnabled: false,
+  producerUboChangeEpoch: 0,
+  producerUboChangeUploadCalls: [0, 0, 0],
+  producerUboChangeFullBytes: [0, 0, 0],
+  producerUboChangedBytes: [0, 0, 0],
+  producerUboChangeBaselineFullCount: [0, 0, 0],
+  producerUboChangeBaselineFullBytes: [0, 0, 0],
+  producerUboDirty16Bytes: [0, 0, 0],
+  producerUboDirty16Ranges: [0, 0, 0],
+  producerUboDirty256Bytes: [0, 0, 0],
+  producerUboDirty256Ranges: [0, 0, 0],
   producerUniformFastClassOrder: ["vs", "ps", "gs"],
   producerUniformFastSkippedComparisons: [0, 0, 0],
   producerUniformFastKeptComparisons: [0, 0, 0],
@@ -8040,7 +8090,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                 if (!stageAccepted) {
                   mappedCapacityHold = true;
                   if (stageReason === "no-capacity") {
-                    markWgpuMappedCapacityWait();
+                    markWgpuMappedCapacityWait(uploadRole);
                   } else {
                     webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
                     markWgpuReplayFatal("staging-capacity", stageReason);
@@ -8256,7 +8306,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                 if (!stageAccepted) {
                   mappedCapacityHold = true;
                   if (stageReason === "no-capacity") {
-                    markWgpuMappedCapacityWait();
+                    markWgpuMappedCapacityWait(WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT);
                   } else {
                     webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
                     markWgpuReplayFatal("staging-capacity", stageReason);

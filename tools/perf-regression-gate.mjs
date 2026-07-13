@@ -1187,6 +1187,10 @@ function summarizeScenario(
         `active=${activeUboMetrics == null ? "unavailable" : activeUboMetrics ? 1 : 0}`
       );
     }
+    if (expectedUboMetrics &&
+        final.causalTelemetry?.webgpu?.producerUboChangeAvailable !== true) {
+      failures.push("WGPU UBO change-attribution schema is unavailable or malformed");
+    }
   }
   const requestedUniformFast = scenario.params?.wgpuuniformfast;
   if (requestedUniformFast != null) {
