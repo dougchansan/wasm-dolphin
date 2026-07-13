@@ -84,6 +84,7 @@ export class UpstreamWorkerAdapter {
     wgpuUploadArenaMiB = 32,
     wgpuUploadTransport = "queue",
     wgpuRendererWorkerProbe = "off",
+    wgpuVisualCadence = false,
     gpuCompletionDiagnostics = false,
     wgpuDirtyRangeProjection = false,
     wgpuPassPackageProjection = false,
@@ -169,6 +170,7 @@ export class UpstreamWorkerAdapter {
     this.wgpuRendererWorkerProbe = new Set([
       "canary", "inline-upload", "worker-upload", "null-drain"
     ]).has(wgpuRendererWorkerProbe) ? wgpuRendererWorkerProbe : "off";
+    this.wgpuVisualCadence = Boolean(wgpuVisualCadence);
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.wgpuDirtyRangeProjection = Boolean(wgpuDirtyRangeProjection);
     this.wgpuPassPackageProjection = Boolean(wgpuPassPackageProjection);
@@ -222,6 +224,7 @@ export class UpstreamWorkerAdapter {
     this.visualChangeFps = 0;
     this.visualFrameHash = 0;
     this.visualSampleSource = "none";
+    this.visualCadenceTelemetry = null;
     this.oglGlError = 0;
     this.coreTicks = 0;
     this.coreTicksPerSecond = 486000000;
@@ -348,6 +351,7 @@ export class UpstreamWorkerAdapter {
       wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
       wgpuUploadTransport: this.wgpuUploadTransport,
       wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
+      wgpuVisualCadence: this.wgpuVisualCadence,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
       wgpuPassPackageProjection: this.wgpuPassPackageProjection,
@@ -996,6 +1000,10 @@ export class UpstreamWorkerAdapter {
     }
     if (typeof response.visualSampleSource === "string") {
       this.visualSampleSource = response.visualSampleSource;
+    }
+    if (response.visualCadenceTelemetry &&
+        typeof response.visualCadenceTelemetry === "object") {
+      this.visualCadenceTelemetry = { ...response.visualCadenceTelemetry };
     }
     if (Number.isFinite(response.oglGlError)) {
       this.oglGlError = response.oglGlError;

@@ -20,6 +20,7 @@ import {
   collectRunMetadata,
   classifyGateOutcome,
   describeFile,
+  evaluateAudioClaimQualification,
   evaluateCandidateCoreBundle,
   evaluateMetricsModeEvidence,
   evaluateCoreSelectionEvidence,
@@ -46,6 +47,7 @@ import {
   parseProfileMetrics,
   parseWgpuProducerProfileStats,
   parseWgpuDrawProfileStats,
+  normalizePerfAudioMode,
   recordsToCsv,
   resolveCoreArtifactPath,
   selectedCoreServedPaths,
@@ -109,6 +111,7 @@ async function main() {
   const requireBaseline = cli.requireBaseline || process.env.PERF_REQUIRE_BASELINE === "1";
   const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
   const headed = process.env.PERF_PROBE_HEADED === "1";
+  const audioMode = normalizePerfAudioMode(process.env.PERF_AUDIO_MODE);
   const continueInvalidCheckpoint = process.env.PERF_CONTINUE_INVALID_CHECKPOINT === "1";
   const corePath = resolveCoreArtifactPath(root, baseUrl);
 
@@ -148,6 +151,7 @@ async function main() {
       corePath,
       durationSeconds,
       headed,
+      audioMode,
       inputMarkerTimeoutMs,
       inputMaxLatenessMs,
       outDir,
@@ -201,6 +205,9 @@ async function main() {
       ...execution.results.flatMap((result) => result.warnings || []),
       ...comparisonWarnings,
       ...(headed ? [] : ["Runs were headless and cannot qualify performance or audio/compositor claims"]),
+      ...(audioMode === "muted"
+        ? ["PERF_AUDIO_MODE=muted; audible audio claims are ineligible"]
+        : []),
     ];
     const qualificationEligible = execution.results.length > 0 && execution.results.every(
       (result) => result.qualification?.eligible === true
@@ -212,6 +219,14 @@ async function main() {
       statisticalGatePassed: Boolean(comparisonConfig && comparison.statisticalGatePassed),
       targetPassed: targetFailures.length === 0,
     });
+    const audioClaimQualification = evaluateAudioClaimQualification({
+      audioMode,
+      headed,
+      qualificationEligible,
+    });
+    comparison.audioMode = audioMode;
+    comparison.audioClaimsEligible = audioClaimQualification.eligible;
+    comparison.audioClaimQualification = audioClaimQualification;
     if (comparisonConfig) {
       comparison.qualificationEligible = qualificationEligible;
       comparison.promotable = gateOutcome.promotable;
@@ -223,6 +238,9 @@ async function main() {
       verdict: gateOutcome.verdict,
       qualificationPassed: gateOutcome.qualificationPassed,
       qualificationEligible,
+      audioMode,
+      audioClaimsEligible: audioClaimQualification.eligible,
+      audioClaimQualification,
       generatedAt: new Date().toISOString(),
       scene: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       baseUrl,
@@ -333,6 +351,49 @@ async function runComparison(configValue, context) {
   return { results, comparison, tasklistPath };
 }
 
+function withAudioClaimQualification(qualification, context) {
+  return {
+    ...qualification,
+    audioClaims: evaluateAudioClaimQualification({
+      audioMode: context.audioMode,
+      headed: context.headed,
+      qualificationEligible: qualification.eligible,
+    }),
+  };
+}
+
+async function applyHarnessAudioMode(page, audioMode) {
+  const application = await page.evaluate(async (requestedMode) => {
+    const audio = window.__audio;
+    if (!audio || typeof audio.setMuted !== "function") {
+      return {
+        requestedMode,
+        applied: false,
+        muted: null,
+        reason: "audio-controller-unavailable",
+      };
+    }
+    await audio.setMuted(requestedMode === "muted");
+    return {
+      requestedMode,
+      applied: true,
+      muted: Boolean(audio.muted),
+      available: Boolean(audio.available),
+      contextState: audio.context?.state || null,
+    };
+  }, audioMode);
+  if (!application.applied) {
+    throw new Error(`Failed to apply PERF_AUDIO_MODE=${audioMode}: ${application.reason}`);
+  }
+  const expectedMuted = audioMode === "muted";
+  if (application.muted !== expectedMuted) {
+    throw new Error(
+      `PERF_AUDIO_MODE=${audioMode} activation mismatch: muted=${application.muted}`
+    );
+  }
+  return application;
+}
+
 async function runScenario(scenario, context) {
   const scenarioDir = path.join(context.outDir, scenario.name);
   await mkdir(scenarioDir, { recursive: true });
@@ -348,6 +409,16 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
+  let inputMarkerReadiness = {
+    required: context.postLoadInputScript.length > 0,
+    ready: context.postLoadInputScript.length === 0,
+    waitedMs: 0,
+  };
+  let audioModeApplication = {
+    requestedMode: context.audioMode,
+    applied: false,
+    muted: null,
+  };
   const { url, uploadProbeMode } = buildPerfScenarioUrl(
     context.baseUrl,
     scenario.params
@@ -422,6 +493,8 @@ async function runScenario(scenario, context) {
     manifest.benchmark.inputScriptMode = context.postLoadInputScript.length
       ? "post-load-only"
       : "none";
+    manifest.benchmark.audioMode = context.audioMode;
+    manifest.benchmark.audioModeApplication = audioModeApplication;
     manifest.benchmark.inputScriptEventCount = context.postLoadInputScript.length;
     manifest.benchmark.inputScriptScheduleOrigin = context.postLoadInputScript.length
       ? "after-first-timed-sample"
@@ -465,10 +538,15 @@ async function runScenario(scenario, context) {
     await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
     manifest.browser.userAgent = await page.evaluate(() => navigator.userAgent);
     manifest.browser.webgpuAdapter = await readWebGpuAdapter(page);
-    manifest.qualification = evaluateQualificationProvenance(manifest);
+    manifest.qualification = withAudioClaimQualification(
+      evaluateQualificationProvenance(manifest),
+      context
+    );
     await page.setInputFiles("#romInput", context.romPath);
     await page.click("#screen");
     await waitForMount(page, scenarioDir);
+    audioModeApplication = await applyHarnessAudioMode(page, context.audioMode);
+    manifest.benchmark.audioModeApplication = audioModeApplication;
     const readiness = await waitForCoreReady(page);
     const pauseResponse = await pauseForBattleCheckpoint(page);
     const attemptedAt = new Date().toISOString();
@@ -542,8 +620,21 @@ async function runScenario(scenario, context) {
         checkpoint: measurementCheckpoint,
       };
     }
+    if (context.postLoadInputScript.length > 0) {
+      inputMarkerReadiness = await waitForInputMarkerReady(page, {
+        pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
+        timeoutMs: context.inputMarkerTimeoutMs,
+      });
+      if (!inputMarkerReadiness.ready) {
+        throw new Error(
+          `Input marker telemetry was not ready before the timed window after ` +
+          `${inputMarkerReadiness.waitedMs} ms`
+        );
+      }
+    }
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
+    manifest.benchmark.inputMarkerReadiness = inputMarkerReadiness;
     manifest.benchmark.timingStartedAt = new Date().toISOString();
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
@@ -879,16 +970,28 @@ async function runScenario(scenario, context) {
     mode: context.postLoadInputScript.length ? "post-load-only" : "none",
     scheduledEventCount: context.postLoadInputScript.length,
     deliveredEventCount: inputEvents.length,
+    markerReadiness: inputMarkerReadiness,
     events: inputEvents,
     delivery: postLoadInputDelivery,
   };
+  summary.audioMode = context.audioMode;
+  summary.audioModeApplication = audioModeApplication;
+  summary.audioClaimQualification = evaluateAudioClaimQualification({
+    audioMode: context.audioMode,
+    headed: context.headed,
+    qualificationEligible: false,
+  });
+  summary.audioClaimsEligible = false;
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
     manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
     if (renderer) manifest.renderer = renderer;
     manifest.fixture.saveStateLoaded = Boolean(saveStateLoad?.loaded);
     manifest.fixture.loadResult = saveStateLoad;
-    manifest.qualification = evaluateQualificationProvenance(manifest);
+    manifest.qualification = withAudioClaimQualification(
+      evaluateQualificationProvenance(manifest),
+      context
+    );
     try {
       assertRunProvenance(manifest);
     } catch (error) {
@@ -902,17 +1005,26 @@ async function runScenario(scenario, context) {
       summaryFile: "summary.json",
       samplesFile: "samples.json",
       eventsFile: "events.jsonl",
+      inputEventsFile: "input-events.json",
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
       fixedEmulatedWork,
+      audioMode: context.audioMode,
+      audioClaimsEligible: manifest.qualification.audioClaims.eligible,
     };
     summary.qualification = manifest.qualification;
+    summary.audioClaimsEligible = manifest.qualification.audioClaims.eligible;
+    summary.audioClaimQualification = manifest.qualification.audioClaims;
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
   }
   await Promise.all([
     writeFile(path.join(scenarioDir, "console.log"), consoleLines.join("\n")),
     writeFile(path.join(scenarioDir, "samples.json"), JSON.stringify(samples, null, 2)),
     writeFile(path.join(scenarioDir, "samples.csv"), recordsToCsv(samples)),
+    writeFile(path.join(scenarioDir, "input-events.json"), JSON.stringify({
+      markerReadiness: inputMarkerReadiness,
+      events: inputEvents,
+    }, null, 2)),
     writeFile(
       path.join(scenarioDir, "events.jsonl"),
       runEventsJsonl(manifest, saveStateLoad, inputEvents, samples)
@@ -1566,6 +1678,21 @@ async function readInputMarkerBarrierState(page) {
   });
 }
 
+async function waitForInputMarkerReady(page, { pollIntervalMs, timeoutMs }) {
+  const startedAt = Date.now();
+  let final = await readInputMarkerBarrierState(page);
+  while (final.available !== true && Date.now() - startedAt < timeoutMs) {
+    await page.waitForTimeout(pollIntervalMs);
+    final = await readInputMarkerBarrierState(page);
+  }
+  return {
+    required: true,
+    ready: final.available === true,
+    waitedMs: Date.now() - startedAt,
+    final,
+  };
+}
+
 async function waitForInputMarkerCompletion(page, baseline, { pollIntervalMs, timeoutMs }) {
   if (baseline?.available !== true) {
     return { available: false, completed: false, waitedMs: 0, baseline, final: baseline };
@@ -2200,6 +2327,8 @@ function comparisonCsv(comparison, results, config) {
     arm: run.arm,
     armName: run.armName,
     valid: run.valid,
+    audioMode: run.audioMode,
+    audioClaimsEligible: run.audioClaimsEligible,
     invalidReasons: run.invalidReasons,
     primaryMetric: config.primaryMetric,
     primaryValue: readPath(run, config.primaryMetric),
@@ -2225,6 +2354,8 @@ function runSummaryCsv(results) {
     armName: run.armName,
     valid: run.valid,
     qualificationEligible: run.qualification?.eligible,
+    audioMode: run.audioMode,
+    audioClaimsEligible: run.audioClaimsEligible,
     invalidReasons: run.invalidReasons,
     fullGameSpeedMean: run.metrics.fullTimedWindow?.gameSpeed?.mean,
     fullCoreFpsMean: run.metrics.fullTimedWindow?.coreFps?.mean,

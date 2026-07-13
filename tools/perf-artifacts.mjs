@@ -73,6 +73,36 @@ export function expectedBattleCheckpointForParams(params = {}) {
 
 export const HOST_CORE_ABI_VERSION = 1;
 export const PERF_EVENT_SCHEMA_VERSION = 1;
+export const PERF_AUDIO_MODES = Object.freeze(["muted", "audible"]);
+
+export function normalizePerfAudioMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase() || "muted";
+  if (!PERF_AUDIO_MODES.includes(mode)) {
+    throw new Error(
+      `Invalid PERF_AUDIO_MODE=${JSON.stringify(value)}; expected muted or audible`
+    );
+  }
+  return mode;
+}
+
+export function evaluateAudioClaimQualification({
+  audioMode,
+  headed = false,
+  qualificationEligible = false,
+} = {}) {
+  const mode = normalizePerfAudioMode(audioMode);
+  const audibleRequested = mode === "audible";
+  let reason = null;
+  if (!audibleRequested) reason = "audio-mode-muted";
+  else if (!headed) reason = "headless";
+  else if (!qualificationEligible) reason = "run-not-qualified";
+  return {
+    mode,
+    audibleRequested,
+    eligible: reason === null,
+    reason,
+  };
+}
 
 const POST_LOAD_INPUT_KEYS = new Set([
   "x", "z", "v", "b", "q", "e", "c",

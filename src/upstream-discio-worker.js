@@ -104,6 +104,15 @@ import {
 } from "./wgpu-upload-probe-executor.js";
 import { AudioPcmProducer } from "./audio-pcm-producer.js";
 import { installWgpuDiagnosticLogFilter } from "./diagnostic-log-filter.js";
+import {
+  WGPU_VISUAL_BYTES_PER_ROW,
+  WGPU_VISUAL_READBACK_BYTES,
+  WGPU_VISUAL_READBACK_RING_SIZE,
+  WGPU_VISUAL_SAMPLE_HEIGHT,
+  WGPU_VISUAL_SAMPLE_WIDTH,
+  createWgpuVisualCadenceTelemetry,
+  hashWgpuVisualSample
+} from "./wgpu-visual-cadence.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -208,6 +217,10 @@ let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
 let wgpuRendererWorkerProbe = "off";
+let wgpuVisualCadenceEnabled = false;
+let wgpuVisualCadenceResources = null;
+let wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(false);
+let wgpuVisualCadenceSequence = 0;
 let wgpuUploadProbeExecutor = null;
 let wgpuUploadProbeWorker = null;
 let wgpuUploadProbeOwnerBuffer = null;
@@ -593,6 +606,14 @@ function rendererDiagnosticsPayload() {
     }),
     wgpuOwnershipTrace: wgpuOwnershipTrace.snapshot(),
     wgpuSemanticRuntime: wgpuSemanticRuntime.snapshot(),
+    wgpuVisualCadence: wgpuVisualCadenceSnapshot(),
+  };
+}
+
+function wgpuVisualCadenceSnapshot() {
+  return {
+    ...wgpuVisualCadenceTelemetry,
+    visualFps: wgpuVisualCadenceEnabled ? visualChangeFps : 0
   };
 }
 
@@ -763,6 +784,7 @@ async function handleMessage(type, payload) {
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
+        wgpuVisualCadence: payload.wgpuVisualCadence,
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
         wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
         wgpuSemanticRuntime: payload.wgpuSemanticRuntime,
@@ -1151,6 +1173,7 @@ async function loadCore({
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
+  wgpuVisualCadence: requestedWgpuVisualCadence = false,
   wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
   wgpuOwnershipTrace: requestedWgpuOwnershipTrace = false,
   wgpuSemanticRuntime: requestedWgpuSemanticRuntime = false,
@@ -1262,6 +1285,15 @@ async function loadCore({
   wgpuRendererWorkerProbe = new Set([
     "canary", "inline-upload", "worker-upload", "null-drain"
   ]).has(requestedWgpuRendererWorkerProbe) ? requestedWgpuRendererWorkerProbe : "off";
+  if (requestedWgpuVisualCadence && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuvisual=1 requires video=wgpu");
+  }
+  destroyWgpuVisualCadenceResources();
+  wgpuVisualCadenceEnabled = Boolean(requestedWgpuVisualCadence);
+  wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(
+    wgpuVisualCadenceEnabled
+  );
+  wgpuVisualCadenceSequence = 0;
   wgpuMappedStagingPool?.invalidate("core reloaded");
   wgpuMappedStagingPool = null;
   wgpuMappedRemapPromises = new Set();
@@ -2048,7 +2080,9 @@ function resetPresentationBuffer() {
   lastVisualFrameHash = 0;
   lastOglSwapCount = 0;
   oglGlError = 0;
-  visualSampleSource = "none";
+  visualSampleSource = wgpuVisualCadenceEnabled
+    ? wgpuVisualCadenceTelemetry.source
+    : "none";
   visualChangesSincePresentationFps = 0;
   framesSincePresentationFps = 0;
   intervalSumSincePresentationFps = 0;
@@ -2432,7 +2466,7 @@ function framePayload({ forceCausalTelemetry = false } = {}) {
       visualSampleSource = "xfb-hash";
     }
     oglGlError = oglStats.glError;
-  } else {
+  } else if (!wgpuVisualCadenceEnabled) {
     visualSampleSource = "xfb-hash";
   }
   const causalTelemetry = maybeCreateCausalTelemetry(videoStats, { force: forceCausalTelemetry });
@@ -2502,6 +2536,7 @@ function framePayload({ forceCausalTelemetry = false } = {}) {
     visualChangeFps,
     visualFrameHash,
     visualSampleSource,
+    visualCadenceTelemetry: wgpuVisualCadenceSnapshot(),
     oglGlError,
     frameBuffer,
     transfer,
@@ -2573,6 +2608,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
     },
     webgpu: {
       ...webGpuCausalStats,
+      visualCadence: wgpuVisualCadenceSnapshot(),
       mappedStaging: wgpuMappedStagingPool?.snapshot() ?? null,
       backlogSampleP95: wgpuBacklogSampleP95(),
       replayPumpWakeDelayAverageMs: webGpuCausalStats.replayPumpWakeCount > 0
@@ -3437,7 +3473,9 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(sourceFrameView), true);
+  if (!wgpuVisualCadenceEnabled) {
+    recordVisualFrameHash(hashFrameBytes(sourceFrameView), true);
+  }
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -3567,7 +3605,9 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
   }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(bytes), true);
+  if (!wgpuVisualCadenceEnabled) {
+    recordVisualFrameHash(hashFrameBytes(bytes), true);
+  }
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -4191,7 +4231,8 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       format,
       alphaMode: "opaque",
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0) |
+        (wgpuVisualCadenceEnabled ? textureUsage.TEXTURE_BINDING : 0)
     });
   } catch (e) {
     recordRendererError("validation", `context.configure: ${e?.message || e}`);
@@ -4213,6 +4254,11 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
     textureWidth: 0,
     uploadBuffer: null
   };
+
+  if (wgpuVisualCadenceEnabled) {
+    ensureWgpuVisualCadenceResources(state);
+    visualSampleSource = wgpuVisualCadenceTelemetry.source;
+  }
 
   wgpuReplayFatal = null;
 
@@ -4236,6 +4282,158 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
   });
 
   return state;
+}
+
+function ensureWgpuVisualCadenceResources(gpu = renderGpu) {
+  if (!wgpuVisualCadenceEnabled || !gpu?.device || wgpuVisualCadenceResources) {
+    return wgpuVisualCadenceResources;
+  }
+  const device = gpu.device;
+  const sampleTexture = device.createTexture({
+    label: "dolphin-wgpu-visual-sample",
+    size: {
+      width: WGPU_VISUAL_SAMPLE_WIDTH,
+      height: WGPU_VISUAL_SAMPLE_HEIGHT,
+      depthOrArrayLayers: 1
+    },
+    format: gpu.format,
+    usage: 0x10 | 0x01 // RENDER_ATTACHMENT | COPY_SRC
+  });
+  const slots = Array.from({ length: WGPU_VISUAL_READBACK_RING_SIZE }, (_, index) => ({
+    buffer: device.createBuffer({
+      label: `dolphin-wgpu-visual-readback-${index}`,
+      size: WGPU_VISUAL_READBACK_BYTES,
+      usage: 0x01 | 0x08 // MAP_READ | COPY_DST
+    }),
+    sequence: 0,
+    state: "idle"
+  }));
+  wgpuVisualCadenceResources = {
+    sampleTexture,
+    sampleView: sampleTexture.createView(),
+    slots
+  };
+  return wgpuVisualCadenceResources;
+}
+
+function destroyWgpuVisualCadenceResources() {
+  if (!wgpuVisualCadenceResources) return;
+  try { wgpuVisualCadenceResources.sampleTexture?.destroy(); } catch {}
+  for (const slot of wgpuVisualCadenceResources.slots || []) {
+    try { slot.buffer?.destroy(); } catch {}
+  }
+  wgpuVisualCadenceResources = null;
+}
+
+function encodeWgpuVisualCadence(encoder, sourceTexture) {
+  if (!wgpuVisualCadenceEnabled || !encoder || !sourceTexture || !renderGpu) {
+    return null;
+  }
+  const telemetry = wgpuVisualCadenceTelemetry;
+  telemetry.encodeAttemptCount += 1;
+  const resources = ensureWgpuVisualCadenceResources(renderGpu);
+  const slot = resources?.slots.find((candidate) => candidate.state === "idle");
+  if (!slot) {
+    telemetry.busyDropCount += 1;
+    return null;
+  }
+
+  slot.state = "encoded";
+  slot.sequence = ++wgpuVisualCadenceSequence;
+  telemetry.inFlightCount += 1;
+  telemetry.inFlightHighWater = Math.max(
+    telemetry.inFlightHighWater,
+    telemetry.inFlightCount
+  );
+  let pass = null;
+  try {
+    // Reuse the presenter's fullscreen triangle, sampler, bind-group layout,
+    // and target format. Only the destination changes to a 96x72 texture.
+    const bindGroup = renderGpu.device.createBindGroup({
+      label: "dolphin-wgpu-visual-bind-group",
+      layout: renderGpu.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: renderGpu.sampler },
+        { binding: 1, resource: sourceTexture.createView() }
+      ]
+    });
+    pass = encoder.beginRenderPass({
+      label: "dolphin-wgpu-visual-downsample",
+      colorAttachments: [{
+        view: resources.sampleView,
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        loadOp: "clear",
+        storeOp: "store"
+      }]
+    });
+    pass.setPipeline(renderGpu.pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+    pass = null;
+    encoder.copyTextureToBuffer(
+      { texture: resources.sampleTexture },
+      {
+        buffer: slot.buffer,
+        bytesPerRow: WGPU_VISUAL_BYTES_PER_ROW,
+        rowsPerImage: WGPU_VISUAL_SAMPLE_HEIGHT
+      },
+      {
+        width: WGPU_VISUAL_SAMPLE_WIDTH,
+        height: WGPU_VISUAL_SAMPLE_HEIGHT,
+        depthOrArrayLayers: 1
+      }
+    );
+    telemetry.encodedSampleCount += 1;
+    return slot;
+  } catch (error) {
+    try { pass?.end(); } catch {}
+    telemetry.encodeErrorCount += 1;
+    releaseWgpuVisualCadenceSlot(slot);
+    recordRendererError("wgpu-visual-encode", error?.message || error);
+    return null;
+  }
+}
+
+function mapWgpuVisualCadenceSlot(slot, submitted) {
+  if (!slot) return;
+  if (!submitted) {
+    releaseWgpuVisualCadenceSlot(slot);
+    return;
+  }
+  slot.state = "mapping";
+  slot.buffer.mapAsync(0x01).then(() => {
+    const bytes = new Uint8Array(slot.buffer.getMappedRange());
+    const hash = hashWgpuVisualSample(bytes);
+    const telemetry = wgpuVisualCadenceTelemetry;
+    if (slot.sequence > telemetry.latestCompletedSequence) {
+      if (telemetry.latestHash && hash && telemetry.latestHash !== hash) {
+        telemetry.changedSampleCount += 1;
+      }
+      telemetry.latestHash = hash;
+      telemetry.latestCompletedSequence = slot.sequence;
+      telemetry.completedSampleCount += 1;
+      visualSampleSource = telemetry.source;
+      recordVisualFrameHash(hash);
+    }
+    slot.buffer.unmap();
+    releaseWgpuVisualCadenceSlot(slot);
+  }).catch((error) => {
+    wgpuVisualCadenceTelemetry.mapErrorCount += 1;
+    try { slot.buffer.unmap(); } catch {}
+    releaseWgpuVisualCadenceSlot(slot);
+    recordRendererError("wgpu-visual-map", error?.message || error);
+  });
+}
+
+function releaseWgpuVisualCadenceSlot(slot) {
+  if (!slot || slot.state === "idle") return;
+  slot.state = "idle";
+  slot.sequence = 0;
+  wgpuVisualCadenceTelemetry.inFlightCount = Math.max(
+    0,
+    wgpuVisualCadenceTelemetry.inFlightCount - 1
+  );
 }
 
 // Day-17 (wasm-dolphin) C++ → JS bridge for the real WebGPU video
@@ -4406,7 +4604,8 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
       device: gpu.device,
       format: gpu.format,
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0) |
+        (wgpuVisualCadenceEnabled ? textureUsage.TEXTURE_BINDING : 0)
     });
     gpu.canvasWidth = width;
     gpu.canvasHeight = height;
@@ -5754,6 +5953,7 @@ function cancelWgpuReplayPump() {
 }
 
 function clearWgpuReplayStateAfterDeviceLoss() {
+  destroyWgpuVisualCadenceResources();
   if (wgpuSemanticRuntimeActive) {
     wgpuSemanticRuntime.invalidate(
       "device loss does not clear all browser WebGPU resource maps"
@@ -8999,6 +9199,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
             return hardwareInputMarkerApplied;
           };
+          // Keep the sample on the same command encoder and before the
+          // optional input marker so it represents the unmodified game
+          // output submitted by this hardware present.
+          const visualCadenceSlot = wgpuVisualCadenceEnabled && lastBackbufferTexture
+            ? encodeWgpuVisualCadence(ensureEnc(), lastBackbufferTexture)
+            : null;
           if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
             const efb = webGpuObjects.textures.get(self._wgEfbColorId);
             const bs = efb ? ensureBlitState() : null;
@@ -9278,6 +9484,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (!presentAlreadySubmitted) applyHardwareInputMarker();
           const submittedPresent = presentAlreadySubmitted || submitEnc("present");
+          mapWgpuVisualCadenceSlot(visualCadenceSlot, submittedPresent);
           if (!submittedPresent) {
             const rejectionReason = lastSubmitFailureReason ||
               (wgpuReplayFatal?.scope === "submit-error" ? "submit-error" :

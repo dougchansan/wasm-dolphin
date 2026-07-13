@@ -52,6 +52,7 @@ for (const requiredPath of [
   "src/wgpu-semantic-runtime.js",
   "src/wgpu-semantic-v2-decoder.js",
   "src/wgpu-ownership-trace.js",
+  "src/wgpu-visual-cadence.js",
 ]) {
   if (!contractSourceDeclarations.some((source) => source.path === requiredPath)) {
     contractSourceDeclarations.push({

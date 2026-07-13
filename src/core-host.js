@@ -46,6 +46,7 @@ import {
   requestedInputReadbackDiagnostics
 } from "./input-latency-telemetry.js";
 import { requestedInputPhotonMarkerConfig } from "./input-visual-marker.js";
+import { requestedWgpuVisualCadence } from "./wgpu-visual-cadence.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -128,6 +129,7 @@ export class EmulatorHost {
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
     this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
+    this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
     this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(
@@ -369,6 +371,7 @@ export class EmulatorHost {
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,
             wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
+            wgpuVisualCadence: this.wgpuVisualCadence,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
             wgpuPassPackageProjection: this.wgpuPassPackageProjection,
@@ -877,6 +880,8 @@ export class EmulatorHost {
       visualFrameHash: this.mode === "dolphin" ? this.visibleFrameHash || this.adapter.visualFrameHash : 0,
       visualSampleSource:
         this.mode === "dolphin" ? this.adapter.visualSampleSource ?? "none" : "demo",
+      visualCadenceTelemetry:
+        this.mode === "dolphin" ? this.adapter.visualCadenceTelemetry ?? null : null,
       oglGlError: this.mode === "dolphin" ? this.adapter.oglGlError ?? 0 : 0,
       visibleSampleError: this.mode === "dolphin" ? this.visibleSampleError : "",
       presentedFrame,
