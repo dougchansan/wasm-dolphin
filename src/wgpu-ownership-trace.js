@@ -5,6 +5,23 @@ export const WGPU_OWNERSHIP_TRACE_SCHEMA =
   "wasm-dolphin.wgpu-ownership-trace.v1";
 export const WGPU_OWNERSHIP_TRACE_HEADER_WORDS = 5;
 export const WGPU_OWNERSHIP_TRACE_RECORD_WORDS = 8;
+export const WGPU_OWNERSHIP_EVENT = Object.freeze({
+  EPOCH: 1,
+  COMMAND: 2,
+  COMMIT: 3,
+  ABORT: 4,
+  POISON: 5,
+  ROLLBACK: 6,
+  LOAD_REQUESTED: 7,
+  CONSUMER_FAILURE: 8,
+  PENDING_RESERVED: 9,
+  PASS_BEGIN: 10,
+});
+export const WGPU_COMMAND_PUBLICATION = Object.freeze({
+  IMMEDIATE: 0,
+  PRIVATE_STAGED: 1,
+  IMMEDIATE_ACTIVE: 2,
+});
 
 const DEFAULT_RECENT_RECORD_LIMIT = 64;
 const MAX_RECENT_RECORD_LIMIT = 256;
@@ -12,7 +29,6 @@ const EVENT_HISTOGRAM_SIZE = 16;
 const OPCODE_HISTOGRAM_SIZE = 32;
 const ATTRIBUTION_HISTOGRAM_SIZE = 4;
 const PUBLICATION_HISTOGRAM_SIZE = 4;
-const OWNERSHIP_TRACE_EVENT_COMMAND = 2;
 
 export function requestedWgpuOwnershipTrace(search = "") {
   return new URLSearchParams(search).get("wgpuownershiptrace") === "1";
@@ -183,7 +199,7 @@ export function createWgpuOwnershipTrace({
       lastCommandSerial = commandSerial;
       if (event < EVENT_HISTOGRAM_SIZE) eventHistogram[event] += 1;
       else eventOverflowCount += 1;
-      if (event === OWNERSHIP_TRACE_EVENT_COMMAND) {
+      if (event === WGPU_OWNERSHIP_EVENT.COMMAND) {
         if (opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[opcode] += 1;
         else opcodeOverflowCount += 1;
         const attribution = auxiliary & 0x3;
