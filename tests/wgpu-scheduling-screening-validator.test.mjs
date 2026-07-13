@@ -127,6 +127,8 @@ test("hardware visual evidence is enforced only when requested", async (t) => {
   await editJson(path.join(fixture.firstRunDir, "summary.json"), (summary) => {
     summary.final.visualSampleSource = "xfb-hash";
     summary.final.visualCadenceTelemetry.enabled = false;
+    summary.final.causalTelemetry.webgpu.visualCadence.enabled = false;
+    summary.final.causalTelemetry.webgpu.visualCadence.source = "xfb-hash";
   });
   await editJson(path.join(fixture.root, "tasklist.json"), (tasklist) => {
     tasklist.blocks[0].runs[0].params.wgpuvisual = "0";
@@ -147,7 +149,20 @@ test("arbitrary final GPU snapshots may retain non-failing work in flight", asyn
   const fixture = await makeFixture(t);
   await editJson(path.join(fixture.firstRunDir, "summary.json"), (summary) => {
     summary.final.causalTelemetry.presentation.gpuCompletion.inFlight = 1;
-    summary.final.visualCadenceTelemetry.inFlightCount = 2;
+    summary.final.causalTelemetry.webgpu.visualCadence.inFlightCount = 2;
+  });
+  const result = await validateWgpuSchedulingScreening({
+    outDir: fixture.root,
+    requireHardwareVisual: true,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+});
+
+test("hardware visual validation reads the authoritative causal telemetry path", async (t) => {
+  const fixture = await makeFixture(t);
+  await editJson(path.join(fixture.firstRunDir, "summary.json"), (summary) => {
+    delete summary.final.visualSampleSource;
+    delete summary.final.visualCadenceTelemetry;
   });
   const result = await validateWgpuSchedulingScreening({
     outDir: fixture.root,
@@ -159,7 +174,7 @@ test("arbitrary final GPU snapshots may retain non-failing work in flight", asyn
 test("scheduling validator rejects frozen output and missing input-to-visible instrumentation", async (t) => {
   const frozen = await makeFixture(t);
   await editJson(path.join(frozen.firstRunDir, "summary.json"), (summary) => {
-    summary.final.visualCadenceTelemetry.changedSampleCount = 0;
+    summary.final.causalTelemetry.webgpu.visualCadence.changedSampleCount = 0;
   });
   let result = await validateWgpuSchedulingScreening({
     outDir: frozen.root,
@@ -478,6 +493,17 @@ function makeFinal() {
         },
       },
       webgpu: {
+        visualCadence: {
+          schema: "wasm-dolphin.wgpu-visual-cadence.v1",
+          enabled: true,
+          source: "wgpu-downsample-readback",
+          completedSampleCount: 120,
+          changedSampleCount: 100,
+          latestHash: 0x1234abcd,
+          encodeErrorCount: 0,
+          mapErrorCount: 0,
+          inFlightCount: 2,
+        },
         errorCount: 0,
         commandDroppedCount: 0,
         batchAbortCount: 0,

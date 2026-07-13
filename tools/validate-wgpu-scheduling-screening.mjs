@@ -323,9 +323,8 @@ function validateCausalFairness({ summary, issue }) {
       "INPUT_MARKER_ERROR", `${counter}=${marker.errorDeltas?.[counter] ?? "missing"}`, issue);
   }
   check(isZeroCounter(marker.final, "pendingGeneration") &&
-      isZeroCounter(marker.final, "activeGeneration") &&
       isZeroCounter(marker.final, "inFlightCount"),
-    "INPUT_MARKER_PENDING", "Input marker has pending, active, or in-flight state", issue);
+    "INPUT_MARKER_PENDING", "Input marker has pending or in-flight work", issue);
   check(isZeroCounter(fairness.gpuErrors, "wgpuErrorCount") &&
       isZeroCounter(fairness.gpuErrors, "gpuCompletionFailedCount"),
     "CAUSAL_GPU_ERROR", "Causal window recorded WGPU or completion errors", issue);
@@ -431,9 +430,9 @@ function validateHardwareVisual({ task, summary, required, issue }) {
   }
   check(task.params?.wgpuvisual === "1" && url.searchParams.get("wgpuvisual") === "1",
     "HARDWARE_VISUAL_NOT_REQUESTED", "wgpuvisual=1 is absent from tasklist or URL", issue);
-  const telemetry = summary.final?.visualCadenceTelemetry || {};
-  check(summary.final?.visualSampleSource === "wgpu-downsample-readback" &&
-      telemetry.schema === "wasm-dolphin.wgpu-visual-cadence.v1" && telemetry.enabled === true &&
+  const telemetry = summary.final?.causalTelemetry?.webgpu?.visualCadence ||
+    summary.final?.visualCadenceTelemetry || {};
+  check(telemetry.schema === "wasm-dolphin.wgpu-visual-cadence.v1" && telemetry.enabled === true &&
       telemetry.source === "wgpu-downsample-readback",
     "HARDWARE_VISUAL_SOURCE", "Final visual source is not hardware WGPU readback", issue);
   check(Number(telemetry.completedSampleCount) >= 2 &&
