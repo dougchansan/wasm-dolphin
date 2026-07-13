@@ -33,6 +33,10 @@ const sampleMs = args.sampleMs ?? Number(process.env.SAMPLE_MS || 1000);
 const screenshotEverySeconds = args.shotEvery ?? Number(process.env.SHOT_EVERY || 4);
 const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
 const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
+const audioMode = String(process.env.AUDIO_MODE || "audible").trim().toLowerCase();
+if (!["audible", "muted"].includes(audioMode)) {
+  throw new Error(`Invalid AUDIO_MODE=${process.env.AUDIO_MODE}; expected audible or muted`);
+}
 const inputMarkerCanvasObservationEnabled =
   process.env.INPUTLATENCY === "1" && process.env.INPUTMARKEROBSERVE !== "0";
 const inputPhotonEnabled = process.env.INPUTPHOTON === "1";
@@ -308,6 +312,7 @@ const runMetadata = await collectRunMetadata({
   inputScript: configuredInputScript,
   sceneLabel,
 });
+runMetadata.benchmark.audioMode = audioMode;
 await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
 
 // launchPersistentContext returns a BrowserContext (not Browser). Both
@@ -529,16 +534,16 @@ try {
     }
   }
 
-  // Phase C: install the audio probe. Unmute (audio defaults to muted),
-  // attach an AnalyserNode to the audio graph, and poll envelope
+  // Phase C: apply the explicit test audio mode, attach an AnalyserNode to
+  // the post-gain graph, and poll its envelope
   // every 250 ms. Wrapped in a single page.evaluate so it runs cleanly
   // even if AudioContext isn't available (older browsers) — failures
   // just leave audioSamples empty.
-  await page.evaluate(() => {
+  await page.evaluate((selectedAudioMode) => {
     try {
       const audio = window.__audio;
       if (!audio) return;
-      void audio.setMuted(false);
+      void audio.setMuted(selectedAudioMode === "muted");
       // ensureContext is async; the actual AudioContext + gain node is
       // created on first call. Trigger it now so the analyser can hook
       // in. We don't await — the validator's RAF-driven sampling will
@@ -580,7 +585,7 @@ try {
       // running without audio samples, the assertion just becomes a
       // "not measured" rather than a fail.
     }
-  });
+  }, audioMode);
 
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
@@ -872,6 +877,7 @@ try {
     inputEvents,
     bootMarks,
   });
+  summary.audio.requestedMode = audioMode;
   summary.inputMarkerCanvas = inputMarkerCanvasObservations?.summary ?? null;
   summary.inputPhoton = {
     enabled: inputPhotonEnabled,
