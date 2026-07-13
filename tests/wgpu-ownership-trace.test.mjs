@@ -33,7 +33,7 @@ test("native setter and descriptor getters attach the real contiguous ABI", () =
   assert.deepEqual(calls, [["set", 1], ["ptr"], ["capacity"]]);
   assert.deepEqual(descriptor, { ptr: 0, capacity: 4 });
   assert.equal(trace.snapshot().registered, true);
-  assert.equal(trace.drain()[0].transactionId, 7);
+  assert.equal(trace.drain({ collect: true })[0].transactionId, 7);
 });
 
 test("decoder drains wrapped records and publishes the read cursor", () => {
@@ -44,7 +44,7 @@ test("decoder drains wrapped records and publishes the read cursor", () => {
   const trace = createWgpuOwnershipTrace();
   trace.configure({ requested: true, active: true, setterAvailable: true, setterInvoked: true });
   trace.attach(fixture.descriptor, fixture.buffer);
-  const records = trace.drain();
+  const records = trace.drain({ collect: true });
   assert.deepEqual(records.map((record) => record.commandSerial), [20, 20, 21]);
   assert.equal(fixture.header[1], 6);
   assert.equal(trace.snapshot().observedRecords, 3);
@@ -79,7 +79,7 @@ test("decoder fails closed on malformed headers", () => {
 
   const impossibleBacklog = makeRing(4, { read: 1, write: 7 });
   trace.attach(impossibleBacklog.descriptor, impossibleBacklog.buffer);
-  assert.deepEqual(trace.drain(), []);
+  assert.deepEqual(trace.drain({ collect: true }), []);
   assert.equal(trace.snapshot().malformedHeaderCount, 1);
   assert.equal(trace.snapshot().registered, false);
 });

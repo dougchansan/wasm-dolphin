@@ -120,7 +120,7 @@ index f91805b..729d44d 100644
    u8* m_upload_base = nullptr;
    u32 m_upload_size = 0;
 diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
-index 1464e57..92eb5c9 100644
+index 1464e57..3a3ffea 100644
 --- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
 +++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
 @@ -55,6 +55,10 @@ static constexpr u32 kRingCapacity = 262144;
@@ -128,7 +128,7 @@ index 1464e57..92eb5c9 100644
  static constexpr u32 kProtocolNonDroppingBackpressure = 1u << 1;
  static constexpr u32 kConsumerStateFailed = 2;
 +static constexpr u32 kOwnershipTraceVersion = 1;
-+static constexpr u32 kOwnershipTraceCapacity = 65536;
++static constexpr u32 kOwnershipTraceCapacity = 131072;
 +static constexpr u32 kTraceBoundaryInitial = 1u << 0;
 +static constexpr u32 kTraceLoadRequestIncrement = 1u << 1;
  

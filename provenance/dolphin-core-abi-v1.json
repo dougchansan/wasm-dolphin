@@ -206,8 +206,8 @@
     {
       "path": "src/wgpu-ownership-trace.js",
       "hashMode": "lf-normalized",
-      "size": 10251,
-      "sha256": "ab1b30ca1e4c954cc9065dffb83681a37b4537c2d96791231332f0cebb424437"
+      "size": 12244,
+      "sha256": "d864c3ed0e1c0486d64b805790b41bb2f88e49f3b1672c644b7f2fc1123d8b4f"
     }
   ],
   "memoryContract": {

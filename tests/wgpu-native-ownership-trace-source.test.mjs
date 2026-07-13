@@ -32,6 +32,7 @@ test("native ownership trace keeps a separate fixed ABI and explicit allocation 
   assert.doesNotMatch(ensureBody, /EM_ASM|postMessage/);
   assert.match(header, /u32 GetOwnershipTracePtr\(\) const/);
   assert.match(header, /u32 GetOwnershipTraceCapacity\(\) const/);
+  assert.match(source, /kOwnershipTraceCapacity = 131072/);
   assert.match(source, /m_trace_header->epoch\.store\(m_trace_epoch/);
 });
 

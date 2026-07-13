@@ -47,7 +47,11 @@ export function createWgpuOwnershipTrace({
   const recentLimit = clampRecentLimit(recentRecordLimit);
   const eventHistogram = new Float64Array(EVENT_HISTOGRAM_SIZE);
   const opcodeHistogram = new Float64Array(OPCODE_HISTOGRAM_SIZE);
-  const recentRecords = [];
+  const recentRecordWords = new Uint32Array(
+    recentLimit * WGPU_OWNERSHIP_TRACE_RECORD_WORDS
+  );
+  let recentRecordCount = 0;
+  let recentRecordWrite = 0;
   let requested = false;
   let active = false;
   let setterAvailable = false;
@@ -112,8 +116,10 @@ export function createWgpuOwnershipTrace({
     }
   }
 
-  function drain() {
-    if (!registered || !headerI32 || !recordsU32 || !descriptor) return [];
+  function drain({ collect = false } = {}) {
+    if (!registered || !headerI32 || !recordsU32 || !descriptor) {
+      return collect ? [] : 0;
+    }
     const write = atomicLoad(headerI32, 0);
     const read = atomicLoad(headerI32, 1);
     const headerCapacity = atomicLoad(headerI32, 2);
@@ -121,40 +127,40 @@ export function createWgpuOwnershipTrace({
     const nextEpoch = atomicLoad(headerI32, 4);
     if (headerCapacity !== descriptor.capacity) {
       return failHeader(
-        `ownership trace header capacity changed to ${headerCapacity}`
+        `ownership trace header capacity changed to ${headerCapacity}`,
+        collect
       );
     }
     const available = (write - read) >>> 0;
     if (available > descriptor.capacity) {
       return failHeader(
-        `ownership trace backlog ${available} exceeds capacity ${descriptor.capacity}`
+        `ownership trace backlog ${available} exceeds capacity ${descriptor.capacity}`,
+        collect
       );
     }
     epoch = nextEpoch;
     nativeDropped = dropped;
-    if (available === 0) return [];
+    if (available === 0) return collect ? [] : 0;
 
-    const drained = [];
+    const drained = collect ? [] : null;
     for (let offset = 0; offset < available; offset += 1) {
       const sequence = (read + offset) >>> 0;
       const slot = sequence % descriptor.capacity;
       const base = slot * WGPU_OWNERSHIP_TRACE_RECORD_WORDS;
-      const record = {
-        event: recordsU32[base] >>> 0,
-        epoch: recordsU32[base + 1] >>> 0,
-        transactionId: recordsU32[base + 2] >>> 0,
-        commandSerial: recordsU32[base + 3] >>> 0,
-        opcode: recordsU32[base + 4] >>> 0,
-        resourceId: recordsU32[base + 5] >>> 0,
-        payloadLength: recordsU32[base + 6] >>> 0,
-        auxiliary: recordsU32[base + 7] >>> 0,
-      };
+      const event = recordsU32[base] >>> 0;
+      const recordEpoch = recordsU32[base + 1] >>> 0;
+      const transactionId = recordsU32[base + 2] >>> 0;
+      const commandSerial = recordsU32[base + 3] >>> 0;
+      const opcode = recordsU32[base + 4] >>> 0;
+      const resourceId = recordsU32[base + 5] >>> 0;
+      const payloadLength = recordsU32[base + 6] >>> 0;
+      const auxiliary = recordsU32[base + 7] >>> 0;
       if (lastRecordEpoch == null) {
-        lastRecordEpoch = record.epoch;
-      } else if (record.epoch !== lastRecordEpoch) {
-        if (isMonotonicU32(lastRecordEpoch, record.epoch)) {
+        lastRecordEpoch = recordEpoch;
+      } else if (recordEpoch !== lastRecordEpoch) {
+        if (isMonotonicU32(lastRecordEpoch, recordEpoch)) {
           epochChangeCount += 1;
-          lastRecordEpoch = record.epoch;
+          lastRecordEpoch = recordEpoch;
           lastCommandSerial = null;
         } else {
           recordEpochMismatchCount += 1;
@@ -162,23 +168,43 @@ export function createWgpuOwnershipTrace({
       }
       if (
         lastCommandSerial != null &&
-        !isMonotonicU32(lastCommandSerial, record.commandSerial)
+        !isMonotonicU32(lastCommandSerial, commandSerial)
       ) {
         monotonicOrderingViolationCount += 1;
       }
-      lastCommandSerial = record.commandSerial;
-      if (record.event < EVENT_HISTOGRAM_SIZE) eventHistogram[record.event] += 1;
+      lastCommandSerial = commandSerial;
+      if (event < EVENT_HISTOGRAM_SIZE) eventHistogram[event] += 1;
       else eventOverflowCount += 1;
-      if (record.opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[record.opcode] += 1;
+      if (opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[opcode] += 1;
       else opcodeOverflowCount += 1;
       observedRecords += 1;
-      recentRecords.push(record);
-      if (recentRecords.length > recentLimit) recentRecords.shift();
-      drained.push(record);
+      const recentBase = recentRecordWrite * WGPU_OWNERSHIP_TRACE_RECORD_WORDS;
+      recentRecordWords[recentBase] = event;
+      recentRecordWords[recentBase + 1] = recordEpoch;
+      recentRecordWords[recentBase + 2] = transactionId;
+      recentRecordWords[recentBase + 3] = commandSerial;
+      recentRecordWords[recentBase + 4] = opcode;
+      recentRecordWords[recentBase + 5] = resourceId;
+      recentRecordWords[recentBase + 6] = payloadLength;
+      recentRecordWords[recentBase + 7] = auxiliary;
+      recentRecordWrite = (recentRecordWrite + 1) % recentLimit;
+      recentRecordCount = Math.min(recentLimit, recentRecordCount + 1);
+      if (collect) {
+        drained.push(recordFromWords(
+          event,
+          recordEpoch,
+          transactionId,
+          commandSerial,
+          opcode,
+          resourceId,
+          payloadLength,
+          auxiliary
+        ));
+      }
     }
     atomicStore(headerI32, 1, write);
     drainedBatches += 1;
-    return drained;
+    return collect ? drained : available;
   }
 
   function reset(kind = "reset") {
@@ -219,15 +245,20 @@ export function createWgpuOwnershipTrace({
       eventOverflowCount,
       opcodeOverflowCount,
       recentRecordLimit: recentLimit,
-      recentRecords: recentRecords.map((record) => ({ ...record })),
+      recentRecords: snapshotRecentRecords(
+        recentRecordWords,
+        recentRecordCount,
+        recentRecordWrite,
+        recentLimit
+      ),
       lastError,
     };
   }
 
-  function failHeader(message) {
+  function failHeader(message, collect = false) {
     malformedHeaderCount += 1;
     detach(message);
-    return [];
+    return collect ? [] : 0;
   }
 
   function detach(message = "") {
@@ -272,6 +303,48 @@ function validateDescriptor(value, heapBuffer) {
     throw new RangeError("ownership trace span exceeds the wasm heap");
   }
   return { ptr, capacity, headerWords, recordWords, schema };
+}
+
+function recordFromWords(
+  event,
+  epoch,
+  transactionId,
+  commandSerial,
+  opcode,
+  resourceId,
+  payloadLength,
+  auxiliary
+) {
+  return {
+    event,
+    epoch,
+    transactionId,
+    commandSerial,
+    opcode,
+    resourceId,
+    payloadLength,
+    auxiliary,
+  };
+}
+
+function snapshotRecentRecords(words, count, write, capacity) {
+  const records = [];
+  const first = (write - count + capacity) % capacity;
+  for (let offset = 0; offset < count; offset += 1) {
+    const slot = (first + offset) % capacity;
+    const base = slot * WGPU_OWNERSHIP_TRACE_RECORD_WORDS;
+    records.push(recordFromWords(
+      words[base] >>> 0,
+      words[base + 1] >>> 0,
+      words[base + 2] >>> 0,
+      words[base + 3] >>> 0,
+      words[base + 4] >>> 0,
+      words[base + 5] >>> 0,
+      words[base + 6] >>> 0,
+      words[base + 7] >>> 0
+    ));
+  }
+  return records;
 }
 
 function isMonotonicU32(previous, next) {
