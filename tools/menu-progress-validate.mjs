@@ -140,6 +140,7 @@ if (removedInheritedWgpuProbe) {
   );
 }
 url.searchParams.set("core", "upstream");
+if (process.env.CORE_ID) url.searchParams.set("coreid", process.env.CORE_ID);
 url.searchParams.set("video", videoMode);
 url.searchParams.set("cpu", process.env.CPU || "dual");
 // §28cx: honor a SPEED override so throughput A/Bs can run unthrottled
@@ -206,6 +207,7 @@ for (const [environmentName, queryName] of [
   ["WGPUUNIFORMFAST", "wgpuuniformfast"],
   ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
   ["WGPUOWNERSHIPTRACE", "wgpuownershiptrace"],
+  ["WGPUSEMANTIC", "wgpusemantic"],
   ["WGPUGEOMPACK", "wgpugeompack"],
   ["WGPUGEOMRANGE", "wgpugeomrange"],
   ["WGPUDETACHED", "wgpudetached"],

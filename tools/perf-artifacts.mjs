@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
+import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "./dolphin-provenance.mjs";
 import {
   WGPU_DRAW_PROFILE_PHASE_ORDER,
   WGPU_DRAW_PROFILE_PERIODS,
@@ -594,6 +595,13 @@ export function validateLockedBuildProvenance(provenance = {}) {
     (abiManifest?.sourceOnlyExportsPendingRebuild ?? []).length === 0,
     "locked.abiManifest.sourceOnlyExportsPendingRebuild must be empty for qualification"
   );
+  require(Array.isArray(abiManifest?.moduleExports), "locked.abiManifest.moduleExports");
+  for (const name of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    require(
+      abiManifest?.moduleExports?.includes(name),
+      `locked.abiManifest.moduleExports includes ${name}`
+    );
+  }
   exact(abiManifest?.upstreamCommit, sourceLock?.upstream?.commit, "locked.abiManifest.upstreamCommit");
   require(sha(String(abiManifest?.coreId || "").replace(/^sha256:/, "")), "locked.abiManifest.coreId");
   require(Array.isArray(abiManifest?.artifacts), "locked.abiManifest.artifacts");

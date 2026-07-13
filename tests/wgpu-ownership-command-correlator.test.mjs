@@ -186,7 +186,10 @@ test("fails closed on signature mismatches, trace drops, and serial gaps", () =>
   mismatch.correlator.pushLegacy([legacy({ opcode: 5, resourceId: 4 })]);
   mismatch.correlator.pushOwnership([command({ serial: 1, opcode: 7, resourceId: 4 })]);
   assert.equal(mismatch.events.length, 0);
-  assert.match(mismatch.correlator.snapshot().reasons[0], /opcode/);
+  assert.match(
+    mismatch.correlator.snapshot().reasons[0],
+    /mismatch at opcode 7, serial 1, legacy record 0: opcode 7 != 5/
+  );
 
   const dropped = fixture();
   dropped.correlator.pushOwnership([], { nativeDropped: 1 });

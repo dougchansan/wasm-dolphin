@@ -57,6 +57,11 @@ test("native ownership trace records transaction outcomes without widening repla
   assert.match(source, /OwnershipAttribution::Outside/);
   assert.match(source, /record\.resource_id = detail0/);
   assert.match(source, /record\.payload_length = detail1/);
+  assert.match(
+    source,
+    /case CmdOp::BeginPass:[\s\S]*?resource_id = rec\.arg\.u\[0\]/,
+    "BeginPass must correlate its framebuffer id with the legacy semantic decoder"
+  );
   assert.match(source, /publication << 8/);
   assert.match(source, /m_header->write\.store\(w \+ count, std::memory_order_release\)/);
 });

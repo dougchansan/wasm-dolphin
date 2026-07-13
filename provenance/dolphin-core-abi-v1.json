@@ -230,8 +230,8 @@
     {
       "path": "src/wgpu-ownership-command-correlator.js",
       "hashMode": "lf-normalized",
-      "size": 28856,
-      "sha256": "3ff83bd80dc1996958ebe4b0ff96686edb7e40134b7e9722fc340353ef2ea63b"
+      "size": 28991,
+      "sha256": "ef637851508339e8135b4e79ac150077faaa7322e2ee31bf96454713c17d2180"
     },
     {
       "path": "src/wgpu-resource-generation-tracker.js",
@@ -296,7 +296,10 @@
     "_SetWebGpuDrawProfileEnabled",
     "_SetWebGpuProducerProfileEnabled",
     "_SetWgpuDeepDiagnosticsEnabled",
-    "_SetWgpuIdleFifoTailElisionEnabled"
+    "_SetWgpuIdleFifoTailElisionEnabled",
+    "_SetWebGpuOwnershipTraceEnabled",
+    "_GetWebGpuOwnershipTracePtr",
+    "_GetWebGpuOwnershipTraceCapacity"
   ],
   "moduleExports": [
     "_AudioBuffer",

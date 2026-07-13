@@ -134,7 +134,7 @@ index 1464e57..3a3ffea 100644
  
  bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
  {
-@@ -74,6 +78,204 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+@@ -74,6 +78,205 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
    return true;
  }
  
@@ -300,6 +300,7 @@ index 1464e57..3a3ffea 100644
 +  case CmdOp::CreateBuffer:
 +  case CmdOp::CreateTexture:
 +  case CmdOp::CreateSampler:
++  case CmdOp::BeginPass:
 +  case CmdOp::SetPipeline:
 +  case CmdOp::SetIndexBuffer:
 +    resource_id = rec.arg.u[0];

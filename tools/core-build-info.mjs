@@ -4,7 +4,11 @@ import { basename, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadWasmToolchainLock, sha256File, sha256NormalizedTextFile } from "./wasm-toolchain.mjs";
-import { fileRecord, publicModuleExports } from "./dolphin-provenance.mjs";
+import {
+  fileRecord,
+  publicModuleExports,
+  REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
+} from "./dolphin-provenance.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -242,8 +246,12 @@ export function buildCandidateAbiManifest({ template, jsPath, wasmPath }) {
       logicalArtifact(findArtifact("dolphin-core-upstream.wasm"), "dolphin-core-upstream.wasm", wasm),
     ],
     contractSources,
-    sourceOnlyExportsPendingRebuild: (template.sourceOnlyExportsPendingRebuild || [])
-      .filter((name) => !moduleExports.includes(name)),
+    sourceOnlyExportsPendingRebuild: [
+      ...new Set([
+        ...(template.sourceOnlyExportsPendingRebuild || []),
+        ...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
+      ]),
+    ].filter((name) => !moduleExports.includes(name)),
     moduleExports,
   };
 }

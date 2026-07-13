@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "../tools/dolphin-provenance.mjs";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 import {
@@ -1293,6 +1294,18 @@ test("locked build provenance rejects valid-looking source, toolchain, and JS mu
   const pendingResult = validateLockedBuildProvenance(pendingRebuild);
   assert.equal(pendingResult.verified, false);
   assert.ok(pendingResult.failures.some((failure) => failure.includes("sourceOnlyExportsPendingRebuild")));
+
+  for (const requiredExport of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    const missingExport = structuredClone(provenance);
+    missingExport.locked.abiManifest.moduleExports =
+      missingExport.locked.abiManifest.moduleExports.filter((name) => name !== requiredExport);
+    const missingResult = validateLockedBuildProvenance(missingExport);
+    assert.equal(missingResult.verified, false);
+    assert.ok(
+      missingResult.failures.some((failure) => failure.includes(requiredExport)),
+      `${requiredExport} must be named in the qualification failure`
+    );
+  }
 });
 
 test("content-addressed candidate bundle may supply its generated ABI manifest", () => {
@@ -1994,6 +2007,7 @@ function validLockedBuildProvenance() {
     abiVersion: 1,
     coreId: `sha256:${hashes.wasm}`,
     upstreamCommit,
+    moduleExports: [...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS],
     artifacts: [
       {
         path: "cores/dolphin/dolphin-core-upstream.js",

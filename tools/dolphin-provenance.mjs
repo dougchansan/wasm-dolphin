@@ -13,6 +13,11 @@ import { join, relative, resolve, sep } from "node:path";
 export const SOURCE_LOCK_PATH = "provenance/dolphin-source.lock.json";
 export const CORE_ABI_PATH = "provenance/dolphin-core-abi-v1.json";
 export const VENDOR_SNAPSHOT_PATH = "provenance/dolphin-vendor-snapshot-v1.json";
+export const REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS = Object.freeze([
+  "_SetWebGpuOwnershipTraceEnabled",
+  "_GetWebGpuOwnershipTracePtr",
+  "_GetWebGpuOwnershipTraceCapacity",
+]);
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -1050,6 +1055,12 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
   );
   const sourceOnlyExports = manifest.sourceOnlyExportsPendingRebuild ?? [];
   invariant(Array.isArray(sourceOnlyExports), "Pending source-only exports must be an array");
+  for (const name of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    invariant(
+      actualExports.includes(name) || sourceOnlyExports.includes(name),
+      `Required Module export ${name} is neither built nor declared pending rebuild`
+    );
+  }
   const activePatchText = lock.patches
     .filter((entry) => entry.cwd === ".")
     .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))

@@ -22,6 +22,7 @@ import {
   gitBlobSha,
   loadSourceLock,
   patchSeriesDigest,
+  REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
   sha256Bytes,
   validateVendorSnapshotManifest,
   verifyCoreAbiManifest,
@@ -378,7 +379,19 @@ test("ABI verification rejects mutations to every declared contract", () => {
     [(manifest) => { manifest.upstreamCommit = "0".repeat(40); }, /upstream commit/],
     [(manifest) => { manifest.runtimeMethods.pop(); }, /runtime methods/],
     [(manifest) => { manifest.workerProtocol.requestTypes.pop(); }, /Worker protocol fields/],
-    [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/]
+    [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/],
+    [
+      (manifest) => {
+        manifest.moduleExports = manifest.moduleExports.filter(
+          (name) => name !== REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS[0]
+        );
+        manifest.sourceOnlyExportsPendingRebuild =
+          manifest.sourceOnlyExportsPendingRebuild.filter(
+            (name) => name !== REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS[0]
+          );
+      },
+      /neither built nor declared pending rebuild/
+    ]
   ];
   const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-contract-"));
   for (const [mutate, pattern] of mutations) {

@@ -11,6 +11,10 @@ const adapter = fs.readFileSync(
   new URL("../src/upstream-worker-adapter.js", import.meta.url),
   "utf8"
 );
+const harness = fs.readFileSync(
+  new URL("../tools/menu-progress-validate.mjs", import.meta.url),
+  "utf8"
+);
 
 test("wgpusemantic is default-off, hardware-only, metrics-only, and implies ownership tracing", () => {
   assert.match(host, /requestedWgpuSemanticRuntime\(window\.location\.search\)/);
@@ -19,6 +23,8 @@ test("wgpusemantic is default-off, hardware-only, metrics-only, and implies owne
   assert.match(adapter, /wgpuSemanticRuntime: this\.wgpuSemanticRuntime/);
   assert.match(worker, /wgpusemantic=1 requires metrics=1/);
   assert.match(worker, /wgpusemantic=1 requires video=wgpu/);
+  assert.match(harness, /process\.env\.CORE_ID.*"coreid"/);
+  assert.match(harness, /\["WGPUSEMANTIC", "wgpusemantic"\]/);
 });
 
 test("startup reset evidence is captured before trace attach and before backend activation", () => {

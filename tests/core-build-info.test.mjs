@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { compareCoreBuildInfo } from "../tools/compare-core-builds.mjs";
 import { buildCandidateAbiManifest, wasmSectionInfo } from "../tools/core-build-info.mjs";
+import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "../tools/dolphin-provenance.mjs";
 
 test("WASM build evidence hashes individual sections", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "wasm-build-info-"));
@@ -47,7 +48,10 @@ test("candidate ABI manifest is bound to candidate artifacts and exports", async
     assert.match(manifest.coreId, /^sha256:[0-9a-f]{64}$/);
     assert.notEqual(manifest.coreId, template.coreId);
     assert.deepEqual(manifest.moduleExports, ["_ExistingExport", "_NewExport"]);
-    assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, ["_StillMissing"]);
+    assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, [
+      "_StillMissing",
+      ...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
+    ]);
     assert.equal(manifest.artifacts[0].path, "cores/dolphin/dolphin-core-upstream.js");
     assert.equal(manifest.artifacts[0].size, Buffer.byteLength(normalizedGlue));
     assert.equal(manifest.artifacts[1].path, "cores/dolphin/dolphin-core-upstream.wasm");

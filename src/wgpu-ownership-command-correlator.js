@@ -464,7 +464,10 @@ export function createWgpuOwnershipCommandCorrelator({
       const actual = legacy[legacyRead];
       const mismatch = signatureMismatch(expected, actual);
       if (mismatch) {
-        fail(`ownership/legacy mismatch: ${mismatch}`);
+        fail(
+          `ownership/legacy mismatch at opcode ${expected.opcode}, ` +
+          `serial ${expected.commandSerial}, legacy record ${actual.recordIndex}: ${mismatch}`
+        );
         break;
       }
       publicationRead += 1;

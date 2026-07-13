@@ -5,6 +5,7 @@ import {
   inspectMemoryContract,
   loadSourceLock,
   publicModuleExports,
+  REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
   verifyCoreAbiManifest,
 } from "./dolphin-provenance.mjs";
 
@@ -75,8 +76,12 @@ const manifest = {
   contractSources,
   memoryContract,
   memoryContractStatus: memoryContractStatus(memoryContract),
-  sourceOnlyExportsPendingRebuild: (previous.sourceOnlyExportsPendingRebuild ?? [])
-    .filter((name) => !moduleExports.includes(name)),
+  sourceOnlyExportsPendingRebuild: [
+    ...new Set([
+      ...(previous.sourceOnlyExportsPendingRebuild ?? []),
+      ...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
+    ]),
+  ].filter((name) => !moduleExports.includes(name)),
   moduleExports,
   runtimeMethods,
 };
