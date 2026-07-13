@@ -27,6 +27,7 @@ export function createWgpuSemanticRuntime({
   let discardedPreparedRecordCount = 0;
   let retriedPreparedRecordCount = 0;
   let ownershipBatchCount = 0;
+  let failureOwnershipRecords = Object.freeze([]);
 
   const sink = enabled ? createWgpuSemanticParitySink({ now }) : null;
   const correlator = enabled ? createWgpuOwnershipCommandCorrelator({
@@ -39,7 +40,13 @@ export function createWgpuSemanticRuntime({
     ownershipBatchCount += 1;
     try {
       const paired = correlator.pushOwnership(records, health);
-      absorbCorrelatorFailure();
+      const correlatorState = correlator.snapshot();
+      if (correlatorState.failed && failureOwnershipRecords.length === 0) {
+        failureOwnershipRecords = Object.freeze(
+          records.slice(-64).map((record) => Object.freeze({ ...record }))
+        );
+      }
+      absorbCorrelatorFailure(correlatorState);
       return paired;
     } catch (error) {
       invalidate(`ownership ingestion failed: ${error?.message || error}`);
@@ -127,14 +134,14 @@ export function createWgpuSemanticRuntime({
       discardedPreparedRecordCount,
       retriedPreparedRecordCount,
       ownershipBatchCount,
+      failureOwnershipRecords,
       checkpoint,
       correlator: correlatorState,
       parity: sinkState,
     });
   }
 
-  function absorbCorrelatorFailure() {
-    const state = correlator.snapshot();
+  function absorbCorrelatorFailure(state = correlator.snapshot()) {
     if (!state.failed) return;
     failed = true;
     for (const reason of state.reasons) reasons.add(reason);

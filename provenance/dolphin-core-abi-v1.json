@@ -230,8 +230,8 @@
     {
       "path": "src/wgpu-ownership-command-correlator.js",
       "hashMode": "lf-normalized",
-      "size": 28991,
-      "sha256": "ef637851508339e8135b4e79ac150077faaa7322e2ee31bf96454713c17d2180"
+      "size": 29253,
+      "sha256": "8668424422a7f4217e6b458e100c1ebb6f02ce2cd852164e95b63eaee20627f5"
     },
     {
       "path": "src/wgpu-resource-generation-tracker.js",
@@ -260,8 +260,8 @@
     {
       "path": "src/wgpu-semantic-runtime.js",
       "hashMode": "lf-normalized",
-      "size": 4689,
-      "sha256": "245219ef3ded7510e57fb3a8fa553820983240981b07cc8648b5b75d32d91dc7"
+      "size": 5046,
+      "sha256": "065c215554ef9ac7ab9b4e186123aa1fbbe719c1389db2d3d02bc0e407a3ac77"
     }
   ],
   "memoryContract": {

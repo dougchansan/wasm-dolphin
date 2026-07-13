@@ -107,6 +107,28 @@ test("retry preparation is counted without becoming a permanent discard", () => 
   assert.equal(state.failed, false);
 });
 
+test("the first failing ownership batch remains available after later trace activity", () => {
+  const runtime = activeRuntime();
+  runtime.pushOwnership([ownership(WGPU_OWNERSHIP_EVENT.EPOCH, {
+    epoch: 1,
+    resourceId: 1,
+  })], healthy());
+  runtime.pushOwnership([
+    ownership(WGPU_OWNERSHIP_EVENT.PENDING_RESERVED, { transactionId: 1 }),
+    ownership(WGPU_OWNERSHIP_EVENT.PENDING_RESERVED, { transactionId: 1 }),
+  ], healthy());
+  runtime.pushOwnership([
+    ownership(WGPU_OWNERSHIP_EVENT.PENDING_RESERVED, { transactionId: 2 }),
+  ], healthy());
+  const state = runtime.snapshot();
+  assert.equal(state.failed, true);
+  assert.deepEqual(
+    state.failureOwnershipRecords.map((record) => record.transactionId),
+    [1, 1]
+  );
+  assert.match(state.reasons[0], /reserved=1, passBegan=0, completed=0/);
+});
+
 function activeRuntime() {
   return createWgpuSemanticRuntime({
     requested: true,

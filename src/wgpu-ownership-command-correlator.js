@@ -209,7 +209,12 @@ export function createWgpuOwnershipCommandCorrelator({
         if (transaction(record.transactionId).reserved ||
             transaction(record.transactionId).passBegan ||
             transaction(record.transactionId).completed) {
-          return fail(`duplicate or late pending reservation for transaction ${record.transactionId}`);
+          const state = transaction(record.transactionId);
+          return fail(
+            `duplicate or late pending reservation for transaction ${record.transactionId} ` +
+            `(serial=${record.commandSerial}, reserved=${Number(state.reserved)}, ` +
+            `passBegan=${Number(state.passBegan)}, completed=${Number(state.completed)})`
+          );
         }
         transaction(record.transactionId).reserved = true;
         return;

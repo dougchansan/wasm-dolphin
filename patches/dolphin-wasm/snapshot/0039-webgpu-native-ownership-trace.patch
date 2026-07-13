@@ -134,7 +134,7 @@ index 1464e57..3a3ffea 100644
  
  bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
  {
-@@ -74,6 +78,205 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+@@ -74,6 +78,206 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
    return true;
  }
  
@@ -191,7 +191,8 @@ index 1464e57..3a3ffea 100644
 +
 +void WebGPUCommandStream::BeginPendingOwnership()
 +{
-+  if (!m_trace_enabled.load(std::memory_order_acquire) || m_trace_pending_transaction != 0)
++  if (!m_trace_enabled.load(std::memory_order_acquire) || m_trace_pending_transaction != 0 ||
++      m_pass_staging || m_trace_active_transaction != 0)
 +    return;
 +  m_trace_pending_transaction = ++m_trace_transaction_serial;
 +  TraceEvent(OwnershipTraceEvent::PendingReserved);

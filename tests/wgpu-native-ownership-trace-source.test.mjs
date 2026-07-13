@@ -46,6 +46,11 @@ test("native ownership trace records transaction outcomes without widening repla
   assert.match(source, /BeginPendingOwnership\(\)/);
   assert.match(vertexManager, /CommitBuffer[\s\S]*?cs\.BeginPendingOwnership\(\)/);
   assert.match(source, /OwnershipTraceEvent::PendingReserved/);
+  assert.match(
+    source,
+    /BeginPendingOwnership\(\)[\s\S]*?m_pass_staging \|\| m_trace_active_transaction != 0/,
+    "an active pass must not reserve a mislabeled successor transaction"
+  );
   assert.match(source, /OwnershipTraceEvent::PassBegin/);
   assert.match(source, /OwnershipTraceEvent::Commit/);
   assert.match(source, /OwnershipTraceEvent::Abort/);
