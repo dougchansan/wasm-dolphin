@@ -9,13 +9,17 @@ fixed-work work reduced unrelated overhead and established a 73-76% visible
 baseline. Compiling high-volume CachedInterpreter diagnostic counters out of
 release WASM improved the balanced visible mean from 73.14% to 74.88%; a clean
 confirmation measured 76.10% visible and 78.84% with GPU replay drained. These
-figures are scene- and machine-specific, and the clean confirmations are single
-runs rather than a new balanced estimate.
+figures are scene- and machine-specific. Frequency-ordering the
+CachedInterpreter callback ladder then improved the eight-run null-drain mean
+from 77.22% to 80.12% and the four-run visible mean from 74.85% to 76.22%.
+Clean confirmations measured 80.45% null-drain and 77.32% visible. Single-run
+confirmations are not balanced estimates.
 
 The current core is content-addressed as
-`d2927ce6e1bd22b3d689fd81ca5a3c06c8b55acfb90ceaa9ee994c2a50cb3613`
+`fe4448a07a726b67c9b7bd73f2515118b353414a66ac48cc4b1cdd92fb42f2c8`
 (12,916,037 bytes). It was rebuilt from an empty build directory after replaying
-the complete patch lock. The earlier semantic capture below belongs to core
+the complete patch lock for the parent optimization, then reproduced by a full
+1,348-target rebuild after the dispatch-order change. The earlier semantic capture below belongs to core
 `6a2469a5...` and remains evidence for that captured applied-save prefix, not
 for general renderer correctness or the newer core.
 
@@ -33,11 +37,12 @@ No default rendering or JIT flag changed. Automated comparisons used
   125.6 GiB reported RAM; Radeon RX 9070 XT, driver `32.0.31021.5001`.
 - Browser: Chrome `143.0.7499.4`; WebGPU adapter reports AMD/RDNA 4.
 - Upstream Dolphin: `e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1`.
-- Accepted patch series: 43 patches, SHA-256
-  `341baabda6265498e01e4765fa7673d5781f3bc94a2ffd64eb4646e07aef5a56`,
-  result tree `ba8f5186a8b5c7b77919c571b8a0c17263ac91ed`.
+- Accepted patch series: 44 patches, SHA-256
+  `88c5929c7c95365ae251345f35a53e93ac9c8febcf1fc5bcc52f7597c9d122e1`,
+  result tree `4f1a43bf5fefa1aad727ed25c4c7e79f8321c9fc`.
 - Branch/commit after evidence integration:
-  `perf/cached-interpreter-hot-counter-compileout` / commit pending.
+  `perf/cached-interpreter-dispatch-order` / commit pending; parent hot-counter
+  change `a93026a43dd915839fa77a3f8a014307e8884118`.
 
 The hardware `visualFps=0` field is not a valid unique-image metric here: it
 still hashes the software XFB source. Browser canvas hashes changed on every
@@ -68,6 +73,33 @@ Raw reports are under
 The clean null-drain and visible report SHA-256 values are respectively
 `007a43c3e58504de922ba0627f9835b81d7ee0e1fd6607169c3ddca0c442b2aa`
 and `2ab2e4611a825ecafff47ae6de8fa7f456aeb43d690adeaae017d13b331abe12`.
+
+## CachedInterpreter frequency-ordered dispatch
+
+The direct callback ladder previously checked low-frequency system operations
+before the measured hot integer, branch, floating-point, and `bdnz` callbacks.
+The retained order keeps `Interpret<false>` first, then tests `FastInteger`,
+`FastBranch`, `FastFloat`, `FastBranchBdnz`, and `Interpret<true>` before the
+remaining system callbacks. Callback bodies and payload handling are identical
+between the candidate and compile-time rollback orders.
+
+| Screen | Reference mean | Candidate mean | Gain | Validity |
+| --- | ---: | ---: | ---: | --- |
+| Eight valid hardware null-drain ABBA/BAAB runs | 77.22% | 80.12% | +2.90 points / +3.76% | ABBA +3.30 points; BAAB +2.50 points; 0 runtime failures |
+| Four-run visible mapped WebGPU ABBA | 74.85% | 76.22% | +1.37 points / +1.82% | Every run valid; candidate had 16/17 changed/readable samples |
+| Clean-core null-drain confirmation | n/a | 80.45% | single run | Valid fixed work; production flags unchanged |
+| Clean-core visible confirmation | n/a | 77.32% | single run | 16/17 changed/readable samples; correct battle image; no WebGPU errors |
+
+Raw reports are under
+`.omx/wgpu-realtime-100/cached-interpreter-dispatch-order-null-drain-r2/`,
+`.omx/wgpu-realtime-100/cached-interpreter-dispatch-order-visible/`, and
+`.omx/wgpu-realtime-100/cached-interpreter-dispatch-order-clean-confirm/`.
+The clean null-drain and visible report SHA-256 values are respectively
+`7e04ec924bc6806a48d7a2881f5638c838c4ae28240289f14c21e213675f805b`
+and `31100ddfd49b4fcde66d437eca0bb30c9db03bd7a8c4ec130131719b14b02be1`.
+The 12,916,037-byte candidate reproduced SHA-256 `fe4448a07...` after a full
+1,348-target rebuild with the unchanged production compile flags. Define
+`DOLPHIN_WEB_HOT_DISPATCH_ORDER=0` externally to restore the legacy order.
 
 ## Reproducible candidate
 
