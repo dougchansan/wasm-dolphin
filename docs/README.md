@@ -1,5 +1,7 @@
 # Documentation
 
+- [Hardware WebGPU performance audit (2026-07-13)](performance-audit-2026-07-13.md) - applied-save semantic proof, reproducible candidate, current bottleneck classification, rejected refactors, and next optimization plan.
+- [Machine-readable applied-save and replay evidence](perf-results/melee-wgpu-applied-save-and-replay-2026-07-13.json) - content hashes, run statistics, comparison decisions, and evidence limitations.
 - [WGPU visible upload closure](perf-results/melee-wgpu-visible-upload-closure-2026-07-12.md) - corrected queue/mapped fairness failure, dense-UBO queue no-go, and the immutable pass-package next gate.
 - [WGPU pass-package projection](perf-results/melee-wgpu-pass-package-projection-2026-07-12.md) - passive direct-battle publication accounting, unresolved native ownership, observer-control limits, and the semantic-digest gate before runtime work.
 - [WGPU native ownership trace](perf-results/melee-wgpu-native-ownership-trace-2026-07-12.md) - zero-drop pending/active/outside attribution, upload ownership, observer limits, and the semantic-digest handoff.
