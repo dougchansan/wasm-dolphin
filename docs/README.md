@@ -1,6 +1,8 @@
 # Documentation
 
 - [Hardware WebGPU performance audit (2026-07-13)](performance-audit-2026-07-13.md) - applied-save semantic proof, reproducible candidate, current bottleneck classification, rejected refactors, and next optimization plan.
+- [Hardware-WGPU no-lag screening closure (2026-07-13)](perf-results/melee-wgpu-no-lag-screening-2026-07-13.md) - item 1–9 proofs, balanced screens, audible fairness evidence, and the no-promotion release decision.
+- [Machine-readable no-lag screening closure](perf-results/melee-wgpu-no-lag-screening-2026-07-13.json) - exact identities, effects, artifact hashes, and retained defaults.
 - [Machine-readable applied-save and replay evidence](perf-results/melee-wgpu-applied-save-and-replay-2026-07-13.json) - content hashes, run statistics, comparison decisions, and evidence limitations.
 - [WGPU visible upload closure](perf-results/melee-wgpu-visible-upload-closure-2026-07-12.md) - corrected queue/mapped fairness failure, dense-UBO queue no-go, and the immutable pass-package next gate.
 - [WGPU pass-package projection](perf-results/melee-wgpu-pass-package-projection-2026-07-12.md) - passive direct-battle publication accounting, unresolved native ownership, observer-control limits, and the semantic-digest gate before runtime work.
