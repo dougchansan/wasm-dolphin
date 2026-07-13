@@ -142,6 +142,8 @@
   repeated visible-output regression and full rollback of the candidate.
 - [WGPU staging record-merge screen](perf-results/melee-wgpu-record-merge-2026-07-13.md) —
   correct wrapper-free ordering, but only about 50 ms saved per fixed-work run.
+- [WGPU remap-completion wake screen](perf-results/melee-wgpu-remap-wake-2026-07-13.md) —
+  rejected immediate wakeups that doubled submissions and increased waits.
 
 Historical session notes under `patches/dolphin-wasm/` are research records,
 not the canonical user-facing reference. Prefer the documents above for the
