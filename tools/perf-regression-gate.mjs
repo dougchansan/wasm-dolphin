@@ -65,6 +65,10 @@ import {
   verifyFileFixture,
 } from "./perf-artifacts.mjs";
 import { buildPerfScenarioUrl } from "./benchmark-url.mjs";
+import {
+  launchWithWindowsCpuAffinity,
+  parseWindowsCpuAffinityMask,
+} from "./windows-process-affinity.mjs";
 
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
@@ -112,6 +116,7 @@ async function main() {
   const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
   const headed = process.env.PERF_PROBE_HEADED === "1";
   const audioMode = normalizePerfAudioMode(process.env.PERF_AUDIO_MODE);
+  const browserCpuAffinity = parseWindowsCpuAffinityMask(process.env.PERF_CPU_AFFINITY_MASK);
   const continueInvalidCheckpoint = process.env.PERF_CONTINUE_INVALID_CHECKPOINT === "1";
   const corePath = resolveCoreArtifactPath(root, baseUrl);
 
@@ -152,6 +157,7 @@ async function main() {
       durationSeconds,
       headed,
       audioMode,
+      browserCpuAffinity,
       inputMarkerTimeoutMs,
       inputMaxLatenessMs,
       outDir,
@@ -249,6 +255,14 @@ async function main() {
       sampleMs,
       settleSeconds,
       headed,
+      browserCpuAffinity: {
+        requestedMask: browserCpuAffinity.requestedMask,
+        enabled: browserCpuAffinity.enabled,
+        runs: execution.results.map((result) => ({
+          name: result.name,
+          ...result.browserCpuAffinity,
+        })),
+      },
       tolerance,
       strict,
       targetMode,
@@ -434,7 +448,11 @@ async function runScenario(scenario, context) {
   url.searchParams.set("probe", `${scenario.name}-${Date.now()}`);
 
   try {
-    browserLaunch = await launchBrowser(context.chromium, context.headed);
+    browserLaunch = await launchBrowser(
+      context.chromium,
+      context.headed,
+      context.browserCpuAffinity
+    );
     browser = browserLaunch.browser;
     page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const recordConsole = (scope, message) => {
@@ -490,6 +508,7 @@ async function runScenario(scenario, context) {
     manifest.browser.executablePath = browserLaunch.executablePath;
     manifest.browser.launchSource = browserLaunch.source;
     manifest.browser.launchArgs = browserLaunch.args;
+    manifest.browser.cpuAffinity = browserLaunch.cpuAffinity;
     manifest.benchmark.inputScriptMode = context.postLoadInputScript.length
       ? "post-load-only"
       : "none";
@@ -975,6 +994,15 @@ async function runScenario(scenario, context) {
     delivery: postLoadInputDelivery,
   };
   summary.audioMode = context.audioMode;
+  summary.browserCpuAffinity = browserLaunch?.cpuAffinity || {
+    enabled: context.browserCpuAffinity.enabled,
+    requested: context.browserCpuAffinity.enabled
+      ? { processId: process.pid, mask: context.browserCpuAffinity.requestedMask }
+      : null,
+    snapshot: null,
+    applied: null,
+    restored: null,
+  };
   summary.audioModeApplication = audioModeApplication;
   summary.audioClaimQualification = evaluateAudioClaimQualification({
     audioMode: context.audioMode,
@@ -1833,7 +1861,7 @@ async function readWebGpuAdapter(page) {
   });
 }
 
-async function launchBrowser(chromium, headed) {
+async function launchBrowser(chromium, headed, cpuAffinity) {
   const args = [
     "--autoplay-policy=no-user-gesture-required",
     "--enable-webgl",
@@ -1859,39 +1887,42 @@ async function launchBrowser(chromium, headed) {
     }
     args.push(`--use-webgpu-power-preference=${webGpuPowerOverride}`);
   }
-  const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
-  const configuredExecutable = process.env.BROWSER_EXECUTABLE
-    ? path.resolve(process.env.BROWSER_EXECUTABLE)
-    : findInstalledBrowserExecutable(requestedChannel);
-  if (configuredExecutable) {
-    try {
-      const browser = await chromium.launch({
-        executablePath: configuredExecutable,
-        headless: !headed,
-        args,
-      });
-      return {
-        browser,
-        requestedChannel,
-        actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
-        executablePath: configuredExecutable,
-        args: [...args],
-        source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
-      };
-    } catch (error) {
-      console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
+  const launched = await launchWithWindowsCpuAffinity(async () => {
+    const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
+    const configuredExecutable = process.env.BROWSER_EXECUTABLE
+      ? path.resolve(process.env.BROWSER_EXECUTABLE)
+      : findInstalledBrowserExecutable(requestedChannel);
+    if (configuredExecutable) {
+      try {
+        const browser = await chromium.launch({
+          executablePath: configuredExecutable,
+          headless: !headed,
+          args,
+        });
+        return {
+          browser,
+          requestedChannel,
+          actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
+          executablePath: configuredExecutable,
+          args: [...args],
+          source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
+        };
+      } catch (error) {
+        console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
+      }
     }
-  }
-  const executablePath = path.resolve(chromium.executablePath());
-  const browser = await chromium.launch({ executablePath, headless: !headed, args });
-  return {
-    browser,
-    requestedChannel,
-    actualChannel: "bundled-chromium",
-    executablePath,
-    args: [...args],
-    source: "playwright-bundled",
-  };
+    const executablePath = path.resolve(chromium.executablePath());
+    const browser = await chromium.launch({ executablePath, headless: !headed, args });
+    return {
+      browser,
+      requestedChannel,
+      actualChannel: "bundled-chromium",
+      executablePath,
+      args: [...args],
+      source: "playwright-bundled",
+    };
+  }, cpuAffinity);
+  return { ...launched.value, cpuAffinity: launched.cpuAffinity };
 }
 
 function findInstalledBrowserExecutable(channel) {
