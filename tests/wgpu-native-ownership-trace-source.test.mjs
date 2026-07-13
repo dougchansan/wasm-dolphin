@@ -44,6 +44,11 @@ test("native ownership trace keeps a separate fixed ABI and explicit allocation 
     source,
     /FinishOwnershipTraceCapture\(\)[\s\S]*?OwnershipTraceEvent::CaptureEnd[\s\S]*?m_trace_capture_waiting_ack\.store[\s\S]*?m_trace_enabled\.store\(false/
   );
+  assert.match(
+    source,
+    /load_requests != 0[\s\S]*?m_pass_staging[\s\S]*?m_trace_pending_boundaries\.fetch_add[\s\S]*?return;[\s\S]*?OwnershipTraceEvent::LoadRequested/,
+    "a load boundary must wait until the current ownership transaction is quiescent"
+  );
   assert.match(source, /Push\(const CmdRecord& rec\)[\s\S]*?WaitForOwnershipTraceCaptureAck\(\)/);
   assert.match(source, /PushBatch\([\s\S]*?WaitForOwnershipTraceCaptureAck\(\)/);
 });
@@ -83,7 +88,7 @@ test("native ownership trace records transaction outcomes without widening repla
   assert.match(source, /m_header->write\.store\(w \+ count, std::memory_order_release\)/);
 });
 
-test("save-state wrappers publish a deferred ownership load-request epoch", async () => {
+test("the applied save callback publishes the ownership epoch before GPU wake", async () => {
   const [wrapper, gfx, cmake] = await Promise.all([
     read("core/upstream/dolphin_web_core.cpp"),
     read("vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp"),
@@ -96,9 +101,28 @@ test("save-state wrappers publish a deferred ownership load-request epoch", asyn
   assert.match(gfx, /GetWebGpuOwnershipTraceCapacity\(\)/);
   assert.match(gfx, /NotifyWebGpuOwnershipTraceLoadRequested\(\)/);
   assert.equal(
-    wrapper.match(/^  NotifyWebGpuOwnershipTraceLoadRequested\(\);/gm)?.length,
-    2,
-    "slot and file state loads must both mark the native trace"
+    wrapper.match(/^    NotifyWebGpuOwnershipTraceLoadRequested\(\);/gm)?.length,
+    1
+  );
+  const callback = wrapper.indexOf("State::SetOnAfterLoadCallback");
+  const checkpoint = wrapper.indexOf(
+    "s_last_loaded_checkpoint_generation.fetch_add",
+    callback
+  );
+  const ownershipBoundary = wrapper.indexOf(
+    "NotifyWebGpuOwnershipTraceLoadRequested();",
+    callback
+  );
+  const gpuWake = wrapper.indexOf("fifo.EmulatorState(true)", callback);
+  assert.ok(
+    callback >= 0 && checkpoint > callback && ownershipBoundary > checkpoint &&
+      gpuWake > ownershipBoundary,
+    "the load checkpoint must become visible before the trace boundary and GPU wake"
+  );
+  const loadEntryPoints = wrapper.slice(wrapper.indexOf("int LoadCoreState"));
+  assert.doesNotMatch(
+    loadEntryPoints,
+    /NotifyWebGpuOwnershipTraceLoadRequested\(\);[\s\S]*?State::Load/
   );
   assert.match(cmake, /'_SetWebGpuOwnershipTraceEnabled'/);
   assert.match(cmake, /'_AcknowledgeWebGpuOwnershipTraceCapture'/);
@@ -108,9 +132,10 @@ test("save-state wrappers publish a deferred ownership load-request epoch", asyn
 });
 
 test("locked native ownership patch replays the source contract", async () => {
-  const patch = await read(
-    "patches/dolphin-wasm/snapshot/0039-webgpu-native-ownership-trace.patch"
-  );
+  const [patch, appliedBoundaryPatch] = await Promise.all([
+    read("patches/dolphin-wasm/snapshot/0039-webgpu-native-ownership-trace.patch"),
+    read("patches/dolphin-wasm/snapshot/0040-webgpu-applied-load-boundary.patch"),
+  ]);
   assert.match(patch, /OwnershipTraceHeader/);
   assert.match(patch, /ownership trace header must stay 20 bytes/);
   assert.match(patch, /SetWebGpuOwnershipTraceEnabled/);
@@ -119,4 +144,6 @@ test("locked native ownership patch replays the source contract", async () => {
   assert.match(patch, /GetWebGpuOwnershipTracePtr/);
   assert.match(patch, /GetWebGpuOwnershipTraceCapacity/);
   assert.match(patch, /LoadRequested/);
+  assert.match(appliedBoundaryPatch, /m_trace_pending_boundaries\.fetch_add/);
+  assert.match(appliedBoundaryPatch, /m_pass_staging/);
 });

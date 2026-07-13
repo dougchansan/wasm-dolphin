@@ -141,7 +141,7 @@ export function createWgpuOwnershipTrace({
     }
   }
 
-  function drain({ collect = false } = {}) {
+  function drain({ collect = false, stopAfterEvent = null } = {}) {
     if (!registered || !headerI32 || !recordsU32 || !descriptor) {
       return collect ? [] : 0;
     }
@@ -167,7 +167,11 @@ export function createWgpuOwnershipTrace({
     nativeDropped = dropped;
     if (available === 0) return collect ? [] : 0;
 
+    const terminalEvent = stopAfterEvent == null
+      ? null
+      : validateEventCode(stopAfterEvent, "stopAfterEvent");
     const drained = collect ? [] : null;
+    let drainedCount = 0;
     for (let offset = 0; offset < available; offset += 1) {
       const sequence = (read + offset) >>> 0;
       const slot = sequence % descriptor.capacity;
@@ -237,10 +241,12 @@ export function createWgpuOwnershipTrace({
           auxiliary
         ));
       }
+      drainedCount += 1;
+      if (terminalEvent != null && event === terminalEvent) break;
     }
-    atomicStore(headerI32, 1, write);
+    atomicStore(headerI32, 1, (read + drainedCount) >>> 0);
     drainedBatches += 1;
-    return collect ? drained : available;
+    return collect ? drained : drainedCount;
   }
 
   function reset(kind = "reset") {
@@ -410,4 +416,12 @@ function clampRecentLimit(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_RECENT_RECORD_LIMIT;
   return Math.min(MAX_RECENT_RECORD_LIMIT, Math.max(1, Math.floor(number)));
+}
+
+function validateEventCode(value, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > 0xffff_ffff) {
+    throw new RangeError(`${name} must be a u32`);
+  }
+  return number >>> 0;
 }

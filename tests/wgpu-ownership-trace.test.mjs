@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  WGPU_OWNERSHIP_EVENT,
   WGPU_OWNERSHIP_TRACE_HEADER_WORDS,
   WGPU_OWNERSHIP_TRACE_RECORD_WORDS,
   WGPU_OWNERSHIP_TRACE_SCHEMA,
@@ -53,6 +54,33 @@ test("decoder drains wrapped records and publishes the read cursor", () => {
   assert.deepEqual(records.map((record) => record.commandSerial), [20, 20, 21]);
   assert.equal(fixture.header[1], 6);
   assert.equal(trace.snapshot().observedRecords, 3);
+});
+
+test("decoder can fence ownership at a load boundary without consuming its suffix", () => {
+  const fixture = makeRing(8, { write: 4, epoch: 2 });
+  writeRecord(fixture, 0, [1, 1, 0, 0, 0, 1, 0, 0]);
+  writeRecord(fixture, 1, [2, 1, 1, 1, 5, 7, 0, 1]);
+  writeRecord(fixture, 2, [WGPU_OWNERSHIP_EVENT.LOAD_REQUESTED, 2, 0, 1, 0, 1, 1, 0]);
+  writeRecord(fixture, 3, [2, 2, 2, 2, 5, 8, 0, 1]);
+  const trace = createWgpuOwnershipTrace();
+  trace.attach(fixture.descriptor, fixture.buffer);
+
+  const prefix = trace.drain({
+    collect: true,
+    stopAfterEvent: WGPU_OWNERSHIP_EVENT.LOAD_REQUESTED,
+  });
+  assert.deepEqual(prefix.map((record) => record.event), [
+    WGPU_OWNERSHIP_EVENT.EPOCH,
+    WGPU_OWNERSHIP_EVENT.COMMAND,
+    WGPU_OWNERSHIP_EVENT.LOAD_REQUESTED,
+  ]);
+  assert.equal(fixture.header[1], 3);
+  assert.equal(trace.snapshot().backlog, 1);
+
+  const suffix = trace.drain({ collect: true });
+  assert.equal(suffix.length, 1);
+  assert.equal(suffix[0].resourceId, 8);
+  assert.equal(fixture.header[1], 4);
 });
 
 test("decoder carries native dropped count and resets ordering at an epoch boundary", () => {

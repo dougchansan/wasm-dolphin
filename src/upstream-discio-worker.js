@@ -77,6 +77,7 @@ import {
 import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
 import {
+  WGPU_OWNERSHIP_EVENT,
   attachWgpuOwnershipTraceFromApi,
   createWgpuOwnershipTrace
 } from "./wgpu-ownership-trace.js";
@@ -5794,9 +5795,16 @@ function ensureWgpuMappedStagingPool(device) {
 function drainWgpuSemanticOwnership() {
   if (!wgpuOwnershipTraceActive) return 0;
   if (!wgpuSemanticRuntimeActive) return wgpuOwnershipTrace.drain();
-  if (!wgpuSemanticRuntime.captureControl().open) return 0;
-  const records = wgpuOwnershipTrace.drain({ collect: true });
-  wgpuSemanticRuntime.pushOwnership(records, wgpuOwnershipTrace.snapshot());
+  if (!wgpuSemanticRuntime.isOpen() ||
+      !wgpuSemanticRuntime.canDrainOwnership()) return 0;
+  const loadedCheckpointGeneration = readLastLoadedCheckpoint().generation;
+  const records = wgpuOwnershipTrace.drain({
+    collect: true,
+    stopAfterEvent: WGPU_OWNERSHIP_EVENT.LOAD_REQUESTED,
+  });
+  wgpuSemanticRuntime.pushOwnership(records, wgpuOwnershipTrace.snapshot(), {
+    loadedCheckpointGeneration,
+  });
   return records.length;
 }
 
@@ -5805,10 +5813,12 @@ function advanceWgpuSemanticCapture(ring, read) {
   drainWgpuSemanticOwnership();
   const ownershipHealth = wgpuOwnershipTrace.snapshot();
   const write = Atomics.load(ring.headerI32, 0) >>> 0;
+  const loadedCheckpointGeneration = readLastLoadedCheckpoint().generation;
   if (wgpuSemanticRuntime.maybeRequestCaptureEnd({
     commandRingRead: read,
     commandRingWrite: write,
     ownershipHealth,
+    loadedCheckpointGeneration,
   })) {
     try {
       api.setWebGpuOwnershipTraceEnabled(0);
@@ -5823,6 +5833,7 @@ function advanceWgpuSemanticCapture(ring, read) {
     commandRingRead: read,
     commandRingWrite: write,
     ownershipHealth,
+    loadedCheckpointGeneration,
   });
   if (!frozen) return;
   if (!api.acknowledgeWebGpuOwnershipTraceCapture(frozen.captureId)) {
@@ -7576,7 +7587,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       ? retainedSemanticPayload.subarray(0, u32[recWord + 4])
       : retainedSemanticPayload;
     const preparedSemanticRecord = wgpuSemanticRuntimeActive &&
-        wgpuSemanticRuntime.captureControl().open
+        wgpuSemanticRuntime.isOpen()
       ? wgpuSemanticRuntime.prepareLegacy(
           u32.subarray(recWord, recWord + 8),
           heap,
@@ -9369,7 +9380,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     if (causalMetricsEnabled) {
       wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
     }
-    if (wgpuSemanticRuntimeActive && wgpuSemanticRuntime.captureControl().open) {
+    if (wgpuSemanticRuntimeActive && wgpuSemanticRuntime.isOpen()) {
       if (replayRecordAccepted && !wgpuReplayFatal && !mappedCapacityHold) {
         wgpuSemanticRuntime.acceptPrepared(preparedSemanticRecord, read);
       } else if (mappedCapacityHold && !wgpuReplayFatal) {

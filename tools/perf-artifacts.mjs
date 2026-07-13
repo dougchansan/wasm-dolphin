@@ -1799,6 +1799,90 @@ export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {})
   return { required: true, expectedActive, enabled, available, failures };
 }
 
+export function evaluateWgpuSemanticQualificationEvidence({
+  requested,
+  telemetry,
+  loadedCheckpointGeneration,
+} = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive) {
+    if (String(requested) !== "0") {
+      failures.push(`wgpusemantic=${requested} is unsupported`);
+    }
+    return { required: false, expectedActive, failures };
+  }
+
+  const semantic = telemetry?.semanticRuntime;
+  const currentLoadedGeneration = Number(loadedCheckpointGeneration);
+  const capturedLoadedGeneration = Number(semantic?.loadedCheckpointGeneration);
+  const loadEpochCount = Number(semantic?.loadEpochCount);
+  const currentEpochCommittedEventCount = Number(
+    semantic?.currentEpochCommittedEventCount
+  );
+  const minimumCommittedEventCount = Number(semantic?.minimumCommittedEventCount);
+
+  if (semantic?.requested !== true || semantic?.active !== true) {
+    failures.push("WGPU semantic runtime was not active when requested");
+  }
+  if (semantic?.captureComplete !== true) {
+    failures.push("WGPU semantic capture did not complete");
+  }
+  if (semantic?.evidenceValid !== true || semantic?.failed === true) {
+    failures.push("WGPU semantic capture evidence is invalid");
+  }
+  if (!Number.isSafeInteger(currentLoadedGeneration) || currentLoadedGeneration < 1) {
+    failures.push("WGPU semantic qualification has no loaded core checkpoint");
+  }
+  if (!Number.isSafeInteger(capturedLoadedGeneration) || capturedLoadedGeneration < 1) {
+    failures.push("WGPU semantic capture did not record a loaded checkpoint generation");
+  } else if (
+    Number.isSafeInteger(currentLoadedGeneration) &&
+    currentLoadedGeneration >= 1 &&
+    capturedLoadedGeneration !== currentLoadedGeneration
+  ) {
+    failures.push(
+      `WGPU semantic checkpoint generation mismatch: capture=${capturedLoadedGeneration} ` +
+      `current=${currentLoadedGeneration}`
+    );
+  }
+  if (!Number.isSafeInteger(loadEpochCount) || loadEpochCount < 1) {
+    failures.push(
+      `WGPU semantic capture observed no load epoch: loadEpochCount=${
+        Number.isFinite(loadEpochCount) ? loadEpochCount : "unavailable"
+      }`
+    );
+  }
+  if (
+    !Number.isSafeInteger(minimumCommittedEventCount) ||
+    minimumCommittedEventCount < 1 ||
+    !Number.isSafeInteger(currentEpochCommittedEventCount) ||
+    currentEpochCommittedEventCount < minimumCommittedEventCount
+  ) {
+    failures.push(
+      `WGPU semantic current epoch is below its committed-event minimum: ` +
+      `current=${Number.isFinite(currentEpochCommittedEventCount)
+        ? currentEpochCommittedEventCount
+        : "unavailable"} ` +
+      `minimum=${Number.isFinite(minimumCommittedEventCount)
+        ? minimumCommittedEventCount
+        : "unavailable"}`
+    );
+  }
+  if (semantic?.qualificationReady !== true) {
+    failures.push("WGPU semantic post-load qualification is not ready");
+  }
+
+  return {
+    required: true,
+    expectedActive,
+    semantic,
+    loadedCheckpointGeneration: currentLoadedGeneration,
+    failures,
+  };
+}
+
 export function parseWgpuTailGateStats(text = "") {
   const parsed = parseTailGateWire(text);
   if (!parsed) return null;

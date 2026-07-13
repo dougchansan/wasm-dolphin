@@ -25,6 +25,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuSemanticQualificationEvidence,
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
@@ -1176,6 +1177,12 @@ function summarizeScenario(
     requested: scenario.params?.wgpugeomrange,
     telemetry: final.causalTelemetry?.webgpu,
   }).failures);
+  failures.push(...evaluateWgpuSemanticQualificationEvidence({
+    requested: scenario.params?.wgpusemantic,
+    telemetry: final.causalTelemetry?.webgpu,
+    loadedCheckpointGeneration:
+      final.causalTelemetry?.core?.loadedCheckpointGeneration,
+  }).failures);
   failures.push(...evaluateWgpuRendererWorkerProbeEvidence({
     requested: scenario.params?.wgpurenderprobe,
     telemetry: final.causalTelemetry?.webgpu,
@@ -1245,7 +1252,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

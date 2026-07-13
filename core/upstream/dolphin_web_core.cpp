@@ -599,6 +599,10 @@ void EnsureRuntime()
                                    std::memory_order_relaxed);
     s_last_loaded_ppc_pc.store(system.GetPPCState().pc, std::memory_order_relaxed);
     s_last_loaded_checkpoint_generation.fetch_add(1, std::memory_order_release);
+    // Publish the semantic epoch only after State::Load has applied and the
+    // checkpoint is observable. The GPU wake below then guarantees that the
+    // first producer command in the new epoch belongs to the restored state.
+    NotifyWebGpuOwnershipTraceLoadRequested();
     // §27b disambiguator: which pthread runs the after-load callback
     // (= the LoadAsFromCore context)? Compare to the long-lived CPU
     // pthread tid ([s27-GPB]) and GPU pthread tid ([s27-gate]). A
@@ -957,7 +961,6 @@ int LoadCoreState(int slot)
   if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
     return 0;
 
-  NotifyWebGpuOwnershipTraceLoadRequested();
   State::Load(Core::System::GetInstance(), slot);
   Core::HostDispatchJobs(Core::System::GetInstance());
   s_core_status = "Load state requested";
@@ -976,7 +979,6 @@ int LoadStateFile(const char* path)
       !Core::IsRunning(Core::System::GetInstance()))
     return 0;
 
-  NotifyWebGpuOwnershipTraceLoadRequested();
   State::LoadAs(Core::System::GetInstance(), std::string(path));
   Core::HostDispatchJobs(Core::System::GetInstance());
   s_core_status = "Load state from file requested";

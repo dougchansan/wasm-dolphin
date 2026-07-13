@@ -1,0 +1,21 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -208,10 +208,15 @@ void WebGPUCommandStream::PublishPendingTraceBoundaries()
+     TraceEventRaw(OwnershipTraceEvent::Epoch, 0, kOwnershipTraceVersion, 0);
+   }
+   const u32 load_requests = pending / kTraceLoadRequestIncrement;
++  if (load_requests != 0 &&
++      (m_trace_pending_transaction != 0 || m_pass_staging || m_trace_active_transaction != 0))
++  {
++    m_trace_pending_boundaries.fetch_add(load_requests * kTraceLoadRequestIncrement,
++                                         std::memory_order_release);
++    return;
++  }
+   for (u32 index = 0; index < load_requests; ++index)
+   {
+-    if (m_trace_pending_transaction != 0 || m_trace_active_transaction != 0)
+-      TraceEventRaw(OwnershipTraceEvent::Abort, 0, 0, 3);
+     m_trace_pending_transaction = 0;
+     m_trace_active_transaction = 0;
+     ++m_trace_epoch;

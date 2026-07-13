@@ -23,6 +23,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuSemanticQualificationEvidence,
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
@@ -394,6 +395,59 @@ test("geometry range evidence requires both activation and the producer ABI", ()
     requested: "1",
     telemetry: null,
   }).failures[0], /active=unavailable/);
+});
+
+test("WGPU semantic qualification requires complete post-load evidence", () => {
+  const validTelemetry = {
+    semanticRuntime: {
+      requested: true,
+      active: true,
+      failed: false,
+      evidenceValid: true,
+      captureComplete: true,
+      loadedCheckpointGeneration: 3,
+      loadEpochCount: 1,
+      currentEpochCommittedEventCount: 128,
+      minimumCommittedEventCount: 128,
+      qualificationReady: true,
+    },
+  };
+  assert.deepEqual(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 3,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuSemanticQualificationEvidence({
+    requested: "0",
+  }).failures, []);
+
+  for (const [label, update, expected] of [
+    ["capture", { captureComplete: false }, /capture did not complete/],
+    ["validity", { evidenceValid: false }, /evidence is invalid/],
+    ["load epoch", { loadEpochCount: 0 }, /observed no load epoch/],
+    ["current epoch", { currentEpochCommittedEventCount: 127 }, /below its committed-event minimum/],
+    ["qualification", { qualificationReady: false }, /qualification is not ready/],
+  ]) {
+    const result = evaluateWgpuSemanticQualificationEvidence({
+      requested: "1",
+      telemetry: {
+        semanticRuntime: { ...validTelemetry.semanticRuntime, ...update },
+      },
+      loadedCheckpointGeneration: 3,
+    });
+    assert.match(result.failures.join("\n"), expected, label);
+  }
+
+  assert.match(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 0,
+  }).failures.join("\n"), /no loaded core checkpoint/);
+  assert.match(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 4,
+  }).failures.join("\n"), /checkpoint generation mismatch/);
 });
 
 test("renderer worker canary evidence requires the nested-worker schema", () => {

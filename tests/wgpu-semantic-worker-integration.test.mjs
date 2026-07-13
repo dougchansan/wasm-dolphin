@@ -15,6 +15,10 @@ const harness = fs.readFileSync(
   new URL("../tools/menu-progress-validate.mjs", import.meta.url),
   "utf8"
 );
+const perfGate = fs.readFileSync(
+  new URL("../tools/perf-regression-gate.mjs", import.meta.url),
+  "utf8"
+);
 
 test("wgpusemantic is default-off, hardware-only, metrics-only, and implies ownership tracing", () => {
   assert.match(host, /requestedWgpuSemanticRuntime\(window\.location\.search\)/);
@@ -93,5 +97,24 @@ test("bounded capture freezes at the published cutoff before releasing the produ
   assert.ok(acknowledge > freeze);
   assert.match(helper, /commandRingRead: read/);
   assert.match(helper, /commandRingWrite: write/);
+  assert.match(
+    helper,
+    /const loadedCheckpointGeneration = readLastLoadedCheckpoint\(\)\.generation/
+  );
+  assert.equal(
+    helper.match(/loadedCheckpointGeneration,/g)?.length,
+    2,
+    "capture stop and freeze must both qualify the current loaded checkpoint"
+  );
   assert.match(worker, /wgpusemantic=1 requires AcknowledgeWebGpuOwnershipTraceCapture/);
+});
+
+test("the perf gate qualifies requested semantic evidence after the loaded checkpoint", () => {
+  assert.match(perfGate, /scenario\.params\?\.wgpusemantic/);
+  assert.match(perfGate, /evaluateWgpuSemanticQualificationEvidence/);
+  assert.match(
+    perfGate,
+    /final\.causalTelemetry\?\.core\?\.loadedCheckpointGeneration/
+  );
+  assert.match(perfGate, /"wgpusemantic"/);
 });

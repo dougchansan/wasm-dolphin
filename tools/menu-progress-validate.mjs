@@ -207,6 +207,7 @@ for (const [environmentName, queryName] of [
   ["WGPUPUMP", "wgpupump"],
   ["WGPUSTATECACHE", "wgpustatecache"],
   ["WGPUUBOCACHE", "wgpuubocache"],
+  ["WGPUUBOPACK", "wgpuubopack"],
   ["WGPUUBOMETRICS", "wgpuubometrics"],
   ["WGPUUNIFORMFAST", "wgpuuniformfast"],
   ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
@@ -474,6 +475,116 @@ try {
   console.log(`[menu-progress] mounting ROM…`);
   await waitForMount(page);
   bootMarks.mountComplete = Date.now() - bootT0;
+
+  const loadConfiguredSaveState = async (elapsed) => {
+    saveStateDone = true;
+    let readiness = null;
+    let pauseResponse = null;
+    let resumeResponse = null;
+    let paused = false;
+    // The deterministic direct-save path uses the same pause/load/resume
+    // barrier as the perf gate. Pausing prevents boot commands from racing the
+    // applied-state ownership boundary while State::LoadAs runs.
+    if (elapsed <= 0) {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        readiness = await page.evaluate(() => {
+          const info = window.__lastFrameInfo || {};
+          return {
+            frame: Number(info.frame) || 0,
+            coreTicks: Number(info.coreTicks) || 0,
+            running: Boolean(info.running),
+          };
+        });
+        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
+        await page.waitForTimeout(250);
+      }
+      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
+        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
+      }
+      pauseResponse = await requestWorkerRpc(
+        page,
+        "validationSetCorePaused",
+        { paused: true }
+      );
+      if (!pauseResponse?.paused || pauseResponse?.coreStateName !== "Paused") {
+        throw new Error(
+          `Core did not pause before direct save load: ${JSON.stringify(pauseResponse)}`
+        );
+      }
+      paused = true;
+    }
+    console.log(
+      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
+    );
+    try {
+      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
+      if (!response?.loaded) {
+        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
+      }
+      if (paused) {
+        resumeResponse = await requestWorkerRpc(
+          page,
+          "validationSetCorePaused",
+          { paused: false }
+        );
+        paused = false;
+        if (resumeResponse?.coreStateName !== "Running") {
+          throw new Error(
+            `Core did not resume after direct save load: ${JSON.stringify(resumeResponse)}`
+          );
+        }
+        await page.evaluate(() => {
+          window.__host?.adapter?.onStatus?.("Save state loaded (Running)");
+        });
+      }
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: true,
+        readiness,
+        pauseResponse,
+        resumeResponse,
+        response,
+      };
+      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
+      milestoneLog.push({
+        t: elapsed.toFixed(1),
+        event: "save-state-loaded",
+        response,
+      });
+    } catch (error) {
+      if (paused) {
+        try {
+          resumeResponse = await requestWorkerRpc(
+            page,
+            "validationSetCorePaused",
+            { paused: false }
+          );
+        } catch {
+          // Preserve the original load error. The run already fails closed.
+        }
+      }
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: false,
+        readiness,
+        pauseResponse,
+        resumeResponse,
+        error: error?.message || String(error),
+      };
+      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
+      throw error;
+    }
+    await page.waitForTimeout(1500);
+    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+  };
+
+  // SAVE_STATE_AT=0 bypasses menu navigation and character select. Load the
+  // Kirby-vs-Link fixture before first-visible and audio sampling so the
+  // headed run begins at the battle rather than presenting boot/menu output.
+  if (saveStateUrl && saveStateAt <= 0) {
+    await loadConfiguredSaveState(0);
+  }
+
   // First-visible-content milestone: poll the canvas hash once a second
   // until we see something other than the all-zeros boot frame. This
   // captures "time-to-first-pixels", separate from "core mounted".
@@ -589,69 +700,6 @@ try {
 
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
-
-  const loadConfiguredSaveState = async (elapsed) => {
-    saveStateDone = true;
-    let readiness = null;
-    // A mounted worker can still report Dolphin's state as Starting on slower
-    // presenter paths. Loading during that window returns rc=0. Wait for a
-    // small amount of real core-frame progress before transferring the state.
-    if (elapsed <= 0) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        readiness = await page.evaluate(() => {
-          const info = window.__lastFrameInfo || {};
-          return {
-            frame: Number(info.frame) || 0,
-            coreTicks: Number(info.coreTicks) || 0,
-            running: Boolean(info.running),
-          };
-        });
-        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
-        await page.waitForTimeout(250);
-      }
-      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
-        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
-      }
-    }
-    console.log(
-      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
-    );
-    try {
-      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
-      saveStateLoadResult = {
-        attemptedAtSeconds: Number(elapsed.toFixed(3)),
-        loaded: Boolean(response?.loaded),
-        readiness,
-        response,
-      };
-      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
-      if (!response?.loaded) {
-        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
-      }
-      milestoneLog.push({
-        t: elapsed.toFixed(1),
-        event: "save-state-loaded",
-        response,
-      });
-    } catch (error) {
-      saveStateLoadResult = {
-        attemptedAtSeconds: Number(elapsed.toFixed(3)),
-        loaded: false,
-        error: error?.message || String(error),
-      };
-      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
-      throw error;
-    }
-    await page.waitForTimeout(1500);
-    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
-  };
-
-  // SAVE_STATE_AT=0 is the deterministic battle-benchmark path: mount the
-  // core, load the state immediately, let it settle, then start the timed
-  // sampling window. Menu navigation and character selection are bypassed.
-  if (saveStateUrl && saveStateAt <= 0) {
-    await loadConfiguredSaveState(0);
-  }
 
   const startedAt = Date.now();
   const totalSamples = Math.ceil((durationSeconds * 1000) / sampleMs);
@@ -1469,6 +1517,36 @@ async function waitForMount(page) {
     await page.waitForTimeout(1000);
   }
   throw new Error("Timed out waiting for Dolphin mount");
+}
+
+async function requestWorkerRpc(page, type, payload = {}) {
+  const configured = Number(process.env.MENU_WORKER_RPC_TIMEOUT_MS || 30000);
+  const timeoutMs = Number.isFinite(configured) && configured >= 1000
+    ? configured
+    : 30000;
+  return page.evaluate(async ({ type, payload, timeoutMs }) => {
+    const adapter = window.__host?.adapter;
+    if (!adapter?.request) {
+      throw new Error(`Active adapter does not expose worker RPC ${type}`);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Worker RPC ${type} timed out after ${timeoutMs} ms`)),
+        timeoutMs
+      );
+      Promise.resolve(adapter.request(type, payload)).then(
+        (value) => {
+          clearTimeout(timer);
+          adapter.applyFrame?.(value);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }, { type, payload, timeoutMs });
 }
 
 async function readSample(page, elapsedSeconds) {

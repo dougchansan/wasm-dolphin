@@ -17,6 +17,14 @@ test("performance validation fails closed when the requested UBO packet mode is 
   assert.match(gate, /WGPU UBO pack mismatch: requested=/);
 });
 
+test("the direct validation harness forwards the requested UBO packet mode", async () => {
+  const harness = await readFile(
+    new URL("../tools/menu-progress-validate.mjs", import.meta.url),
+    "utf8"
+  );
+  assert.match(harness, /\["WGPUUBOPACK", "wgpuubopack"\]/);
+});
+
 test("performance validation fails closed when guarded uniform fast mode is inactive", async () => {
   const gate = await readFile(
     new URL("../tools/perf-regression-gate.mjs", import.meta.url),
