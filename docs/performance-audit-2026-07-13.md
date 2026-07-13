@@ -3,20 +3,21 @@
 ## Outcome
 
 Headed/operator validation reports a changing Melee battle image from the true
-hardware WebGPU path, but it is not close to full speed on the validation
-machine. Muted direct-loaded Kirby-versus-Link comparison screens currently
-run at roughly 47-53% game speed and 20-21 presentation FPS; headed audible
-validations measured 39-50% game speed. Command replay and buffer upload volume
-are major measured pressures. This package does not independently exclude
-browser or GPU presentation cost.
+hardware WebGPU path, but it is not yet full speed on the validation machine.
+The original captures in this document ran at roughly 47-53% game speed. Later
+fixed-work work reduced unrelated overhead and established a 73-76% visible
+baseline. Compiling high-volume CachedInterpreter diagnostic counters out of
+release WASM improved the balanced visible mean from 73.14% to 74.88%; a clean
+confirmation measured 76.10% visible and 78.84% with GPU replay drained. These
+figures are scene- and machine-specific, and the clean confirmations are single
+runs rather than a new balanced estimate.
 
-The accepted core candidate is content-addressed as
-`6a2469a532d205640d6631dfbbebeed71e3a994753b4b76171a5f1d5fac71a7d`
-(12,914,873 bytes). Two independent builds matched exactly at the WASM and
-normalized-JS levels. A post-load semantic capture paired all 25,481 ownership
-records with no drop, mismatch, unresolved dependency, open transaction, or
-abort. This proves the captured applied-save prefix, not general renderer
-correctness.
+The current core is content-addressed as
+`d2927ce6e1bd22b3d689fd81ca5a3c06c8b55acfb90ceaa9ee994c2a50cb3613`
+(12,916,037 bytes). It was rebuilt from an empty build directory after replaying
+the complete patch lock. The earlier semantic capture below belongs to core
+`6a2469a5...` and remains evidence for that captured applied-save prefix, not
+for general renderer correctness or the newer core.
 
 No default rendering or JIT flag changed. Automated comparisons used
 `AUDIO_MODE=muted`; the separate headed validation used
@@ -32,17 +33,41 @@ No default rendering or JIT flag changed. Automated comparisons used
   125.6 GiB reported RAM; Radeon RX 9070 XT, driver `32.0.31021.5001`.
 - Browser: Chrome `143.0.7499.4`; WebGPU adapter reports AMD/RDNA 4.
 - Upstream Dolphin: `e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1`.
-- Accepted patch series: 42 patches, SHA-256
-  `35e5aa5492d88e433fbba3e36475fd928f58d737038d6fa426576fa2724c78f3`,
-  result tree `657e4ef3bd496fa4f5997f1685fe9bb904cba41b`.
+- Accepted patch series: 43 patches, SHA-256
+  `341baabda6265498e01e4765fa7673d5781f3bc94a2ffd64eb4646e07aef5a56`,
+  result tree `ba8f5186a8b5c7b77919c571b8a0c17263ac91ed`.
 - Branch/commit after evidence integration:
-  `perf/wgpu-semantic-digest` / `e53d17b3aade75feb8a3baaf9de8b118c2f145f0`.
+  `perf/cached-interpreter-hot-counter-compileout` / commit pending.
 
 The hardware `visualFps=0` field is not a valid unique-image metric here: it
 still hashes the software XFB source. Browser canvas hashes changed on every
 sample in the headed run (61/61), which proves changing presentation but does
 not provide a calibrated hardware unique-FPS rate or independently prove the
 scene identity. Battle-image identity is operator validation.
+
+## CachedInterpreter hot-counter compile-out
+
+The direct-save scene executed at least 2.602 billion telemetry-only counter
+writes per 12 emulated seconds even with `ppcprof=0`. Release builds now use
+`DOLPHIN_WEB_HOT_COUNTERS=0`, which removes those writes at compile time while
+preserving JIT engagement/failure metrics and the Melee idle-loop counters used
+by throttle behavior. Browser helper telemetry explicitly reports
+`hotcounts:off`.
+
+| Screen | Reference mean | Candidate mean | Gain | Validity |
+| --- | ---: | ---: | ---: | --- |
+| Eight-run hardware null-drain ABBA/BAAB | 75.12% | 76.99% | +1.87 points / +2.49% | Both blocks and all four pairs positive; 0 runtime failures |
+| Four-run visible mapped WebGPU ABBA | 73.14% | 74.88% | +1.73 points / +2.37% | Every run had 17 changed and 18 readable samples; correct battle image |
+| Clean-core null-drain confirmation | n/a | 78.84% | single run | Valid fixed work; `hotcounts:off` |
+| Clean-core visible confirmation | n/a | 76.10% | single run | 16 changed samples; correct battle image; no WebGPU errors |
+
+Raw reports are under
+`.omx/wgpu-realtime-100/cached-interpreter-hot-counter-null-drain/`,
+`.omx/wgpu-realtime-100/cached-interpreter-hot-counter-visible/`, and
+`.omx/wgpu-realtime-100/cached-interpreter-hot-counter-clean-confirm/`.
+The clean null-drain and visible report SHA-256 values are respectively
+`007a43c3e58504de922ba0627f9835b81d7ee0e1fd6607169c3ddca0c442b2aa`
+and `2ab2e4611a825ecafff47ae6de8fa7f456aeb43d690adeaae017d13b331abe12`.
 
 ## Reproducible candidate
 

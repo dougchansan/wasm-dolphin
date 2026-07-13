@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:2576faf651de4dd6cd9677e2770c6285271e63ceb30e39489b978f9b43bab245",
+  "coreId": "sha256:d2927ce6e1bd22b3d689fd81ca5a3c06c8b55acfb90ceaa9ee994c2a50cb3613",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 263858,
-      "sha256": "ceda63f22527297af8b51f5b63e52b9b65824f4e1dccdcced68dce3ec0ce45ba"
+      "size": 265140,
+      "sha256": "e94adaa822bbb265ffadae8da40cedcf0bb7d8bbff7b06dc319f5c8e42cbe1b2"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12893772,
-      "sha256": "2576faf651de4dd6cd9677e2770c6285271e63ceb30e39489b978f9b43bab245"
+      "size": 12916037,
+      "sha256": "d2927ce6e1bd22b3d689fd81ca5a3c06c8b55acfb90ceaa9ee994c2a50cb3613"
     }
   ],
   "contractSources": [
@@ -165,7 +165,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "3102b1bcdaba0770748dae0e11cf69314b16797d0c5d2b2f378655ab2e3c23b9"
+      "sha256": "a4c322e60516695084ac498aa23d1e82ef394b848c0839b6c882b7e421b69c66"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
@@ -296,19 +296,9 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [
-    "_RunWebGpuVertexManagerGeometryRangeSmoke",
-    "_SetWebGpuGeometryRangeEnabled",
-    "_SetWebGpuDrawProfileEnabled",
-    "_SetWebGpuProducerProfileEnabled",
-    "_SetWgpuDeepDiagnosticsEnabled",
-    "_SetWgpuIdleFifoTailElisionEnabled",
-    "_SetWebGpuOwnershipTraceEnabled",
-    "_GetWebGpuOwnershipTracePtr",
-    "_GetWebGpuOwnershipTraceCapacity",
-    "_AcknowledgeWebGpuOwnershipTraceCapture"
-  ],
+  "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
+    "_AcknowledgeWebGpuOwnershipTraceCapture",
     "_AudioBuffer",
     "_AudioBufferFrames",
     "_AudioChannels",
@@ -370,6 +360,8 @@
     "_GetVideoStats",
     "_GetWebGpuCommandStreamGeometrySmokeError",
     "_GetWebGpuDenseUboSmokeError",
+    "_GetWebGpuOwnershipTraceCapacity",
+    "_GetWebGpuOwnershipTracePtr",
     "_GetWebGpuStateCacheStats",
     "_GetWebGpuVertexManagerGeometrySmokeError",
     "_LoadCoreState",
@@ -399,6 +391,7 @@
     "_RunWebGpuDenseUboRollbackSmoke",
     "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
     "_RunWebGpuVertexManagerGeometryParitySmoke",
+    "_RunWebGpuVertexManagerGeometryRangeSmoke",
     "_RunWebGpuVertexManagerGeometryRollbackSmoke",
     "_SaveCoreState",
     "_SaveState",
@@ -419,11 +412,17 @@
     "_SetSoftwareRasterProfileEnabled",
     "_SetSoftwareTevHotCaseMode",
     "_SetVideoBackend",
+    "_SetWebGpuDrawProfileEnabled",
     "_SetWebGpuGeometryPackEnabled",
+    "_SetWebGpuGeometryRangeEnabled",
+    "_SetWebGpuOwnershipTraceEnabled",
+    "_SetWebGpuProducerProfileEnabled",
     "_SetWebGpuStateCacheEnabled",
     "_SetWebGpuUboCacheEnabled",
     "_SetWebGpuUboPackEnabled",
     "_SetWebGpuUploadArenaMiB",
+    "_SetWgpuDeepDiagnosticsEnabled",
+    "_SetWgpuIdleFifoTailElisionEnabled",
     "_SetXfbFastPaths",
     "_StopCore",
     "_TestDcbxLoopPattern",

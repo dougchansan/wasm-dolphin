@@ -291,7 +291,7 @@ function createDependentLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 42);
+  assert.equal(result.patches.count, 43);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
   assert.equal(result.vendorSnapshot.rootPaths, 108);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
@@ -390,7 +390,7 @@ test("ABI verification rejects mutations to every declared contract", () => {
             (name) => name !== REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS[0]
           );
       },
-      /neither built nor declared pending rebuild/
+      /Generated core Module exports do not match ABI v1/
     ]
   ];
   const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-contract-"));

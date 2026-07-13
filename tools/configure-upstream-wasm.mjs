@@ -66,7 +66,7 @@ if (!existsSync(resolvedNagaLibrary)) {
 // flags so subprojects that replace their Release flags still retain LTO, but
 // make try_compile use Debug and append overrides that disable optimization
 // and LTO for probes only. Clang/Emscripten honors the last -O*/-f*lto option.
-const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0";
+const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0 -DDOLPHIN_WEB_HOT_COUNTERS=0";
 const wasmDebugProbeFlags = "-O0 -fno-lto";
 const cmakeArgs = [
   cmake,

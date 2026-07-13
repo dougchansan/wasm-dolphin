@@ -1,0 +1,437 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index bf2ce5b6cf..f82426f62c 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -54,6 +54,23 @@
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+ 
++#ifndef DOLPHIN_WEB_HOT_COUNTERS
++#define DOLPHIN_WEB_HOT_COUNTERS 1
++#endif
++
++#if DOLPHIN_WEB_HOT_COUNTERS
++#define DOLPHIN_WEB_HOT_COUNT(statement) \
++  do                                         \
++  {                                          \
++    statement;                               \
++  } while (false)
++#else
++#define DOLPHIN_WEB_HOT_COUNT(statement) \
++  do                                         \
++  {                                          \
++  } while (false)
++#endif
++
+ #ifdef __clang__
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wmissing-variable-declarations"
+@@ -288,8 +305,10 @@ u64 s_fmh_fire_fast = 0;
+ u64 s_fmh_fire_slow = 0;
+ // §28bz audit: §28bt re-dispatch chain depth. entry = outer for(;;) iterations,
+ // iter = continue-edges taken inside the redispatch branch. avg depth = 1 + iter/entry.
++#if DOLPHIN_WEB_HOT_COUNTERS
+ u32 s_wasm_redispatch_entry_count = 0;
+ u32 s_wasm_redispatch_iter_count = 0;
++#endif
+ // §28cd spike audit: WebAssembly.Module()/Instance() synchronous wall time
+ // on the pthread CPU loop. Atomic because the EM_JS compile path runs on
+ // the CPU pthread while GetPpcWasmHelperStats may be called from main.
+@@ -7697,7 +7716,7 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+   }
+ #endif
+ #ifdef __EMSCRIPTEN__
+-  ++s_wasm_redispatch_entry_count;
++  DOLPHIN_WEB_HOT_COUNT(++s_wasm_redispatch_entry_count);
+ #endif
+   for (;;)
+   {
+@@ -7849,7 +7868,7 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+         Jit(m_ppc_state.pc);
+         return;
+       }
+-      ++s_wasm_redispatch_iter_count;
++      DOLPHIN_WEB_HOT_COUNT(++s_wasm_redispatch_iter_count);
+       normal_entry = next;
+       continue;
+     }
+@@ -8713,9 +8732,9 @@ s32 CachedInterpreter::FastSystemNoop(PowerPC::PowerPCState& ppc_state,
+   (void)ppc_state;
+   const UGeckoInstruction inst = operands.inst;
+   if (inst.OPCD == 19)
+-    ++s_fast_system_isync_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_system_isync_ops);
+   else
+-    ++s_fast_system_sync_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_system_sync_ops);
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -8789,13 +8808,13 @@ static bool TryFastRamWordLoadStore(Core::System& system, PowerPC::PowerPCState&
+     }
+ 
+     if (inst.OPCD == 32)
+-      ++s_fast_word_mem_lwz_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_lwz_ops);
+     else if (inst.OPCD == 33)
+-      ++s_fast_word_mem_lwzu_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_lwzu_ops);
+     else if (inst.SUBOP10 == 23)
+-      ++s_fast_word_mem_lwzx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_lwzx_ops);
+     else
+-      ++s_fast_word_mem_lwzux_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_lwzux_ops);
+   }
+   else
+   {
+@@ -8808,16 +8827,16 @@ static bool TryFastRamWordLoadStore(Core::System& system, PowerPC::PowerPCState&
+       ppc_state.gpr[inst.RA] = address;
+ 
+     if (inst.OPCD == 36)
+-      ++s_fast_word_mem_stw_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_stw_ops);
+     else if (inst.OPCD == 37)
+-      ++s_fast_word_mem_stwu_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_stwu_ops);
+     else if (inst.SUBOP10 == 151)
+-      ++s_fast_word_mem_stwx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_stwx_ops);
+     else
+-      ++s_fast_word_mem_stwux_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_stwux_ops);
+   }
+ 
+-  ++s_fast_word_mem_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_word_mem_ops);
+   return true;
+ }
+ 
+@@ -8865,7 +8884,7 @@ static bool TryFastRamByteHalfLoadStore(Core::System& system, PowerPC::PowerPCSt
+       if (update)
+         ppc_state.gpr[inst.RA] = address;
+     }
+-    ++s_fast_byte_mem_load_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_byte_mem_load_ops);
+   }
+   else if (store_byte)
+   {
+@@ -8876,7 +8895,7 @@ static bool TryFastRamByteHalfLoadStore(Core::System& system, PowerPC::PowerPCSt
+ 
+     if ((ppc_state.Exceptions & EXCEPTION_DSI) == 0 && update)
+       ppc_state.gpr[inst.RA] = address;
+-    ++s_fast_byte_mem_store_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_byte_mem_store_ops);
+   }
+   else if (load_half)
+   {
+@@ -8891,7 +8910,7 @@ static bool TryFastRamByteHalfLoadStore(Core::System& system, PowerPC::PowerPCSt
+       if (update)
+         ppc_state.gpr[inst.RA] = address;
+     }
+-    ++s_fast_half_mem_load_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_half_mem_load_ops);
+   }
+   else
+   {
+@@ -8902,10 +8921,10 @@ static bool TryFastRamByteHalfLoadStore(Core::System& system, PowerPC::PowerPCSt
+ 
+     if ((ppc_state.Exceptions & EXCEPTION_DSI) == 0 && update)
+       ppc_state.gpr[inst.RA] = address;
+-    ++s_fast_half_mem_store_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_half_mem_store_ops);
+   }
+ 
+-  ++s_fast_byte_half_mem_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_byte_half_mem_ops);
+   return true;
+ }
+ 
+@@ -8954,7 +8973,7 @@ static bool TryFastRamMultiwordLoadStore(Core::System& system, PowerPC::PowerPCS
+     }
+   }
+ 
+-  ++s_fast_multiword_mem_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_multiword_mem_ops);
+   return true;
+ }
+ 
+@@ -8992,7 +9011,7 @@ s32 CachedInterpreter::FastBranch(PowerPC::PowerPCState& ppc_state,
+       ppc_state.npc = destination_addr;
+     }
+ 
+-    ++s_fast_branch_bcx_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bcx_ops);
+     break;
+   }
+   case 18:  // bx
+@@ -9005,7 +9024,7 @@ s32 CachedInterpreter::FastBranch(PowerPC::PowerPCState& ppc_state,
+       destination_addr += current_pc;
+     ppc_state.npc = destination_addr;
+ 
+-    ++s_fast_branch_bx_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bx_ops);
+     break;
+   }
+   case 19:
+@@ -9025,7 +9044,7 @@ s32 CachedInterpreter::FastBranch(PowerPC::PowerPCState& ppc_state,
+           LR(ppc_state) = current_pc + 4;
+       }
+ 
+-      ++s_fast_branch_bclrx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bclrx_ops);
+     }
+     else if (inst.SUBOP10 == 528)  // bcctrx
+     {
+@@ -9039,14 +9058,14 @@ s32 CachedInterpreter::FastBranch(PowerPC::PowerPCState& ppc_state,
+           LR(ppc_state) = current_pc + 4;
+       }
+ 
+-      ++s_fast_branch_bcctrx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bcctrx_ops);
+     }
+     break;
+   default:
+     break;
+   }
+ 
+-  ++s_fast_branch_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_ops);
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -9061,9 +9080,9 @@ s32 CachedInterpreter::FastBranchBdnz(PowerPC::PowerPCState& ppc_state,
+   else
+     ppc_state.npc = current_pc + 4;
+ 
+-  ++s_fast_branch_bcx_ops;
+-  ++s_fast_branch_bdnz_ops;
+-  ++s_fast_branch_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bcx_ops);
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_bdnz_ops);
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_branch_ops);
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -9076,7 +9095,7 @@ s32 CachedInterpreter::FastInteger(PowerPC::PowerPCState& ppc_state,
+   case 7:  // mulli
+     ppc_state.gpr[inst.RD] =
+         static_cast<u32>(static_cast<s32>(ppc_state.gpr[inst.RA]) * inst.SIMM_16);
+-    ++s_fast_integer_mulli_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_integer_mulli_ops);
+     break;
+   case 8:  // subfic
+   {
+@@ -9084,7 +9103,7 @@ s32 CachedInterpreter::FastInteger(PowerPC::PowerPCState& ppc_state,
+     const u32 immediate = static_cast<u32>(static_cast<s32>(inst.SIMM_16));
+     ppc_state.gpr[inst.RD] = immediate - lhs;
+     ppc_state.SetCarry(immediate >= lhs);
+-    ++s_fast_integer_subfic_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_integer_subfic_ops);
+     break;
+   }
+   case 10:  // cmpli
+@@ -9104,11 +9123,11 @@ s32 CachedInterpreter::FastInteger(PowerPC::PowerPCState& ppc_state,
+     if (inst.OPCD == 13)
+     {
+       FastUpdateCR0(ppc_state, result);
+-      ++s_fast_integer_addic_rc_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_integer_addic_rc_ops);
+     }
+     else
+     {
+-      ++s_fast_integer_addic_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_integer_addic_ops);
+     }
+     break;
+   }
+@@ -9297,16 +9316,16 @@ static bool TryFastRamFloatLoadStore(Core::System& system, PowerPC::PowerPCState
+       ppc_state.ps[inst.FD].Fill(ConvertToDouble(value));
+ 
+     if (indexed)
+-      ++s_fast_float_lfsx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_lfsx_ops);
+     else
+-      ++s_fast_float_lfs_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_lfs_ops);
+   }
+   else if (load_double)
+   {
+     const u64 value = in_ram ? ReadRamU64BE(ram, offset) : system.GetMMU().Read<u64>(address);
+     if ((ppc_state.Exceptions & EXCEPTION_DSI) == 0)
+       ppc_state.ps[inst.FD].SetPS0(value);
+-    ++s_fast_float_lfd_ops;
++    DOLPHIN_WEB_HOT_COUNT(++s_fast_float_lfd_ops);
+   }
+   else
+   {
+@@ -9319,11 +9338,11 @@ static bool TryFastRamFloatLoadStore(Core::System& system, PowerPC::PowerPCState
+       system.GetMMU().Write<u32>(value, address);
+ 
+     if (store_integer_word)
+-      ++s_fast_float_stfiwx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_stfiwx_ops);
+     else if (indexed)
+-      ++s_fast_float_stfsx_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_stfsx_ops);
+     else
+-      ++s_fast_float_stfs_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_stfs_ops);
+   }
+ 
+   return true;
+@@ -9336,7 +9355,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+   if (!FastCheckFpuAvailable(ppc_state, power_pc, current_pc))
+     return 0;
+ 
+-  ++s_fast_float_ops;
++  DOLPHIN_WEB_HOT_COUNT(++s_fast_float_ops);
+ 
+   switch (inst.OPCD)
+   {
+@@ -9367,9 +9386,9 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         ppc_state.ps[inst.FD].Fill(result);
+         ppc_state.UpdateFPRFSingle(result);
+         if (add)
+-          ++s_fast_float_simple_fadds_ops;
++          DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fadds_ops);
+         else
+-          ++s_fast_float_simple_fsubs_ops;
++          DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fsubs_ops);
+       }
+       else
+       {
+@@ -9385,9 +9404,9 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+       }
+ 
+       if (add)
+-        ++s_fast_float_fadds_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fadds_ops);
+       else
+-        ++s_fast_float_fsubs_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fsubs_ops);
+     }
+     else if (inst.SUBOP5 == 25)  // fmulsx
+     {
+@@ -9405,7 +9424,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         ppc_state.fpscr.FI = 0;
+         ppc_state.fpscr.FR = 0;
+         ppc_state.UpdateFPRFSingle(result);
+-        ++s_fast_float_simple_fmuls_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fmuls_ops);
+       }
+       else
+       {
+@@ -9422,7 +9441,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         }
+       }
+ 
+-      ++s_fast_float_fmuls_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fmuls_ops);
+     }
+     else if (inst.SUBOP5 == 29)  // fmaddsx
+     {
+@@ -9443,7 +9462,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         ppc_state.fpscr.FI = product != result;
+         ppc_state.fpscr.FR = 0;
+         ppc_state.UpdateFPRFSingle(result);
+-        ++s_fast_float_simple_fmadds_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fmadds_ops);
+       }
+       else
+       {
+@@ -9460,7 +9479,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         }
+       }
+ 
+-      ++s_fast_float_fmadds_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fmadds_ops);
+     }
+     else if (inst.SUBOP5 == 30)  // fnmsubsx
+     {
+@@ -9480,7 +9499,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         const float result = std::isnan(tmp) ? tmp : -tmp;
+         ppc_state.ps[inst.FD].Fill(result);
+         ppc_state.UpdateFPRFSingle(result);
+-        ++s_fast_float_simple_fnmsubs_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fnmsubs_ops);
+       }
+       else
+       {
+@@ -9496,7 +9515,7 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         }
+       }
+ 
+-      ++s_fast_float_fnmsubs_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fnmsubs_ops);
+     }
+     break;
+   case 63:
+@@ -9523,19 +9542,19 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+         if (value == 0 && std::signbit(b))
+           result |= 0x100000000ull;
+         ppc_state.ps[inst.FD].SetPS0(result);
+-        ++s_fast_float_simple_fctiwz_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_simple_fctiwz_ops);
+       }
+       else
+       {
+         Interpreter::fctiwzx(Core::System::GetInstance().GetInterpreter(), inst);
+       }
+ 
+-      ++s_fast_float_fctiwz_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fctiwz_ops);
+     }
+     else if (inst.SUBOP10 == 72)  // fmrx
+     {
+       ppc_state.ps[inst.FD].SetPS0(ppc_state.ps[inst.FB].PS0AsU64());
+-      ++s_fast_float_fmr_ops;
++      DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fmr_ops);
+     }
+     else if (inst.SUBOP10 == 40 || inst.SUBOP10 == 136 || inst.SUBOP10 == 264)
+     {
+@@ -9543,17 +9562,17 @@ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+       if (inst.SUBOP10 == 40)  // fnegx
+       {
+         value ^= UINT64_C(1) << 63;
+-        ++s_fast_float_fneg_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fneg_ops);
+       }
+       else if (inst.SUBOP10 == 136)  // fnabsx
+       {
+         value |= UINT64_C(1) << 63;
+-        ++s_fast_float_fnabs_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fnabs_ops);
+       }
+       else  // fabsx
+       {
+         value &= ~(UINT64_C(1) << 63);
+-        ++s_fast_float_fabs_ops;
++        DOLPHIN_WEB_HOT_COUNT(++s_fast_float_fabs_ops);
+       }
+       ppc_state.ps[inst.FD].SetPS0(value);
+     }
+@@ -10999,6 +11018,7 @@ extern "C" const char* GetPpcWasmHelperStats()
+ 
+   std::ostringstream out;
+   out << (s_wasm_jit_direct_only ? "tier:guarded " : "tier:mixed ");
++  out << "hotcounts:" << (DOLPHIN_WEB_HOT_COUNTERS ? "on " : "off ");
+   const u32 average_prefix =
+       s_wasm_block_attempt_count == 0 ? 0 : s_wasm_prefix_instruction_sum / s_wasm_block_attempt_count;
+   out << "jit attempts:" << s_wasm_block_attempt_count
+@@ -11027,12 +11047,14 @@ extern "C" const char* GetPpcWasmHelperStats()
+       << "statei64:" << s_wasm_emit_state_load_i64_count << "ld/"
+       << s_wasm_emit_state_store_i64_count << "st ";
+   // §28bz audit: §28bt re-dispatch chain depth. Avg chain length = 1 + iter/entry.
++#if DOLPHIN_WEB_HOT_COUNTERS
+   const u32 entries_for_avg = std::max<u32>(s_wasm_redispatch_entry_count, 1);
+   // u64 cast: iter * 100 can overflow u32 at long runs (728M × 100 > 4.29B).
+   const u32 chain_depth_x100 = static_cast<u32>(
+       100u + (static_cast<u64>(s_wasm_redispatch_iter_count) * 100u) / entries_for_avg);
+   out << "redispatch:" << s_wasm_redispatch_entry_count << "ent/"
+       << s_wasm_redispatch_iter_count << "iter(avgx100:" << chain_depth_x100 << ") ";
++#endif
+   // §28cd spike audit: WebAssembly.Module + Instance synchronous wall time on
+   // the pthread CPU loop. Module = full JIT compile, Instance = link/instantiate.
+   // Both block the game loop. Hits/misses tell us cache effectiveness.
+
