@@ -367,7 +367,11 @@ export function createWgpuResourceGenerationTracker({
       dependencyCount,
       maxTrackedResources: resourceLimit,
       maxDependencyPayloadBytes: payloadLimit,
+      // WDS2 can encode these ordered annotations, but an independent package
+      // decoder and a boundary-aware runtime adapter still do not exist.
+      dependencyEncodingAvailable: true,
       dependencyEncodingReady: false,
+      independentDependencyDecodingReady: false,
       runtimeIntegrationReady: false,
       committedTransactionCount,
       abortedTransactionCount,

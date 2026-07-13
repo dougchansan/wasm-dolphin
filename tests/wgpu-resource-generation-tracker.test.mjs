@@ -11,6 +11,7 @@ import {
   WGPU_RESOURCE_GENERATION_TRACKER_SCHEMA,
   createWgpuResourceGenerationTracker,
 } from "../src/wgpu-resource-generation-tracker.js";
+import { encodeWgpuSemanticEventV2 } from "../src/wgpu-semantic-digest.js";
 
 const EMPTY = new Uint8Array(0);
 
@@ -416,9 +417,28 @@ test("a failed tracker cannot advance through a load boundary or grow failure ev
   assert.equal(tracker.snapshot().failed, false);
 });
 
-test("snapshot discloses that dependency encoding and runtime integration are not ready", () => {
+test("WDS2 accepts exact tracker annotations without implying decoder/runtime readiness", () => {
+  const tracker = readyTracker();
+  tracker.decorate(event(OP.CREATE_SHADER, RESOURCE.SHADER, 101));
+  tracker.decorate(event(OP.CREATE_SHADER, RESOURCE.SHADER, 102));
+  const command = event(OP.CREATE_PIPELINE, RESOURCE.PIPELINE, 201, {
+    args: [201, 101, 102, 3],
+  });
+  const annotation = tracker.decorate(command);
+  const encoded = encodeWgpuSemanticEventV2({
+    ...command,
+    ...annotation,
+    epoch: 1,
+    transaction: 0,
+    sequenceLo: 0,
+    sequenceHi: 0,
+  });
+  assert.equal(new DataView(encoded.buffer).getUint32(44, true), 1);
+
   const state = readyTracker().snapshot();
+  assert.equal(state.dependencyEncodingAvailable, true);
   assert.equal(state.dependencyEncodingReady, false);
+  assert.equal(state.independentDependencyDecodingReady, false);
   assert.equal(state.runtimeIntegrationReady, false);
 });
 
