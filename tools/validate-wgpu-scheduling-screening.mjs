@@ -200,6 +200,7 @@ async function validateRun({
   validateFixedWork({ report, reportRun, manifest, summary, issue });
   validateBackend({ manifest, summary, issue });
   validateCausalFairness({ summary, issue });
+  validateInputToVisible({ task, summary, issue });
   validateRawInputEvents({ manifest, summary, inputEvents, issue });
   validateReplayIntegrity({ manifest, summary, consoleText, issue });
   validateHardwareVisual({
@@ -347,6 +348,27 @@ function validateRawInputEvents({ manifest, summary, inputEvents, issue }) {
     "INPUT_EVENT_SUMMARY", "Summary does not preserve all 12 post-load input events", issue);
 }
 
+function validateInputToVisible({ task, summary, issue }) {
+  let url;
+  try {
+    url = new URL(summary.url);
+  } catch {
+    issue("INPUT_PHOTON_URL", `Invalid summary URL ${summary.url}`);
+    return;
+  }
+  check(task.params?.inputphoton === "1" && url.searchParams.get("inputphoton") === "1",
+    "INPUT_PHOTON_NOT_REQUESTED", "inputphoton=1 is absent from tasklist or URL", issue);
+  const marker = summary.final?.causalTelemetry?.input?.marker || {};
+  check(marker.schema === "wasm-dolphin.input-visual-marker.v1" &&
+      marker.causalVisualAttribution === true && marker.opticalMarker?.enabled === true,
+    "INPUT_VISIBLE_SOURCE", "Final input marker is not browser-visible causal telemetry", issue);
+  check(Array.isArray(marker.samples) && marker.samples.length >= INPUT_MARKER_COUNT &&
+      marker.samples.slice(-INPUT_MARKER_COUNT).every((sample) =>
+        sample?.completionKind === "gpu-queue-complete" &&
+        Number.isFinite(Number(sample?.pollToCompletionMs))),
+    "INPUT_VISIBLE_SAMPLES", "Final telemetry lacks 12 GPU-completed input-to-visible samples", issue);
+}
+
 function validateReplayIntegrity({ manifest, summary, consoleText, issue }) {
   const renderer = manifest.renderer || {};
   check(Array.isArray(renderer.errors) && renderer.errors.length === 0,
@@ -390,7 +412,7 @@ function validateReplayIntegrity({ manifest, summary, consoleText, issue }) {
   const completion = summary.final?.causalTelemetry?.presentation?.gpuCompletion || {};
   check(completion.enabled === true && Number(completion.completedCount) > 0,
     "GPU_COMPLETION_MISSING", "GPU completion sampling is disabled or empty", issue);
-  for (const counter of ["failedCount", "unsupportedCount", "inFlight"]) {
+  for (const counter of ["failedCount", "unsupportedCount"]) {
     check(isZeroCounter(completion, counter),
       "GPU_COMPLETION_ERROR", `${counter}=${completion[counter] ?? "missing"}`, issue);
   }
@@ -414,9 +436,11 @@ function validateHardwareVisual({ task, summary, required, issue }) {
       telemetry.schema === "wasm-dolphin.wgpu-visual-cadence.v1" && telemetry.enabled === true &&
       telemetry.source === "wgpu-downsample-readback",
     "HARDWARE_VISUAL_SOURCE", "Final visual source is not hardware WGPU readback", issue);
-  check(Number(telemetry.completedSampleCount) >= 2 && Number(telemetry.latestHash) > 0,
-    "HARDWARE_VISUAL_EMPTY", "Hardware visual readback has fewer than two completed samples", issue);
-  for (const counter of ["encodeErrorCount", "mapErrorCount", "inFlightCount"]) {
+  check(Number(telemetry.completedSampleCount) >= 2 &&
+      Number(telemetry.changedSampleCount) > 0 && Number(telemetry.latestHash) > 0,
+    "HARDWARE_VISUAL_EMPTY",
+    "Hardware visual readback has fewer than two samples, no changed sample, or no hash", issue);
+  for (const counter of ["encodeErrorCount", "mapErrorCount"]) {
     check(isZeroCounter(telemetry, counter),
       "HARDWARE_VISUAL_ERROR", `${counter}=${telemetry[counter] ?? "missing"}`, issue);
   }

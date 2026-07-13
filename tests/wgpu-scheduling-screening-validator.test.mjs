@@ -143,6 +143,38 @@ test("hardware visual evidence is enforced only when requested", async (t) => {
   assert.ok(required.issues.some((issue) => issue.code === "HARDWARE_VISUAL_SOURCE"));
 });
 
+test("arbitrary final GPU snapshots may retain non-failing work in flight", async (t) => {
+  const fixture = await makeFixture(t);
+  await editJson(path.join(fixture.firstRunDir, "summary.json"), (summary) => {
+    summary.final.causalTelemetry.presentation.gpuCompletion.inFlight = 1;
+    summary.final.visualCadenceTelemetry.inFlightCount = 2;
+  });
+  const result = await validateWgpuSchedulingScreening({
+    outDir: fixture.root,
+    requireHardwareVisual: true,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+});
+
+test("scheduling validator rejects frozen output and missing input-to-visible instrumentation", async (t) => {
+  const frozen = await makeFixture(t);
+  await editJson(path.join(frozen.firstRunDir, "summary.json"), (summary) => {
+    summary.final.visualCadenceTelemetry.changedSampleCount = 0;
+  });
+  let result = await validateWgpuSchedulingScreening({
+    outDir: frozen.root,
+    requireHardwareVisual: true,
+  });
+  assert.ok(result.issues.some((issue) => issue.code === "HARDWARE_VISUAL_EMPTY"));
+
+  const noInputPhoton = await makeFixture(t);
+  await editJson(path.join(noInputPhoton.root, "tasklist.json"), (tasklist) => {
+    delete tasklist.blocks[0].runs[0].params.inputphoton;
+  });
+  result = await validateWgpuSchedulingScreening({ outDir: noInputPhoton.root });
+  assert.ok(result.issues.some((issue) => issue.code === "INPUT_PHOTON_NOT_REQUESTED"));
+});
+
 test("scheduling validator verifies raw artifacts and provenance bytes", async (t) => {
   const fixture = await makeFixture(t);
   await writeFile(path.join(fixture.firstRunDir, "build-provenance", "source.lock.json"), "changed");
@@ -200,6 +232,7 @@ async function makeFixture(t) {
           presenter: "webgpu",
           gpucomplete: "1",
           inputlatency: "1",
+          inputphoton: "1",
           wgpuvisual: "1",
         },
         status: "complete",
@@ -430,6 +463,18 @@ function makeFinal() {
           failedCount: 0,
           unsupportedCount: 0,
           inFlight: 0,
+        },
+      },
+      input: {
+        marker: {
+          schema: "wasm-dolphin.input-visual-marker.v1",
+          causalVisualAttribution: true,
+          opticalMarker: { enabled: true },
+          samples: Array.from({ length: 12 }, (_, index) => ({
+            generation: index + 1,
+            completionKind: "gpu-queue-complete",
+            pollToCompletionMs: index + 1,
+          })),
         },
       },
       webgpu: {
