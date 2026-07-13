@@ -32,6 +32,7 @@ mismatches.
 | Mean core FPS | 42.68 | 42.01 | Same direction |
 | Mean physical wraps | 34.75 | 18.00 | Expected capacity benefit |
 | Mean inflight high-water | 33,548,422 B | 56,660,579 B | ~100.0% versus ~84.4% of capacity |
+| Mean replay-backlog high-water | 56,116.5 records | 94,719 records | 64 MiB increased peak queued work by 68.8% |
 | Post-load upload timeouts | 1 | 0 | More headroom avoided one timeout |
 | Batch aborts | 1 | 0 | Tracks the timeout |
 | Held-stage limit hits | 0 | 8 total | Two in every 64 MiB run |
@@ -50,9 +51,11 @@ hits.
 ## Decision and rollback
 
 Keep 32 MiB as the default. `wgpuuploadmb=64` remains a diagnostic capacity
-option, not a performance optimization. A future experiment may examine the
-consumer staging policy independently, but it must not bundle that change with
-arena capacity.
+option, not a performance optimization. Although it reduced arena wraps and
+avoided one upload timeout, it allowed 68.8% more replay backlog to accumulate
+at peak, slowed throughput, and worsened GPU-completion latency. A future
+experiment may examine the consumer staging policy independently, but it must
+not bundle that change with arena capacity.
 
 Long replay drains and audio mix round trips remained roughly 1.7–1.9 seconds;
 capacity did not address the primary lag mechanism.
