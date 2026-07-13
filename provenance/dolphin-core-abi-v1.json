@@ -74,8 +74,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 60220,
-      "sha256": "77e907db4ba8e4a24fdfd257c2a9dd6ecd700ebe2a2ed379583da6e3fe13bbaa"
+      "size": 60731,
+      "sha256": "9b9a866139195a0fd231f5f415fb30e44d147fe60d2cf5c7ca6d151f2f6f56fd"
     },
     {
       "path": "src/core-host.js",
@@ -206,8 +206,8 @@
     {
       "path": "src/wgpu-ownership-trace.js",
       "hashMode": "lf-normalized",
-      "size": 12244,
-      "sha256": "d864c3ed0e1c0486d64b805790b41bb2f88e49f3b1672c644b7f2fc1123d8b4f"
+      "size": 13500,
+      "sha256": "c6776d2d464fc71ad374bf780d13ada2bff02c15e2b2b6d5cbce19a624c6a5f1"
     }
   ],
   "memoryContract": {

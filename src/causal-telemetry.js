@@ -1076,6 +1076,16 @@ export function flattenCausalTelemetry(value) {
       ownershipTrace.malformedDescriptorCount,
     causalWgpuOwnershipTraceEventHistogram: ownershipTrace.eventHistogram,
     causalWgpuOwnershipTraceOpcodeHistogram: ownershipTrace.opcodeHistogram,
+    causalWgpuOwnershipTraceCommandAttributionHistogram:
+      ownershipTrace.commandAttributionHistogram,
+    causalWgpuOwnershipTraceCommandPublicationHistogram:
+      ownershipTrace.commandPublicationHistogram,
+    causalWgpuOwnershipTraceUploadBytesByAttribution:
+      ownershipTrace.uploadBytesByAttribution,
+    causalWgpuOwnershipTraceMaximumTransactionId:
+      ownershipTrace.maximumTransactionId,
+    causalWgpuOwnershipTraceZeroTransactionCommands:
+      ownershipTrace.zeroTransactionCommandCount,
     causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,
     causalWgpuUploadAbortedPassCount: uploadPassAssociation.abortedPassCount,
     causalWgpuUploadIncompletePassCount: uploadPassAssociation.incompletePassCount,

@@ -1132,6 +1132,44 @@ function summarizeScenario(
           failures.push(`WGPU ownership trace ${label}=${value ?? "unavailable"}`);
         }
       }
+      const eventHistogram = trace?.eventHistogram;
+      const attributionHistogram = trace?.commandAttributionHistogram;
+      const publicationHistogram = trace?.commandPublicationHistogram;
+      if (!Array.isArray(eventHistogram) || eventHistogram.length < 11) {
+        failures.push("WGPU ownership trace event histogram unavailable");
+      } else {
+        for (const [label, index] of [
+          ["epoch", 1],
+          ["command", 2],
+          ["commit", 3],
+          ["load requested", 7],
+          ["pending reserved", 9],
+          ["pass begin", 10],
+        ]) {
+          if (!(Number(eventHistogram[index]) > 0)) {
+            failures.push(`WGPU ownership trace observed zero ${label} events`);
+          }
+        }
+      }
+      if (!Array.isArray(attributionHistogram) || attributionHistogram.length !== 4) {
+        failures.push("WGPU ownership trace attribution histogram unavailable");
+      }
+      if (!Array.isArray(publicationHistogram) || publicationHistogram.length !== 4) {
+        failures.push("WGPU ownership trace publication histogram unavailable");
+      }
+      const commandEvents = Number(eventHistogram?.[2]);
+      const attributedCommands = Array.isArray(attributionHistogram)
+        ? attributionHistogram.reduce((sum, value) => sum + Number(value || 0), 0)
+        : Number.NaN;
+      const publishedCommands = Array.isArray(publicationHistogram)
+        ? publicationHistogram.reduce((sum, value) => sum + Number(value || 0), 0)
+        : Number.NaN;
+      if (!Number.isFinite(commandEvents) || attributedCommands !== commandEvents) {
+        failures.push("WGPU ownership trace attribution counts do not conserve commands");
+      }
+      if (!Number.isFinite(commandEvents) || publishedCommands !== commandEvents) {
+        failures.push("WGPU ownership trace publication counts do not conserve commands");
+      }
     }
   }
   failures.push(...evaluateWgpuGeometryRangeEvidence({

@@ -34,6 +34,11 @@ test("native setter and descriptor getters attach the real contiguous ABI", () =
   assert.deepEqual(descriptor, { ptr: 0, capacity: 4 });
   assert.equal(trace.snapshot().registered, true);
   assert.equal(trace.drain({ collect: true })[0].transactionId, 7);
+  assert.deepEqual(trace.snapshot().commandAttributionHistogram, [0, 1, 0, 0]);
+  assert.deepEqual(trace.snapshot().commandPublicationHistogram, [1, 0, 0, 0]);
+  assert.deepEqual(trace.snapshot().uploadBytesByAttribution, [0, 128, 0, 0]);
+  assert.equal(trace.snapshot().maximumTransactionId, 7);
+  assert.equal(trace.snapshot().zeroTransactionCommandCount, 0);
 });
 
 test("decoder drains wrapped records and publishes the read cursor", () => {

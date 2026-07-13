@@ -10,6 +10,9 @@ const DEFAULT_RECENT_RECORD_LIMIT = 64;
 const MAX_RECENT_RECORD_LIMIT = 256;
 const EVENT_HISTOGRAM_SIZE = 16;
 const OPCODE_HISTOGRAM_SIZE = 32;
+const ATTRIBUTION_HISTOGRAM_SIZE = 4;
+const PUBLICATION_HISTOGRAM_SIZE = 4;
+const OWNERSHIP_TRACE_EVENT_COMMAND = 2;
 
 export function requestedWgpuOwnershipTrace(search = "") {
   return new URLSearchParams(search).get("wgpuownershiptrace") === "1";
@@ -47,6 +50,9 @@ export function createWgpuOwnershipTrace({
   const recentLimit = clampRecentLimit(recentRecordLimit);
   const eventHistogram = new Float64Array(EVENT_HISTOGRAM_SIZE);
   const opcodeHistogram = new Float64Array(OPCODE_HISTOGRAM_SIZE);
+  const commandAttributionHistogram = new Float64Array(ATTRIBUTION_HISTOGRAM_SIZE);
+  const commandPublicationHistogram = new Float64Array(PUBLICATION_HISTOGRAM_SIZE);
+  const uploadBytesByAttribution = new Float64Array(ATTRIBUTION_HISTOGRAM_SIZE);
   const recentRecordWords = new Uint32Array(
     recentLimit * WGPU_OWNERSHIP_TRACE_RECORD_WORDS
   );
@@ -73,6 +79,8 @@ export function createWgpuOwnershipTrace({
   let opcodeOverflowCount = 0;
   let lastCommandSerial = null;
   let lastRecordEpoch = null;
+  let maximumTransactionId = 0;
+  let zeroTransactionCommandCount = 0;
   let lastError = "";
 
   function configure(next = {}) {
@@ -177,6 +185,17 @@ export function createWgpuOwnershipTrace({
       else eventOverflowCount += 1;
       if (opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[opcode] += 1;
       else opcodeOverflowCount += 1;
+      if (event === OWNERSHIP_TRACE_EVENT_COMMAND) {
+        const attribution = auxiliary & 0x3;
+        const publication = (auxiliary >>> 8) & 0x3;
+        commandAttributionHistogram[attribution] += 1;
+        commandPublicationHistogram[publication] += 1;
+        maximumTransactionId = Math.max(maximumTransactionId, transactionId);
+        if (transactionId === 0) zeroTransactionCommandCount += 1;
+        if (opcode === 6 || opcode === 8) {
+          uploadBytesByAttribution[attribution] += payloadLength;
+        }
+      }
       observedRecords += 1;
       const recentBase = recentRecordWrite * WGPU_OWNERSHIP_TRACE_RECORD_WORDS;
       recentRecordWords[recentBase] = event;
@@ -242,6 +261,11 @@ export function createWgpuOwnershipTrace({
       malformedDescriptorCount,
       eventHistogram: Array.from(eventHistogram),
       opcodeHistogram: Array.from(opcodeHistogram),
+      commandAttributionHistogram: Array.from(commandAttributionHistogram),
+      commandPublicationHistogram: Array.from(commandPublicationHistogram),
+      uploadBytesByAttribution: Array.from(uploadBytesByAttribution),
+      maximumTransactionId,
+      zeroTransactionCommandCount,
       eventOverflowCount,
       opcodeOverflowCount,
       recentRecordLimit: recentLimit,
