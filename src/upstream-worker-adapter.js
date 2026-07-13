@@ -87,6 +87,7 @@ export class UpstreamWorkerAdapter {
     gpuCompletionDiagnostics = false,
     wgpuDirtyRangeProjection = false,
     wgpuPassPackageProjection = false,
+    wgpuOwnershipTrace = false,
     inputLatencyDiagnostics = false,
     inputReadbackDiagnostics = false,
     inputPhotonDiagnostics = false,
@@ -170,6 +171,7 @@ export class UpstreamWorkerAdapter {
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.wgpuDirtyRangeProjection = Boolean(wgpuDirtyRangeProjection);
     this.wgpuPassPackageProjection = Boolean(wgpuPassPackageProjection);
+    this.wgpuOwnershipTrace = Boolean(wgpuOwnershipTrace);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
     this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
     this.inputPhotonDiagnostics = Boolean(inputPhotonDiagnostics);
@@ -347,6 +349,7 @@ export class UpstreamWorkerAdapter {
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
       wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+      wgpuOwnershipTrace: this.wgpuOwnershipTrace,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
       inputReadbackDiagnostics: this.inputReadbackDiagnostics,
       inputPhotonDiagnostics: this.inputPhotonDiagnostics,

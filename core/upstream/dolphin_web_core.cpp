@@ -54,6 +54,7 @@
 extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
 extern "C" std::uint32_t DolphinWeb_SetCachedInterpreterDisableMask(std::uint32_t mask);
 extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
+extern "C" void NotifyWebGpuOwnershipTraceLoadRequested();
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -956,6 +957,7 @@ int LoadCoreState(int slot)
   if (!s_runtime_initialized || slot < 0 || !Core::IsRunning(Core::System::GetInstance()))
     return 0;
 
+  NotifyWebGpuOwnershipTraceLoadRequested();
   State::Load(Core::System::GetInstance(), slot);
   Core::HostDispatchJobs(Core::System::GetInstance());
   s_core_status = "Load state requested";
@@ -974,6 +976,7 @@ int LoadStateFile(const char* path)
       !Core::IsRunning(Core::System::GetInstance()))
     return 0;
 
+  NotifyWebGpuOwnershipTraceLoadRequested();
   State::LoadAs(Core::System::GetInstance(), std::string(path));
   Core::HostDispatchJobs(Core::System::GetInstance());
   s_core_status = "Load state from file requested";

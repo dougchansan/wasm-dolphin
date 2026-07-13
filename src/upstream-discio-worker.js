@@ -76,6 +76,10 @@ import {
 } from "./wgpu-upload-attribution.js";
 import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import {
+  attachWgpuOwnershipTraceFromApi,
+  createWgpuOwnershipTrace
+} from "./wgpu-ownership-trace.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 import {
   attemptRetainedWgpuUpload,
@@ -223,6 +227,9 @@ let wgpuDirtyRangeProjectionActive = false;
 let wgpuPassPackageProjection = createWgpuPassPackageProjection();
 let wgpuPassPackageProjectionRequested = false;
 let wgpuPassPackageProjectionActive = false;
+let wgpuOwnershipTrace = createWgpuOwnershipTrace();
+let wgpuOwnershipTraceRequested = false;
+let wgpuOwnershipTraceActive = false;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -576,6 +583,7 @@ function rendererDiagnosticsPayload() {
       requested: wgpuPassPackageProjectionRequested,
       active: wgpuPassPackageProjectionActive
     }),
+    wgpuOwnershipTrace: wgpuOwnershipTrace.snapshot(),
   };
 }
 
@@ -646,6 +654,10 @@ async function handleMessage(type, payload) {
       wgpuPassPackageProjection = createWgpuPassPackageProjection();
       wgpuPassPackageProjectionRequested = Boolean(payload.wgpuPassPackageProjection);
       wgpuPassPackageProjectionActive = wgpuPassPackageProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
+      wgpuOwnershipTrace = createWgpuOwnershipTrace();
+      wgpuOwnershipTraceRequested = Boolean(payload.wgpuOwnershipTrace);
+      wgpuOwnershipTraceActive = wgpuOwnershipTraceRequested &&
         causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
@@ -739,6 +751,7 @@ async function handleMessage(type, payload) {
         wgpuUploadTransport: payload.wgpuUploadTransport,
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
+        wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -1125,6 +1138,7 @@ async function loadCore({
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
   wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
+  wgpuOwnershipTrace: requestedWgpuOwnershipTrace = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -1161,6 +1175,12 @@ async function loadCore({
   }
   if (requestedWgpuPassPackageProjection && videoBackend !== "WebGPU-Real") {
     throw new Error("wgpupackageprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuOwnershipTrace && !collectMetrics) {
+    throw new Error("wgpuownershiptrace=1 requires metrics=1");
+  }
+  if (requestedWgpuOwnershipTrace && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuownershiptrace=1 requires video=wgpu");
   }
   wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
   wgpuProducerProfileAvailable = false;
@@ -1489,6 +1509,22 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
+  const ownershipTraceSetterAvailable = Boolean(
+    api.setWebGpuOwnershipTraceEnabled &&
+    api.getWebGpuOwnershipTracePtr &&
+    api.getWebGpuOwnershipTraceCapacity
+  );
+  wgpuOwnershipTrace.configure({
+    requested: wgpuOwnershipTraceRequested,
+    active: wgpuOwnershipTraceActive,
+    setterAvailable: ownershipTraceSetterAvailable,
+    setterInvoked: wgpuOwnershipTraceActive && ownershipTraceSetterAvailable,
+  });
+  if (wgpuOwnershipTraceRequested && !ownershipTraceSetterAvailable) {
+    throw new Error(
+      "wgpuownershiptrace=1 requires ownership trace setter and descriptor getters"
+    );
+  }
   api.setWgpuDeepDiagnosticsEnabled?.(wgpuDeepReplayDiagnostics ? 1 : 0);
   wgpuProducerProfileAvailable = Boolean(
     api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
@@ -1532,6 +1568,19 @@ async function loadCore({
   installDolphinPthreadChannels(moduleInstance, {
     jitCacheEnabled: !noJitCache
   });
+  if (wgpuOwnershipTraceActive) {
+    const heap = moduleInstance?.HEAPU8;
+    if (!heap || !(heap.buffer instanceof SharedArrayBuffer)) {
+      throw new Error("wgpuownershiptrace=1 requires a shared wasm heap");
+    }
+    attachWgpuOwnershipTraceFromApi(
+      wgpuOwnershipTrace,
+      api,
+      heap.buffer
+    );
+  } else {
+    api.setWebGpuOwnershipTraceEnabled?.(0);
+  }
   if (api.setVideoBackend) {
     api.setVideoBackend(videoBackend);
     rendererDiagnostics.configuredVideoBackend = videoBackend;
@@ -1647,6 +1696,20 @@ function bindApi(module) {
         ? (enabled) => ccall(
             "SetWebGpuDrawProfileEnabled", null, ["number"], [enabled ? 1 : 0]
           )
+        : null,
+    setWebGpuOwnershipTraceEnabled:
+      typeof module._SetWebGpuOwnershipTraceEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuOwnershipTraceEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    getWebGpuOwnershipTracePtr:
+      typeof module._GetWebGpuOwnershipTracePtr === "function"
+        ? () => ccall("GetWebGpuOwnershipTracePtr", "number", [], []) >>> 0
+        : null,
+    getWebGpuOwnershipTraceCapacity:
+      typeof module._GetWebGpuOwnershipTraceCapacity === "function"
+        ? () => ccall("GetWebGpuOwnershipTraceCapacity", "number", [], []) >>> 0
         : null,
     setWgpuDeepDiagnosticsEnabled:
       typeof module._SetWgpuDeepDiagnosticsEnabled === "function"
@@ -2400,6 +2463,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
     return null;
   }
   lastCausalTelemetryAt = now;
+  if (wgpuOwnershipTraceActive) wgpuOwnershipTrace.drain();
   const loadedCheckpoint = readLastLoadedCheckpoint();
   return createCausalTelemetry({
     enabled: true,
@@ -2468,6 +2532,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
         requested: wgpuPassPackageProjectionRequested,
         active: wgpuPassPackageProjectionActive
       }),
+      ownershipTrace: wgpuOwnershipTrace.snapshot(),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,

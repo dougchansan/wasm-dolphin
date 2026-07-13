@@ -205,6 +205,7 @@ for (const [environmentName, queryName] of [
   ["WGPUUBOMETRICS", "wgpuubometrics"],
   ["WGPUUNIFORMFAST", "wgpuuniformfast"],
   ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
+  ["WGPUOWNERSHIPTRACE", "wgpuownershiptrace"],
   ["WGPUGEOMPACK", "wgpugeompack"],
   ["WGPUGEOMRANGE", "wgpugeomrange"],
   ["WGPUDETACHED", "wgpudetached"],

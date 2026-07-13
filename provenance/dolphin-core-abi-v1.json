@@ -38,8 +38,8 @@
     {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
-      "size": 40001,
-      "sha256": "4bfc9cc73b15c64ffe846c1f8c58030326e713f69a8048fbd2afa69a2864be15"
+      "size": 40150,
+      "sha256": "2cdc8da4fcda42ff06b4d69be6449774bad4c10ddf81eaa15b4519f967cfa9e1"
     },
     {
       "path": "src/app.js",
@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 58611,
-      "sha256": "8d858081d13bdcee18a8484503c636b4fa4a1ce3e1f59f7e9c6f0b8a67445ec7"
+      "size": 60220,
+      "sha256": "77e907db4ba8e4a24fdfd257c2a9dd6ecd700ebe2a2ed379583da6e3fe13bbaa"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 58117,
-      "sha256": "a0489c2d84fff61b148ee85a595f2a5ea24e19f476eeb6656ab503c921e147b9"
+      "size": 58330,
+      "sha256": "4349f99344e2123e0566617e89f1b7a009e77129a1ff3d21f3c28247662a3362"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 428636,
-      "sha256": "fcc8a1611cb2368951f1feed216812dcd19e3002012f3c6e169f6c3ad3b0da23"
+      "size": 431309,
+      "sha256": "c7bc993a82aefc886db3b978bdca44c3361b217bbd5cf58c2fb836907f865ff9"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 38877,
-      "sha256": "17ef78934c3d2509b2b674c8e5fd68d53e5f54eb97666d1ee36925bf498c03d1"
+      "size": 39019,
+      "sha256": "6c6178b7b00f3b71305a501f7cab6b12c2590c4740fc51690c71ec45def08c73"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -202,6 +202,12 @@
       "hashMode": "lf-normalized",
       "size": 12368,
       "sha256": "a2a927fb57920a07061ef8b3c77f38ee30760cf0cb9f8989bb48fa972a6dc818"
+    },
+    {
+      "path": "src/wgpu-ownership-trace.js",
+      "hashMode": "lf-normalized",
+      "size": 10251,
+      "sha256": "ab1b30ca1e4c954cc9065dffb83681a37b4537c2d96791231332f0cebb424437"
     }
   ],
   "memoryContract": {

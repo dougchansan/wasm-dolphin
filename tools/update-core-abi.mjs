@@ -39,13 +39,16 @@ if (pinnedCoreSha256 !== wasm.sha256) {
   );
 }
 const contractSourceDeclarations = [...previous.contractSources];
-if (!contractSourceDeclarations.some(
-  (source) => source.path === "src/wgpu-pass-package-projection.js"
-)) {
-  contractSourceDeclarations.push({
-    path: "src/wgpu-pass-package-projection.js",
-    hashMode: "lf-normalized",
-  });
+for (const requiredPath of [
+  "src/wgpu-pass-package-projection.js",
+  "src/wgpu-ownership-trace.js",
+]) {
+  if (!contractSourceDeclarations.some((source) => source.path === requiredPath)) {
+    contractSourceDeclarations.push({
+      path: requiredPath,
+      hashMode: "lf-normalized",
+    });
+  }
 }
 const contractSources = contractSourceDeclarations.map((source) => ({
   ...fileRecord(source.path, root, source.hashMode ?? "raw"),

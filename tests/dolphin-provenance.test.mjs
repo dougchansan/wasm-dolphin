@@ -290,7 +290,7 @@ function createDependentLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 40);
+  assert.equal(result.patches.count, 41);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
   assert.equal(result.vendorSnapshot.rootPaths, 108);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
@@ -305,6 +305,12 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
       (source) => source.path === "src/wgpu-pass-package-projection.js"
     ),
     "pass-package projection must remain covered by the core ABI contract"
+  );
+  assert.ok(
+    coreAbi.contractSources.some(
+      (source) => source.path === "src/wgpu-ownership-trace.js"
+    ),
+    "ownership trace decoder must remain covered by the core ABI contract"
   );
 });
 

@@ -39,6 +39,7 @@ import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
 import { requestedWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { requestedWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { requestedWgpuOwnershipTrace } from "./wgpu-ownership-trace.js";
 import {
   requestedInputLatencyDiagnostics,
   requestedInputReadbackDiagnostics
@@ -131,6 +132,7 @@ export class EmulatorHost {
     this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(
       window.location.search
     );
+    this.wgpuOwnershipTrace = requestedWgpuOwnershipTrace(window.location.search);
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
       requestedInputLatencyDiagnostics(window.location.search) || this.inputPhotonMarker.enabled;
@@ -367,6 +369,7 @@ export class EmulatorHost {
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
             wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+            wgpuOwnershipTrace: this.wgpuOwnershipTrace,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,
             inputPhotonDiagnostics: this.inputPhotonMarker.enabled,

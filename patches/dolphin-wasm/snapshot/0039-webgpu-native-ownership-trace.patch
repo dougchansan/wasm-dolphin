@@ -1,0 +1,569 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index f91805b..729d44d 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -198,6 +198,60 @@ struct CmdRingHeader
+ static_assert(sizeof(CmdRingHeader) == 28,
+               "CmdRingHeader must stay 28 bytes (JS bridge assumes fixed layout)");
+ 
++// Default-off diagnostic sideband. This is deliberately a separate ABI from
++// CmdRingHeader/CmdRecord: ownership experiments must never perturb the hot
++// replay protocol's fixed 28-byte/32-byte layout.
++enum class OwnershipTraceEvent : u32
++{
++  Epoch = 1,
++  Command = 2,
++  Commit = 3,
++  Abort = 4,
++  Poison = 5,
++  Rollback = 6,
++  LoadRequested = 7,
++  ConsumerFailure = 8,
++  PendingReserved = 9,
++  PassBegin = 10,
++};
++
++enum class OwnershipAttribution : u32
++{
++  Outside = 0,
++  Pending = 1,
++  Active = 2,
++};
++
++struct OwnershipTraceHeader
++{
++  std::atomic<u32> write;
++  std::atomic<u32> read;
++  u32 capacity;
++  std::atomic<u32> dropped;
++  std::atomic<u32> epoch;
++};
++static_assert(sizeof(OwnershipTraceHeader) == 20,
++              "ownership trace header must stay 20 bytes");
++
++struct OwnershipTraceRecord
++{
++  // event/epoch/transaction_id/command_serial are monotonic producer
++  // identities. For Command records auxiliary bits 0..1 carry
++  // OwnershipAttribution and bits 8..9 carry publication state:
++  // 0=published, 1=private staged pass record, 2=immediate publication
++  // attributed to an active pass.
++  u32 event;
++  u32 epoch;
++  u32 transaction_id;
++  u32 command_serial;
++  u32 opcode;
++  u32 resource_id;
++  u32 payload_length;
++  u32 auxiliary;
++};
++static_assert(sizeof(OwnershipTraceRecord) == 32,
++              "ownership trace record must stay 32 bytes");
++
+ // A nonzero count means an immediate command publication failed. Passes are
+ // committed transactionally below, so a failed pass never becomes visible.
+ u64 GetWebGpuCommandDroppedRecordCount();
+@@ -217,6 +271,20 @@ public:
+   // request is rejected rather than invalidating the shared pointer.
+   bool ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled);
+ 
++  // Allocate and publish the native ownership sideband only after an explicit
++  // opt-in. Disabling leaves the allocation inert; it does not invalidate a
++  // pointer already handed to the JS consumer.
++  void SetOwnershipTraceEnabled(bool enabled);
++  // Thread-safe notification seam used by save-state wrappers. The producer
++  // publishes the boundary on its next traced command, preserving SPSC ring
++  // ownership and the emulator's existing load behavior.
++  void NotifyOwnershipTraceLoadRequested();
++  u32 GetOwnershipTracePtr() const;
++  u32 GetOwnershipTraceCapacity() const { return m_trace_capacity; }
++  // Reserve ownership before VertexManager publishes geometry required by a
++  // following draw. The next BeginPass consumes this pending transaction.
++  void BeginPendingOwnership();
++
+   // Append one record. Drops the record (returns false) if the ring
+   // is full — the consumer is behind; better to skip a frame's
+   // commands than block the video pthread.
+@@ -382,11 +450,34 @@ private:
+   void ResetPassStaging();
+   void RollbackLastUpload(u32 src_heap_ptr, u32 len);
+   u32 ReserveUpload(size_t len, u32 align);
++  void EnsureOwnershipTrace();
++  void TraceCommand(const CmdRecord& rec);
++  void TraceEvent(OwnershipTraceEvent event, u32 op = 0, u32 detail0 = 0,
++                  u32 detail1 = 0);
++  void TraceEventRaw(OwnershipTraceEvent event, u32 op, u32 detail0, u32 detail1,
++                     u32 auxiliary_extra = 0);
++  void PublishPendingTraceBoundaries();
++  void TraceConsumerFailure();
++  OwnershipAttribution CurrentTraceAttribution() const;
++  u32 CurrentTraceTransaction() const;
+ 
+   CmdRingHeader* m_header = nullptr;
+   CmdRecord* m_slots = nullptr;
+   u32 m_capacity = 0;
+ 
++  OwnershipTraceHeader* m_trace_header = nullptr;
++  OwnershipTraceRecord* m_trace_slots = nullptr;
++  u32 m_trace_capacity = 0;
++  std::atomic<bool> m_trace_enabled{false};
++  std::atomic<u32> m_trace_pending_boundaries{0};
++  u32 m_trace_epoch = 0;
++  u32 m_trace_transaction_serial = 0;
++  u32 m_trace_pending_transaction = 0;
++  u32 m_trace_active_transaction = 0;
++  u32 m_trace_command_serial = 0;
++  u32 m_trace_last_consumer_error = 0;
++  u32 m_trace_last_consumer_error_epoch = 0;
++
+   // Per-frame upload arena (DESIGN §payload). Bump-allocated, wraps.
+   u8* m_upload_base = nullptr;
+   u32 m_upload_size = 0;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 1464e57..92eb5c9 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -55,6 +55,10 @@ static constexpr u32 kRingCapacity = 262144;
+ static constexpr u32 kProtocolUploadWatermark = 1u << 0;
+ static constexpr u32 kProtocolNonDroppingBackpressure = 1u << 1;
+ static constexpr u32 kConsumerStateFailed = 2;
++static constexpr u32 kOwnershipTraceVersion = 1;
++static constexpr u32 kOwnershipTraceCapacity = 65536;
++static constexpr u32 kTraceBoundaryInitial = 1u << 0;
++static constexpr u32 kTraceLoadRequestIncrement = 1u << 1;
+ 
+ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+ {
+@@ -74,6 +78,204 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+   return true;
+ }
+ 
++void WebGPUCommandStream::EnsureOwnershipTrace()
++{
++  if (m_trace_header)
++    return;
++
++  const size_t bytes = sizeof(OwnershipTraceHeader) +
++                       sizeof(OwnershipTraceRecord) * kOwnershipTraceCapacity;
++  void* const block = std::malloc(bytes);
++  if (!block)
++    return;
++  std::memset(block, 0, bytes);
++  m_trace_header = new (block) OwnershipTraceHeader();
++  m_trace_header->write.store(0, std::memory_order_relaxed);
++  m_trace_header->read.store(0, std::memory_order_relaxed);
++  m_trace_header->capacity = kOwnershipTraceCapacity;
++  m_trace_header->dropped.store(0, std::memory_order_relaxed);
++  m_trace_header->epoch.store(0, std::memory_order_relaxed);
++  m_trace_slots = reinterpret_cast<OwnershipTraceRecord*>(
++      static_cast<u8*>(block) + sizeof(OwnershipTraceHeader));
++  m_trace_capacity = kOwnershipTraceCapacity;
++
++}
++
++u32 WebGPUCommandStream::GetOwnershipTracePtr() const
++{
++  return static_cast<u32>(reinterpret_cast<uintptr_t>(m_trace_header));
++}
++
++void WebGPUCommandStream::SetOwnershipTraceEnabled(bool enabled)
++{
++  if (!enabled)
++  {
++    m_trace_enabled.store(false, std::memory_order_release);
++    return;
++  }
++  EnsureOwnershipTrace();
++  if (!m_trace_header)
++    return;
++  if (!m_trace_enabled.load(std::memory_order_relaxed))
++  {
++    m_trace_pending_boundaries.fetch_or(kTraceBoundaryInitial, std::memory_order_release);
++    m_trace_enabled.store(true, std::memory_order_release);
++  }
++}
++
++void WebGPUCommandStream::NotifyOwnershipTraceLoadRequested()
++{
++  if (m_trace_enabled.load(std::memory_order_acquire))
++    m_trace_pending_boundaries.fetch_add(kTraceLoadRequestIncrement, std::memory_order_release);
++}
++
++void WebGPUCommandStream::BeginPendingOwnership()
++{
++  if (!m_trace_enabled.load(std::memory_order_acquire) || m_trace_pending_transaction != 0)
++    return;
++  m_trace_pending_transaction = ++m_trace_transaction_serial;
++  TraceEvent(OwnershipTraceEvent::PendingReserved);
++}
++
++OwnershipAttribution WebGPUCommandStream::CurrentTraceAttribution() const
++{
++  if (m_trace_pending_transaction != 0 && !m_pass_staging)
++    return OwnershipAttribution::Pending;
++  if (m_pass_staging)
++    return OwnershipAttribution::Active;
++  if (m_trace_active_transaction != 0)
++    return OwnershipAttribution::Active;
++  return OwnershipAttribution::Outside;
++}
++
++u32 WebGPUCommandStream::CurrentTraceTransaction() const
++{
++  if (m_trace_pending_transaction != 0 && !m_pass_staging)
++    return m_trace_pending_transaction;
++  if (m_pass_staging)
++    return m_trace_active_transaction;
++  return m_trace_active_transaction;
++}
++
++void WebGPUCommandStream::TraceEventRaw(OwnershipTraceEvent event, u32 op, u32 detail0,
++                                        u32 detail1, u32 auxiliary_extra)
++{
++  const u32 write = m_trace_header->write.load(std::memory_order_relaxed);
++  const u32 read = m_trace_header->read.load(std::memory_order_acquire);
++  if (write - read >= m_trace_capacity)
++  {
++    m_trace_header->dropped.fetch_add(1, std::memory_order_relaxed);
++    return;
++  }
++  OwnershipTraceRecord& record = m_trace_slots[write % m_trace_capacity];
++  record.event = static_cast<u32>(event);
++  record.epoch = m_trace_epoch;
++  record.transaction_id = CurrentTraceTransaction();
++  record.command_serial = m_trace_command_serial;
++  record.opcode = op;
++  record.resource_id = detail0;
++  record.payload_length = detail1;
++  record.auxiliary = static_cast<u32>(CurrentTraceAttribution()) | auxiliary_extra;
++  m_trace_header->write.store(write + 1, std::memory_order_release);
++}
++
++void WebGPUCommandStream::PublishPendingTraceBoundaries()
++{
++  const u32 pending = m_trace_pending_boundaries.exchange(0, std::memory_order_acq_rel);
++  if ((pending & kTraceBoundaryInitial) != 0)
++  {
++    ++m_trace_epoch;
++    m_trace_header->epoch.store(m_trace_epoch, std::memory_order_release);
++    TraceEventRaw(OwnershipTraceEvent::Epoch, 0, kOwnershipTraceVersion, 0);
++  }
++  const u32 load_requests = pending / kTraceLoadRequestIncrement;
++  for (u32 index = 0; index < load_requests; ++index)
++  {
++    if (m_trace_pending_transaction != 0 || m_trace_active_transaction != 0)
++      TraceEventRaw(OwnershipTraceEvent::Abort, 0, 0, 3);
++    m_trace_pending_transaction = 0;
++    m_trace_active_transaction = 0;
++    ++m_trace_epoch;
++    m_trace_header->epoch.store(m_trace_epoch, std::memory_order_release);
++    TraceEventRaw(OwnershipTraceEvent::LoadRequested, 0, index + 1, load_requests);
++  }
++}
++
++void WebGPUCommandStream::TraceEvent(OwnershipTraceEvent event, u32 op, u32 detail0, u32 detail1)
++{
++  if (!m_trace_enabled.load(std::memory_order_acquire))
++    return;
++  PublishPendingTraceBoundaries();
++  TraceEventRaw(event, op, detail0, detail1);
++}
++
++void WebGPUCommandStream::TraceCommand(const CmdRecord& rec)
++{
++  if (!m_trace_enabled.load(std::memory_order_acquire))
++    return;
++  ++m_trace_command_serial;
++  const u32 op = rec.op;
++  const bool staged = m_pass_staging && op >= static_cast<u32>(CmdOp::BeginPass) &&
++                      op <= static_cast<u32>(CmdOp::EndPass);
++  const u32 publication = staged ? 1u : (m_pass_staging ? 2u : 0u);
++  u32 resource_id = 0;
++  u32 payload_length = 0;
++  switch (static_cast<CmdOp>(op))
++  {
++  case CmdOp::CreateShader:
++  case CmdOp::CreatePipelineCfg:
++  case CmdOp::CreateBindGroup:
++    resource_id = rec.arg.u[0];
++    payload_length = rec.arg.u[2];
++    break;
++  case CmdOp::UploadBuffer:
++    resource_id = rec.arg.u[0];
++    payload_length = rec.arg.u[3];
++    break;
++  case CmdOp::UploadTexture:
++    resource_id = rec.arg.u[0];
++    payload_length = rec.arg.u[2] * rec.arg.u[4];
++    break;
++  case CmdOp::CreatePipeline:
++  case CmdOp::CreateBuffer:
++  case CmdOp::CreateTexture:
++  case CmdOp::CreateSampler:
++  case CmdOp::SetPipeline:
++  case CmdOp::SetIndexBuffer:
++    resource_id = rec.arg.u[0];
++    break;
++  case CmdOp::SetBindGroup:
++  case CmdOp::SetVertexBuffer:
++    resource_id = rec.arg.u[1];
++    break;
++  case CmdOp::Destroy:
++    resource_id = rec.arg.u[1];
++    break;
++  case CmdOp::BlitTexture:
++    resource_id = rec.arg.u[0];
++    break;
++  default:
++    break;
++  }
++  PublishPendingTraceBoundaries();
++  TraceEventRaw(OwnershipTraceEvent::Command, op, resource_id, payload_length,
++                publication << 8);
++}
++
++void WebGPUCommandStream::TraceConsumerFailure()
++{
++  if (!m_trace_enabled.load(std::memory_order_acquire) || !m_header)
++    return;
++  PublishPendingTraceBoundaries();
++  const u32 error = m_header->consumer_error.load(std::memory_order_acquire);
++  if (m_trace_last_consumer_error == error && m_trace_last_consumer_error_epoch == m_trace_epoch)
++    return;
++  m_trace_last_consumer_error = error;
++  m_trace_last_consumer_error_epoch = m_trace_epoch;
++  TraceEvent(OwnershipTraceEvent::ConsumerFailure, 0, error,
++             m_header->consumer_state.load(std::memory_order_relaxed));
++}
++
+ void WebGPUCommandStream::EnsureRing()
+ {
+   if (m_header)
+@@ -148,7 +350,10 @@ bool WebGPUCommandStream::ConsumerFailed() const
+ bool WebGPUCommandStream::WaitForRingSpace(u32 write, u32 count)
+ {
+   if (ConsumerFailed())
++  {
++    TraceConsumerFailure();
+     return false;
++  }
+ 
+   const auto is_full = [&] {
+     return write - m_header->read.load(std::memory_order_acquire) > m_capacity - count;
+@@ -176,11 +381,17 @@ bool WebGPUCommandStream::WaitForRingSpace(u32 write, u32 count)
+     while (is_full())
+     {
+       if (ConsumerFailed())
++      {
++        TraceConsumerFailure();
+         return finish_wait(false);
++      }
+       const u32 observed = m_header->read.load(std::memory_order_acquire);
+       emscripten_futex_wait(reinterpret_cast<volatile void*>(&m_header->read), observed, 4.0);
+     }
+-    return finish_wait(!ConsumerFailed());
++    const bool failed = ConsumerFailed();
++    if (failed)
++      TraceConsumerFailure();
++    return finish_wait(!failed);
+   }
+ 
+   constexpr u32 kMaxSpins = 500000u;
+@@ -199,7 +410,12 @@ bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
+     return end - m_header->upload_read.load(std::memory_order_acquire) > m_upload_size;
+   };
+   if (!is_full())
+-    return !ConsumerFailed();
++  {
++    const bool failed = ConsumerFailed();
++    if (failed)
++      TraceConsumerFailure();
++    return !failed;
++  }
+ 
+   const double wait_started_ms = emscripten_get_now();
+   const auto finish_wait = [&](bool result) {
+@@ -221,12 +437,18 @@ bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
+     while (is_full())
+     {
+       if (ConsumerFailed())
++      {
++        TraceConsumerFailure();
+         return finish_wait(false);
++      }
+       const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
+       emscripten_futex_wait(
+           reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
+     }
+-    return finish_wait(!ConsumerFailed());
++    const bool failed = ConsumerFailed();
++    if (failed)
++      TraceConsumerFailure();
++    return finish_wait(!failed);
+   }
+ 
+   constexpr u32 kMaxUploadWaits = 250u;
+@@ -308,6 +530,7 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+   // Release: the slot write above must be visible to the consumer
+   // before it observes the bumped write index.
+   m_header->write.store(w + 1, std::memory_order_release);
++  TraceCommand(rec);
+   return true;
+ }
+ 
+@@ -350,15 +573,19 @@ bool WebGPUCommandStream::StagePassRecord(const CmdRecord& rec)
+   DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
+       DolphinWeb::WebGpuDrawProfile::Phase::CommandStage);
+   m_pass_records.push_back(rec);
++  TraceCommand(rec);
+   return true;
+ }
+ 
+ void WebGPUCommandStream::PoisonPass()
+ {
++  const bool newly_poisoned = m_pass_staging ? !m_pass_poisoned : !m_required_publication_failed;
+   if (m_pass_staging)
+     m_pass_poisoned = true;
+   else
+     m_required_publication_failed = true;
++  if (newly_poisoned)
++    TraceEvent(OwnershipTraceEvent::Poison);
+ }
+ 
+ void WebGPUCommandStream::ResetPassStaging()
+@@ -373,6 +600,9 @@ void WebGPUCommandStream::AbortPass()
+   if (!m_pass_staging)
+     return;
+   ++m_batch_abort_count;
++  TraceEvent(OwnershipTraceEvent::Abort, 0, static_cast<u32>(m_pass_records.size()),
++             m_pass_poisoned ? 1u : 0u);
++  m_trace_active_transaction = 0;
+   ResetPassStaging();
+ }
+ 
+@@ -705,9 +935,12 @@ void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
+   if (src_heap_ptr == m_last_upload_ptr && len == m_last_upload_len &&
+       m_upload_write == m_last_upload_write_after)
+   {
++    const u32 write_before = m_upload_write;
+     m_upload_write = m_last_upload_write_before;
+     m_last_upload_ptr = 0;
+     m_last_upload_len = 0;
++    TraceEvent(OwnershipTraceEvent::Rollback, static_cast<u32>(CmdOp::UploadBuffer),
++               write_before, m_upload_write);
+   }
+ }
+ 
+@@ -886,15 +1119,28 @@ bool WebGPUCommandStream::PushBeginPass(u32 fb_id, float r, float g, float b, fl
+   {
+     m_required_publication_failed = false;
+     ++m_batch_abort_count;
++    TraceEvent(OwnershipTraceEvent::Abort, static_cast<u32>(CmdOp::BeginPass), 0, 1);
++    m_trace_pending_transaction = 0;
+     return false;
+   }
+   // A nested BEGIN indicates the caller lost ownership of the previous pass.
+   // Drop that private batch before accepting a new transaction.
+   if (m_pass_staging)
+     AbortPass();
++  if (m_trace_enabled.load(std::memory_order_acquire))
++  {
++    if (m_trace_pending_transaction == 0)
++    {
++      m_trace_pending_transaction = ++m_trace_transaction_serial;
++      TraceEvent(OwnershipTraceEvent::PendingReserved);
++    }
++    m_trace_active_transaction = m_trace_pending_transaction;
++    m_trace_pending_transaction = 0;
++  }
+   m_pass_staging = true;
+   m_pass_poisoned = false;
+   m_pass_records.clear();
++  TraceEvent(OwnershipTraceEvent::PassBegin);
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::BeginPass);
+   rec.arg.u[0] = fb_id;
+@@ -1055,7 +1301,19 @@ bool WebGPUCommandStream::PushEndPass()
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::EndPass);
+   m_pass_records.push_back(rec);
++  TraceCommand(rec);
+   const bool committed = PushBatch(m_pass_records.data(), static_cast<u32>(m_pass_records.size()));
++  if (committed)
++  {
++    TraceEvent(OwnershipTraceEvent::Commit, static_cast<u32>(CmdOp::EndPass),
++               static_cast<u32>(m_pass_records.size()), 0);
++  }
++  else
++  {
++    TraceEvent(OwnershipTraceEvent::Abort, static_cast<u32>(CmdOp::EndPass),
++               static_cast<u32>(m_pass_records.size()), 2);
++    m_trace_active_transaction = 0;
++  }
+   ResetPassStaging();
+   return committed;
+ }
+@@ -1069,6 +1327,7 @@ bool WebGPUCommandStream::PushSubmitPresent()
+   if (!Push(rec))
+     return false;
+   ++m_submit_serial;
++  m_trace_active_transaction = 0;
+   return true;
+ }
+ 
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index aa282bb..f9d669d 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -127,6 +127,26 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUploadArenaMiB(int mib, int metric
+   GetCommandStream().ConfigureUploadArenaMiB(static_cast<u32>(mib), metrics_enabled != 0);
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuOwnershipTraceEnabled(int enabled)
++{
++  GetCommandStream().SetOwnershipTraceEnabled(enabled != 0);
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE u32 GetWebGpuOwnershipTracePtr()
++{
++  return GetCommandStream().GetOwnershipTracePtr();
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE u32 GetWebGpuOwnershipTraceCapacity()
++{
++  return GetCommandStream().GetOwnershipTraceCapacity();
++}
++
++extern "C" void NotifyWebGpuOwnershipTraceLoadRequested()
++{
++  GetCommandStream().NotifyOwnershipTraceLoadRequested();
++}
++
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuProducerProfileEnabled(int enabled)
+ {
+   DolphinWeb::WebGpuProducerProfile::SetEnabled(enabled != 0);
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index 0e8aeb2..8075e0c 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -183,6 +183,7 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+     return;
+   if (vertex_stride == 0)
+     return;
++  cs.BeginPendingOwnership();
+ 
+   const bool geometry_pack_enabled = IsGeometryUploadPackEnabled();
+   const u64 geometry_pack_epoch = GetGeometryUploadPackEpoch();
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+index 8fe963b..4eed2a7 100644
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@ if(EMSCRIPTEN AND DOLPHIN_WASM_CORE_SOURCE)
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuDeepDiagnosticsEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuOwnershipTraceEnabled','_GetWebGpuOwnershipTracePtr','_GetWebGpuOwnershipTraceCapacity','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuDeepDiagnosticsEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread']"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread

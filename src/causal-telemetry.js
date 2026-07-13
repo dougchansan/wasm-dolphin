@@ -1,5 +1,6 @@
 import { createWgpuUploadAttribution } from "./wgpu-upload-attribution.js";
 import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { createWgpuOwnershipTrace } from "./wgpu-ownership-trace.js";
 import {
   WGPU_DRAW_PROFILE_PHASE_ORDER,
   WGPU_DRAW_PROFILE_SCHEMA,
@@ -303,6 +304,7 @@ export function createCausalTelemetry(overrides = {}) {
           requested: false,
           active: false,
         }),
+        ownershipTrace: createWgpuOwnershipTrace().snapshot(),
       },
       workerTraffic: {
         mainToWorker: emptyTrafficDirection(),
@@ -694,6 +696,10 @@ export function flattenCausalTelemetry(value) {
     createWgpuPassPackageProjection().snapshot({ requested: false, active: false }),
     telemetry.webgpu.passPackageProjection ?? {}
   );
+  const ownershipTrace = deepMerge(
+    createWgpuOwnershipTrace().snapshot(),
+    telemetry.webgpu.ownershipTrace ?? {}
+  );
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -1049,6 +1055,27 @@ export function flattenCausalTelemetry(value) {
     causalWgpuPassPackageUnresolvedOutsideResources:
       passPackageProjection.ownership.unresolvedOutsideResources,
     causalWgpuPassPackageOpHistogram: passPackageProjection.opHistogram,
+    causalWgpuOwnershipTraceSchema: ownershipTrace.schema,
+    causalWgpuOwnershipTraceRequested: ownershipTrace.requested,
+    causalWgpuOwnershipTraceActive: ownershipTrace.active,
+    causalWgpuOwnershipTraceSetterAvailable: ownershipTrace.setterAvailable,
+    causalWgpuOwnershipTraceSetterInvoked: ownershipTrace.setterInvoked,
+    causalWgpuOwnershipTraceRegistered: ownershipTrace.registered,
+    causalWgpuOwnershipTraceEpoch: ownershipTrace.epoch,
+    causalWgpuOwnershipTraceBacklog: ownershipTrace.backlog,
+    causalWgpuOwnershipTraceNativeDropped: ownershipTrace.nativeDropped,
+    causalWgpuOwnershipTraceObservedRecords: ownershipTrace.observedRecords,
+    causalWgpuOwnershipTraceDrainedBatches: ownershipTrace.drainedBatches,
+    causalWgpuOwnershipTraceEpochChanges: ownershipTrace.epochChangeCount,
+    causalWgpuOwnershipTraceRecordEpochMismatches:
+      ownershipTrace.recordEpochMismatchCount,
+    causalWgpuOwnershipTraceOrderingViolations:
+      ownershipTrace.monotonicOrderingViolationCount,
+    causalWgpuOwnershipTraceMalformedHeaders: ownershipTrace.malformedHeaderCount,
+    causalWgpuOwnershipTraceMalformedDescriptors:
+      ownershipTrace.malformedDescriptorCount,
+    causalWgpuOwnershipTraceEventHistogram: ownershipTrace.eventHistogram,
+    causalWgpuOwnershipTraceOpcodeHistogram: ownershipTrace.opcodeHistogram,
     causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,
     causalWgpuUploadAbortedPassCount: uploadPassAssociation.abortedPassCount,
     causalWgpuUploadIncompletePassCount: uploadPassAssociation.incompletePassCount,

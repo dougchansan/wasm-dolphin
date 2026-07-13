@@ -964,6 +964,7 @@ function summarizeScenario(
     drop: maxRegex(helperText, /drop:(\d+)/g),
     causalFairness,
     wgpuDirtyRangeProjection: dirtyRangeProjection,
+    wgpuOwnershipTrace: final.causalTelemetry?.webgpu?.ownershipTrace ?? null,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
@@ -1095,6 +1096,44 @@ function summarizeScenario(
       }
     }
   }
+  const requestedOwnershipTrace = scenario.params?.wgpuownershiptrace;
+  if (requestedOwnershipTrace != null) {
+    const expectedOwnershipTrace = String(requestedOwnershipTrace) === "1";
+    const trace = final.causalTelemetry?.webgpu?.ownershipTrace;
+    if (
+      trace?.requested !== expectedOwnershipTrace ||
+      trace?.active !== expectedOwnershipTrace ||
+      trace?.enabled !== expectedOwnershipTrace
+    ) {
+      failures.push(
+        `WGPU ownership trace mismatch: requested=${expectedOwnershipTrace ? 1 : 0} ` +
+        `capturedRequested=${trace?.requested == null ? "unavailable" : trace.requested ? 1 : 0} ` +
+        `active=${trace?.active == null ? "unavailable" : trace.active ? 1 : 0}`
+      );
+    }
+    if (expectedOwnershipTrace) {
+      if (trace?.setterAvailable !== true || trace?.setterInvoked !== true) {
+        failures.push("WGPU ownership trace native setter evidence unavailable");
+      }
+      if (trace?.registered !== true) {
+        failures.push("WGPU ownership trace ring was not registered");
+      }
+      if (!(Number(trace?.observedRecords) > 0)) {
+        failures.push("WGPU ownership trace observed zero records");
+      }
+      for (const [label, value] of [
+        ["native dropped", trace?.nativeDropped],
+        ["record epoch mismatches", trace?.recordEpochMismatchCount],
+        ["ordering violations", trace?.monotonicOrderingViolationCount],
+        ["malformed headers", trace?.malformedHeaderCount],
+        ["malformed descriptors", trace?.malformedDescriptorCount],
+      ]) {
+        if (!Number.isFinite(Number(value)) || Number(value) !== 0) {
+          failures.push(`WGPU ownership trace ${label}=${value ?? "unavailable"}`);
+        }
+      }
+    }
+  }
   failures.push(...evaluateWgpuGeometryRangeEvidence({
     requested: scenario.params?.wgpugeomrange,
     telemetry: final.causalTelemetry?.webgpu,
@@ -1168,7 +1207,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
