@@ -88,6 +88,71 @@ test("reorders staged and immediate records by publication rather than trace ord
   assert.equal(correlator.checkpoint().valid, true);
 });
 
+test("projects one immutable package while retaining ineligible immediate commands", () => {
+  const { correlator } = fixture();
+  correlator.pushOwnership([
+    lifecycle(WGPU_OWNERSHIP_EVENT.PASS_BEGIN, { transactionId: 7 }),
+    command({
+      serial: 1,
+      opcode: 6,
+      resourceId: 40,
+      payloadLength: 4,
+      transactionId: 7,
+      publication: WGPU_COMMAND_PUBLICATION.IMMEDIATE_ACTIVE,
+    }),
+    command({
+      serial: 2,
+      opcode: 12,
+      transactionId: 7,
+      publication: WGPU_COMMAND_PUBLICATION.PRIVATE_STAGED,
+    }),
+    command({
+      serial: 3,
+      opcode: 21,
+      transactionId: 7,
+      publication: WGPU_COMMAND_PUBLICATION.PRIVATE_STAGED,
+    }),
+    lifecycle(WGPU_OWNERSHIP_EVENT.COMMIT, {
+      transactionId: 7,
+      serial: 3,
+      resourceId: 2,
+    }),
+    command({ serial: 4, opcode: 22, transactionId: 7 }),
+  ]);
+  correlator.pushLegacy([
+    legacy({ opcode: 6, resourceId: 40, payload: [1, 2, 3, 4] }),
+    legacy({ opcode: 12 }),
+    legacy({ opcode: 21 }),
+    legacy({ opcode: 22 }),
+  ]);
+
+  assert.deepEqual(correlator.snapshot().packageOpportunity, {
+    schema: "wasm-dolphin.wgpu-pass-package-opportunity.v1",
+    currentEpochOnly: true,
+    runtimeBehaviorChanged: false,
+    eligible: true,
+    reasons: [],
+    legacyRecords: 4,
+    projectedRecords: 2,
+    recordReduction: 2,
+    legacyPublications: 3,
+    projectedPublications: 2,
+    publicationReduction: 1,
+    publicationReductionRatio: 1 / 3,
+    committedTransactions: 1,
+    abortedTransactions: 0,
+    outsideImmediateCommands: 0,
+    eligibleImmediateCommands: 1,
+    privateStagedCommands: 2,
+    ineligibleTransactionCommands: 1,
+    eligiblePayloadBytes: 4,
+    maximumPackageRecords: 3,
+    maximumPackagePayloadBytes: 4,
+    maximumPackageBytes: 100,
+    requiresMultiplePayloadPages: false,
+  });
+});
+
 test("accepts an active command after Commit and delays close until present", () => {
   const { correlator, events } = fixture();
   correlator.pushOwnership([
@@ -152,6 +217,12 @@ test("abort discards only private records and preserves immediate publications",
   correlator.pushLegacy([legacy({ opcode: 5, resourceId: 8 })]);
   assert.deepEqual(events.map((event) => event.opcode), [5]);
   assert.equal(correlator.snapshot().discardedPrivateRecords, 2);
+  assert.equal(correlator.snapshot().packageOpportunity.abortedTransactions, 1);
+  assert.equal(correlator.snapshot().packageOpportunity.eligible, false);
+  assert.match(
+    correlator.snapshot().packageOpportunity.reasons.join(" "),
+    /producer-state rollback proof/
+  );
   assert.equal(correlator.checkpoint().valid, true);
 });
 
@@ -179,6 +250,8 @@ test("a clean LoadRequested begins a new checkpoint generation", () => {
   ]);
   assert.equal(correlator.checkpoint().valid, true);
   assert.equal(correlator.checkpoint().generation, 1);
+  assert.equal(correlator.snapshot().packageOpportunity.legacyRecords, 0);
+  assert.equal(correlator.snapshot().packageOpportunity.currentEpochOnly, true);
 });
 
 test("fails closed on signature mismatches, trace drops, and serial gaps", () => {

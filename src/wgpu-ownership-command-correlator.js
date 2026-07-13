@@ -25,8 +25,13 @@ export const WGPU_CORRELATION_EPOCH_KIND = Object.freeze({
 });
 
 const SUBMIT_PRESENT_OPCODE = 22;
+const UPLOAD_BUFFER_OPCODE = 6;
 const OWNERSHIP_TRACE_VERSION = 1;
 const EMPTY_BYTES = new Uint8Array(0);
+const LEGACY_RECORD_BYTES = 32;
+const MAX_PAYLOAD_PAGE_BYTES = 4 * 1024 * 1024;
+const PASS_PACKAGE_OPPORTUNITY_SCHEMA =
+  "wasm-dolphin.wgpu-pass-package-opportunity.v1";
 
 // This is an observational join, not a replay path. The ownership lane says
 // when a producer command became globally visible; the legacy lane supplies
@@ -72,6 +77,7 @@ export function createWgpuOwnershipCommandCorrelator({
   let captureEndCommandRingWrite = 0;
   let captureEndCommandSerial = 0;
   let captureId = 0;
+  let packageOpportunity = createPackageOpportunityState();
 
   function pushOwnership(records, health = {}) {
     if (!Array.isArray(records)) {
@@ -297,6 +303,7 @@ export function createWgpuOwnershipCommandCorrelator({
     ) {
       return fail("private staged publication is not actively attributed");
     }
+    observePackageOpportunityCommand(record, publication);
     if (record.transactionId !== 0) {
       if (transaction(record.transactionId).completed) {
         return fail(`command arrived after transaction ${record.transactionId} closed`);
@@ -465,6 +472,24 @@ export function createWgpuOwnershipCommandCorrelator({
     }
     state.completed = true;
     completedTransactions += 1;
+    if (state.aborted) {
+      packageOpportunity.abortedTransactions += 1;
+    } else {
+      packageOpportunity.committedTransactions += 1;
+      packageOpportunity.maximumPackageRecords = Math.max(
+        packageOpportunity.maximumPackageRecords,
+        state.packageEligibleRecords
+      );
+      packageOpportunity.maximumPackagePayloadBytes = Math.max(
+        packageOpportunity.maximumPackagePayloadBytes,
+        state.packageEligiblePayloadBytes
+      );
+      packageOpportunity.maximumPackageBytes = Math.max(
+        packageOpportunity.maximumPackageBytes,
+        state.packageEligibleRecords * LEGACY_RECORD_BYTES +
+          state.packageEligiblePayloadBytes
+      );
+    }
     retiredTransactionHighWater = Math.max(retiredTransactionHighWater, state.id);
     transactions.delete(state.id);
     return true;
@@ -628,6 +653,7 @@ export function createWgpuOwnershipCommandCorrelator({
       captureEndCommandRingWrite,
       captureEndCommandSerial,
       captureId,
+      packageOpportunity: snapshotPackageOpportunity(openTransactions),
     };
   }
 
@@ -658,6 +684,7 @@ export function createWgpuOwnershipCommandCorrelator({
         }
       }
       transactions.clear();
+      packageOpportunity = createPackageOpportunityState();
       currentTransaction = 0;
       lastCommandSerial = null;
       lastLegacyRecordIndex = null;
@@ -683,6 +710,84 @@ export function createWgpuOwnershipCommandCorrelator({
       reasons.add("semantic sink mismatch marker failed");
     }
     return false;
+  }
+
+  function observePackageOpportunityCommand(record, publication) {
+    packageOpportunity.legacyRecords += 1;
+    if (record.transactionId === 0) {
+      packageOpportunity.outsideImmediateCommands += 1;
+      return;
+    }
+    const state = transaction(record.transactionId);
+    const packageEligible =
+      publication === WGPU_COMMAND_PUBLICATION.PRIVATE_STAGED ||
+      record.opcode === UPLOAD_BUFFER_OPCODE;
+    if (publication === WGPU_COMMAND_PUBLICATION.PRIVATE_STAGED) {
+      packageOpportunity.privateStagedCommands += 1;
+    } else if (packageEligible) {
+      packageOpportunity.eligibleImmediateCommands += 1;
+    } else {
+      packageOpportunity.ineligibleTransactionCommands += 1;
+    }
+    if (!packageEligible) return;
+    packageOpportunity.eligiblePayloadBytes += record.payloadLength;
+    state.packageEligibleRecords += 1;
+    state.packageEligiblePayloadBytes += record.payloadLength;
+  }
+
+  function snapshotPackageOpportunity(openTransactions) {
+    const reasons = [];
+    const pendingOwnership = publicationOrder.length - publicationRead;
+    const pendingLegacy = legacy.length - legacyRead;
+    if (failed) reasons.push("ownership/semantic correlation failed");
+    if (nativeDropped !== 0) reasons.push("native trace drops are nonzero");
+    if (packageOpportunity.abortedTransactions !== 0) {
+      reasons.push("aborted transactions require producer-state rollback proof");
+    }
+    if (openTransactions.length !== 0) reasons.push("ownership transactions remain open");
+    if (pendingOwnership !== 0) reasons.push("ownership commands remain unmatched");
+    if (pendingLegacy !== 0) reasons.push("legacy commands remain unmatched");
+    if (packageOpportunity.committedTransactions === 0) {
+      reasons.push("no committed transactions were observed");
+    }
+    const legacyPublications =
+      packageOpportunity.outsideImmediateCommands +
+      packageOpportunity.eligibleImmediateCommands +
+      packageOpportunity.ineligibleTransactionCommands +
+      packageOpportunity.committedTransactions;
+    const projectedPublications =
+      packageOpportunity.outsideImmediateCommands +
+      packageOpportunity.ineligibleTransactionCommands +
+      packageOpportunity.committedTransactions;
+    const projectedRecords = projectedPublications;
+    const publicationReduction = legacyPublications - projectedPublications;
+    return Object.freeze({
+      schema: PASS_PACKAGE_OPPORTUNITY_SCHEMA,
+      currentEpochOnly: true,
+      runtimeBehaviorChanged: false,
+      eligible: reasons.length === 0,
+      reasons: Object.freeze(reasons),
+      legacyRecords: packageOpportunity.legacyRecords,
+      projectedRecords,
+      recordReduction: packageOpportunity.legacyRecords - projectedRecords,
+      legacyPublications,
+      projectedPublications,
+      publicationReduction,
+      publicationReductionRatio:
+        legacyPublications === 0 ? 0 : publicationReduction / legacyPublications,
+      committedTransactions: packageOpportunity.committedTransactions,
+      abortedTransactions: packageOpportunity.abortedTransactions,
+      outsideImmediateCommands: packageOpportunity.outsideImmediateCommands,
+      eligibleImmediateCommands: packageOpportunity.eligibleImmediateCommands,
+      privateStagedCommands: packageOpportunity.privateStagedCommands,
+      ineligibleTransactionCommands: packageOpportunity.ineligibleTransactionCommands,
+      eligiblePayloadBytes: packageOpportunity.eligiblePayloadBytes,
+      maximumPackageRecords: packageOpportunity.maximumPackageRecords,
+      maximumPackagePayloadBytes: packageOpportunity.maximumPackagePayloadBytes,
+      maximumPackageBytes: packageOpportunity.maximumPackageBytes,
+      requiresMultiplePayloadPages:
+        packageOpportunity.maximumPackagePayloadBytes > MAX_PAYLOAD_PAGE_BYTES,
+    });
   }
 
   function reservePendingRecord() {
@@ -862,8 +967,26 @@ function transactionState(id) {
     outstandingPublished: 0,
     outstandingStagedPublished: 0,
     paired: 0,
+    packageEligibleRecords: 0,
+    packageEligiblePayloadBytes: 0,
     sinkTransactionOpen: false,
     sinkTransactionSettled: false,
+  };
+}
+
+function createPackageOpportunityState() {
+  return {
+    legacyRecords: 0,
+    committedTransactions: 0,
+    abortedTransactions: 0,
+    outsideImmediateCommands: 0,
+    eligibleImmediateCommands: 0,
+    privateStagedCommands: 0,
+    ineligibleTransactionCommands: 0,
+    eligiblePayloadBytes: 0,
+    maximumPackageRecords: 0,
+    maximumPackagePayloadBytes: 0,
+    maximumPackageBytes: 0,
   };
 }
 

@@ -230,8 +230,8 @@
     {
       "path": "src/wgpu-ownership-command-correlator.js",
       "hashMode": "lf-normalized",
-      "size": 30596,
-      "sha256": "a9ae79573521e5e690fe1ebb1ea529f564003ab6c84de2dc77b4c1d3c08c5c34"
+      "size": 36008,
+      "sha256": "d4636d72837faa5bc9353a582242d8ae28c0f7d695fa41ac80a7bf666241afba"
     },
     {
       "path": "src/wgpu-resource-generation-tracker.js",

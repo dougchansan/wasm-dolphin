@@ -101,6 +101,33 @@ The 12,916,037-byte candidate reproduced SHA-256 `fe4448a07...` after a full
 1,348-target rebuild with the unchanged production compile flags. Define
 `DOLPHIN_WEB_HOT_DISPATCH_ORDER=0` externally to restore the legacy order.
 
+## Immutable pass-package falsification
+
+The passive consumer projection observed 3,058,795 legacy records, 897,121
+legacy publications, 7,363 complete passes, 849,087 uploads, and 1.846 GB of
+upload payload in one visible fixed-work run. A full-envelope grouping would
+theoretically reduce publications by 98.3%, but that consumer-only result is
+not a correctness claim because it cannot see unpublished producer aborts or
+prove resource generations.
+
+A bounded native-ownership plus WDS2 semantic capture now reports a separate
+current-epoch opportunity model. It paired 73,001 records overall and froze a
+clean applied-save prefix with zero mismatch, abort, drop, ordering, or epoch
+errors. In that prefix, the conservative package set (buffer uploads plus
+already-private pass records) covered 401 of 440 records across 10 committed
+transactions, but reduced only 94 of 133 release publications (70.7%). This is
+below the plan's 90% producer-falsification gate, so executable package
+transport remains parked.
+
+Single-run observer classification measured 77.36% with projection only,
+71.67% with ownership trace, and 72.03% with semantic mode; the corresponding
+clean visible confirmation was 77.32%. Projection overhead is therefore small,
+while native trace is the observer cost that must be reduced or bounded more
+tightly. These are descriptive single runs, not balanced performance effects.
+The latest visible workload also contains a 6.319 MB pass payload, so a future
+runtime design needs multiple immutable payload pages under one atomic
+transaction rather than one contiguous 4 MiB package.
+
 ## Reproducible candidate
 
 `compare-core-builds` reported `sourceEqual`, `toolchainEqual`, `wasmExact`,
