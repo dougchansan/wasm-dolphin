@@ -94,56 +94,39 @@ export function createWgpuSemanticDigest({
       throw new Error("overlapping semantic transactions are not supported");
     }
     transactions.set(id, {
-      globalDigest: new Uint8Array(globalDigest),
-      epochDigest: new Uint8Array(epochDigest),
-      eventCount: 0,
-      sequenceLo,
-      sequenceHi,
+      events: [],
     });
   }
 
-  function appendEvent(draft) {
+  function appendEvent(draft, { staged = false } = {}) {
     const transaction = u32(draft?.transaction ?? 0, "transaction");
-    if (transaction === 0 && transactions.size !== 0) {
-      mismatchCount += 1;
-      throw new Error(
-        "transaction-zero semantic events cannot interleave with an open transaction"
-      );
-    }
     const payloadBytes = asBytes(draft?.payloadBytes ?? EMPTY_BYTES);
-    const branch = transaction === 0 ? null : transactions.get(transaction);
-    if (transaction !== 0 && !branch) {
+    const branch = staged ? transactions.get(transaction) : null;
+    if (staged && transaction === 0) {
+      mismatchCount += 1;
+      throw new Error("staged semantic events require a nonzero transaction");
+    }
+    if (staged && !branch) {
       unresolvedCount += 1;
       throw new Error(`semantic transaction ${transaction} is not open`);
     }
     const startedAt = now();
     const payloadDigest = sha256(payloadBytes);
-    const event = {
-      ...draft,
+    const event = immutableEventDraft({
+      draft,
       epoch,
       transaction,
-      sequenceLo: branch?.sequenceLo ?? sequenceLo,
-      sequenceHi: branch?.sequenceHi ?? sequenceHi,
       payloadLength: payloadBytes.byteLength,
-    };
-    const encoded = encodeWgpuSemanticEvent(event, payloadDigest);
+      payloadDigest,
+    });
     eventCount += 1;
     payloadBytesHashed += payloadBytes.byteLength;
-    encodedBytesHashed += encoded.byteLength;
-    if (transaction === 0) {
-      [sequenceLo, sequenceHi] = nextSequence(sequenceLo, sequenceHi);
-      globalDigest = chain(globalDigest, encoded);
-      epochDigest = chain(epochDigest, encoded);
-      committedEventCount += 1;
-    } else {
-      [branch.sequenceLo, branch.sequenceHi] = nextSequence(
-        branch.sequenceLo,
-        branch.sequenceHi
-      );
-      branch.globalDigest = chain(branch.globalDigest, encoded);
-      branch.epochDigest = chain(branch.epochDigest, encoded);
-      branch.eventCount += 1;
+    if (staged) {
+      branch.events.push(event);
+      recordHashTime(startedAt);
+      return null;
     }
+    const encoded = commitEvent(event);
     recordHashTime(startedAt);
     return encoded;
   }
@@ -155,21 +138,19 @@ export function createWgpuSemanticDigest({
       mismatchCount += 1;
       throw new Error(`semantic transaction ${id} cannot commit because it is not open`);
     }
-    globalDigest = branch.globalDigest;
-    epochDigest = branch.epochDigest;
-    sequenceLo = branch.sequenceLo;
-    sequenceHi = branch.sequenceHi;
-    committedEventCount += branch.eventCount;
+    const startedAt = now();
+    for (const event of branch.events) commitEvent(event);
     transactions.delete(id);
     committedTransactionCount += 1;
     recentCommits.push({
       epoch,
       transaction: id,
-      eventCount: branch.eventCount,
+      eventCount: branch.events.length,
       globalDigest: bytesToHex(globalDigest),
       epochDigest: bytesToHex(epochDigest),
     });
     if (recentCommits.length > recentLimit) recentCommits.shift();
+    recordHashTime(startedAt);
   }
 
   function abortTransaction(transactionId) {
@@ -224,6 +205,20 @@ export function createWgpuSemanticDigest({
     hashMaxMs = Math.max(hashMaxMs, elapsed);
   }
 
+  function commitEvent(event) {
+    const encoded = encodeWgpuSemanticEvent({
+      ...event,
+      sequenceLo,
+      sequenceHi,
+    }, event.payloadDigest);
+    [sequenceLo, sequenceHi] = nextSequence(sequenceLo, sequenceHi);
+    globalDigest = chain(globalDigest, encoded);
+    epochDigest = chain(epochDigest, encoded);
+    encodedBytesHashed += encoded.byteLength;
+    committedEventCount += 1;
+    return encoded;
+  }
+
   return {
     beginEpoch,
     beginTransaction,
@@ -234,6 +229,21 @@ export function createWgpuSemanticDigest({
     markMismatch,
     markOverflow,
     snapshot,
+  };
+}
+
+function immutableEventDraft({ draft, epoch, transaction, payloadLength, payloadDigest }) {
+  return {
+    kind: u32(draft?.kind, "kind"),
+    epoch,
+    transaction,
+    opcode: u32(draft?.opcode, "opcode"),
+    resourceClass: u32(draft?.resourceClass, "resourceClass"),
+    resourceId: u32(draft?.resourceId, "resourceId"),
+    generation: u32(draft?.generation, "generation"),
+    args: normalizeArgs(draft?.args),
+    payloadLength,
+    payloadDigest: new Uint8Array(payloadDigest),
   };
 }
 

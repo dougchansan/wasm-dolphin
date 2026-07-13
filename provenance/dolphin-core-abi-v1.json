@@ -224,8 +224,8 @@
     {
       "path": "src/wgpu-semantic-digest.js",
       "hashMode": "lf-normalized",
-      "size": 9697,
-      "sha256": "7243a85f209dcac492978b97f27ce7409c863dcf980e5cc6bb3b7891f5de534d"
+      "size": 9792,
+      "sha256": "34bc95921b1660ad9c0086b596ddf6f1619fa43e78a6ff80683ebba605d88e94"
     }
   ],
   "memoryContract": {

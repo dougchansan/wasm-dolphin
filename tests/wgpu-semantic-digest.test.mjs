@@ -75,7 +75,7 @@ test("semantic chains are deterministic and payload sensitive", () => {
     const sink = createWgpuSemanticDigest({ now: () => 0 });
     sink.beginEpoch(1);
     sink.beginTransaction(2);
-    sink.appendEvent(draft({ transaction: 2, payloadBytes: payload }));
+    sink.appendEvent(draft({ transaction: 2, payloadBytes: payload }), { staged: true });
     sink.commitTransaction(2);
     return sink.snapshot();
   };
@@ -94,7 +94,7 @@ test("aborted transaction content never advances the committed chain", () => {
   const candidate = createWgpuSemanticDigest({ now: () => 0 });
   candidate.beginEpoch(3);
   candidate.beginTransaction(8);
-  candidate.appendEvent(draft({ transaction: 8 }));
+  candidate.appendEvent(draft({ transaction: 8 }), { staged: true });
   candidate.abortTransaction(8);
   assert.equal(candidate.snapshot().globalDigest, baseline.snapshot().globalDigest);
   assert.equal(candidate.snapshot().epochDigest, baseline.snapshot().epochDigest);
@@ -107,12 +107,12 @@ test("epoch boundaries fail closed on open branches and bound commit history", (
   const sink = createWgpuSemanticDigest({ recentCommitLimit: 2, now: () => 0 });
   sink.beginEpoch(1);
   sink.beginTransaction(1);
-  sink.appendEvent(draft({ transaction: 1 }));
+  sink.appendEvent(draft({ transaction: 1 }), { staged: true });
   sink.beginEpoch(2);
   assert.equal(sink.snapshot().unresolvedCount, 1);
   for (let id = 2; id <= 4; id += 1) {
     sink.beginTransaction(id);
-    sink.appendEvent(draft({ transaction: id, resourceId: id }));
+    sink.appendEvent(draft({ transaction: id, resourceId: id }), { staged: true });
     sink.commitTransaction(id);
   }
   assert.deepEqual(sink.snapshot().recentCommits.map((entry) => entry.transaction), [3, 4]);
@@ -130,14 +130,47 @@ test("overlapping transactions fail closed instead of forking committed history"
   assert.equal(sink.snapshot().mismatchCount, 1);
 });
 
-test("transaction-zero events cannot be overwritten by a later branch commit", () => {
+test("published events interleave with a private branch without being overwritten", () => {
   const sink = createWgpuSemanticDigest({ now: () => 0 });
   sink.beginEpoch(1);
   sink.beginTransaction(1);
-  assert.throws(
-    () => sink.appendEvent(draft({ transaction: 0 })),
-    /cannot interleave with an open transaction/
-  );
-  assert.equal(sink.snapshot().committedEventCount, 0);
-  assert.equal(sink.snapshot().mismatchCount, 1);
+  sink.appendEvent(draft({ transaction: 1, opcode: 6 }), { staged: true });
+  sink.appendEvent(draft({ transaction: 1, opcode: 5, payloadBytes: new Uint8Array() }));
+  const beforeCommit = sink.snapshot();
+  assert.equal(beforeCommit.committedEventCount, 1);
+  sink.commitTransaction(1);
+  assert.equal(sink.snapshot().committedEventCount, 2);
+  assert.equal(sink.snapshot().mismatchCount, 0);
+});
+
+test("aborting a private branch preserves already-published events with the same owner", () => {
+  const candidate = createWgpuSemanticDigest({ now: () => 0 });
+  candidate.beginEpoch(1);
+  candidate.beginTransaction(4);
+  candidate.appendEvent(draft({ transaction: 4, opcode: 6 }), { staged: true });
+  candidate.appendEvent(draft({ transaction: 4, opcode: 5, payloadBytes: new Uint8Array() }));
+  const publishedDigest = candidate.snapshot().globalDigest;
+  candidate.abortTransaction(4);
+  assert.equal(candidate.snapshot().globalDigest, publishedDigest);
+  assert.equal(candidate.snapshot().committedEventCount, 1);
+  assert.equal(candidate.snapshot().abortedTransactionCount, 1);
+});
+
+test("staged event inputs are immutable before commit", () => {
+  const payload = Uint8Array.of(1, 2, 3, 4);
+  const args = [9, 64, 4, 1];
+  const sink = createWgpuSemanticDigest({ now: () => 0 });
+  sink.beginEpoch(1);
+  sink.beginTransaction(5);
+  sink.appendEvent(draft({ transaction: 5, payloadBytes: payload, args }), { staged: true });
+  payload[0] = 99;
+  args[0] = 99;
+  sink.commitTransaction(5);
+
+  const expected = createWgpuSemanticDigest({ now: () => 0 });
+  expected.beginEpoch(1);
+  expected.beginTransaction(5);
+  expected.appendEvent(draft({ transaction: 5 }), { staged: true });
+  expected.commitTransaction(5);
+  assert.equal(sink.snapshot().globalDigest, expected.snapshot().globalDigest);
 });
