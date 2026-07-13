@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 435011,
-      "sha256": "0969c1c66670badcd5882871b2f80ac5dcb8fffcd50789281fcc45e0cc96bd46"
+      "size": 436747,
+      "sha256": "04b0fc90c58f91d44cdba990b368e2e9c18878d2e12f6bff7cf4bad525db11c7"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -206,8 +206,8 @@
     {
       "path": "src/wgpu-ownership-trace.js",
       "hashMode": "lf-normalized",
-      "size": 13802,
-      "sha256": "a453ab9f5d4b1129e4c9822c624613f8789ee6baa248fb008864b2f1eb7b9083"
+      "size": 13821,
+      "sha256": "411cc139e5b65b522b9aa34c91ff542f6bc56e06882fead859d2c2d5436e6fa1"
     },
     {
       "path": "src/incremental-sha256.js",
@@ -230,8 +230,8 @@
     {
       "path": "src/wgpu-ownership-command-correlator.js",
       "hashMode": "lf-normalized",
-      "size": 29253,
-      "sha256": "8668424422a7f4217e6b458e100c1ebb6f02ce2cd852164e95b63eaee20627f5"
+      "size": 30596,
+      "sha256": "a9ae79573521e5e690fe1ebb1ea529f564003ab6c84de2dc77b4c1d3c08c5c34"
     },
     {
       "path": "src/wgpu-resource-generation-tracker.js",
@@ -260,8 +260,8 @@
     {
       "path": "src/wgpu-semantic-runtime.js",
       "hashMode": "lf-normalized",
-      "size": 5046,
-      "sha256": "065c215554ef9ac7ab9b4e186123aa1fbbe719c1389db2d3d02bc0e407a3ac77"
+      "size": 9697,
+      "sha256": "ea5841a9584a5da15a8ff6c950a802855b0528631433f21286cc2dca796b562e"
     }
   ],
   "memoryContract": {
@@ -299,7 +299,8 @@
     "_SetWgpuIdleFifoTailElisionEnabled",
     "_SetWebGpuOwnershipTraceEnabled",
     "_GetWebGpuOwnershipTracePtr",
-    "_GetWebGpuOwnershipTraceCapacity"
+    "_GetWebGpuOwnershipTraceCapacity",
+    "_AcknowledgeWebGpuOwnershipTraceCapture"
   ],
   "moduleExports": [
     "_AudioBuffer",

@@ -74,3 +74,24 @@ test("device loss invalidates semantic evidence instead of claiming a reset", ()
   assert.match(body, /wgpuSemanticRuntime\.invalidate/);
   assert.doesNotMatch(body, /captureInitialWgpuConsumerResetAttestation/);
 });
+
+test("bounded capture freezes at the published cutoff before releasing the producer", () => {
+  const publish = worker.indexOf("publishWgpuReadIndex(ring, read);");
+  const advance = worker.indexOf("advanceWgpuSemanticCapture(ring, read);", publish);
+  assert.ok(publish > 0);
+  assert.ok(advance > publish);
+  const helperStart = worker.indexOf("function advanceWgpuSemanticCapture(");
+  const helperEnd = worker.indexOf("\nasync function initializeWgpuUploadProbe", helperStart);
+  const helper = worker.slice(helperStart, helperEnd);
+  const request = helper.indexOf("maybeRequestCaptureEnd(");
+  const nativeStop = helper.indexOf("setWebGpuOwnershipTraceEnabled(0)", request);
+  const freeze = helper.indexOf("maybeFreezeCapture(", nativeStop);
+  const acknowledge = helper.indexOf("acknowledgeWebGpuOwnershipTraceCapture", freeze);
+  assert.ok(request > 0);
+  assert.ok(nativeStop > request);
+  assert.ok(freeze > nativeStop);
+  assert.ok(acknowledge > freeze);
+  assert.match(helper, /commandRingRead: read/);
+  assert.match(helper, /commandRingWrite: write/);
+  assert.match(worker, /wgpusemantic=1 requires AcknowledgeWebGpuOwnershipTraceCapture/);
+});

@@ -249,6 +249,29 @@ test("checkpoint rejects unmatched lanes, open transactions, and dirty sinks", (
   assert.deepEqual(correlator.checkpoint().reasons, ["semantic sink committed prefix is invalid"]);
 });
 
+test("capture end is a terminal producer acknowledgement with an exclusive ring cutoff", () => {
+  const { correlator } = fixture();
+  correlator.pushOwnership([
+    command({ serial: 1, opcode: 5, resourceId: 7 }),
+  ]);
+  correlator.pushLegacy([{ ...legacy({ opcode: 5, resourceId: 7 }), recordIndex: 9 }]);
+  correlator.pushOwnership([lifecycle(WGPU_OWNERSHIP_EVENT.CAPTURE_END, {
+    serial: 1,
+    opcode: 22,
+    resourceId: 10,
+    payloadLength: 1,
+  })]);
+  const checkpoint = correlator.checkpoint();
+  assert.equal(checkpoint.valid, true);
+  assert.equal(checkpoint.captureEndSeen, true);
+  assert.equal(checkpoint.captureEndCommandRingWrite, 10);
+  assert.equal(checkpoint.captureEndCommandSerial, 1);
+
+  correlator.pushOwnership([command({ serial: 2, opcode: 5, resourceId: 8 })]);
+  assert.equal(correlator.snapshot().failed, true);
+  assert.match(correlator.snapshot().reasons.join(" "), /after capture end/);
+});
+
 test("drives the semantic sink lifecycle without making immediate records rollbackable", () => {
   const sink = createWgpuSemanticDigest({ now: () => 0 });
   const correlator = createWgpuOwnershipCommandCorrelator({ semanticSink: sink });

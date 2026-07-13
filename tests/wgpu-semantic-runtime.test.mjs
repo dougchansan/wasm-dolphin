@@ -129,6 +129,87 @@ test("the first failing ownership batch remains available after later trace acti
   assert.match(state.reasons[0], /reserved=1, passBegan=0, completed=0/);
 });
 
+test("bounded capture stops only after a qualified prefix and terminal native ack", () => {
+  const runtime = createWgpuSemanticRuntime({
+    requested: true,
+    active: true,
+    minimumCommittedEventCount: 2,
+    initialConsumerResetAttestation: captureInitialWgpuConsumerResetAttestation({
+      resourceMaps: emptyMaps(),
+      videoBackend: "WebGPU-Real",
+      renderDeviceReady: true,
+      capturedBeforeTraceAttach: true,
+      commandRingRegistered: false,
+      commandsProcessed: 0,
+      canvasOwnedByCommandRing: false,
+      replayFatal: null,
+    }),
+    now: () => 0,
+  });
+  runtime.pushOwnership([
+    ownership(WGPU_OWNERSHIP_EVENT.EPOCH, { epoch: 1, resourceId: 1 }),
+    ownership(WGPU_OWNERSHIP_EVENT.COMMAND, {
+      epoch: 1,
+      commandSerial: 1,
+      opcode: 5,
+      resourceId: 7,
+    }),
+    ownership(WGPU_OWNERSHIP_EVENT.COMMAND, {
+      epoch: 1,
+      commandSerial: 2,
+      opcode: 5,
+      resourceId: 8,
+    }),
+  ], healthy());
+
+  runtime.acceptPrepared(
+    runtime.prepareLegacy(Uint32Array.of(5, 7, 64, 1, 0, 0, 0, 0)),
+    0
+  );
+  assert.equal(runtime.captureControl().stopRequested, false);
+  runtime.acceptPrepared(
+    runtime.prepareLegacy(Uint32Array.of(5, 8, 64, 1, 0, 0, 0, 0)),
+    1
+  );
+  assert.equal(runtime.maybeRequestCaptureEnd({
+    commandRingRead: 2,
+    commandRingWrite: 2,
+    ownershipHealth: healthy(),
+  }), true);
+  assert.equal(runtime.captureControl().nativeStopRequestPending, true);
+  assert.equal(runtime.snapshot().captureComplete, false);
+
+  runtime.markNativeStopRequestSent();
+  runtime.pushOwnership([ownership(WGPU_OWNERSHIP_EVENT.CAPTURE_END, {
+    epoch: 1,
+    commandSerial: 2,
+    opcode: 22,
+    resourceId: 2,
+    payloadLength: 1,
+  })], healthy());
+  assert.deepEqual(runtime.maybeFreezeCapture({
+    commandRingRead: 2,
+    commandRingWrite: 2,
+    ownershipHealth: healthy(),
+  }), {
+    captureId: 1,
+    commandRingWrite: 2,
+    commandSerial: 2,
+  });
+  const completed = runtime.snapshot({ detailed: true });
+  assert.equal(completed.captureComplete, true);
+  assert.equal(completed.evidenceValid, true);
+  assert.equal(completed.captureEndCommandRingWrite, 2);
+  assert.equal(completed.captureEndCommandSerial, 2);
+
+  assert.equal(
+    runtime.prepareLegacy(Uint32Array.of(5, 9, 64, 1, 0, 0, 0, 0)),
+    null
+  );
+  runtime.invalidate("later device loss");
+  assert.deepEqual(runtime.snapshot({ detailed: true }), completed);
+});
+
 function activeRuntime() {
   return createWgpuSemanticRuntime({
     requested: true,
@@ -150,6 +231,7 @@ function activeRuntime() {
 function healthy() {
   return {
     registered: true,
+    backlog: 0,
     nativeDropped: 0,
     recordEpochMismatchCount: 0,
     monotonicOrderingViolationCount: 0,

@@ -16,6 +16,7 @@ export const WGPU_OWNERSHIP_EVENT = Object.freeze({
   CONSUMER_FAILURE: 8,
   PENDING_RESERVED: 9,
   PASS_BEGIN: 10,
+  CAPTURE_END: 11,
 });
 export const WGPU_COMMAND_PUBLICATION = Object.freeze({
   IMMEDIATE: 0,

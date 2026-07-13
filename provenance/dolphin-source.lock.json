@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "f97bd81255b66d5cddecc01c79254884c3513983f845d1e81127ae47b3b37b8d",
+  "patchSeriesSha256": "bc1b6c5ee1074b6bb411d5432d4bfdb3138ef1e7ff08ad1f87251ec3227b42e9",
   "patches": [
     {
       "order": 1,
@@ -336,8 +336,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0039-webgpu-native-ownership-trace.patch",
-      "size": 26082,
-      "sha256": "32503444d40d690fc1938e218c3129abaf3930b3ebcfed932516dffa449ba38b"
+      "size": 29230,
+      "sha256": "fee0cb0b7e897dbb3a3682acd871df58f53d76c0e87860be35357cf03c9640a8"
     },
     {
       "order": 40,

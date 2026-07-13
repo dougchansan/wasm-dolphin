@@ -1545,6 +1545,12 @@ async function loadCore({
       "wgpuownershiptrace=1 requires ownership trace setter and descriptor getters"
     );
   }
+  if (wgpuSemanticRuntimeActive &&
+      !api.acknowledgeWebGpuOwnershipTraceCapture) {
+    throw new Error(
+      "wgpusemantic=1 requires AcknowledgeWebGpuOwnershipTraceCapture"
+    );
+  }
   api.setWgpuDeepDiagnosticsEnabled?.(wgpuDeepReplayDiagnostics ? 1 : 0);
   wgpuProducerProfileAvailable = Boolean(
     api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
@@ -1743,6 +1749,15 @@ function bindApi(module) {
         ? (enabled) => ccall(
             "SetWebGpuOwnershipTraceEnabled", null, ["number"], [enabled ? 1 : 0]
           )
+        : null,
+    acknowledgeWebGpuOwnershipTraceCapture:
+      typeof module._AcknowledgeWebGpuOwnershipTraceCapture === "function"
+        ? (captureId) => ccall(
+            "AcknowledgeWebGpuOwnershipTraceCapture",
+            "number",
+            ["number"],
+            [captureId >>> 0]
+          ) !== 0
         : null,
     getWebGpuOwnershipTracePtr:
       typeof module._GetWebGpuOwnershipTracePtr === "function"
@@ -5779,9 +5794,43 @@ function ensureWgpuMappedStagingPool(device) {
 function drainWgpuSemanticOwnership() {
   if (!wgpuOwnershipTraceActive) return 0;
   if (!wgpuSemanticRuntimeActive) return wgpuOwnershipTrace.drain();
+  if (!wgpuSemanticRuntime.captureControl().open) return 0;
   const records = wgpuOwnershipTrace.drain({ collect: true });
   wgpuSemanticRuntime.pushOwnership(records, wgpuOwnershipTrace.snapshot());
   return records.length;
+}
+
+function advanceWgpuSemanticCapture(ring, read) {
+  if (!wgpuSemanticRuntimeActive || !ring?.headerI32) return;
+  drainWgpuSemanticOwnership();
+  const ownershipHealth = wgpuOwnershipTrace.snapshot();
+  const write = Atomics.load(ring.headerI32, 0) >>> 0;
+  if (wgpuSemanticRuntime.maybeRequestCaptureEnd({
+    commandRingRead: read,
+    commandRingWrite: write,
+    ownershipHealth,
+  })) {
+    try {
+      api.setWebGpuOwnershipTraceEnabled(0);
+      wgpuSemanticRuntime.markNativeStopRequestSent();
+    } catch (error) {
+      wgpuSemanticRuntime.invalidate(
+        `native capture-stop request failed: ${error?.message || error}`
+      );
+    }
+  }
+  const frozen = wgpuSemanticRuntime.maybeFreezeCapture({
+    commandRingRead: read,
+    commandRingWrite: write,
+    ownershipHealth,
+  });
+  if (!frozen) return;
+  if (!api.acknowledgeWebGpuOwnershipTraceCapture(frozen.captureId)) {
+    markWgpuReplayFatal(
+      "semantic-capture-ack",
+      `native capture ${frozen.captureId} acknowledgement was rejected`
+    );
+  }
 }
 
 async function initializeWgpuUploadProbe(mode) {
@@ -7526,7 +7575,8 @@ function drainWebGpuCmdRing(source = "presentation") {
         op === WGPU_CMD_OP_UPLOAD_BUFFER
       ? retainedSemanticPayload.subarray(0, u32[recWord + 4])
       : retainedSemanticPayload;
-    const preparedSemanticRecord = wgpuSemanticRuntimeActive
+    const preparedSemanticRecord = wgpuSemanticRuntimeActive &&
+        wgpuSemanticRuntime.captureControl().open
       ? wgpuSemanticRuntime.prepareLegacy(
           u32.subarray(recWord, recWord + 8),
           heap,
@@ -9319,7 +9369,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     if (causalMetricsEnabled) {
       wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
     }
-    if (wgpuSemanticRuntimeActive) {
+    if (wgpuSemanticRuntimeActive && wgpuSemanticRuntime.captureControl().open) {
       if (replayRecordAccepted && !wgpuReplayFatal && !mappedCapacityHold) {
         wgpuSemanticRuntime.acceptPrepared(preparedSemanticRecord, read);
       } else if (mappedCapacityHold && !wgpuReplayFatal) {
@@ -9413,6 +9463,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     ring.stagedScanCursor = null;
   }
   publishWgpuReadIndex(ring, read);
+  advanceWgpuSemanticCapture(ring, read);
   const processed = (read - initialRead) >>> 0;
   const backlogAfter = (write - read) >>> 0;
   webGpuCausalStats.backlogAfterLast = backlogAfter;

@@ -15,6 +15,7 @@ export const CORE_ABI_PATH = "provenance/dolphin-core-abi-v1.json";
 export const VENDOR_SNAPSHOT_PATH = "provenance/dolphin-vendor-snapshot-v1.json";
 export const REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS = Object.freeze([
   "_SetWebGpuOwnershipTraceEnabled",
+  "_AcknowledgeWebGpuOwnershipTraceCapture",
   "_GetWebGpuOwnershipTracePtr",
   "_GetWebGpuOwnershipTraceCapacity",
 ]);

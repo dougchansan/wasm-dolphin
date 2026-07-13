@@ -51,7 +51,7 @@ export function createWgpuOwnershipCommandCorrelator({
   let legacyRead = 0;
   const transactions = new Map();
   const reasons = new Set();
-  const lifecycleCounts = new Float64Array(11);
+  const lifecycleCounts = new Float64Array(12);
   let currentTransaction = 0;
   let epoch = null;
   let lastCommandSerial = null;
@@ -68,6 +68,10 @@ export function createWgpuOwnershipCommandCorrelator({
   let generation = 0;
   let epochOpened = false;
   let retiredTransactionHighWater = 0;
+  let captureEndSeen = false;
+  let captureEndCommandRingWrite = 0;
+  let captureEndCommandSerial = 0;
+  let captureId = 0;
 
   function pushOwnership(records, health = {}) {
     if (!Array.isArray(records)) {
@@ -202,7 +206,21 @@ export function createWgpuOwnershipCommandCorrelator({
         return;
 
       case WGPU_OWNERSHIP_EVENT.COMMAND:
+        if (captureEndSeen) return fail("ownership command arrived after capture end");
         return processCommand(record);
+
+      case WGPU_OWNERSHIP_EVENT.CAPTURE_END:
+        if (captureEndSeen) return fail("duplicate capture end record");
+        if (record.transactionId !== 0 || record.opcode !== SUBMIT_PRESENT_OPCODE ||
+            record.commandSerial !== lastCommandSerial || record.payloadLength === 0 ||
+            record.auxiliary !== 0) {
+          return fail("capture end record does not match the terminal ABI");
+        }
+        captureEndSeen = true;
+        captureEndCommandRingWrite = record.resourceId;
+        captureEndCommandSerial = record.commandSerial;
+        captureId = record.payloadLength;
+        return;
 
       case WGPU_OWNERSHIP_EVENT.PENDING_RESERVED:
         if (!requireTransaction(record, "pending reservation")) return;
@@ -545,6 +563,14 @@ export function createWgpuOwnershipCommandCorrelator({
     if (sinkSnapshot && Number(sinkSnapshot.openTransactionCount ?? 0) !== 0) {
       checkpointReasons.push("semantic sink is not checkpoint-clean");
     }
+    if (captureEndSeen) {
+      const consumedWrite = lastLegacyRecordIndex == null
+        ? 0
+        : (lastLegacyRecordIndex + 1) >>> 0;
+      if (consumedWrite !== captureEndCommandRingWrite) {
+        checkpointReasons.push("capture end cutoff does not match consumed legacy prefix");
+      }
+    }
     const committedPrefixValid = prefixReasons.length === 0;
     const fullyQuiescent = checkpointReasons.length === 0;
     return Object.freeze({
@@ -562,6 +588,10 @@ export function createWgpuOwnershipCommandCorrelator({
       openTransactionCount: openTransactions.length,
       nativeDropped,
       lastLegacyRecordIndex: lastLegacyRecordIndex ?? 0,
+      captureEndSeen,
+      captureEndCommandRingWrite,
+      captureEndCommandSerial,
+      captureId,
       sink: sinkSnapshot,
     });
   }
@@ -594,6 +624,10 @@ export function createWgpuOwnershipCommandCorrelator({
       completedTransactions,
       resetCount,
       lifecycleCounts: Array.from(lifecycleCounts),
+      captureEndSeen,
+      captureEndCommandRingWrite,
+      captureEndCommandSerial,
+      captureId,
     };
   }
 

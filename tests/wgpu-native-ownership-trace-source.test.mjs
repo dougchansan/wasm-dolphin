@@ -19,6 +19,8 @@ test("native ownership trace keeps a separate fixed ABI and explicit allocation 
   assert.match(header, /static_assert\(sizeof\(OwnershipTraceHeader\) == 20/);
   assert.match(header, /static_assert\(sizeof\(OwnershipTraceRecord\) == 32/);
   assert.match(header, /std::atomic<bool> m_trace_enabled\{false\}/);
+  assert.match(header, /CaptureEnd = 11/);
+  assert.match(header, /m_trace_capture_waiting_ack\{0\}/);
 
   const ensureCalls = source.match(/EnsureOwnershipTrace\(\)/g) ?? [];
   assert.equal(ensureCalls.length, 2, "only the definition and explicit setter may allocate");
@@ -34,6 +36,16 @@ test("native ownership trace keeps a separate fixed ABI and explicit allocation 
   assert.match(header, /u32 GetOwnershipTraceCapacity\(\) const/);
   assert.match(source, /kOwnershipTraceCapacity = 131072/);
   assert.match(source, /m_trace_header->epoch\.store\(m_trace_epoch/);
+  assert.match(
+    source,
+    /PushSubmitPresent\(\)[\s\S]*?if \(!Push\(rec\)\)[\s\S]*?m_trace_active_transaction = 0;[\s\S]*?FinishOwnershipTraceCapture\(\)/
+  );
+  assert.match(
+    source,
+    /FinishOwnershipTraceCapture\(\)[\s\S]*?OwnershipTraceEvent::CaptureEnd[\s\S]*?m_trace_capture_waiting_ack\.store[\s\S]*?m_trace_enabled\.store\(false/
+  );
+  assert.match(source, /Push\(const CmdRecord& rec\)[\s\S]*?WaitForOwnershipTraceCaptureAck\(\)/);
+  assert.match(source, /PushBatch\([\s\S]*?WaitForOwnershipTraceCaptureAck\(\)/);
 });
 
 test("native ownership trace records transaction outcomes without widening replay commands", async () => {
@@ -79,6 +91,7 @@ test("save-state wrappers publish a deferred ownership load-request epoch", asyn
   ]);
 
   assert.match(gfx, /SetWebGpuOwnershipTraceEnabled\(int enabled\)/);
+  assert.match(gfx, /AcknowledgeWebGpuOwnershipTraceCapture\(u32 capture_id\)/);
   assert.match(gfx, /GetWebGpuOwnershipTracePtr\(\)/);
   assert.match(gfx, /GetWebGpuOwnershipTraceCapacity\(\)/);
   assert.match(gfx, /NotifyWebGpuOwnershipTraceLoadRequested\(\)/);
@@ -88,6 +101,7 @@ test("save-state wrappers publish a deferred ownership load-request epoch", asyn
     "slot and file state loads must both mark the native trace"
   );
   assert.match(cmake, /'_SetWebGpuOwnershipTraceEnabled'/);
+  assert.match(cmake, /'_AcknowledgeWebGpuOwnershipTraceCapture'/);
   assert.match(cmake, /'_GetWebGpuOwnershipTracePtr'/);
   assert.match(cmake, /'_GetWebGpuOwnershipTraceCapacity'/);
   assert.doesNotMatch(wrapper, /LoadBoundary/);
@@ -100,6 +114,8 @@ test("locked native ownership patch replays the source contract", async () => {
   assert.match(patch, /OwnershipTraceHeader/);
   assert.match(patch, /ownership trace header must stay 20 bytes/);
   assert.match(patch, /SetWebGpuOwnershipTraceEnabled/);
+  assert.match(patch, /AcknowledgeWebGpuOwnershipTraceCapture/);
+  assert.match(patch, /OwnershipTraceEvent::CaptureEnd/);
   assert.match(patch, /GetWebGpuOwnershipTracePtr/);
   assert.match(patch, /GetWebGpuOwnershipTraceCapacity/);
   assert.match(patch, /LoadRequested/);
