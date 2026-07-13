@@ -136,6 +136,10 @@
 
 - [WGPU mapped-drain coalescing](perf-results/melee-wgpu-mapped-drain-coalescing-2026-07-13.md) —
   rejected bounded drain deferral with direct-save fixed-work evidence.
+- [WGPU CPU-mode screen](perf-results/melee-wgpu-cpu-mode-2026-07-13.md) —
+  fixed-work rejection of `cpu=single`; hardware WGPU retains `cpu=dual`.
+- [WGPU upload-diagnostic cold-path screen](perf-results/melee-wgpu-upload-diagnostic-coldpath-2026-07-13.md) —
+  repeated visible-output regression and full rollback of the candidate.
 
 Historical session notes under `patches/dolphin-wasm/` are research records,
 not the canonical user-facing reference. Prefer the documents above for the
