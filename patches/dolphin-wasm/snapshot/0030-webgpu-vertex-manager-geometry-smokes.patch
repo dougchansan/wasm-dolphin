@@ -147,7 +147,7 @@ index 56d7925..c79a3c9 100644
  // GPUBufferUsage numeric flags (DESIGN doc): VERTEX 0x20, INDEX 0x10,
  // COPY_DST 0x8.
  static constexpr u32 kUsageVertex = 0x20 | 0x8;
-@@ -258,4 +261,257 @@ void VertexManager::UploadUtilityUniforms(const void* uniforms, u32 uniforms_siz
+@@ -258,4 +261,335 @@ void VertexManager::UploadUtilityUniforms(const void* uniforms, u32 uniforms_siz
      static_cast<WebGPUGfx*>(g_gfx.get())->UploadUtilityUniforms(uniforms, uniforms_size);
  }
  
@@ -224,6 +224,11 @@ index 56d7925..c79a3c9 100644
 +    manager.m_geometry_submit_serial = GetCommandStream().GetSubmitSerial();
 +  }
 +
++  static void ForcePackedWrap(VertexManager& manager)
++  {
++    manager.m_geometry_offset = VertexManager::kGeometryBufferSize - 8;
++  }
++
 +  static void SeedLegacyWrap(VertexManager& manager)
 +  {
 +    manager.m_geometry_pack_active = false;
@@ -237,6 +242,18 @@ index 56d7925..c79a3c9 100644
 +  static u32 VertexId(const VertexManager& manager) { return manager.GetVertexBufferId(); }
 +  static u32 IndexId(const VertexManager& manager) { return manager.GetIndexBufferId(); }
 +  static u32 GeometryOffset(const VertexManager& manager) { return manager.m_geometry_offset; }
++  static u32 GeometryGenerations(const VertexManager& manager)
++  {
++    return manager.m_geometry_generations_since_submit;
++  }
++  static u64 GeometrySubmitSerial(const VertexManager& manager)
++  {
++    return manager.m_geometry_submit_serial;
++  }
++  static u32 MaxGeometryGenerations()
++  {
++    return VertexManager::kMaxGeometryGenerationsPerSubmit;
++  }
 +  static u32 VertexOffset(const VertexManager& manager) { return manager.m_vertex_offset; }
 +  static u32 IndexOffset(const VertexManager& manager) { return manager.m_index_offset; }
 +};
@@ -366,26 +383,87 @@ index 56d7925..c79a3c9 100644
 +  constexpr u8 vertices[32] = {1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0,
 +                               5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0};
 +  constexpr u16 indices[] = {0, 1, 0};
-+  VertexManager manager;
-+  VertexManagerTestPeer::SeedPackedWrap(manager);
-+  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
-+                              static_cast<u32>(std::size(indices)), stride);
++  WebGPUCommandStream& stream = GetCommandStream();
++  VertexManager repeated_wrap_manager;
++  VertexManagerTestPeer::SeedPackedWrap(repeated_wrap_manager);
 +  u32 base_vertex = UINT32_MAX;
 +  u32 base_index = UINT32_MAX;
++  u32 previous_id = VertexManagerTestPeer::VertexId(repeated_wrap_manager);
++  for (u32 generation = 2; generation <= VertexManagerTestPeer::MaxGeometryGenerations();
++       ++generation)
++  {
++    VertexManagerTestPeer::Seed(repeated_wrap_manager, vertices, sizeof(vertices), indices,
++                                static_cast<u32>(std::size(indices)), stride);
++    VertexManagerTestPeer::Commit(repeated_wrap_manager, 2, stride,
++                                  static_cast<u32>(std::size(indices)), &base_vertex, &base_index);
++    const u32 rotated_id = VertexManagerTestPeer::VertexId(repeated_wrap_manager);
++    if (rotated_id == 0 || rotated_id == previous_id || base_vertex != 0 || base_index != 16 ||
++        VertexManagerTestPeer::GeometryGenerations(repeated_wrap_manager) != generation)
++      return FailVertexManagerSmoke(502, "repeated packed wrap reused a live generation");
++    previous_id = rotated_id;
++    VertexManagerTestPeer::ForcePackedWrap(repeated_wrap_manager);
++  }
++
++  const u32 capped_id = VertexManagerTestPeer::VertexId(repeated_wrap_manager);
++  const u32 capped_offset = VertexManagerTestPeer::GeometryOffset(repeated_wrap_manager);
++  const u32 capped_write =
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire);
++  const u32 capped_upload = WebGPUCommandStreamTestPeer::UploadWrite(stream);
++  VertexManagerTestPeer::Seed(repeated_wrap_manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  base_vertex = UINT32_MAX;
++  base_index = UINT32_MAX;
++  VertexManagerTestPeer::Commit(repeated_wrap_manager, 2, stride,
++                                static_cast<u32>(std::size(indices)), &base_vertex, &base_index);
++  if (base_vertex != 0 || base_index != 0 ||
++      VertexManagerTestPeer::VertexId(repeated_wrap_manager) != capped_id ||
++      VertexManagerTestPeer::GeometryOffset(repeated_wrap_manager) != capped_offset ||
++      VertexManagerTestPeer::GeometryGenerations(repeated_wrap_manager) !=
++          VertexManagerTestPeer::MaxGeometryGenerations() ||
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != capped_write ||
++      WebGPUCommandStreamTestPeer::UploadWrite(stream) != capped_upload)
++    return FailVertexManagerSmoke(503, "generation-cap failure changed live placement state");
++  if (stream.PushBeginPass(1, 0, 0, 0, 1, 0, 0))
++    return FailVertexManagerSmoke(504, "generation-cap failure did not reject the owning pass");
++
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(505, "submit-reuse fixture reset failed");
++  SetWebGpuGeometryPackEnabled(1);
++  VertexManager manager;
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
 +  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
 +                                &base_vertex, &base_index);
-+  const u32 wrapped_id = VertexManagerTestPeer::VertexId(manager);
-+  if (wrapped_id == 0 || wrapped_id == 91 || base_vertex != 0 || base_index != 16)
-+    return FailVertexManagerSmoke(502, "packed exhaustion did not rotate before reuse");
++  const u32 submitted_id = VertexManagerTestPeer::VertexId(manager);
++  if (submitted_id == 0 || VertexManagerTestPeer::GeometrySubmitSerial(manager) != 0 ||
++      !stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8) ||
++      !stream.PushSetVertexBuffer(0, submitted_id, 0) ||
++      !stream.PushSetIndexBuffer(submitted_id, 0, base_index * sizeof(u16)) ||
++      !stream.PushDrawIndexed(static_cast<u32>(std::size(indices)), 1, base_index, base_vertex) ||
++      !stream.PushEndPass() || !stream.PushSubmitPresent())
++    return FailVertexManagerSmoke(506, "submit-reuse fixture could not publish its barrier");
 +
-+  InvalidateGeometryUploadPack();
++  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
++                                &base_vertex, &base_index);
++  if (VertexManagerTestPeer::VertexId(manager) != submitted_id || base_vertex != 0 ||
++      base_index != 16 || VertexManagerTestPeer::GeometryOffset(manager) != 40 ||
++      VertexManagerTestPeer::GeometryGenerations(manager) != 1 ||
++      VertexManagerTestPeer::GeometrySubmitSerial(manager) != 1)
++    return FailVertexManagerSmoke(507, "packed destination reused before the submit barrier");
++
++  // The worker re-applies this setter before and after save load. Treat that
++  // epoch as a placement reset and require a fresh resource identity.
++  const u32 pre_load_id = VertexManagerTestPeer::VertexId(manager);
++  SetWebGpuGeometryPackEnabled(1);
 +  VertexManagerTestPeer::Seed(manager, vertices, sizeof(vertices), indices,
 +                              static_cast<u32>(std::size(indices)), stride);
 +  VertexManagerTestPeer::Commit(manager, 2, stride, static_cast<u32>(std::size(indices)),
 +                                &base_vertex, &base_index);
 +  const u32 invalidated_id = VertexManagerTestPeer::VertexId(manager);
-+  if (invalidated_id == 0 || invalidated_id == wrapped_id || base_vertex != 0)
-+    return FailVertexManagerSmoke(503, "epoch invalidation reused an old packed destination");
++  if (invalidated_id == 0 || invalidated_id == pre_load_id || base_vertex != 0)
++    return FailVertexManagerSmoke(508, "save-load epoch reused an old packed destination");
 +
 +  SetWebGpuGeometryPackEnabled(0);
 +  VertexManagerTestPeer::SeedLegacyWrap(manager);
@@ -395,7 +473,7 @@ index 56d7925..c79a3c9 100644
 +                                &base_vertex, &base_index);
 +  if (VertexManagerTestPeer::VertexId(manager) != 91 ||
 +      VertexManagerTestPeer::IndexId(manager) != 92 || base_vertex != 0 || base_index != 0)
-+    return FailVertexManagerSmoke(504, "legacy exhaustion did not wrap at aligned offsets");
++    return FailVertexManagerSmoke(509, "legacy exhaustion did not wrap at aligned offsets");
 +  return 0;
 +}
 +
@@ -434,4 +512,3 @@ index 0cb2ee3..f905f71 100644
  }  // namespace WebGPU
 warning: in the working copy of 'C:\Users\DOUGLA~1\AppData\Local\Temp\wgpu-live-vm-before\WebGPUVertexManager.h', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'vendor\dolphin\Source\Core\VideoBackends\WebGPU\WebGPUVertexManager.h', LF will be replaced by CRLF the next time Git touches it
-

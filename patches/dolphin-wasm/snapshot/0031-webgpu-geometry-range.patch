@@ -378,9 +378,7 @@ index c79a3c9370..fee9fcf67c 100644
      return;
    }
  
-@@ -349,6 +489,10 @@ struct VertexManagerTestPeer
-   static u32 GeometryOffset(const VertexManager& manager) { return manager.m_geometry_offset; }
-   static u32 VertexOffset(const VertexManager& manager) { return manager.m_vertex_offset; }
+@@ -366,4 +506,8 @@ struct VertexManagerTestPeer
    static u32 IndexOffset(const VertexManager& manager) { return manager.m_index_offset; }
 +  static u32 PendingRangeSize(const VertexManager& manager)
 +  {
@@ -389,7 +387,7 @@ index c79a3c9370..fee9fcf67c 100644
  };
  
  extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuVertexManagerGeometryParitySmoke(int indexed,
-@@ -514,4 +658,145 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuVertexManagerGeometrySmokeE
+@@ -514,4 +658,186 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuVertexManagerGeometrySmokeE
    return s_vertex_manager_geometry_smoke_error;
  }
  
@@ -528,6 +526,47 @@ index c79a3c9370..fee9fcf67c 100644
 +      VertexManagerTestPeer::PendingRangeSize(rollback_manager) != 0 ||
 +      stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8))
 +    return FailVertexManagerSmoke(616, "failed range flush did not rollback and poison pass");
++
++  // Re-applying the geometry flags is the worker's save-load epoch seam. A
++  // private range from the old state must disappear before a fresh buffer id
++  // can own any post-load placement.
++  if (!s_vertex_manager_smoke_fixture.Reset())
++    return FailVertexManagerSmoke(617, "save-load range fixture reset failed");
++  SetWebGpuGeometryPackEnabled(1);
++  SetWebGpuGeometryRangeEnabled(1);
++  VertexManager load_manager;
++  VertexManagerTestPeer::Seed(load_manager, vertices_a, sizeof(vertices_a), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(load_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &first_base_vertex,
++                                &first_base_index);
++  const u32 pre_load_id = VertexManagerTestPeer::VertexId(load_manager);
++  const u32 pre_load_write =
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire);
++  if (pre_load_id == 0 || !load_manager.HasPendingGeometryRange())
++    return FailVertexManagerSmoke(618, "save-load range fixture did not retain private bytes");
++
++  SetWebGpuGeometryPackEnabled(1);
++  VertexManagerTestPeer::Seed(load_manager, vertices_b, sizeof(vertices_b), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(load_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &second_base_vertex,
++                                &second_base_index);
++  if (load_manager.HasPendingGeometryRange() || VertexManagerTestPeer::VertexId(load_manager) != 0 ||
++      s_vertex_manager_smoke_fixture.header.write.load(std::memory_order_acquire) != pre_load_write ||
++      stream.PushBeginPass(7, 0, 0, 0, 1, 1, 8))
++    return FailVertexManagerSmoke(619, "save-load epoch retained or published old placement");
++
++  VertexManagerTestPeer::Seed(load_manager, vertices_b, sizeof(vertices_b), indices,
++                              static_cast<u32>(std::size(indices)), stride);
++  VertexManagerTestPeer::Commit(load_manager, 3, stride,
++                                static_cast<u32>(std::size(indices)), &second_base_vertex,
++                                &second_base_index);
++  if (VertexManagerTestPeer::VertexId(load_manager) == 0 ||
++      VertexManagerTestPeer::VertexId(load_manager) == pre_load_id ||
++      !load_manager.HasPendingGeometryRange() || second_base_vertex != 0)
++    return FailVertexManagerSmoke(620, "post-load placement did not start with fresh identity");
++  load_manager.DiscardPendingGeometryRange();
 +
 +  SetWebGpuGeometryRangeEnabled(0);
 +  SetWebGpuGeometryPackEnabled(0);

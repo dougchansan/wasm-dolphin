@@ -363,6 +363,22 @@ test("layout covers padding, empty spans, exact end, and overflow", () => {
   assert.equal(planWgpuGeometryPacketLayout({
     baseOffset: 0, capacity: 15, vertexLength: 9, indexLength: 4,
   }), null);
+
+  const liveCapacity = 32 * 1024 * 1024;
+  const exactMaximum = planWgpuGeometryPacketLayout({
+    baseOffset: 0,
+    capacity: liveCapacity,
+    vertexLength: liveCapacity - 4,
+    indexLength: 4,
+  });
+  assert.equal(exactMaximum.packetLength, liveCapacity);
+  assert.equal(exactMaximum.endOffset, liveCapacity);
+  assert.equal(planWgpuGeometryPacketLayout({
+    baseOffset: 0,
+    capacity: liveCapacity,
+    vertexLength: liveCapacity - 4,
+    indexLength: 5,
+  }), null, "one byte beyond the live 32 MiB packet boundary must fail without allocation");
 });
 
 test("packed bytes reconstruct exactly and padding is deterministic zero", () => {

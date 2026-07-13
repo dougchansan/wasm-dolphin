@@ -97,6 +97,9 @@ test("native geometry range smoke locks ordering, padding, and rollback", async 
   assert.match(patch, /skipped draw published draw A without its upload/);
   assert.match(patch, /missing first draw published or poisoned a pass/);
   assert.match(patch, /stream\.AbortPass\(\);[\s\S]*?DiscardPendingGeometryRange\(\)/);
+  assert.match(patch, /save-load range fixture did not retain private bytes/);
+  assert.match(patch, /save-load epoch retained or published old placement/);
+  assert.match(patch, /post-load placement did not start with fresh identity/);
 });
 
 test("native VertexManager smoke crosses the real CommitBuffer boundary", async () => {
@@ -115,10 +118,18 @@ test("native VertexManager smoke crosses the real CommitBuffer boundary", async 
   assert.match(patch, /SeedPackedWrap/);
   assert.match(patch, /SeedLegacyWrap/);
   assert.match(patch, /FailConsumer\(GetCommandStream\(\)/);
-  assert.match(patch, /InvalidateGeometryUploadPack\(\)/);
+  assert.match(patch, /SetWebGpuGeometryPackEnabled\(1\)/);
   assert.match(patch, /PushDrawIndexed/);
   assert.match(patch, /PushDraw\(3, 1, base_vertex\)/);
   assert.match(patch, /refused to replace a live WebGPU command ring/);
+  assert.match(
+    patch,
+    /for \(u32 generation = 2;[\s\S]*?MaxGeometryGenerations\(\)/
+  );
+  assert.match(patch, /generation-cap failure changed live placement state/);
+  assert.match(patch, /PushSubmitPresent\(\)/);
+  assert.match(patch, /GeometrySubmitSerial\(manager\) != 1/);
+  assert.match(patch, /save-load epoch reused an old packed destination/);
 });
 
 test("producer wait instrumentation measures only actual ring and upload stalls", async () => {

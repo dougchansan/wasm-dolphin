@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "35e5aa5492d88e433fbba3e36475fd928f58d737038d6fa426576fa2724c78f3",
+  "patchSeriesSha256": "19d4e4b70c9d0aff2496880ed47a0d790b9ebdc96fa451c8e08547789310d31e",
   "patches": [
     {
       "order": 1,
@@ -264,16 +264,16 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0030-webgpu-vertex-manager-geometry-smokes.patch",
-      "size": 21901,
-      "sha256": "557bcfcd2dd57c79ea5d86fb5e1403b1c4f1389dce3417b51b3c433b9185ce42"
+      "size": 26496,
+      "sha256": "7f3a30386cf08796fa55df0f7c9c752d3c91c846a172db49c8326341b40c4919"
     },
     {
       "order": 31,
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0031-webgpu-geometry-range.patch",
-      "size": 32264,
-      "sha256": "871e328e68e36f7f4916c41ff6dd4729f799aded9830c988986cc967b306252a"
+      "size": 34703,
+      "sha256": "a1110546a59ab827533ff3ae00d13dceebfdc0186f8f88520d88a7a1b12ed2c5"
     },
     {
       "order": 32,
