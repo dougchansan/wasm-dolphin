@@ -171,7 +171,7 @@ async function validateRun({
   const renderer = manifest.renderer || {};
   validateBackend({ renderer, summary, issue });
   validateRuntimeErrors({ renderer, summary, consoleText, issue });
-  validatePresentationReadbacks({ renderer, issue });
+  validatePresentationReadbacks({ renderer, summary, issue });
   const cache = validateUboCache({ expected, summary, samples, issue });
   const timing = validateSamples({
     samples,
@@ -262,25 +262,43 @@ function validateRuntimeErrors({ renderer, summary, consoleText, issue }) {
     "WORKER_RPC_ERROR", "Worker transport recorded error replies", issue);
 
   const classifier = renderer.wgpuReplayClassifier?.stages || {};
-  check(isZeroCounter(classifier.missingResources, "total"),
-    "MISSING_RESOURCE", "WGPU replay classifier recorded missing resources", issue);
-  check(isZeroCounter(classifier.passAtomicity, "splitAtDrainCount") &&
-      isZeroCounter(classifier.passAtomicity, "recordsOutsidePass"),
-    "PASS_ATOMICITY", "WGPU replay split a pass or replayed state outside a pass", issue);
-  check(isZeroCounter(classifier.presentSubmission, "errorCount"),
-    "PRESENT_ERROR", "WGPU present submission recorded an error", issue);
+  if (renderer.wgpuReplayClassifier?.stages) {
+    check(isZeroCounter(classifier.missingResources, "total"),
+      "MISSING_RESOURCE", "WGPU replay classifier recorded missing resources", issue);
+    check(isZeroCounter(classifier.passAtomicity, "splitAtDrainCount") &&
+        isZeroCounter(classifier.passAtomicity, "recordsOutsidePass"),
+      "PASS_ATOMICITY", "WGPU replay split a pass or replayed state outside a pass", issue);
+    check(isZeroCounter(classifier.presentSubmission, "errorCount"),
+      "PRESENT_ERROR", "WGPU present submission recorded an error", issue);
+  }
 
   const webgpu = summary.final?.causalTelemetry?.webgpu || {};
   for (const counter of REQUIRED_ZERO_WEBGPU_COUNTERS) {
     check(isZeroCounter(webgpu, counter),
       "WEBGPU_COUNTER", `${counter}=${webgpu[counter]} expected 0`, issue);
   }
+  const association = webgpu.uploadAttribution?.passAssociation || {};
+  check(isZeroCounter(association, "abortedPassCount") &&
+      isZeroCounter(association, "incompletePassCount") && association.currentPassOpen === false,
+    "UPLOAD_PASS_ERROR", "Upload attribution ended with an aborted, incomplete, or open pass", issue);
   check(!/(?:\[pageerror\]|\[probe-error\]|:pageerror\]|\[(?:worker:[^\]]*:)?error\])/i.test(consoleText),
     "CONSOLE_ERROR", "console.log contains a page, worker, probe, or console error marker", issue);
 }
 
-function validatePresentationReadbacks({ renderer, issue }) {
+function validatePresentationReadbacks({ renderer, summary, issue }) {
   const chain = renderer.wgpuReplayClassifier?.stages?.presentationChain || {};
+  if (!renderer.wgpuReplayClassifier?.stages) {
+    const cadence = summary.final?.causalTelemetry?.webgpu?.visualCadence || {};
+    check(cadence.schema === "wasm-dolphin.wgpu-visual-cadence.v1" &&
+        cadence.enabled === true && cadence.source === "wgpu-downsample-readback",
+      "READBACK_MISSING", "Hardware WGPU visual cadence readback is unavailable", issue);
+    check(Number(cadence.completedSampleCount) >= 2 &&
+        Number(cadence.changedSampleCount) > 0 && Number(cadence.latestHash) > 0,
+      "RGB_READBACK_ZERO", "Hardware WGPU visual cadence is empty or frozen", issue);
+    check(isZeroCounter(cadence, "encodeErrorCount") && isZeroCounter(cadence, "mapErrorCount"),
+      "READBACK_ERROR", "Hardware WGPU cadence reported an encode or map error", issue);
+    return;
+  }
   for (const kind of ["xfb", "backbuffer"]) {
     const stage = chain[kind] || {};
     check(Number(stage.readbackCount || 0) > 0,
