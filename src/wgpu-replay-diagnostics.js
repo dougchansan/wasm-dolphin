@@ -335,6 +335,12 @@ export function requestedWgpuMappedStageFast(
   return new URLSearchParams(search).get("wgpustagefast") === "1";
 }
 
+export function requestedWgpuMappedDrainCoalescing(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpudraincoalesce") === "1";
+}
+
 export function requestedWgpuProducerProfile(
   search = globalThis.location?.search ?? ""
 ) {

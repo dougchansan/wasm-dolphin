@@ -47,6 +47,7 @@ export function createWgpuMappedStagingPool({
       mappedBytes: new Uint8Array(buffer.getMappedRange()),
       cursor: 0,
       records: [],
+      firstRecordAtMs: 0,
       state: "mapped",
       epoch: 0,
     };
@@ -55,6 +56,8 @@ export function createWgpuMappedStagingPool({
   let failed = false;
   let lastError = null;
   let nextBatchId = 1;
+  let nextRecordSequence = 1;
+  let lastRecordSequenceStaged = 0;
   const activeBatches = new Set();
   const metrics = {
     bufferUploads: 0,
@@ -113,15 +116,21 @@ export function createWgpuMappedStagingPool({
     }
 
     slot.mappedBytes.set(bytes, offset);
+    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    const recordSequence = nextRecordSequence++;
     const previous = slot.records.at(-1);
     if (previous?.kind === "buffer" && previous.destination === destination &&
+        previous.sequenceEnd === lastRecordSequenceStaged &&
         previous.sourceOffset + previous.size === offset &&
         previous.destinationOffset + previous.size === destinationOffset) {
       previous.size += bytes.byteLength;
+      previous.sequenceEnd = recordSequence;
       metrics.bufferUploadsCoalesced += 1;
     } else {
       slot.records.push({
         kind: "buffer",
+        sequenceStart: recordSequence,
+        sequenceEnd: recordSequence,
         sourceOffset: offset,
         size: bytes.byteLength,
         destination,
@@ -129,6 +138,7 @@ export function createWgpuMappedStagingPool({
       });
       metrics.copyCommandsEncoded += 1;
     }
+    lastRecordSequenceStaged = recordSequence;
     metrics.bufferUploads += 1;
     metrics.logicalBytes += bytes.byteLength;
     metrics.stagedBytes += bytes.byteLength;
@@ -237,8 +247,12 @@ export function createWgpuMappedStagingPool({
       }
     }
 
+    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    const recordSequence = nextRecordSequence++;
     slot.records.push({
       kind: "texture",
+      sequenceStart: recordSequence,
+      sequenceEnd: recordSequence,
       sourceOffset: offset,
       bytesPerRow: packedBytesPerRow,
       rowsPerImage: height,
@@ -248,6 +262,7 @@ export function createWgpuMappedStagingPool({
       aspect,
       copySize: { width, height, depthOrArrayLayers },
     });
+    lastRecordSequenceStaged = recordSequence;
     metrics.textureUploads += 1;
     metrics.copyCommandsEncoded += 1;
     metrics.logicalBytes += sourceBytesPerRow * height * depthOrArrayLayers;
@@ -271,17 +286,24 @@ export function createWgpuMappedStagingPool({
     try {
       const sealedBytes = batchSlots.reduce((total, slot) => total + slot.cursor, 0);
       const sealedRecords = batchSlots.reduce((total, slot) => total + slot.records.length, 0);
+      const oldestPendingAtMs = Math.min(...batchSlots.map((slot) => slot.firstRecordAtMs));
+      const orderedRecords = batchSlots.flatMap((slot) =>
+        slot.records.map((record) => ({ slot, record }))
+      ).sort((left, right) => left.record.sequenceStart - right.record.sequenceStart);
       for (const slot of batchSlots) {
         slot.buffer.unmap();
         slot.mappedBytes = null;
         slot.state = "sealed";
-        for (const record of slot.records) encodeRecord(encoder, slot.buffer, record);
+      }
+      for (const { slot, record } of orderedRecords) {
+        encodeRecord(encoder, slot.buffer, record);
       }
       const batch = Object.freeze({
         owner,
         id: nextBatchId,
         slots: Object.freeze(batchSlots.slice()),
         commandBuffer: encoder.finish(),
+        oldestPendingAtMs,
       });
       nextBatchId += 1;
       activeBatches.add(batch);
@@ -307,6 +329,7 @@ export function createWgpuMappedStagingPool({
       const remapStartedAt = now();
       slot.state = "remapping";
       slot.records = [];
+      slot.firstRecordAtMs = 0;
       slot.cursor = 0;
       slot.epoch = generation;
       metrics.remapsStarted += 1;
@@ -348,6 +371,7 @@ export function createWgpuMappedStagingPool({
       slot.epoch += 1;
       slot.state = "failed";
       slot.records = [];
+      slot.firstRecordAtMs = 0;
       slot.cursor = 0;
       slot.mappedBytes = null;
       try {
@@ -362,6 +386,10 @@ export function createWgpuMappedStagingPool({
   function snapshot() {
     const states = { mapped: 0, sealed: 0, remapping: 0, failed: 0 };
     for (const slot of slots) states[slot.state] += 1;
+    const oldestPendingAtMs = slots.reduce((oldest, slot) => {
+      if (slot.state !== "mapped" || slot.records.length === 0) return oldest;
+      return oldest === 0 ? slot.firstRecordAtMs : Math.min(oldest, slot.firstRecordAtMs);
+    }, 0);
     return {
       slotCount,
       slotSize,
@@ -370,6 +398,12 @@ export function createWgpuMappedStagingPool({
       lastError,
       states,
       pendingUploads: slots.reduce((count, slot) => count + slot.records.length, 0),
+      pendingBytes: slots.reduce(
+        (bytes, slot) => bytes + (slot.state === "mapped" ? slot.cursor : 0),
+        0
+      ),
+      oldestPendingAtMs,
+      oldestPendingAgeMs: oldestPendingAtMs > 0 ? Math.max(0, now() - oldestPendingAtMs) : 0,
       activeBatches: activeBatches.size,
       remapLatencyBucketBoundsMs: [...REMAP_LATENCY_BUCKET_BOUNDS_MS],
       ...metrics,

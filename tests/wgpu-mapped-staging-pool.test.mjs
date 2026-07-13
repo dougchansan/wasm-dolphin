@@ -71,6 +71,7 @@ function createPool(fake, options = {}) {
     slotSize: 1024,
     bufferUsage: 0x0006,
     mapMode: 0x0002,
+    now: () => 100,
     ...options,
   });
 }
@@ -97,6 +98,7 @@ test("creates a fixed mapped-at-creation pool and preserves aligned buffer bytes
   ]);
 
   const batch = pool.seal();
+  assert.equal(batch.oldestPendingAtMs, 100);
   const copies = batch.commandBuffer.copies;
   assert.equal(copies.length, 2);
   assert.deepEqual(copies.map((copy) => [copy[0], copy[2], copy[4], copy[5]]), [
@@ -237,6 +239,9 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     lastError: null,
     states: { mapped: 1, sealed: 0, remapping: 0, failed: 0 },
     pendingUploads: 1,
+    pendingBytes: 8,
+    oldestPendingAtMs: 100,
+    oldestPendingAgeMs: 0,
     activeBatches: 0,
     remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000],
     bufferUploads: 1,
@@ -300,6 +305,62 @@ test("coalesces adjacent copies to the same buffer without changing byte order",
   assert.equal(pool.snapshot().bufferUploads, 2);
   assert.equal(pool.snapshot().bufferUploadsCoalesced, 1);
   assert.equal(pool.snapshot().copyCommandsEncoded, 1);
+});
+
+test("seals remapped slots in first-pending order instead of slot-id order", async () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 2, slotSize: 8 });
+  const destination = { name: "overlap" };
+
+  pool.stageBuffer({ data: new Uint8Array(8), destination });
+  const firstBatch = pool.seal();
+  const firstRemap = pool.acceptSubmission(firstBatch);
+
+  // slot 0 is remapping, so this older write lands in slot 1.
+  pool.stageBuffer({
+    data: Uint8Array.of(1, 1, 1, 1),
+    destination,
+    destinationOffset: 0,
+  });
+  fake.buffers[0].maps[0].operation.resolve();
+  await firstRemap;
+
+  // slot 0 is available again and receives the newer overlapping write.
+  pool.stageBuffer({
+    data: Uint8Array.of(2, 2, 2, 2),
+    destination,
+    destinationOffset: 0,
+  });
+  const ordered = pool.seal().commandBuffer.copies;
+  assert.equal(ordered.length, 2);
+  assert.equal(ordered[0][1], fake.buffers[1], "older slot-1 write must encode first");
+  assert.equal(ordered[1][1], fake.buffers[0], "newer slot-0 write must encode last");
+});
+
+test("preserves global A-B-A record order across staging slots", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 2, slotSize: 8 });
+  const destination = { name: "overlap" };
+
+  pool.stageBuffer({
+    data: Uint8Array.of(1, 1, 1, 1),
+    destination,
+    destinationOffset: 0,
+  });
+  pool.stageBuffer({
+    data: new Uint8Array(8).fill(2),
+    destination,
+    destinationOffset: 0,
+  });
+  pool.stageBuffer({
+    data: Uint8Array.of(3, 3, 3, 3),
+    destination,
+    destinationOffset: 4,
+  });
+
+  const copies = pool.seal().commandBuffer.copies;
+  assert.equal(copies.length, 3, "A and C must not coalesce across B");
+  assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 1, 0]);
 });
 
 test("submits upload before render and remaps slots only after acceptance", async () => {

@@ -45,6 +45,49 @@ test("mapped staging fast path is opt-in and flows through the worker load paylo
   assert.match(harness, /\["WGPUSTAGEFAST", "wgpustagefast"\]/);
 });
 
+test("mapped drain coalescing is opt-in, bounded, and generation-fenced", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedDrainCoalescing\(/);
+  assert.match(host, /wgpuMappedDrainCoalescing: this\.wgpuMappedDrainCoalescing/);
+  assert.match(adapter, /this\.wgpuMappedDrainCoalescing = Boolean\(wgpuMappedDrainCoalescing\)/);
+  assert.match(worker, /wgpuMappedDrainCoalescing: payload\.wgpuMappedDrainCoalescing/);
+  assert.match(worker, /wgpuUploadTransport === "mapped" && Boolean\(requestedWgpuMappedDrainCoalescing\)/);
+  assert.match(worker, /pendingBytes: mappedSnapshot\?\.pendingBytes \?\? 0/);
+  assert.match(worker, /pendingRecords: mappedSnapshot\?\.pendingUploads \?\? 0/);
+  assert.match(worker, /pendingAgeMs: mappedSnapshot\?\.oldestPendingAgeMs \?\? 0/);
+  assert.match(worker, /scheduleWgpuMappedDrainDeadline\(mappedDrainDecision\)/);
+  assert.match(worker, /generation: wgpuMappedStagingGeneration/);
+  assert.match(worker, /submitPendingWgpuMappedUploads\("coalescing-deadline"\)/);
+  assert.match(worker, /WGPU_MAPPED_DRAIN_FORCE_REASONS\.FINALIZATION/);
+  assert.match(worker, /case "validationFinalizeWgpuMappedDrain"/);
+  assert.match(worker, /await finalizeWgpuMappedDrain/);
+  assert.match(worker, /Promise\.all\(pendingRemaps\)/);
+  assert.match(worker, /WGPU mapped drain finalization did not quiesce/);
+  assert.match(
+    gate,
+    /"validationFinalizeWgpuMappedDrain"[\s\S]*?finalSample\.causalTelemetry = finalized\.causalTelemetry/
+  );
+  assert.match(gate, /mappedDrainFinalization\?\.quiesced/);
+  assert.match(gate, /params: Object\.fromEntries\(url\.searchParams\.entries\(\)\)/);
+  assert.match(gate, /was enabled but never deferred work/);
+  assert.match(gate, /was enabled but never submitted mapped work/);
+  assert.match(gate, /mappedDrainFinalization/);
+  assert.match(gate, /retained uploads beyond 8 ms/);
+  assert.match(worker, /WGPU_MAPPED_DRAIN_FORCE_REASONS\.DESTROY/);
+  assert.match(
+    worker,
+    /case WGPU_CMD_OP_DESTROY:[\s\S]*?submitEnc\("destroy"\)[\s\S]*?m\.delete\(id\)/
+  );
+  assert.match(gate, /WGPU mapped drain coalescing mismatch/);
+  assert.match(harness, /\["WGPUDRAINCOALESCE", "wgpudraincoalesce"\]/);
+});
+
 test("mapped uploads are copied into a bounded pool and queue writes stay isolated", async () => {
   const worker = await readSource("../src/upstream-discio-worker.js");
   assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 3/);
@@ -64,7 +107,7 @@ test("submission orders upload before render and capacity never falls back", asy
     worker,
     /q\.submit\(mappedBatch\s*\? \[mappedBatch\.commandBuffer, renderCommandBuffer\]/
   );
-  assert.match(worker, /q\.submit\(\[batch\.commandBuffer\]\)/);
+  assert.match(worker, /(?:q|queue)\.submit\(\[batch\.commandBuffer\]\)/);
   assert.match(
     worker,
     /if \(mappedCapacityHold\) \{[\s\S]*?if \(pass\) \{[\s\S]*?markWgpuReplayFatal/

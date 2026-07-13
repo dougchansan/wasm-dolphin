@@ -26,6 +26,7 @@ import {
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuMappedStageFast,
+  requestedWgpuMappedDrainCoalescing,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   requestedWgpuUboMetrics,
@@ -716,6 +717,13 @@ test("mapped staging allocation fast path is opt-in", () => {
   assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=0"), false);
   assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=1"), true);
   assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=true"), false);
+});
+
+test("mapped upload drain coalescing is opt-in", () => {
+  assert.equal(requestedWgpuMappedDrainCoalescing(""), false);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=0"), false);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=1"), true);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=true"), false);
 });
 
 test("producer phase profiling is default-off and accepts only an explicit one", () => {

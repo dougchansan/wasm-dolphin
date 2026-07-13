@@ -850,6 +850,34 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.mappedStaging?.remapLatencyBucketBoundsMs ?? [],
     causalWgpuMappedStagingRemapLatencyHistogram:
       telemetry.webgpu.mappedStaging?.remapLatencyHistogram ?? [],
+    causalWgpuMappedDrainCoalescingEnabled:
+      telemetry.webgpu.mappedDrainCoalescingEnabled ?? false,
+    causalWgpuMappedDrainDeferred:
+      telemetry.webgpu.mappedDrainCoalescing?.state?.deferred ?? false,
+    causalWgpuMappedDrainDeferredBoundaries:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.deferredBoundaries ?? 0,
+    causalWgpuMappedDrainFlushDecisions:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.flushDecisions ?? 0,
+    causalWgpuMappedDrainTimerFired:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.timerFired ?? 0,
+    causalWgpuMappedDrainTimerStale:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.timerStale ?? 0,
+    causalWgpuMappedDrainActualSubmissions:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualSubmissions ?? 0,
+    causalWgpuMappedDrainActualSubmissionAgeMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualSubmissionAgeMaxMs ?? 0,
+    causalWgpuMappedDrainActualDeadlineOverrunMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualDeadlineOverrunMaxMs ?? 0,
+    causalWgpuMappedDrainDeadlineOverrunMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.deadlineOverrunMaxMs ?? 0,
+    causalWgpuMappedDrainMaxPendingBytes:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingBytes ?? 0,
+    causalWgpuMappedDrainMaxPendingRecords:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingRecords ?? 0,
+    causalWgpuMappedDrainMaxPendingAgeMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingAgeMs ?? 0,
+    causalWgpuMappedDrainFlushReasons:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.flushReasons ?? {},
     causalWgpuErrorCount: telemetry.webgpu.errorCount,
     causalWgpuProducerStateCacheEnabled: telemetry.webgpu.producerStateCacheEnabled,
     causalWgpuProducerPipelineRecordsSuppressed:

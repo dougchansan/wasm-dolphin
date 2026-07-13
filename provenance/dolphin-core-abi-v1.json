@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 63537,
-      "sha256": "bdfe46a9c8024827613182d9c3975664cc6476881c115bc31787e4af2f28c69b"
+      "size": 65239,
+      "sha256": "6f9de9df3ba9b37db3c681b673413a9af0024605c4c4fdd473c31d19e007bdfc"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 59114,
-      "sha256": "81a056b03621d4cb9c023316c43243651395716a707933c939ff8119a4ef00a8"
+      "size": 59332,
+      "sha256": "4defb8f24d282f6f11ca5f8d7487ff921b5f0d46298078193b239910cc351c7c"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 449165,
-      "sha256": "487ecd9f28eff32524cb386151f200de8158192ede6e7b6871d991baf21d2627"
+      "size": 459465,
+      "sha256": "cdc8358061e717cce0ef6220816ae0716a033f01d5b9fe8072377343d4731782"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 39678,
-      "sha256": "bc7527e6a0d8113c8b9363c4064dbf1218d87fe5675dbd89120ce04f86ad77b2"
+      "size": 39855,
+      "sha256": "94491fc1f95217df3997e81e45cb5f1eb0eb70ec4e27d3ca1ea544ab75a61e58"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -182,8 +182,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 36214,
-      "sha256": "bde938317e36dedfbb003062a844b1e242bbbae5023636614d37ae3158f1f3b2"
+      "size": 36389,
+      "sha256": "9928b9a7c732a3044cd5c3868fdad43143d74d8bcbe1d28d4cb1513ece3afbca"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -468,6 +468,7 @@
       "setInputMask",
       "setInputState",
       "validationBeginWgpuRendererProbeMeasurement",
+      "validationFinalizeWgpuMappedDrain",
       "validationFinalizeWgpuRendererProbe",
       "validationReadCoreProgress",
       "validationSetCorePaused"

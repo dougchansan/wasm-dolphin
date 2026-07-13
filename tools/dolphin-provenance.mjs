@@ -978,7 +978,7 @@ function inspectRuntimeMethods(root, glueSource) {
   return result;
 }
 
-function inspectWorkerProtocol(root) {
+export function inspectWorkerProtocol(root) {
   const worker = readFileSync(resolve(root, "src/upstream-discio-worker.js"), "utf8");
   const adapter = readFileSync(resolve(root, "src/upstream-worker-adapter.js"), "utf8");
   const protocol = readFileSync(resolve(root, "src/upstream-worker-protocol.js"), "utf8");

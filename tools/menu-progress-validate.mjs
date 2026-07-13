@@ -221,6 +221,7 @@ for (const [environmentName, queryName] of [
   ["WGPUATOMIC", "wgpuatomic"],
   ["WGPUUPLOADMB", "wgpuuploadmb"],
   ["WGPUSTAGEFAST", "wgpustagefast"],
+  ["WGPUDRAINCOALESCE", "wgpudraincoalesce"],
   ["WGPUREPLAYMS", "wgpureplayms"],
   ["WGPUPOWER", "wgpupower"],
   ["SWTEVFAST", "swtevfast"],

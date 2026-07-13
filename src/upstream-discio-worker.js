@@ -91,6 +91,10 @@ import {
   createWgpuMappedStagingPool
 } from "./wgpu-mapped-staging-pool.js";
 import {
+  WGPU_MAPPED_DRAIN_FORCE_REASONS,
+  createWgpuMappedDrainCoalescer
+} from "./wgpu-mapped-drain-coalescer.js";
+import {
   WGPU_CONSUMER_ERROR_DEVICE_LOST,
   WGPU_CONSUMER_ERROR_SUBMIT,
   WGPU_CONSUMER_ERROR_UNKNOWN,
@@ -217,6 +221,7 @@ let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
 let wgpuMappedStageFastEnabled = false;
+let wgpuMappedDrainCoalescingEnabled = false;
 let wgpuRendererWorkerProbe = "off";
 let wgpuVisualCadenceEnabled = false;
 let wgpuVisualCadenceResources = null;
@@ -235,6 +240,9 @@ let wgpuMappedCapacityBlocked = false;
 let wgpuMappedCapacityBlockedAt = 0;
 let wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
 let wgpuMappedStagingGeneration = 0;
+let wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer();
+let wgpuMappedDrainTimer = null;
+let wgpuMappedDrainTimerToken = null;
 const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
 const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
 let wgpuProducerStateCacheAvailable = false;
@@ -674,7 +682,10 @@ self.addEventListener("message", async (event) => {
 async function handleMessage(type, payload) {
   switch (type) {
     case "load":
-      wgpuMappedStagingGeneration += 1;
+      if (!moduleInstance) {
+        cancelWgpuMappedDrainTimer();
+        wgpuMappedStagingGeneration += 1;
+      }
       causalMetricsEnabled = Boolean(payload.collectMetrics);
       collectMetrics = Boolean(payload.collectMetrics);
       metricsDiagnostics = createMetricsDiagnostics();
@@ -788,6 +799,7 @@ async function handleMessage(type, payload) {
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
         wgpuMappedStageFast: payload.wgpuMappedStageFast,
+        wgpuMappedDrainCoalescing: payload.wgpuMappedDrainCoalescing,
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
         wgpuVisualCadence: payload.wgpuVisualCadence,
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
@@ -825,6 +837,7 @@ async function handleMessage(type, payload) {
       }
       return framePayload();
     case "reset":
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.RESET);
       workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
@@ -846,6 +859,7 @@ async function handleMessage(type, payload) {
     case "saveState":
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
@@ -896,10 +910,23 @@ async function handleMessage(type, payload) {
       if (api?.getCoreStateName?.() !== "Paused") {
         throw new Error("WGPU renderer probe finalization requires a paused core");
       }
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.FINALIZATION);
       const finalized = await finalizeWgpuUploadProbe(
         Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 10_000))
       );
       return { ...finalized, ...framePayload({ forceCausalTelemetry: true }) };
+    }
+    case "validationFinalizeWgpuMappedDrain": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU mapped drain finalization requires a paused core");
+      }
+      const mappedDrainFinalization = await finalizeWgpuMappedDrain(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 10_000))
+      );
+      return {
+        mappedDrainFinalization,
+        ...framePayload({ forceCausalTelemetry: true }),
+      };
     }
     case "validationBeginWgpuRendererProbeMeasurement": {
       if (api?.getCoreStateName?.() !== "Paused") {
@@ -913,6 +940,7 @@ async function handleMessage(type, payload) {
     case "rendererDiagnostics":
       return rendererDiagnosticsPayload();
     case "loadStateFile": {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
       workletAudioProducer.transition();
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
@@ -1178,6 +1206,7 @@ async function loadCore({
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   wgpuMappedStageFast: requestedWgpuMappedStageFast = false,
+  wgpuMappedDrainCoalescing: requestedWgpuMappedDrainCoalescing = false,
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
   wgpuVisualCadence: requestedWgpuVisualCadence = false,
   wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
@@ -1290,6 +1319,12 @@ async function loadCore({
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
   wgpuMappedStageFastEnabled =
     wgpuUploadTransport === "mapped" && Boolean(requestedWgpuMappedStageFast);
+  wgpuMappedDrainCoalescingEnabled =
+    wgpuUploadTransport === "mapped" && Boolean(requestedWgpuMappedDrainCoalescing);
+  wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer({
+    enabled: wgpuMappedDrainCoalescingEnabled,
+    generation: wgpuMappedStagingGeneration,
+  });
   wgpuRendererWorkerProbe = new Set([
     "canary", "inline-upload", "worker-upload", "null-drain"
   ]).has(requestedWgpuRendererWorkerProbe) ? requestedWgpuRendererWorkerProbe : "off";
@@ -1354,6 +1389,7 @@ async function loadCore({
   webGpuCausalStats.replayWindowRecords = WGPU_REPLAY_WINDOW_RECORDS;
   webGpuCausalStats.uploadTransport = wgpuUploadTransport;
   webGpuCausalStats.mappedStagingFastPath = wgpuMappedStageFastEnabled;
+  webGpuCausalStats.mappedDrainCoalescingEnabled = wgpuMappedDrainCoalescingEnabled;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   softwareTevHotCaseMode = (Number(requestedSoftwareTevHotCaseMode) || 0) & 3;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
@@ -2636,6 +2672,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
       ...webGpuCausalStats,
       visualCadence: wgpuVisualCadenceSnapshot(),
       mappedStaging: wgpuMappedStagingPool?.snapshot() ?? null,
+      mappedDrainCoalescing: wgpuMappedDrainCoalescer.snapshot(),
       backlogSampleP95: wgpuBacklogSampleP95(),
       replayPumpWakeDelayAverageMs: webGpuCausalStats.replayPumpWakeCount > 0
         ? webGpuCausalStats.replayPumpWakeDelayTotalMs /
@@ -5980,6 +6017,7 @@ function cancelWgpuReplayPump() {
 
 function clearWgpuReplayStateAfterDeviceLoss() {
   wgpuMappedStagingGeneration += 1;
+  resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.DEVICE_LOSS);
   wgpuUploadAttribution.cancelCapacityWait();
   destroyWgpuVisualCadenceResources();
   if (wgpuSemanticRuntimeActive) {
@@ -6019,6 +6057,189 @@ function ensureWgpuMappedStagingPool(device) {
     });
   }
   return wgpuMappedStagingPool;
+}
+
+function cancelWgpuMappedDrainTimer(token = null) {
+  if (token && wgpuMappedDrainTimerToken &&
+      (token.generation !== wgpuMappedDrainTimerToken.generation ||
+       token.sequence !== wgpuMappedDrainTimerToken.sequence)) {
+    return false;
+  }
+  if (wgpuMappedDrainTimer !== null) clearTimeout(wgpuMappedDrainTimer);
+  wgpuMappedDrainTimer = null;
+  wgpuMappedDrainTimerToken = null;
+  return true;
+}
+
+function resetWgpuMappedDrainCoalescing(reason, { clearTelemetry = false } = {}) {
+  cancelWgpuMappedDrainTimer();
+  wgpuMappedDrainCoalescer.reset({
+    generation: wgpuMappedStagingGeneration,
+    reason,
+    clearTelemetry,
+  });
+}
+
+function mappedDrainForceReason(reason) {
+  if (reason === "staging-capacity") return WGPU_MAPPED_DRAIN_FORCE_REASONS.CAPACITY;
+  if (reason === "present") return WGPU_MAPPED_DRAIN_FORCE_REASONS.PRESENT;
+  if (reason.includes("readback")) return WGPU_MAPPED_DRAIN_FORCE_REASONS.READBACK;
+  if (reason === "blit") return WGPU_MAPPED_DRAIN_FORCE_REASONS.BLIT;
+  if (reason === "destroy") return WGPU_MAPPED_DRAIN_FORCE_REASONS.DESTROY;
+  return WGPU_MAPPED_DRAIN_FORCE_REASONS.RENDER;
+}
+
+function prepareWgpuMappedDrainSubmission(reason, decisionPrepared = false) {
+  const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  const pending = (snapshot?.pendingUploads ?? 0) > 0;
+  if (!decisionPrepared) {
+    const decision = wgpuMappedDrainCoalescer.force(mappedDrainForceReason(reason), {
+      pending,
+      pendingBytes: snapshot?.pendingBytes ?? 0,
+      pendingRecords: snapshot?.pendingUploads ?? 0,
+      pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+    });
+    if (decision.cancelledTimerToken) {
+      cancelWgpuMappedDrainTimer(decision.cancelledTimerToken);
+    }
+  }
+  return pending;
+}
+
+function submitPendingWgpuMappedUploads(reason = "coalescing-deadline") {
+  const pool = wgpuMappedStagingPool;
+  const queue = renderGpu?.device?.queue;
+  if (!pool || !queue) return false;
+  let batch = null;
+  try {
+    batch = pool.seal();
+    if (!batch) return false;
+    queue.submit([batch.commandBuffer]);
+    gpuCompletionTracker.recordSubmittedWork(queue, "hardware-upload-staging");
+    if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
+    wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
+    wgpuMappedDrainCoalescer.recordSubmission(
+      Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
+    );
+    trackWgpuMappedRemap(pool.acceptSubmission(batch));
+    return true;
+  } catch (error) {
+    if (batch) {
+      try {
+        pool.rejectSubmission(batch, error);
+      } catch {
+        pool.invalidate(error);
+      }
+    }
+    recordRendererError("submit-error", error?.message || error);
+    markWgpuReplayFatal("submit-error", error?.message || error);
+    wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error });
+    return false;
+  }
+}
+
+function scheduleWgpuMappedDrainDeadline(decision) {
+  cancelWgpuMappedDrainTimer();
+  const token = decision.timerToken;
+  if (!token) return;
+  wgpuMappedDrainTimerToken = token;
+  const timerHandle = setTimeout(() => {
+    const isCurrentTimer = wgpuMappedDrainTimer === timerHandle &&
+      wgpuMappedDrainTimerToken?.generation === token.generation &&
+      wgpuMappedDrainTimerToken?.sequence === token.sequence;
+    if (!isCurrentTimer) {
+      wgpuMappedDrainCoalescer.onTimer(token, {
+        pending: false,
+        generation: token.generation,
+      });
+      return;
+    }
+    wgpuMappedDrainTimer = null;
+    wgpuMappedDrainTimerToken = null;
+    const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    const pending = (snapshot?.pendingUploads ?? 0) > 0;
+    const timerDecision = wgpuMappedDrainCoalescer.onTimer(token, {
+      pending,
+      pendingBytes: snapshot?.pendingBytes ?? 0,
+      pendingRecords: snapshot?.pendingUploads ?? 0,
+      pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+    });
+    if (timerDecision.action === "flush") {
+      submitPendingWgpuMappedUploads("coalescing-deadline");
+    }
+  }, Math.max(0, decision.delayMs));
+  wgpuMappedDrainTimer = timerHandle;
+}
+
+function forceWgpuMappedDrainLifecycle(reason) {
+  if (!wgpuMappedDrainCoalescingEnabled) return false;
+  const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  const pending = (snapshot?.pendingUploads ?? 0) > 0;
+  const decision = wgpuMappedDrainCoalescer.force(reason, {
+    pending,
+    pendingBytes: snapshot?.pendingBytes ?? 0,
+    pendingRecords: snapshot?.pendingUploads ?? 0,
+    pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+    generation: wgpuMappedStagingGeneration,
+  });
+  if (decision.cancelledTimerToken) {
+    cancelWgpuMappedDrainTimer(decision.cancelledTimerToken);
+  }
+  if (decision.action === "flush") {
+    submitPendingWgpuMappedUploads(reason);
+  }
+  resetWgpuMappedDrainCoalescing(reason);
+  return decision.action === "flush";
+}
+
+async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
+  const deadlineAt = globalThis.performance.now() + timeoutMs;
+  for (;;) {
+    const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    if ((snapshot?.pendingUploads ?? 0) > 0) {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.FINALIZATION);
+    }
+    const pendingRemaps = [...wgpuMappedRemapPromises];
+    if (pendingRemaps.length === 0) break;
+    const remainingMs = deadlineAt - globalThis.performance.now();
+    if (remainingMs <= 0) {
+      throw new Error("WGPU mapped drain finalization timed out");
+    }
+    let timeoutHandle;
+    try {
+      await Promise.race([
+        Promise.all(pendingRemaps),
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error("WGPU mapped drain finalization timed out")),
+            remainingMs
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+    await Promise.resolve();
+  }
+  const finalSnapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  const quiesced = !wgpuReplayFatal &&
+    (finalSnapshot?.pendingUploads ?? 0) === 0 &&
+    (finalSnapshot?.activeBatches ?? 0) === 0 &&
+    (finalSnapshot?.states?.remapping ?? 0) === 0 &&
+    wgpuMappedRemapPromises.size === 0 &&
+    !wgpuMappedCapacityBlocked;
+  if (!quiesced) {
+    throw new Error("WGPU mapped drain finalization did not quiesce");
+  }
+  return {
+    quiesced: true,
+    pendingUploads: finalSnapshot?.pendingUploads ?? 0,
+    activeBatches: finalSnapshot?.activeBatches ?? 0,
+    remappingSlots: finalSnapshot?.states?.remapping ?? 0,
+    activeCapacityWait: false,
+  };
 }
 
 function drainWgpuSemanticOwnership() {
@@ -6431,6 +6652,10 @@ function markWgpuMappedCapacityWait(uploadRole = WGPU_UPLOAD_ROLE.UNKNOWN) {
 function markWgpuReplayFatal(scope, detail) {
   if (wgpuReplayFatal) return false;
   wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
+  resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.FATAL);
+  if (wgpuMappedStagingPool?.snapshot().pendingUploads > 0) {
+    wgpuMappedStagingPool.invalidate(`fatal ${scope}: ${detail || "unknown"}`);
+  }
   const errorCode = scope === "device-lost"
     ? WGPU_CONSUMER_ERROR_DEVICE_LOST
     : scope === "submit-error"
@@ -7124,6 +7349,7 @@ const webGpuCausalStats = {
   queueSubmissionCount: 0,
   uploadTransport: "queue",
   mappedStagingFastPath: false,
+  mappedDrainCoalescingEnabled: false,
   mappedStagingCopyCount: 0,
   mappedStagingCopyBytes: 0,
   mappedStagingCopyTotalMs: 0,
@@ -7569,6 +7795,9 @@ function drainWebGpuCmdRing(source = "presentation") {
   };
   const acceptMappedBatch = (batch) => {
     if (!batch) return;
+    wgpuMappedDrainCoalescer.recordSubmission(
+      Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
+    );
     trackWgpuMappedRemap(wgpuMappedStagingPool.acceptSubmission(batch));
   };
   const rejectMappedBatch = (batch, error) => {
@@ -7579,8 +7808,9 @@ function drainWebGpuCmdRing(source = "presentation") {
       wgpuMappedStagingPool.invalidate(error);
     }
   };
-  const sealMappedBatch = () => {
+  const sealMappedBatch = (reason = "drain-boundary", decisionPrepared = false) => {
     if (wgpuUploadTransport !== "mapped") return null;
+    prepareWgpuMappedDrainSubmission(reason, decisionPrepared);
     try {
       return ensureWgpuMappedStagingPool(dev).seal();
     } catch (error) {
@@ -7588,36 +7818,25 @@ function drainWebGpuCmdRing(source = "presentation") {
       return null;
     }
   };
-  const flushMappedUploadsOnly = (reason = "staging-capacity") => {
-    const batch = sealMappedBatch();
-    if (!batch || wgpuReplayFatal) return false;
-    try {
-      q.submit([batch.commandBuffer]);
-      gpuCompletionTracker.recordSubmittedWork(q, "hardware-upload-staging");
-      if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
-      wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
-      acceptMappedBatch(batch);
-      return true;
-    } catch (error) {
-      rejectMappedBatch(batch, error);
-      recordRendererError("submit-error", error?.message || error);
-      markWgpuReplayFatal("submit-error", error?.message || error);
-      wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error });
-      return false;
-    }
+  const flushMappedUploadsOnly = (
+    reason = "staging-capacity",
+    decisionPrepared = false
+  ) => {
+    prepareWgpuMappedDrainSubmission(reason, decisionPrepared);
+    return submitPendingWgpuMappedUploads(reason);
   };
   let lastSubmitFailureReason = null;
-  const submitEnc = (reason = "drain-boundary") => {
+  const submitEnc = (reason = "drain-boundary", decisionPrepared = false) => {
     lastSubmitFailureReason = null;
     if (!enc) {
       // Upload-only drains still have to seal and submit their mapped batch,
       // but callers use the return value to decide whether a render/present
       // command buffer was submitted.
-      flushMappedUploadsOnly(reason);
+      flushMappedUploadsOnly(reason, decisionPrepared);
       lastSubmitFailureReason = wgpuReplayFatal ? "replay-fatal" : "no-command-encoder";
       return false;
     }
-    const mappedBatch = sealMappedBatch();
+    const mappedBatch = sealMappedBatch(reason, decisionPrepared);
     if (wgpuReplayFatal) {
       lastSubmitFailureReason = wgpuReplayFatal.scope === "submit-error"
         ? "submit-error"
@@ -9638,6 +9857,30 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           break;
         case WGPU_CMD_OP_DESTROY: {
+          const pendingMappedDestroyUploads =
+            (wgpuMappedStagingPool?.snapshot().pendingUploads ?? 0) > 0;
+          if (wgpuMappedDrainCoalescingEnabled && pendingMappedDestroyUploads) {
+            if (pass) {
+              markWgpuReplayFatal(
+                "destroy-order",
+                "destroy encountered with pending mapped uploads inside a render pass"
+              );
+              break;
+            }
+            const destroySubmitted = enc
+              ? submitEnc("destroy")
+              : flushMappedUploadsOnly("destroy");
+            const destroyStillPending =
+              (wgpuMappedStagingPool?.snapshot().pendingUploads ?? 0) > 0;
+            if (!destroySubmitted || destroyStillPending) {
+              markWgpuReplayFatal(
+                "destroy-order",
+                "destroy could not submit all pending mapped uploads"
+              );
+              break;
+            }
+            if (wgpuReplayFatal) break;
+          }
           const tag = u32[recWord + 1], id = u32[recWord + 2];
           const m = tag === 1 ? webGpuObjects.buffers
                   : tag === 2 ? webGpuObjects.textures
@@ -9756,7 +9999,25 @@ function drainWebGpuCmdRing(source = "presentation") {
   if (wgpuReplayBudgetMs > 0) replayLimit = read;
   if (!wgpuReplayFatal) {
     endPass("drain-boundary", read);
-    submitEnc("drain-boundary");
+    const mappedSnapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    const pendingMappedUploads = (mappedSnapshot?.pendingUploads ?? 0) > 0;
+    const mappedDrainDecision = wgpuMappedDrainCoalescer.atBoundary({
+      pending: pendingMappedUploads,
+      pendingBytes: mappedSnapshot?.pendingBytes ?? 0,
+      pendingRecords: mappedSnapshot?.pendingUploads ?? 0,
+      pendingAgeMs: mappedSnapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+      hasOpenPass: Boolean(pass),
+      hasRenderEncoder: Boolean(enc),
+    });
+    if (mappedDrainDecision.cancelledTimerToken) {
+      cancelWgpuMappedDrainTimer(mappedDrainDecision.cancelledTimerToken);
+    }
+    if (mappedDrainDecision.action === "defer") {
+      scheduleWgpuMappedDrainDeadline(mappedDrainDecision);
+    } else if (enc || mappedDrainDecision.action === "flush") {
+      submitEnc("drain-boundary", true);
+    }
   }
   const stopReason = deferBeginPass
     ? "deferred-begin"

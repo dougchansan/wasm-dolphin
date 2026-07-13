@@ -134,6 +134,9 @@
 - [OGL performance plan](ogl-performance-plan.md) — diagnostic OGL research.
 - [Upstream WASM probe](upstream-wasm-probe.md) — upstream integration notes.
 
+- [WGPU mapped-drain coalescing](perf-results/melee-wgpu-mapped-drain-coalescing-2026-07-13.md) —
+  rejected bounded drain deferral with direct-save fixed-work evidence.
+
 Historical session notes under `patches/dolphin-wasm/` are research records,
 not the canonical user-facing reference. Prefer the documents above for the
 current contract.

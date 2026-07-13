@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   fileRecord,
   inspectMemoryContract,
+  inspectWorkerProtocol,
   loadSourceLock,
   publicModuleExports,
   REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
@@ -85,6 +86,7 @@ const manifest = {
   ].filter((name) => !moduleExports.includes(name)),
   moduleExports,
   runtimeMethods,
+  workerProtocol: inspectWorkerProtocol(root),
 };
 
 if (write) {

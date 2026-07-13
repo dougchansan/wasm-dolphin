@@ -437,6 +437,10 @@ async function runScenario(scenario, context) {
     context.baseUrl,
     scenario.params
   );
+  scenario = {
+    ...scenario,
+    params: Object.fromEntries(url.searchParams.entries()),
+  };
   const fixedWorkPollIntervalMs = uploadProbeMode ? 10 : FIXED_WORK_POLL_INTERVAL_MS;
   let fixedEmulatedWork = {
     enabled: context.targetCoreSeconds != null,
@@ -812,32 +816,29 @@ async function runScenario(scenario, context) {
         break;
       }
     }
-    if (uploadProbeMode) {
+    const mappedDrainFinalizationMode =
+      String(scenario.params?.wgpudraincoalesce ?? "0") === "1";
+    if (uploadProbeMode || mappedDrainFinalizationMode) {
       const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
       if (!pause?.paused || pause?.coreStateName !== "Paused") {
-        throw new Error(`Upload probe core did not pause for finalization: ${JSON.stringify(pause)}`);
+        throw new Error(`WGPU core did not pause for finalization: ${JSON.stringify(pause)}`);
       }
       const finalized = await requestWorkerRpc(
         page,
-        "validationFinalizeWgpuRendererProbe",
+        uploadProbeMode
+          ? "validationFinalizeWgpuRendererProbe"
+          : "validationFinalizeWgpuMappedDrain",
         { timeoutMs: 10_000 },
         20_000
       );
-      const snapshot = finalized?.snapshot;
-      if (!snapshot?.quiesced || !snapshot?.passed) {
-        throw new Error(`Upload probe did not finalize cleanly: ${JSON.stringify(snapshot)}`);
-      }
-      const finalizationEvidence = validateWgpuUploadProbeFinalization({
-        requested: scenario.params.wgpurenderprobe,
-        finalized,
-      });
-      if (!finalizationEvidence.valid) {
-        throw new Error(
-          `Upload probe finalization telemetry is invalid: ${finalizationEvidence.failures.join("; ")}`
-        );
-      }
       const finalSample = samples.at(-1);
-      if (!finalSample) throw new Error("Upload probe finalization has no timed sample to update");
+      if (!finalSample) throw new Error("WGPU finalization has no timed sample to update");
+      if (!finalized?.causalTelemetry) {
+        throw new Error("WGPU finalization did not return causal telemetry");
+      }
+      if (mappedDrainFinalizationMode && !finalized?.mappedDrainFinalization?.quiesced) {
+        throw new Error("WGPU mapped drain finalization did not return quiescent evidence");
+      }
       finalSample.causalTelemetry = finalized.causalTelemetry;
       Object.assign(
         finalSample,
@@ -846,14 +847,48 @@ async function runScenario(scenario, context) {
           finalized.causalTelemetry?.webgpu?.dirtyRangeProjection
         )
       );
-      manifest.benchmark.rendererWorkerProbeFinalization = {
-        paused: true,
-        quiesced: true,
-        schema: snapshot.schema,
-        observedRecordCount: snapshot.observedRecordCount,
-        totalUploadBytes: snapshot.totalUploadBytes,
-        streamDigest: snapshot.streamDigest,
-      };
+      if (uploadProbeMode) {
+        const snapshot = finalized?.snapshot;
+        if (!snapshot?.quiesced || !snapshot?.passed) {
+          throw new Error(`Upload probe did not finalize cleanly: ${JSON.stringify(snapshot)}`);
+        }
+        const finalizationEvidence = validateWgpuUploadProbeFinalization({
+          requested: scenario.params.wgpurenderprobe,
+          finalized,
+        });
+        if (!finalizationEvidence.valid) {
+          throw new Error(
+            `Upload probe finalization telemetry is invalid: ${finalizationEvidence.failures.join("; ")}`
+          );
+        }
+        manifest.benchmark.rendererWorkerProbeFinalization = {
+          paused: true,
+          quiesced: true,
+          schema: snapshot.schema,
+          observedRecordCount: snapshot.observedRecordCount,
+          totalUploadBytes: snapshot.totalUploadBytes,
+          streamDigest: snapshot.streamDigest,
+        };
+      } else {
+        manifest.benchmark.mappedDrainFinalization = {
+          paused: true,
+          quiesced: true,
+          deferred: Boolean(
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.state?.deferred
+          ),
+          pendingUploads:
+            finalized.causalTelemetry.webgpu?.mappedStaging?.pendingUploads ?? null,
+          activeBatches: finalized.mappedDrainFinalization.activeBatches,
+          remappingSlots: finalized.mappedDrainFinalization.remappingSlots,
+          activeCapacityWait: finalized.mappedDrainFinalization.activeCapacityWait,
+          deferredBoundaries:
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.telemetry
+              ?.deferredBoundaries ?? null,
+          actualSubmissions:
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.telemetry
+              ?.actualSubmissions ?? null,
+        };
+      }
     }
     manifest.benchmark.inputScriptDeliveredEventCount = inputEvents.length;
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
@@ -1216,6 +1251,46 @@ function summarizeScenario(
       );
     }
   }
+  const requestedMappedDrainCoalescing = scenario.params?.wgpudraincoalesce;
+  if (requestedMappedDrainCoalescing != null) {
+    const expectedMappedDrainCoalescing = String(requestedMappedDrainCoalescing) === "1";
+    const activeMappedDrainCoalescing =
+      final.causalTelemetry?.webgpu?.mappedDrainCoalescingEnabled;
+    if (activeMappedDrainCoalescing !== expectedMappedDrainCoalescing) {
+      failures.push(
+        `WGPU mapped drain coalescing mismatch: requested=${expectedMappedDrainCoalescing ? 1 : 0} ` +
+        `active=${activeMappedDrainCoalescing == null ? "unavailable" : activeMappedDrainCoalescing ? 1 : 0}`
+      );
+    }
+    if (expectedMappedDrainCoalescing) {
+      const coalescing = final.causalTelemetry?.webgpu?.mappedDrainCoalescing;
+      const staging = final.causalTelemetry?.webgpu?.mappedStaging;
+      if (coalescing?.state?.deferred !== false) {
+        failures.push("WGPU mapped drain coalescing ended with a deferred batch");
+      }
+      if ((staging?.pendingUploads ?? -1) !== 0) {
+        failures.push("WGPU mapped staging ended with pending uploads");
+      }
+      if ((coalescing?.telemetry?.generationMismatches ?? -1) !== 0) {
+        failures.push("WGPU mapped drain coalescing observed a generation mismatch");
+      }
+      if ((coalescing?.telemetry?.timerStale ?? -1) !== 0) {
+        failures.push("WGPU mapped drain coalescing observed a stale timer callback");
+      }
+      if ((coalescing?.telemetry?.actualDeadlineOverrunMaxMs ?? Number.POSITIVE_INFINITY) > 4) {
+        failures.push("WGPU mapped drain coalescing exceeded its 4 ms submit deadline tolerance");
+      }
+      if ((coalescing?.telemetry?.actualSubmissionAgeMaxMs ?? Number.POSITIVE_INFINITY) > 8) {
+        failures.push("WGPU mapped drain coalescing retained uploads beyond 8 ms");
+      }
+      if ((coalescing?.telemetry?.deferredBoundaries ?? 0) === 0) {
+        failures.push("WGPU mapped drain coalescing was enabled but never deferred work");
+      }
+      if ((coalescing?.telemetry?.actualSubmissions ?? 0) === 0) {
+        failures.push("WGPU mapped drain coalescing was enabled but never submitted mapped work");
+      }
+    }
+  }
   const requestedPackageProjection = scenario.params?.wgpupackageprojection;
   if (requestedPackageProjection != null) {
     const expectedPackageProjection = String(requestedPackageProjection) === "1";
@@ -1408,7 +1483,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagefast", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

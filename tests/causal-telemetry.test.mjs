@@ -130,6 +130,45 @@ test("flattens UBO change vectors and mapped capacity-wait roles", () => {
   );
 });
 
+test("flattens bounded mapped drain coalescing evidence", () => {
+  const value = createCausalTelemetry({
+    webgpu: {
+      mappedDrainCoalescingEnabled: true,
+      mappedDrainCoalescing: {
+        state: { deferred: true },
+        telemetry: {
+          deferredBoundaries: 9,
+          flushDecisions: 8,
+          timerFired: 2,
+          timerStale: 1,
+          actualSubmissions: 8,
+          actualSubmissionAgeMaxMs: 4.4,
+          actualDeadlineOverrunMaxMs: 0.4,
+          deadlineOverrunMaxMs: 0.7,
+          maxPendingBytes: 900_000,
+          maxPendingRecords: 600,
+          maxPendingAgeMs: 3.8,
+          flushReasons: { "second-boundary": 6, "timer-deadline": 2 },
+        },
+      },
+    },
+  });
+  const flat = flattenCausalTelemetry(value);
+  assert.equal(flat.causalWgpuMappedDrainCoalescingEnabled, true);
+  assert.equal(flat.causalWgpuMappedDrainDeferred, true);
+  assert.equal(flat.causalWgpuMappedDrainDeferredBoundaries, 9);
+  assert.equal(flat.causalWgpuMappedDrainTimerFired, 2);
+  assert.equal(flat.causalWgpuMappedDrainActualSubmissions, 8);
+  assert.equal(flat.causalWgpuMappedDrainActualSubmissionAgeMaxMs, 4.4);
+  assert.equal(flat.causalWgpuMappedDrainActualDeadlineOverrunMaxMs, 0.4);
+  assert.equal(flat.causalWgpuMappedDrainDeadlineOverrunMaxMs, 0.7);
+  assert.equal(flat.causalWgpuMappedDrainMaxPendingAgeMs, 3.8);
+  assert.deepEqual(flat.causalWgpuMappedDrainFlushReasons, {
+    "second-boundary": 6,
+    "timer-deadline": 2,
+  });
+});
+
 test("core profile text is promoted without changing the compatibility string", () => {
   const source =
     "video xfb:77 640x480 stride:1280 present:320x240 hash:4b2d0a3b nz:2048 " +
