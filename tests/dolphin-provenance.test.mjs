@@ -318,6 +318,8 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
     "src/wgpu-ownership-command-correlator.js",
     "src/wgpu-resource-generation-tracker.js",
     "src/wgpu-semantic-digest.js",
+    "src/wgpu-semantic-parity-sink.js",
+    "src/wgpu-semantic-v2-decoder.js",
   ]) {
     assert.ok(
       coreAbi.contractSources.some((source) => source.path === path),

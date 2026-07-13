@@ -224,20 +224,32 @@
     {
       "path": "src/wgpu-semantic-digest.js",
       "hashMode": "lf-normalized",
-      "size": 16355,
-      "sha256": "e4e4c6a0d2e412351ce39a8c678d9e1a596e1a07421f8937e307d8884b900c8c"
+      "size": 16403,
+      "sha256": "b28a3ee9dc7207833eac426cc75530aa35ce80c22fd1d490af46a6e9eb160079"
     },
     {
       "path": "src/wgpu-ownership-command-correlator.js",
       "hashMode": "lf-normalized",
-      "size": 27338,
-      "sha256": "8ff0267183b481e9d470289acdb009d75164ec7773fc6cdc5c61e1f730b05387"
+      "size": 28315,
+      "sha256": "8a124bd47f7ef3c10c00d39032e9a6f1f6c0b4c2ce7cc5031dcecaac024dff01"
     },
     {
       "path": "src/wgpu-resource-generation-tracker.js",
       "hashMode": "lf-normalized",
       "size": 26230,
       "sha256": "df2120ad404902eb31dc6af1c37d7c906bbdcb2429042a63385f10918d37fac6"
+    },
+    {
+      "path": "src/wgpu-semantic-parity-sink.js",
+      "hashMode": "lf-normalized",
+      "size": 7844,
+      "sha256": "23fa18a2336b44669e58499d8f1990664e2e94773364dd3bfb9ff25ebfbd6e69"
+    },
+    {
+      "path": "src/wgpu-semantic-v2-decoder.js",
+      "hashMode": "lf-normalized",
+      "size": 21037,
+      "sha256": "7399848fd70833be247e6ac15da2c620be28b6380915ef5eb9500d111537e546"
     }
   ],
   "memoryContract": {

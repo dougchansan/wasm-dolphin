@@ -219,7 +219,7 @@ function createSemanticDigest({ recentCommitLimit, now }, codec) {
       throw new Error(`semantic transaction ${id} cannot commit because it is not open`);
     }
     const startedAt = now();
-    commitEvents(branch.events);
+    const encodedEvents = commitEvents(branch.events);
     transactions.delete(id);
     committedTransactionCount += 1;
     recentCommits.push({
@@ -231,6 +231,7 @@ function createSemanticDigest({ recentCommitLimit, now }, codec) {
     });
     if (recentCommits.length > recentLimit) recentCommits.shift();
     recordHashTime(startedAt);
+    return encodedEvents;
   }
 
   function abortTransaction(transactionId) {

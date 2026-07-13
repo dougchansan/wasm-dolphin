@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import { bytesToHex, sha256 } from "./incremental-sha256.js";
-import { WGPU_SEMANTIC_DIGEST_SCHEMA } from "./wgpu-semantic-digest.js";
+import {
+  WGPU_SEMANTIC_DIGEST_SCHEMA,
+  WGPU_SEMANTIC_DIGEST_SCHEMA_V2,
+} from "./wgpu-semantic-digest.js";
 import {
   WGPU_COMMAND_PUBLICATION,
   WGPU_OWNERSHIP_EVENT,
@@ -12,6 +15,11 @@ export { WGPU_COMMAND_PUBLICATION, WGPU_OWNERSHIP_EVENT };
 
 export const WGPU_OWNERSHIP_COMMAND_CORRELATOR_SCHEMA =
   "wasm-dolphin.wgpu-ownership-command-correlator.v1";
+export const WGPU_CORRELATION_EPOCH_KIND = Object.freeze({
+  OBSERVATION_START: "observation-start",
+  CONSUMER_RESET: "consumer-reset",
+  LOAD: "load",
+});
 
 const SUBMIT_PRESENT_OPCODE = 22;
 const OWNERSHIP_TRACE_VERSION = 1;
@@ -167,7 +175,11 @@ export function createWgpuOwnershipCommandCorrelator({
         epoch = record.epoch;
         epochOpened = true;
         try {
-          sink.beginEpoch(epoch);
+          // The native initial epoch attests only that ownership tracing was
+          // enabled. It does not prove that the browser consumer cleared its
+          // resource maps, so a generation-aware sink must fail closed until
+          // it receives an independent consumer-reset attestation.
+          sink.beginEpoch(epoch, { kind: WGPU_CORRELATION_EPOCH_KIND.OBSERVATION_START });
         } catch (error) {
           return fail(`semantic sink epoch begin failed: ${error?.message || error}`);
         }
@@ -601,7 +613,7 @@ export function createWgpuOwnershipCommandCorrelator({
       generation += 1;
       resetCount += 1;
       try {
-        sink.beginEpoch(nextEpoch);
+        sink.beginEpoch(nextEpoch, { kind: WGPU_CORRELATION_EPOCH_KIND.LOAD });
       } catch (error) {
         fail(`semantic sink epoch reset failed: ${error?.message || error}`);
       }
@@ -666,7 +678,7 @@ function normalizeSink(sink) {
       ? (id) => sink.abortTransaction(id)
       : () => {},
     beginEpoch: typeof sink.beginEpoch === "function"
-      ? (nextEpoch) => sink.beginEpoch(nextEpoch)
+      ? (nextEpoch, options) => sink.beginEpoch(nextEpoch, options)
       : () => {},
     markMismatch: typeof sink.markMismatch === "function"
       ? () => sink.markMismatch()
@@ -679,8 +691,17 @@ function snapshotSink(sink) {
 }
 
 function validSinkPrefix(value) {
+  const recognizedSchema =
+    value?.schema === WGPU_SEMANTIC_DIGEST_SCHEMA ||
+    (
+      value?.schema === WGPU_SEMANTIC_DIGEST_SCHEMA_V2 &&
+      value?.dependencyEncodingReady === true &&
+      value?.independentDecodingReady === true &&
+      isNonNegativeSafeInteger(value.independentDecodedEventCount) &&
+      value.independentDecodedEventCount === value.committedEventCount
+    );
   return (
-    value?.schema === WGPU_SEMANTIC_DIGEST_SCHEMA &&
+    recognizedSchema &&
     isNonNegativeSafeInteger(value.openTransactionCount) &&
     isNonNegativeSafeInteger(value.unresolvedCount) &&
     isNonNegativeSafeInteger(value.mismatchCount) &&

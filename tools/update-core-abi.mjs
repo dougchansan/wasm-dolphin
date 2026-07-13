@@ -46,6 +46,8 @@ for (const requiredPath of [
   "src/wgpu-pass-package-projection.js",
   "src/wgpu-resource-generation-tracker.js",
   "src/wgpu-semantic-digest.js",
+  "src/wgpu-semantic-parity-sink.js",
+  "src/wgpu-semantic-v2-decoder.js",
   "src/wgpu-ownership-trace.js",
 ]) {
   if (!contractSourceDeclarations.some((source) => source.path === requiredPath)) {
