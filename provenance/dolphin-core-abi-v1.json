@@ -206,8 +206,26 @@
     {
       "path": "src/wgpu-ownership-trace.js",
       "hashMode": "lf-normalized",
-      "size": 13500,
-      "sha256": "c6776d2d464fc71ad374bf780d13ada2bff02c15e2b2b6d5cbce19a624c6a5f1"
+      "size": 13504,
+      "sha256": "5ac5405b97f66bf69e59952460f7001b6c5201939d128b3c304f1b2cc6f91011"
+    },
+    {
+      "path": "src/incremental-sha256.js",
+      "hashMode": "lf-normalized",
+      "size": 7793,
+      "sha256": "daea2976bf7588c8f9287e89a2dbd2d278de7f57e4833de81330c639d0178cc8"
+    },
+    {
+      "path": "src/wgpu-legacy-semantic-decoder.js",
+      "hashMode": "lf-normalized",
+      "size": 11975,
+      "sha256": "d5ec01782c4aa44c05488c91b7e2a7b79ec0461cd2ed797d043637c6e791ddb8"
+    },
+    {
+      "path": "src/wgpu-semantic-digest.js",
+      "hashMode": "lf-normalized",
+      "size": 9697,
+      "sha256": "7243a85f209dcac492978b97f27ce7409c863dcf980e5cc6bb3b7891f5de534d"
     }
   ],
   "memoryContract": {

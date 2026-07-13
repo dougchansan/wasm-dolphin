@@ -312,6 +312,16 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
     ),
     "ownership trace decoder must remain covered by the core ABI contract"
   );
+  for (const path of [
+    "src/incremental-sha256.js",
+    "src/wgpu-legacy-semantic-decoder.js",
+    "src/wgpu-semantic-digest.js",
+  ]) {
+    assert.ok(
+      coreAbi.contractSources.some((source) => source.path === path),
+      `${path} must remain covered by the core ABI contract`
+    );
+  }
 });
 
 test("vendor snapshot manifest rejects changed per-path evidence", () => {

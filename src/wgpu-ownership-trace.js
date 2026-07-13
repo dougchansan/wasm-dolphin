@@ -183,9 +183,9 @@ export function createWgpuOwnershipTrace({
       lastCommandSerial = commandSerial;
       if (event < EVENT_HISTOGRAM_SIZE) eventHistogram[event] += 1;
       else eventOverflowCount += 1;
-      if (opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[opcode] += 1;
-      else opcodeOverflowCount += 1;
       if (event === OWNERSHIP_TRACE_EVENT_COMMAND) {
+        if (opcode < OPCODE_HISTOGRAM_SIZE) opcodeHistogram[opcode] += 1;
+        else opcodeOverflowCount += 1;
         const attribution = auxiliary & 0x3;
         const publication = (auxiliary >>> 8) & 0x3;
         commandAttributionHistogram[attribution] += 1;

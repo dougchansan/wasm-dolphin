@@ -103,7 +103,16 @@ test("decoder detects non-monotonic serials and mismatched record epochs", () =>
 test("decoder bounds recent storage and histograms", () => {
   const fixture = makeRing(8, { write: 6, epoch: 1 });
   for (let index = 0; index < 6; index += 1) {
-    writeRecord(fixture, index, [index === 5 ? 99 : 1, 1, 1, index, index === 5 ? 99 : 6, 0, 0, 0]);
+    writeRecord(fixture, index, [
+      index === 5 ? 99 : 2,
+      1,
+      1,
+      index,
+      index === 4 ? 99 : 6,
+      0,
+      0,
+      0,
+    ]);
   }
   const trace = createWgpuOwnershipTrace({ recentRecordLimit: 2 });
   trace.attach(fixture.descriptor, fixture.buffer);
