@@ -1,5 +1,7 @@
 # Documentation
 
+- [WGPU guarded uniform-comparison screen](perf-results/melee-wgpu-uniform-fast-2026-07-12.md) - default-off correctness evidence, unresolved throughput screen, and upload/replay backlog diagnosis.
+
 - [Current status](current-status.md) — supported scope, recommended path, and
   confidence levels.
 - [Causal performance telemetry](causal-telemetry.md) — versioned core,
