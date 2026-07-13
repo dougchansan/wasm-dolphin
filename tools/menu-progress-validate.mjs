@@ -1830,15 +1830,20 @@ function installInputMarkerCanvasObserver() {
         !Number.isFinite(browserCanvasVisibleAtEpochMs)) {
       return false;
     }
-    const ordered = [
+    // completedAtEpochMs is when the JS onSubmittedWorkDone() callback runs,
+    // not a hardware timestamp. The browser may paint already-submitted work
+    // before that callback receives a main-thread turn, so validate the worker
+    // lifecycle and submitted-to-visible chains independently.
+    const workerOrdered = [
       timestamps.sentAtEpochMs,
       timestamps.appliedAtEpochMs,
       timestamps.polledAtEpochMs,
       timestamps.submittedAtEpochMs,
       timestamps.completedAtEpochMs,
-      browserCanvasVisibleAtEpochMs,
     ];
-    return ordered.every((value, index) => index === 0 || value >= ordered[index - 1]);
+    return workerOrdered.every(
+      (value, index) => index === 0 || value >= workerOrdered[index - 1]
+    ) && browserCanvasVisibleAtEpochMs >= timestamps.submittedAtEpochMs;
   }
 
   function buildGenerationObservation({
@@ -1905,7 +1910,15 @@ function installInputMarkerCanvasObserver() {
         workerAppliedToCorePollMs: stageDelta(polledAtEpochMs, appliedAtEpochMs),
         corePollToMarkerSubmitMs: stageDelta(submittedAtEpochMs, polledAtEpochMs),
         markerSubmitToGpuCompleteMs: stageDelta(completedAtEpochMs, submittedAtEpochMs),
+        markerSubmitToGpuCompletionCallbackMs: stageDelta(
+          completedAtEpochMs,
+          submittedAtEpochMs
+        ),
         gpuCompleteToBrowserCanvasVisibleMs: stageDelta(
+          browserCanvasVisibleAtEpochMs,
+          completedAtEpochMs
+        ),
+        gpuCompletionCallbackToBrowserCanvasVisibleMs: stageDelta(
           browserCanvasVisibleAtEpochMs,
           completedAtEpochMs
         ),
@@ -1919,6 +1932,10 @@ function installInputMarkerCanvasObserver() {
         timestamps,
         browserCanvasVisibleAtEpochMs
       ),
+      completionCallbackAfterCanvasVisible:
+        Number.isFinite(completedAtEpochMs) &&
+        Number.isFinite(browserCanvasVisibleAtEpochMs) &&
+        completedAtEpochMs > browserCanvasVisibleAtEpochMs,
       adapterValidated,
       workerValidated,
       workerTelemetryCapturedAtMs: worker?.telemetryCapturedAtMs ?? null,
@@ -2191,6 +2208,9 @@ function installInputMarkerCanvasObserver() {
     const monotonicTimestampCount = workerValidated.filter(
       (sample) => sample.workerTimestampsMonotonic
     ).length;
+    const completionCallbackAfterCanvasVisibleCount = workerValidated.filter(
+      (sample) => sample.completionCallbackAfterCanvasVisible
+    ).length;
     const acceptanceReasons = [];
     if (expectedGenerationCount < 6) {
       acceptanceReasons.push("expected-generation-count-below-six");
@@ -2239,7 +2259,9 @@ function installInputMarkerCanvasObserver() {
       "workerAppliedToCorePollMs",
       "corePollToMarkerSubmitMs",
       "markerSubmitToGpuCompleteMs",
+      "markerSubmitToGpuCompletionCallbackMs",
       "gpuCompleteToBrowserCanvasVisibleMs",
+      "gpuCompletionCallbackToBrowserCanvasVisibleMs",
       "inputEventToBrowserCanvasVisibleMs",
     ];
     const stageLatency = Object.fromEntries(stageNames.map((name) => [
@@ -2250,6 +2272,8 @@ function installInputMarkerCanvasObserver() {
       enabled: true,
       measurement:
         "worker-validated input generation to first matching 8x8 sample of the 32x32 browser-canvas-visible marker",
+      gpuCompletionTimestampMeaning:
+        "onSubmittedWorkDone callback observation; not an exact hardware completion timestamp",
       observationBoundary: state.observationBoundary,
       scanoutIncluded: false,
       physicalPhotonBoundaryIncluded: false,
@@ -2271,6 +2295,7 @@ function installInputMarkerCanvasObserver() {
       workerValidatedGenerationCount: workerValidated.length,
       workerTimestampJoinCount,
       monotonicTimestampCount,
+      completionCallbackAfterCanvasVisibleCount,
       workerMarkerStats: markerStats,
       acceptance: {
         passed: acceptanceReasons.length === 0,

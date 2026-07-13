@@ -46,6 +46,9 @@ test("marker observations are raw artifacts and canvas-visible latency excludes 
   assert.match(source, /workerAppliedToCorePollMs/);
   assert.match(source, /markerSubmitToGpuCompleteMs/);
   assert.match(source, /gpuCompleteToBrowserCanvasVisibleMs/);
+  assert.match(source, /markerSubmitToGpuCompletionCallbackMs/);
+  assert.match(source, /gpuCompletionCallbackToBrowserCanvasVisibleMs/);
+  assert.match(source, /onSubmittedWorkDone callback observation/);
   assert.match(source, /appliedAtEpochMs/);
   assert.match(source, /workerTimestamps: worker\?\.timestamps \?\? null/);
   assert.match(source, /scanoutIncluded: false/);
@@ -56,6 +59,27 @@ test("marker observations are raw artifacts and canvas-visible latency excludes 
   assert.match(source, /expected-generation-count-below-six/);
   assert.match(source, /inputreadback-must-be-disabled/);
   assert.match(source, /physicalPhotonBoundaryIncluded: false/);
+});
+
+test("marker ordering accepts delayed completion callbacks but rejects broken causal chains", async () => {
+  const source = await readFile(harnessUrl, "utf8");
+  const helperStart = source.indexOf("  function completeWorkerTimestamps");
+  const helperEnd = source.indexOf("\n  function buildGenerationObservation", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const validate = vm.runInNewContext(
+    `(() => {${source.slice(helperStart, helperEnd)}; return monotonicWorkerTimestamps;})()`
+  );
+  const ordered = {
+    sentAtEpochMs: 100,
+    appliedAtEpochMs: 101,
+    polledAtEpochMs: 110,
+    submittedAtEpochMs: 111,
+    completedAtEpochMs: 120,
+  };
+
+  assert.equal(validate(ordered, 115), true);
+  assert.equal(validate(ordered, 110), false);
+  assert.equal(validate({ ...ordered, polledAtEpochMs: 99 }, 115), false);
 });
 
 test("stop joins completed worker samples that arrived after their canvas marker expired", async () => {
@@ -189,13 +213,16 @@ test("stop joins completed worker samples that arrived after their canvas marker
       workerAppliedToCorePollMs: 3,
       corePollToMarkerSubmitMs: 2,
       markerSubmitToGpuCompleteMs: 3,
+      markerSubmitToGpuCompletionCallbackMs: 3,
       gpuCompleteToBrowserCanvasVisibleMs: 5,
+      gpuCompletionCallbackToBrowserCanvasVisibleMs: 5,
       inputEventToBrowserCanvasVisibleMs: 15,
     }
   );
   assert.equal(snapshot.summary.workerValidatedGenerationCount, 6);
   assert.equal(snapshot.summary.workerTimestampJoinCount, 6);
   assert.equal(snapshot.summary.monotonicTimestampCount, 6);
+  assert.equal(snapshot.summary.completionCallbackAfterCanvasVisibleCount, 1);
   assert.equal(snapshot.summary.acceptance.passed, true);
   assert.deepEqual({ ...snapshot.summary.acceptance.parityCounts }, {
     expected: 6,
@@ -256,7 +283,9 @@ test("stop joins completed worker samples that arrived after their canvas marker
       appliedAtEpochMs: sentAtEpochMs + 2,
       polledAtEpochMs: sentAtEpochMs + 5,
       submittedAtEpochMs: sentAtEpochMs + 7,
-      completedAtEpochMs: sentAtEpochMs + 10,
+      // onSubmittedWorkDone() reports callback-observation time. The browser
+      // may paint submitted work before that callback gets a main-thread turn.
+      completedAtEpochMs: sentAtEpochMs + (generation === 6 ? 20 : 10),
     };
   }
 });
