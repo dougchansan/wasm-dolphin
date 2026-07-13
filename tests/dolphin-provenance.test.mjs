@@ -316,6 +316,7 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
     "src/incremental-sha256.js",
     "src/wgpu-legacy-semantic-decoder.js",
     "src/wgpu-ownership-command-correlator.js",
+    "src/wgpu-resource-generation-tracker.js",
     "src/wgpu-semantic-digest.js",
   ]) {
     assert.ok(

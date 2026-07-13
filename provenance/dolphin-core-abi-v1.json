@@ -232,6 +232,12 @@
       "hashMode": "lf-normalized",
       "size": 27338,
       "sha256": "8ff0267183b481e9d470289acdb009d75164ec7773fc6cdc5c61e1f730b05387"
+    },
+    {
+      "path": "src/wgpu-resource-generation-tracker.js",
+      "hashMode": "lf-normalized",
+      "size": 25987,
+      "sha256": "8c236a1eff41029333f4fa70e61ac10e78b57c13e157fa9635448e18dc72a1ab"
     }
   ],
   "memoryContract": {
