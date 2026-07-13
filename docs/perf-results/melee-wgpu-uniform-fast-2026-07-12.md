@@ -16,7 +16,7 @@ This is a screening result for the default-off `wgpuuniformfast=1` experiment. I
 
 | Block | Fast path off mean game speed | Fast path on mean game speed | Effect | Validity |
 | --- | ---: | ---: | ---: | --- |
-| 1 | 47.4705% | 48.2636% | +1.6705% | Valid |
+| 1 | 47.4705% | 48.2636% | +1.6706% | Valid |
 | 2 | 47.7862% | 47.7377% | -0.1014% | Invalid: record-count-per-frame parity exceeded 0.5% |
 | Replacement 1 | 48.0874% (two runs) | 48.0461% (one run) | Incomplete | Final run was interrupted by the outer command limit |
 
@@ -34,17 +34,19 @@ This smoke deliberately enabled detailed UBO timing, so its throughput is diagno
 | Average core FPS | 28.28 |
 | Average presentation FPS | 22.52 |
 | Audio active samples | 89.86% |
-| Uniform comparisons skipped (VS/PS/GS) | 160,020 / 100,692 / 80,453 |
-| Uniform comparisons retained (VS/PS/GS) | 71,793 / 131,121 / 151,360 |
+| Uniform comparisons skipped (VS/PS/GS) | 162,450 / 102,162 / 81,678 |
+| Uniform comparisons retained (VS/PS/GS) | 72,713 / 133,001 / 153,485 |
 | Changed comparisons after a clean guard (VS/PS/GS) | 0 / 0 / 0 |
 | WGPU backlog high-water | 56,667 records |
 | WGPU backlog sampled p95 | 2,802 records |
 | Maximum replay drain | 2,251.78 ms |
-| Queue-write calls | 573,559 |
+| Queue transport / queue-write calls | `queue` / 573,559 |
 | Maximum queue-write duration | 2,244.405 ms |
+| Upload replay CPU total | 4,751 ms |
+| Audio underruns | 6 |
 | GPU completions | 56 / 56 sampled; 0 failures |
 | GPU completion p95 / max | 89.65 / 2,501.445 ms |
 
-The large command/upload count and tail stalls dominate the small comparison opportunity. The next optimization target is bounded upload/replay batching that reduces queue-write and command-record counts while preserving exact resource and pass ordering.
+The large command/upload count and tail stalls dominate the small comparison opportunity. The null-drain A/B measured producer throughput and did not replay these uploads; the visible run used the ordinary `queue` transport. The next optimization target is a visible real-replay comparison of queue transport against bounded, completion-aware staging/batching that reduces queue-write and command-record counts while preserving exact resource and pass ordering.
 
 Raw local artifacts are under `.omx/wgpu-no-lag/uniform-fast-screen-2796011` and `.omx/wgpu-no-lag/uniform-fast-visible-detail-2796011-wgpu`.
