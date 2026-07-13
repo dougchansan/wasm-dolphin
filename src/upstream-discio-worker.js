@@ -75,6 +75,7 @@ import {
   createWgpuUploadAttribution
 } from "./wgpu-upload-attribution.js";
 import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
+import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
 import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
 import {
   attemptRetainedWgpuUpload,
@@ -219,6 +220,9 @@ let wgpuUploadAttribution = createWgpuUploadAttribution();
 let wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
 let wgpuDirtyRangeProjectionRequested = false;
 let wgpuDirtyRangeProjectionActive = false;
+let wgpuPassPackageProjection = createWgpuPassPackageProjection();
+let wgpuPassPackageProjectionRequested = false;
+let wgpuPassPackageProjectionActive = false;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -568,6 +572,10 @@ function rendererDiagnosticsPayload() {
       requested: wgpuDirtyRangeProjectionRequested,
       active: wgpuDirtyRangeProjectionActive
     }),
+    wgpuPassPackageProjection: wgpuPassPackageProjection.snapshot({
+      requested: wgpuPassPackageProjectionRequested,
+      active: wgpuPassPackageProjectionActive
+    }),
   };
 }
 
@@ -635,6 +643,10 @@ async function handleMessage(type, payload) {
       wgpuDirtyRangeProjectionRequested = Boolean(payload.wgpuDirtyRangeProjection);
       wgpuDirtyRangeProjectionActive =
         wgpuDirtyRangeProjectionRequested && causalMetricsEnabled;
+      wgpuPassPackageProjection = createWgpuPassPackageProjection();
+      wgpuPassPackageProjectionRequested = Boolean(payload.wgpuPassPackageProjection);
+      wgpuPassPackageProjectionActive = wgpuPassPackageProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
         enabled: gpuCompletionDiagnostics
@@ -726,6 +738,7 @@ async function handleMessage(type, payload) {
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
+        wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -1111,6 +1124,7 @@ async function loadCore({
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
+  wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
@@ -1142,6 +1156,12 @@ async function loadCore({
   wgpuInputVisualBaselineReady = false;
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
+  if (requestedWgpuPassPackageProjection && !collectMetrics) {
+    throw new Error("wgpupackageprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuPassPackageProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpupackageprojection=1 requires video=wgpu");
+  }
   wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
   wgpuProducerProfileAvailable = false;
   wgpuDrawProfileRequested = Boolean(requestedWgpuDrawProfile);
@@ -2443,6 +2463,10 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
       dirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
         requested: wgpuDirtyRangeProjectionRequested,
         active: wgpuDirtyRangeProjectionActive
+      }),
+      passPackageProjection: wgpuPassPackageProjection.snapshot({
+        requested: wgpuPassPackageProjectionRequested,
+        active: wgpuPassPackageProjectionActive
       }),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
@@ -5618,6 +5642,9 @@ function clearWgpuReplayStateAfterDeviceLoss() {
     webGpuCmdRing.stagedScanCursor = null;
   }
   wgpuPassStateCache.reset("device-lost");
+  if (wgpuPassPackageProjectionActive) {
+    wgpuPassPackageProjection.reset("device-lost");
+  }
 }
 
 function ensureWgpuMappedStagingPool(device) {
@@ -6841,6 +6868,9 @@ function drainWebGpuCmdRing(source = "presentation") {
           });
         }
       }
+      if (wgpuPassPackageProjectionActive) {
+        wgpuPassPackageProjection.reset("load-fence-discard");
+      }
       publishWgpuReadIndex(ring, discardTo);
       wgpuReplayClassifier?.recordLoadFence({
         discardedRecords,
@@ -7366,6 +7396,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       self._wgBpDefer = 0;
     }
     const replayOpStartedAt = causalMetricsEnabled ? performance.now() : 0;
+    let replayRecordAccepted = true;
     try {
       switch (op) {
         case WGPU_CMD_OP_CREATE_SHADER:
@@ -9133,6 +9164,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
       }
     } catch (e) {
+      replayRecordAccepted = false;
       webGpuCausalStats.errorCount += 1;
       if (wgpuUploadTransport === "mapped" &&
           (op === WGPU_CMD_OP_UPLOAD_BUFFER || op === WGPU_CMD_OP_UPLOAD_TEXTURE)) {
@@ -9172,6 +9204,16 @@ function drainWebGpuCmdRing(source = "presentation") {
         }
       }
       break;
+    }
+    if (wgpuPassPackageProjectionActive && replayRecordAccepted) {
+      const payloadBytes = op === WGPU_CMD_OP_UPLOAD_BUFFER
+        ? u32[recWord + 4]
+        : op === WGPU_CMD_OP_UPLOAD_TEXTURE
+          ? Math.imul(u32[recWord + 3], u32[recWord + 5]) >>> 0
+          : 0;
+      // Observe only after the handler accepted this record and immediately
+      // before the authoritative legacy read cursor advances.
+      wgpuPassPackageProjection.observeConsumedRecord(op, read, payloadBytes);
     }
     read = (read + 1) >>> 0;
     if (wgpuReplayBudgetMs > 0) {

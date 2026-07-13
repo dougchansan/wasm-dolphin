@@ -1,4 +1,5 @@
 import { createWgpuUploadAttribution } from "./wgpu-upload-attribution.js";
+import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
 import {
   WGPU_DRAW_PROFILE_PHASE_ORDER,
   WGPU_DRAW_PROFILE_SCHEMA,
@@ -298,6 +299,10 @@ export function createCausalTelemetry(overrides = {}) {
         uploadTimeoutCountBeforeVerifiedLoad: 0,
         uploadTimeoutCountAfterVerifiedLoad: 0,
         uploadAttribution: createWgpuUploadAttribution().snapshot({ enabled: false }),
+        passPackageProjection: createWgpuPassPackageProjection().snapshot({
+          requested: false,
+          active: false,
+        }),
       },
       workerTraffic: {
         mainToWorker: emptyTrafficDirection(),
@@ -685,6 +690,10 @@ export function flattenCausalTelemetry(value) {
   );
   const uploadPassAssociation = uploadAttribution.passAssociation;
   const queueWrite = uploadAttribution.queueWrite;
+  const passPackageProjection = deepMerge(
+    createWgpuPassPackageProjection().snapshot({ requested: false, active: false }),
+    telemetry.webgpu.passPackageProjection ?? {}
+  );
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -1006,6 +1015,40 @@ export function flattenCausalTelemetry(value) {
     causalWgpuQueueWriteSlowEvents: queueWrite.slowEvents,
     causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
     causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
+    causalWgpuPassPackageProjectionSchema: passPackageProjection.schema,
+    causalWgpuPassPackageProjectionRequested: passPackageProjection.requested,
+    causalWgpuPassPackageProjectionActive: passPackageProjection.active,
+    causalWgpuPassPackageRuntimeEligible: passPackageProjection.runtimeEligible,
+    causalWgpuPassPackageLegacyRecords: passPackageProjection.legacy.records,
+    causalWgpuPassPackageLegacyPublications: passPackageProjection.legacy.publications,
+    causalWgpuPassPackageProjectedRecords: passPackageProjection.projected.records,
+    causalWgpuPassPackageProjectedPublications: passPackageProjection.projected.publications,
+    causalWgpuPassPackageProjectedRecordReduction:
+      passPackageProjection.projected.recordReduction,
+    causalWgpuPassPackageProjectedPublicationReduction:
+      passPackageProjection.projected.publicationReduction,
+    causalWgpuPassPackageSpeculativePublications:
+      passPackageProjection.speculativeFullEnvelope.publications,
+    causalWgpuPassPackageSpeculativePublicationReductionEstimate:
+      passPackageProjection.speculativeFullEnvelope.publicationReductionEstimate,
+    causalWgpuPassPackageCompletePasses: passPackageProjection.projected.completePassPackages,
+    causalWgpuPassPackageOutsideSegments: passPackageProjection.projected.outsideSegments,
+    causalWgpuPassPackageUploadRecords: passPackageProjection.records.uploads,
+    causalWgpuPassPackageUploadBytes: passPackageProjection.records.uploadBytes,
+    causalWgpuPassPackageResourceRecords: passPackageProjection.records.resources,
+    causalWgpuPassPackageUnsupportedRecords: passPackageProjection.records.unsupported,
+    causalWgpuPassPackageMalformedRecords: passPackageProjection.records.malformed,
+    causalWgpuPassPackageNestedPasses: passPackageProjection.records.nestedPasses,
+    causalWgpuPassPackageStateOutsidePass: passPackageProjection.records.stateOutsidePass,
+    causalWgpuPassPackagePendingPrePassUploads:
+      passPackageProjection.ownership.pendingPrePassUploads,
+    causalWgpuPassPackageUnresolvedPrePassUploads:
+      passPackageProjection.ownership.unresolvedPrePassUploads,
+    causalWgpuPassPackagePendingOutsideResources:
+      passPackageProjection.ownership.pendingOutsideResources,
+    causalWgpuPassPackageUnresolvedOutsideResources:
+      passPackageProjection.ownership.unresolvedOutsideResources,
+    causalWgpuPassPackageOpHistogram: passPackageProjection.opHistogram,
     causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,
     causalWgpuUploadAbortedPassCount: uploadPassAssociation.abortedPassCount,
     causalWgpuUploadIncompletePassCount: uploadPassAssociation.incompletePassCount,

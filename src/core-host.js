@@ -38,6 +38,7 @@ import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
 import { requestedWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
+import { requestedWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
 import {
   requestedInputLatencyDiagnostics,
   requestedInputReadbackDiagnostics
@@ -127,6 +128,9 @@ export class EmulatorHost {
     this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
+    this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(
+      window.location.search
+    );
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
       requestedInputLatencyDiagnostics(window.location.search) || this.inputPhotonMarker.enabled;
@@ -362,6 +366,7 @@ export class EmulatorHost {
             wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
+            wgpuPassPackageProjection: this.wgpuPassPackageProjection,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,
             inputPhotonDiagnostics: this.inputPhotonMarker.enabled,

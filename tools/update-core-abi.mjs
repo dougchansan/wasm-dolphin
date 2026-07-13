@@ -38,7 +38,16 @@ if (pinnedCoreSha256 !== wasm.sha256) {
     protocolSource.replace(coreHashPattern, `$1${wasm.sha256}$2`)
   );
 }
-const contractSources = previous.contractSources.map((source) => ({
+const contractSourceDeclarations = [...previous.contractSources];
+if (!contractSourceDeclarations.some(
+  (source) => source.path === "src/wgpu-pass-package-projection.js"
+)) {
+  contractSourceDeclarations.push({
+    path: "src/wgpu-pass-package-projection.js",
+    hashMode: "lf-normalized",
+  });
+}
+const contractSources = contractSourceDeclarations.map((source) => ({
   ...fileRecord(source.path, root, source.hashMode ?? "raw"),
   ...(source.hashMode ? { hashMode: source.hashMode } : {}),
 }));

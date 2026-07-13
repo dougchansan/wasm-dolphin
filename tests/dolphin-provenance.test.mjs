@@ -297,6 +297,15 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
   assert.equal(result.core.abiVersion, 1);
   assert.equal(result.core.memoryContract.jsGlue.initialPages, 24576);
   assert.equal(result.core.memoryContract.activePatchSeries.initialPages, 24576);
+  const coreAbi = JSON.parse(
+    readFileSync(join(projectRoot, "provenance/dolphin-core-abi-v1.json"), "utf8")
+  );
+  assert.ok(
+    coreAbi.contractSources.some(
+      (source) => source.path === "src/wgpu-pass-package-projection.js"
+    ),
+    "pass-package projection must remain covered by the core ABI contract"
+  );
 });
 
 test("vendor snapshot manifest rejects changed per-path evidence", () => {

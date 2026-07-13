@@ -1058,6 +1058,43 @@ function summarizeScenario(
       );
     }
   }
+  const requestedPackageProjection = scenario.params?.wgpupackageprojection;
+  if (requestedPackageProjection != null) {
+    const expectedPackageProjection = String(requestedPackageProjection) === "1";
+    const projection = final.causalTelemetry?.webgpu?.passPackageProjection;
+    const activePackageProjection = projection?.active;
+    if (activePackageProjection !== expectedPackageProjection) {
+      failures.push(
+        `WGPU pass-package projection mismatch: requested=${expectedPackageProjection ? 1 : 0} ` +
+        `active=${activePackageProjection == null ? "unavailable" : activePackageProjection ? 1 : 0}`
+      );
+    }
+    if (expectedPackageProjection && projection?.runtimeEligible !== false) {
+      failures.push("WGPU passive pass-package projection must remain runtimeEligible=false");
+    }
+    if (expectedPackageProjection && activePackageProjection === true) {
+      const projectionHazards = [
+        ["unsupported", projection?.records?.unsupported],
+        ["malformed", projection?.records?.malformed],
+        ["nested passes", projection?.records?.nestedPasses],
+        ["state outside pass", projection?.records?.stateOutsidePass],
+        ["incomplete passes", projection?.boundaries?.incompletePasses],
+      ];
+      if (!(Number(projection?.legacy?.records) > 0)) {
+        failures.push("WGPU pass-package projection observed zero records");
+      }
+      if (!(Number(projection?.projected?.completePassPackages) > 0)) {
+        failures.push("WGPU pass-package projection observed zero complete passes");
+      }
+      for (const [label, value] of projectionHazards) {
+        if (!Number.isFinite(Number(value)) || Number(value) !== 0) {
+          failures.push(
+            `WGPU pass-package projection ${label} must be zero; got ${value ?? "unavailable"}`
+          );
+        }
+      }
+    }
+  }
   failures.push(...evaluateWgpuGeometryRangeEvidence({
     requested: scenario.params?.wgpugeomrange,
     telemetry: final.causalTelemetry?.webgpu,
@@ -1131,7 +1168,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
