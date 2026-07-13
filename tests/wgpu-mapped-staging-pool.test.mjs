@@ -105,6 +105,39 @@ test("creates a fixed mapped-at-creation pool and preserves aligned buffer bytes
   ]);
 });
 
+test("positional buffer staging preserves object-path bytes, offsets, and metrics", () => {
+  const controlFake = createFakeDevice();
+  const fastFake = createFakeDevice();
+  const control = createPool(controlFake, { slotCount: 1, slotSize: 64 });
+  const fast = createPool(fastFake, { slotCount: 1, slotSize: 64 });
+  const backing = Uint8Array.of(99, 1, 2, 3, 4, 88);
+  const bytes = backing.subarray(1, 5);
+  const controlDestination = { name: "control" };
+  const fastDestination = { name: "fast" };
+
+  const controlResult = control.stageBuffer({
+    data: bytes,
+    destination: controlDestination,
+    destinationOffset: 12,
+    alignment: 16,
+  });
+  const fastResult = fast.stageBufferFast(bytes, fastDestination, 12, 16);
+
+  assert.equal(fastResult, null);
+  assert.equal(controlResult.ok, true);
+  assert.deepEqual(
+    [...new Uint8Array(fastFake.buffers[0].storage)],
+    [...new Uint8Array(controlFake.buffers[0].storage)]
+  );
+  assert.deepEqual(fast.snapshot(), control.snapshot());
+  const controlCopy = control.seal().commandBuffer.copies[0];
+  const fastCopy = fast.seal().commandBuffer.copies[0];
+  assert.deepEqual(
+    [fastCopy[0], fastCopy[2], fastCopy[4], fastCopy[5]],
+    [controlCopy[0], controlCopy[2], controlCopy[4], controlCopy[5]]
+  );
+});
+
 test("packs tight texture rows into 256-byte aligned copy layouts", () => {
   const fake = createFakeDevice();
   const pool = createPool(fake);
@@ -135,6 +168,53 @@ test("packs tight texture rows into 256-byte aligned copy layouts", () => {
   });
   assert.deepEqual(copy[2], { texture, origin: { x: 1, y: 2, z: 3 } });
   assert.deepEqual(copy[3], { width: 2, height: 2, depthOrArrayLayers: 2 });
+});
+
+test("positional texture staging preserves row packing and copy layout", () => {
+  const controlFake = createFakeDevice();
+  const fastFake = createFakeDevice();
+  const control = createPool(controlFake);
+  const fast = createPool(fastFake);
+  const backing = Uint8Array.from({ length: 26 }, (_, index) => index);
+  const bytes = backing.subarray(1, 25);
+  const copySize = { width: 2, height: 2, depthOrArrayLayers: 2 };
+  const origin = { x: 1, y: 2, z: 3 };
+  const controlDestination = { name: "control" };
+  const fastDestination = { name: "fast" };
+
+  const controlResult = control.stageTexture({
+    data: bytes,
+    destination: controlDestination,
+    copySize,
+    sourceBytesPerRow: 4,
+    sourceRowsPerImage: 3,
+    origin,
+    mipLevel: 2,
+    aspect: "all",
+  });
+  const fastResult = fast.stageTextureFast(
+    bytes, fastDestination, copySize, 4, 3, origin, 2, "all"
+  );
+
+  assert.equal(fastResult, null);
+  assert.equal(controlResult.ok, true);
+  assert.deepEqual(
+    [...new Uint8Array(fastFake.buffers[0].storage)],
+    [...new Uint8Array(controlFake.buffers[0].storage)]
+  );
+  assert.deepEqual(fast.snapshot(), control.snapshot());
+  const controlCopy = control.seal().commandBuffer.copies[0];
+  const fastCopy = fast.seal().commandBuffer.copies[0];
+  assert.deepEqual(fastCopy[1], {
+    buffer: fastFake.buffers[0],
+    offset: controlCopy[1].offset,
+    bytesPerRow: controlCopy[1].bytesPerRow,
+    rowsPerImage: controlCopy[1].rowsPerImage,
+  });
+  assert.deepEqual(fastCopy[2], {
+    texture: fastDestination, origin, mipLevel: 2, aspect: "all",
+  });
+  assert.deepEqual(fastCopy[3], controlCopy[3]);
 });
 
 test("reports bounded capacity misses without allocating or dropping prior uploads", () => {
@@ -183,6 +263,22 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     remapLatencyMaxMs: 0,
     remapLatencyHistogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     invalidations: 0,
+  });
+});
+
+test("positional staging reports interned miss reasons without success objects", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 1, slotSize: 8 });
+  const destination = {};
+  assert.equal(pool.stageBufferFast(new Uint8Array(8), destination), null);
+  assert.equal(pool.stageBufferFast(new Uint8Array(4), destination), "no-capacity");
+  assert.equal(pool.stageBufferFast(new Uint8Array(12), destination), "payload-too-large");
+  assert.deepEqual(pool.snapshot(), {
+    ...pool.snapshot(),
+    bufferUploads: 1,
+    capacityMisses: 2,
+    oversizedMisses: 1,
+    capacityMissesMappedSlotsFull: 1,
   });
 });
 

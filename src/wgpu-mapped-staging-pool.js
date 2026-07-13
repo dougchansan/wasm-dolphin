@@ -25,6 +25,9 @@ export function createWgpuMappedStagingPool({
   if (!isPositiveInteger(slotSize) || slotSize % COPY_ALIGNMENT !== 0) {
     throw new RangeError("slotSize must be a positive multiple of 4");
   }
+  if (!Number.isSafeInteger(slotCount * slotSize)) {
+    throw new RangeError("combined staging capacity must be a safe integer");
+  }
   if (!isNonnegativeInteger(bufferUsage) || !isNonnegativeInteger(mapMode)) {
     throw new TypeError("bufferUsage and mapMode must be numeric WebGPU flags");
   }
@@ -81,27 +84,45 @@ export function createWgpuMappedStagingPool({
   };
 
   function stageBuffer({ data, destination, destinationOffset = 0, alignment = 4 } = {}) {
-    const bytes = viewBytes(data);
+    return stageBufferBytes(viewBytes(data), destination, destinationOffset, alignment, false);
+  }
+
+  function stageBufferFast(data, destination, destinationOffset = 0, alignment = 4) {
+    return stageBufferBytes(viewBytes(data, true), destination, destinationOffset, alignment, true);
+  }
+
+  function stageBufferBytes(bytes, destination, destinationOffset, alignment, fast) {
     if (!bytes || !destination) throw new TypeError("buffer upload needs data and destination");
     if (!isNonnegativeInteger(destinationOffset) || destinationOffset % COPY_ALIGNMENT !== 0 ||
         bytes.byteLength === 0 || bytes.byteLength % COPY_ALIGNMENT !== 0) {
       throw new RangeError("buffer copy offsets and byte lengths must be positive multiples of 4");
     }
     const sourceAlignment = combinedAlignment(COPY_ALIGNMENT, alignment);
-    const allocation = allocate(bytes.byteLength, sourceAlignment);
-    if (!allocation.ok) return allocation;
+    let slot;
+    let offset;
+    if (fast) {
+      const token = allocateFast(bytes.byteLength, sourceAlignment);
+      if (typeof token === "string") return token;
+      slot = slots[Math.floor(token / slotSize)];
+      offset = token % slotSize;
+    } else {
+      const allocation = allocate(bytes.byteLength, sourceAlignment);
+      if (!allocation.ok) return allocation;
+      slot = allocation.slot;
+      offset = allocation.offset;
+    }
 
-    allocation.slot.mappedBytes.set(bytes, allocation.offset);
-    const previous = allocation.slot.records.at(-1);
+    slot.mappedBytes.set(bytes, offset);
+    const previous = slot.records.at(-1);
     if (previous?.kind === "buffer" && previous.destination === destination &&
-        previous.sourceOffset + previous.size === allocation.offset &&
+        previous.sourceOffset + previous.size === offset &&
         previous.destinationOffset + previous.size === destinationOffset) {
       previous.size += bytes.byteLength;
       metrics.bufferUploadsCoalesced += 1;
     } else {
-      allocation.slot.records.push({
+      slot.records.push({
         kind: "buffer",
-        sourceOffset: allocation.offset,
+        sourceOffset: offset,
         size: bytes.byteLength,
         destination,
         destinationOffset,
@@ -111,7 +132,7 @@ export function createWgpuMappedStagingPool({
     metrics.bufferUploads += 1;
     metrics.logicalBytes += bytes.byteLength;
     metrics.stagedBytes += bytes.byteLength;
-    return success(allocation.slot, allocation.offset, bytes.byteLength, bytes.byteLength);
+    return fast ? null : success(slot, offset, bytes.byteLength, bytes.byteLength);
   }
 
   function stageTexture({
@@ -124,7 +145,53 @@ export function createWgpuMappedStagingPool({
     mipLevel,
     aspect,
   } = {}) {
-    const bytes = viewBytes(data);
+    return stageTextureBytes(
+      viewBytes(data),
+      destination,
+      copySize,
+      sourceBytesPerRow,
+      sourceRowsPerImage,
+      origin,
+      mipLevel,
+      aspect,
+      false
+    );
+  }
+
+  function stageTextureFast(
+    data,
+    destination,
+    copySize,
+    sourceBytesPerRow,
+    sourceRowsPerImage = copySize?.height,
+    origin,
+    mipLevel,
+    aspect
+  ) {
+    return stageTextureBytes(
+      viewBytes(data, true),
+      destination,
+      copySize,
+      sourceBytesPerRow,
+      sourceRowsPerImage,
+      origin,
+      mipLevel,
+      aspect,
+      true
+    );
+  }
+
+  function stageTextureBytes(
+    bytes,
+    destination,
+    copySize,
+    sourceBytesPerRow,
+    sourceRowsPerImage,
+    origin,
+    mipLevel,
+    aspect,
+    fast
+  ) {
     const width = copySize?.width;
     const height = copySize?.height;
     const depthOrArrayLayers = copySize?.depthOrArrayLayers ?? 1;
@@ -144,24 +211,35 @@ export function createWgpuMappedStagingPool({
     const packedBytesPerRow = alignUp(sourceBytesPerRow, TEXTURE_ROW_ALIGNMENT);
     const packedSize = packedBytesPerRow * height * depthOrArrayLayers;
     if (!Number.isSafeInteger(packedSize)) throw new RangeError("texture staging size overflow");
-    const allocation = allocate(packedSize, TEXTURE_ROW_ALIGNMENT);
-    if (!allocation.ok) return allocation;
+    let slot;
+    let offset;
+    if (fast) {
+      const token = allocateFast(packedSize, TEXTURE_ROW_ALIGNMENT);
+      if (typeof token === "string") return token;
+      slot = slots[Math.floor(token / slotSize)];
+      offset = token % slotSize;
+    } else {
+      const allocation = allocate(packedSize, TEXTURE_ROW_ALIGNMENT);
+      if (!allocation.ok) return allocation;
+      slot = allocation.slot;
+      offset = allocation.offset;
+    }
 
     for (let layer = 0; layer < depthOrArrayLayers; layer += 1) {
       for (let row = 0; row < height; row += 1) {
         const sourceOffset = layer * sourceSliceBytes + row * sourceBytesPerRow;
-        const targetOffset = allocation.offset +
+        const targetOffset = offset +
           (layer * height + row) * packedBytesPerRow;
-        allocation.slot.mappedBytes.set(
+        slot.mappedBytes.set(
           bytes.subarray(sourceOffset, sourceOffset + sourceBytesPerRow),
           targetOffset
         );
       }
     }
 
-    allocation.slot.records.push({
+    slot.records.push({
       kind: "texture",
-      sourceOffset: allocation.offset,
+      sourceOffset: offset,
       bytesPerRow: packedBytesPerRow,
       rowsPerImage: height,
       destination,
@@ -174,12 +252,14 @@ export function createWgpuMappedStagingPool({
     metrics.copyCommandsEncoded += 1;
     metrics.logicalBytes += sourceBytesPerRow * height * depthOrArrayLayers;
     metrics.stagedBytes += packedSize;
-    return success(
-      allocation.slot,
-      allocation.offset,
-      sourceBytesPerRow * height * depthOrArrayLayers,
-      packedSize
-    );
+    return fast
+      ? null
+      : success(
+          slot,
+          offset,
+          sourceBytesPerRow * height * depthOrArrayLayers,
+          packedSize
+        );
   }
 
   function seal() {
@@ -310,7 +390,30 @@ export function createWgpuMappedStagingPool({
     return miss("no-capacity", false);
   }
 
+  function allocateFast(size, alignment) {
+    if (failed) return fastMiss("pool-failed", false);
+    if (size > slotSize) return fastMiss("payload-too-large", true);
+    for (const slot of slots) {
+      if (slot.state !== "mapped") continue;
+      const offset = alignUp(slot.cursor, alignment);
+      if (offset + size > slotSize) continue;
+      slot.cursor = offset + size;
+      return slot.id * slotSize + offset;
+    }
+    return fastMiss("no-capacity", false);
+  }
+
   function miss(reason, oversized) {
+    recordMiss(oversized);
+    return Object.freeze({ ok: false, reason });
+  }
+
+  function fastMiss(reason, oversized) {
+    recordMiss(oversized);
+    return reason;
+  }
+
+  function recordMiss(oversized) {
     metrics.capacityMisses += 1;
     if (oversized) {
       metrics.oversizedMisses += 1;
@@ -319,7 +422,6 @@ export function createWgpuMappedStagingPool({
     } else {
       metrics.capacityMissesNoMappedSlots += 1;
     }
-    return Object.freeze({ ok: false, reason });
   }
 
   function assertUsable() {
@@ -338,7 +440,9 @@ export function createWgpuMappedStagingPool({
 
   return Object.freeze({
     stageBuffer,
+    stageBufferFast,
     stageTexture,
+    stageTextureFast,
     seal,
     acceptSubmission,
     rejectSubmission,
@@ -439,8 +543,9 @@ function greatestCommonDivisor(left, right) {
   return left;
 }
 
-function viewBytes(value) {
+function viewBytes(value, reuseUint8Array = false) {
   if (!ArrayBuffer.isView(value)) return null;
+  if (reuseUint8Array && value instanceof Uint8Array) return value;
   return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
 }
 

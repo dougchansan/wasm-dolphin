@@ -238,7 +238,7 @@ test("host plumbing is default-off and worker records only accepted padded uploa
   assert.match(adapter, /wgpuDirtyRangeProjection: this\.wgpuDirtyRangeProjection/);
   assert.match(worker, /wgpuDirtyRangeProjectionRequested && causalMetricsEnabled/);
   assert.match(worker, /bytes: len,[\s\S]*?sourceBytes: len/);
-  const failedStage = worker.indexOf("if (!staged.ok)");
+  const failedStage = worker.indexOf("if (!stageAccepted)");
   const acceptedProjection = worker.indexOf(
     "wgpuDirtyRangeProjection.recordUpload",
     failedStage

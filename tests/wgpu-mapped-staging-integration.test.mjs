@@ -21,6 +21,30 @@ test("upload transport flows from URL parsing through the worker load payload", 
   assert.match(worker, /requestedWgpuUploadTransport === "mapped" \? "mapped" : "queue"/);
 });
 
+test("mapped staging fast path is opt-in and flows through the worker load payload", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStageFast\(window\.location\.search\)/);
+  assert.match(host, /wgpuMappedStageFast: this\.wgpuMappedStageFast/);
+  assert.match(adapter, /this\.wgpuMappedStageFast = Boolean\(wgpuMappedStageFast\)/);
+  assert.match(adapter, /wgpuMappedStageFast: this\.wgpuMappedStageFast/);
+  assert.match(worker, /wgpuMappedStageFast: payload\.wgpuMappedStageFast/);
+  assert.match(
+    worker,
+    /wgpuMappedStageFastEnabled =[\s\S]*?wgpuUploadTransport === "mapped" && Boolean\(requestedWgpuMappedStageFast\)/
+  );
+  assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageBufferFast\(/);
+  assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageTextureFast\(/);
+  assert.match(worker, /if \(stagedUpload && stageAccepted\) \{[\s\S]*?stagedUploads\.delete\(read\)/);
+  assert.match(gate, /"wgpustagefast"/);
+  assert.match(harness, /\["WGPUSTAGEFAST", "wgpustagefast"\]/);
+});
+
 test("mapped uploads are copied into a bounded pool and queue writes stay isolated", async () => {
   const worker = await readSource("../src/upstream-discio-worker.js");
   assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 3/);

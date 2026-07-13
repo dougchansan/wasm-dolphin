@@ -28,6 +28,7 @@ import {
   requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
+  requestedWgpuMappedStageFast,
   requestedWgpuUboCache,
   requestedWgpuUboMetrics,
   requestedWgpuUniformFast,
@@ -128,6 +129,7 @@ export class EmulatorHost {
       this.wgpuGeometryPack && requestedWgpuGeometryRange(window.location.search);
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
     this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
+    this.wgpuMappedStageFast = requestedWgpuMappedStageFast(window.location.search);
     this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
     this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
@@ -370,6 +372,7 @@ export class EmulatorHost {
             wgpuGeometryRange: this.wgpuGeometryRange,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
             wgpuUploadTransport: this.wgpuUploadTransport,
+            wgpuMappedStageFast: this.wgpuMappedStageFast,
             wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
             wgpuVisualCadence: this.wgpuVisualCadence,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,

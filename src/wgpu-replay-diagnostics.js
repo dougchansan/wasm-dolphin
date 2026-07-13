@@ -329,6 +329,12 @@ export function requestedWgpuUploadTransport(
     : "queue";
 }
 
+export function requestedWgpuMappedStageFast(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpustagefast") === "1";
+}
+
 export function requestedWgpuProducerProfile(
   search = globalThis.location?.search ?? ""
 ) {

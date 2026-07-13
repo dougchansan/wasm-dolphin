@@ -25,6 +25,7 @@ import {
   requestedWgpuGeometryRange,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
+  requestedWgpuMappedStageFast,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
   requestedWgpuUboMetrics,
@@ -708,6 +709,13 @@ test("mapped upload transport is opt-in and queue remains the reference", () => 
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=queue"), "queue");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=mapped"), "mapped");
   assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=MAPped"), "queue");
+});
+
+test("mapped staging allocation fast path is opt-in", () => {
+  assert.equal(requestedWgpuMappedStageFast(""), false);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=0"), false);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=1"), true);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=true"), false);
 });
 
 test("producer phase profiling is default-off and accepts only an explicit one", () => {
