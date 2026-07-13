@@ -1,5 +1,7 @@
 # Documentation
 
+- [WGPU visible upload closure](perf-results/melee-wgpu-visible-upload-closure-2026-07-12.md) - corrected queue/mapped fairness failure, dense-UBO queue no-go, and the immutable pass-package next gate.
+
 - [WGPU guarded uniform-comparison screen](perf-results/melee-wgpu-uniform-fast-2026-07-12.md) - default-off correctness evidence, unresolved throughput screen, and upload/replay backlog diagnosis.
 
 - [Current status](current-status.md) — supported scope, recommended path, and
