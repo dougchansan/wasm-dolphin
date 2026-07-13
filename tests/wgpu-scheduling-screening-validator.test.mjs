@@ -46,8 +46,10 @@ test("scheduling validator rejects non-audible, headless, or wrong-work campaign
 test("scheduling validator rejects replacements, pending work, and an unbalanced order", async (t) => {
   for (const [name, mutate, code] of [
     ["replacement", (tasklist) => {
-      tasklist.maximumAttemptedBlocks = 3;
       tasklist.blocks[1].replaces = "block-01";
+    }, "TASKLIST_REPLACEMENT"],
+    ["wrong retry ceiling", (tasklist) => {
+      tasklist.maximumAttemptedBlocks = 2;
     }, "TASKLIST_BOUNDS"],
     ["pending", (tasklist) => {
       tasklist.blocks[1].status = "pending";
@@ -209,7 +211,7 @@ async function makeFixture(t) {
     mode: "screening",
     initialValidBlocks: 2,
     maximumValidBlocks: 2,
-    maximumAttemptedBlocks: 2,
+    maximumAttemptedBlocks: 3,
     blocks,
     status: "PASS",
   };

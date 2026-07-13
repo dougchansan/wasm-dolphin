@@ -123,9 +123,10 @@ function validateEnvelope({ report, tasklist, comparison, addIssue }) {
   check(tasklist.mode === "screening",
     "TASKLIST_MODE", `tasklist mode=${tasklist.mode}`, addIssue);
   check(tasklist.initialValidBlocks === 2 && tasklist.maximumValidBlocks === 2 &&
-      tasklist.maximumAttemptedBlocks === 2,
+      tasklist.maximumAttemptedBlocks === 3,
     "TASKLIST_BOUNDS",
-    "Tasklist must be bounded to exactly two valid and two attempted blocks", addIssue);
+    "Tasklist must require two valid blocks with the harness retry ceiling of three attempts",
+    addIssue);
   check(Array.isArray(tasklist.blocks) && tasklist.blocks.length === 2,
     "TASKLIST_BLOCK_COUNT", `blocks=${tasklist.blocks?.length ?? 0} expected 2`, addIssue);
   const expectedOrders = ["ABBA", "BAAB"];
