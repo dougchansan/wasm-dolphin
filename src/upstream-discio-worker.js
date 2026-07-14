@@ -115,7 +115,6 @@ import {
   WGPU_CONSUMER_ERROR_SUBMIT,
   WGPU_CONSUMER_ERROR_UNKNOWN,
   enableWgpuNonDroppingBackpressure,
-  enableWgpuUboComputePackageProtocol,
   failWgpuRingConsumer,
   publishWgpuRingProgress
 } from "./wgpu-ring-backpressure.js";
@@ -634,14 +633,6 @@ function wgpuRuntimeConfigPayload() {
     uboPackEnabled: Boolean(webGpuUboPackMode()),
     producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
     producerUboPackAvailable: Boolean(api?.setWebGpuUboPackEnabled),
-    uboCompute: {
-      requested: wgpuUboComputeReconstructionRequested,
-      active: wgpuUboComputeReconstructionActive,
-      protocolNegotiated: Boolean(webGpuCmdRing?.uboComputePackageProtocolEnabled),
-      protocolVersion: 3,
-      codecVersion: 1,
-      producerEncoded: true,
-    },
     geometryPackEnabled: wgpuGeometryPackEnabled,
     geometryRangeEnabled: wgpuGeometryRangeEnabled,
     producerGeometryRangeAvailable: Boolean(api?.setWebGpuGeometryRangeEnabled),
@@ -810,7 +801,7 @@ async function handleMessage(type, payload) {
         payload.wgpuUboComputeReconstruction
       );
       wgpuUboComputeReconstructionActive =
-        wgpuUboComputeReconstructionRequested &&
+        wgpuUboComputeReconstructionRequested && causalMetricsEnabled &&
         payload.videoBackend === "WebGPU-Real" &&
         payload.wgpuUploadTransport === "mapped";
       wgpuOwnershipTrace = createWgpuOwnershipTrace();
@@ -1457,6 +1448,9 @@ async function loadCore({
     throw new Error(
       "wgpuubocomputeprojection=1 requires wgpuuploadtransport=mapped"
     );
+  }
+  if (requestedWgpuUboComputeReconstruction && !collectMetrics) {
+    throw new Error("wgpuubocompute=1 requires metrics=1");
   }
   if (requestedWgpuUboComputeReconstruction && videoBackend !== "WebGPU-Real") {
     throw new Error("wgpuubocompute=1 requires video=wgpu");
@@ -6239,7 +6233,6 @@ function handleWebGpuCmdRing(event) {
     uploadSize: (data.uploadSize >>> 0) || 0,
     uploadWatermarkEnabled: false,
     protocolV3Enabled: false,
-    uboComputePackageProtocolEnabled: false,
     stagedUploads: new Map(),
     stagedUploadBytes: 0,
     heldReplayStart: null,
@@ -6562,11 +6555,8 @@ function wgpuUboComputeReconstructionSnapshot() {
     replayBehaviorChanged: wgpuUboComputeReconstructionActive,
     disabledReason: wgpuUboComputeReconstructionRequested &&
         !wgpuUboComputeReconstructionActive
-      ? "requires-hardware-wgpu-mapped"
+      ? "requires-metrics-hardware-wgpu-mapped"
       : null,
-    protocolNegotiated: Boolean(webGpuCmdRing?.uboComputePackageProtocolEnabled),
-    protocolVersion: 3,
-    codecVersion: 1,
     ...(snapshot ?? {}),
   };
 }
@@ -6575,8 +6565,7 @@ function pendingWgpuUploadSnapshot() {
   const mapped = wgpuMappedStagingPool?.snapshot() ?? null;
   const compute = wgpuUboComputeReconstruction?.snapshot() ?? null;
   return {
-    pendingUploads: (mapped?.pendingUploads ?? 0) + (compute?.pendingUploads ?? 0) +
-      (compute?.pendingProducerPackages ?? 0),
+    pendingUploads: (mapped?.pendingUploads ?? 0) + (compute?.pendingUploads ?? 0),
     pendingBytes: mapped?.pendingBytes ?? 0,
     oldestPendingAgeMs: mapped?.oldestPendingAgeMs ?? 0,
     mapped,
@@ -6616,7 +6605,6 @@ function stageWgpuUboComputeUpload({
   data,
   borrowBytes = false,
 } = {}) {
-  if (webGpuCmdRing?.uboComputePackageProtocolEnabled) return null;
   if (!wgpuUboComputeReconstructionActive || role !== WGPU_UPLOAD_ROLE.UBO) {
     return null;
   }
@@ -6632,23 +6620,6 @@ function stageWgpuUboComputeUpload({
     destinationOffset,
     bytes: data,
     borrowBytes,
-  });
-  return { handled: true, ...result };
-}
-
-function stageWgpuUboComputePackage({ resourceId, role, data } = {}) {
-  if (role !== WGPU_UPLOAD_ROLE.UBO_COMPUTE_PACKAGE) return null;
-  if (!wgpuUboComputeReconstructionActive ||
-      !webGpuCmdRing?.uboComputePackageProtocolEnabled) {
-    return { handled: true, ok: false, reason: "ubo-package-protocol-inactive" };
-  }
-  const manager = wgpuUboComputeReconstruction;
-  if (!manager) {
-    return { handled: true, ok: false, reason: "ubo-compute-manager-unavailable" };
-  }
-  const result = manager.stageEncodedPackage({
-    resourceId,
-    packageBytes: data,
   });
   return { handled: true, ...result };
 }
@@ -8840,14 +8811,8 @@ function drainWebGpuCmdRing(source = "presentation") {
                   size,
                   usage,
                 });
-                if (!enableWgpuUboComputePackageProtocol(ring)) {
-                  throw new Error("protocol-v3 capability negotiation failed");
-                }
               } catch (error) {
                 wgpuUboComputeReconstructionActive = false;
-                wgpuUboComputeReconstruction?.invalidate(
-                  `resource-registration:${error?.message || error}`
-                );
                 wgpuUboComputeReconstruction = null;
                 console.warn(
                   `[webgpu-ubo-compute] resource registration fell back to legacy: ` +
@@ -9035,22 +9000,13 @@ function drainWebGpuCmdRing(source = "presentation") {
                 const destinationOffset = u32[recWord + 2] & ~3;
                 if (stagedUpload) {
                   const stage = (data) => {
-                    const compute = uploadRole === WGPU_UPLOAD_ROLE.UBO_COMPUTE_PACKAGE
-                      ? stageWgpuUboComputePackage({
-                          resourceId: bufferId,
-                          role: uploadRole,
-                          data,
-                        })
-                      : wgpuUboComputeReconstructionActive &&
-                          uploadRole === WGPU_UPLOAD_ROLE.UBO
-                        ? stageWgpuUboComputeUpload({
-                            resourceId: bufferId,
-                            role: uploadRole,
-                            destinationOffset,
-                            data,
-                            borrowBytes: true,
-                          })
-                        : null;
+                    const compute = stageWgpuUboComputeUpload({
+                      resourceId: bufferId,
+                      role: uploadRole,
+                      destinationOffset,
+                      data,
+                      borrowBytes: true,
+                    });
                     if (compute?.handled) return compute;
                     const sparse = ensureWgpuSparseUbo(dev)?.stage({
                       pool,
@@ -9077,21 +9033,12 @@ function drainWebGpuCmdRing(source = "presentation") {
                   stageReason = retainedAttempt.result.reason ?? null;
                   retainedAccepted = retainedAttempt.accepted;
                 } else {
-                  const compute = uploadRole === WGPU_UPLOAD_ROLE.UBO_COMPUTE_PACKAGE
-                    ? stageWgpuUboComputePackage({
-                        resourceId: bufferId,
-                        role: uploadRole,
-                        data: uploadSource,
-                      })
-                    : wgpuUboComputeReconstructionActive &&
-                        uploadRole === WGPU_UPLOAD_ROLE.UBO
-                      ? stageWgpuUboComputeUpload({
-                          resourceId: bufferId,
-                          role: uploadRole,
-                          destinationOffset,
-                          data: uploadSource,
-                        })
-                      : null;
+                  const compute = stageWgpuUboComputeUpload({
+                    resourceId: bufferId,
+                    role: uploadRole,
+                    destinationOffset,
+                    data: uploadSource,
+                  });
                   const sparse = compute?.handled ? null : ensureWgpuSparseUbo(dev)?.stage({
                     pool,
                     data: uploadSource,
@@ -10739,10 +10686,6 @@ function drainWebGpuCmdRing(source = "presentation") {
                   : tag === 3 ? webGpuObjects.bindGroups : null;
           if (m) {
             const resource = m.get(id);
-            if (tag === 1 && resource &&
-                wgpuUboComputeReconstruction?.hasResource(id)) {
-              wgpuUboComputeReconstruction.unregisterResource(id);
-            }
             if (resource && wgpuConsumerStateCacheEnabled) {
               wgpuPassStateCache.invalidateDestroyedResource(tag, resource);
             }

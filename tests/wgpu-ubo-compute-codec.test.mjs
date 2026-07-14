@@ -7,7 +7,6 @@ import test from "node:test";
 import {
   applyWgpuUboComputePackageReference,
   encodeWgpuUboComputePackage,
-  validateWgpuUboComputePackage,
   WGPU_UBO_COMPUTE_CODEC_MAGIC,
 } from "../src/wgpu-ubo-compute-codec.js";
 
@@ -72,45 +71,6 @@ test("reference reconstruction is byte-exact for subviews and overlapping later 
   expected.set(subview, 0);
   expected.set(later, 768);
   assert.deepEqual(destination, expected);
-});
-
-test("producer packages validate against the command resource and shadow generation", () => {
-  const initial = pattern(CLASS_BYTES.GS, 0x51);
-  const changed = initial.slice();
-  changed.fill(0xaa, 16, 32);
-  const full = encodeWgpuUboComputePackage({
-    uploads: [upload("GS", 0, initial)],
-  });
-  const delta = encodeWgpuUboComputePackage({
-    uploads: [upload("GS", 64, changed)],
-    shadows: full.nextShadows,
-  });
-  const destinations = new Map([[7, { size: 1024 }]]);
-  const first = validateWgpuUboComputePackage({
-    packageBytes: full.bytes,
-    destinations,
-    expectedResourceId: 7,
-  });
-  assert.equal(first.recordCount, 1);
-  assert.equal(first.records[0].kind, 0);
-  assert.deepEqual([...first.nextShadowValidity], ["7:2"]);
-  assert.throws(() => validateWgpuUboComputePackage({
-    packageBytes: delta.bytes,
-    destinations,
-    expectedResourceId: 7,
-  }), /no valid prior shadow/);
-  const second = validateWgpuUboComputePackage({
-    packageBytes: delta.bytes,
-    destinations,
-    expectedResourceId: 7,
-    shadowValidity: first.nextShadowValidity,
-  });
-  assert.equal(second.records[0].kind, 1);
-  assert.throws(() => validateWgpuUboComputePackage({
-    packageBytes: full.bytes,
-    destinations,
-    expectedResourceId: 8,
-  }), /does not match/);
 });
 
 test("resource and class shadows remain independent", () => {

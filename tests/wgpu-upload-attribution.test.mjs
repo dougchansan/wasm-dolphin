@@ -11,10 +11,10 @@ import {
   createWgpuUploadAttribution,
 } from "../src/wgpu-upload-attribution.js";
 
-test("WGPU upload attribution starts with a fixed zero-filled v3 schema", () => {
+test("WGPU upload attribution starts with a fixed zero-filled v2 schema", () => {
   const snapshot = createWgpuUploadAttribution().snapshot({ enabled: false });
 
-  assert.equal(snapshot.schema, "wasm-dolphin.wgpu-upload-attribution.v3");
+  assert.equal(snapshot.schema, "wasm-dolphin.wgpu-upload-attribution.v2");
   assert.equal(snapshot.enabled, false);
   assert.deepEqual(snapshot.roleOrder, [
     "unknown",
@@ -24,7 +24,6 @@ test("WGPU upload attribution starts with a fixed zero-filled v3 schema", () => 
     "index",
     "texture-adjacent",
     "geometry",
-    "ubo-compute-package",
   ]);
   assert.deepEqual(snapshot.sizeBucketLabels, [
     "<=64", "<=256", "<=1024", "<=4096", "<=16384", "<=65536", ">65536",
@@ -264,6 +263,6 @@ test("reset restores all counters, buckets, pass state, and maxima", () => {
     maxCalls: 0,
     maxBytes: 0,
     maxDestinationSpanBytes: 0,
-    maxDestinationSpanBytesByRole: [0, 0, 0, 0, 0, 0, 0, 0],
+    maxDestinationSpanBytesByRole: [0, 0, 0, 0, 0, 0, 0],
   });
 });

@@ -571,7 +571,7 @@ test("opt-in geometry packing uses one transactional upload and a published-subm
       readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
     ]);
 
-  assert.match(streamHeader, /Geometry = 6,[\s\S]*?UboComputePackage = 7,[\s\S]*?Count = 8/);
+  assert.match(streamHeader, /Geometry = 6,[\s\S]*?Count = 7/);
   assert.match(streamHeader, /UploadAllocTwoSegments/);
   assert.match(streamSource, /ReserveUpload\(total_size, packet_align\)/);
   assert.match(streamSource, /std::memcpy\(destination, first, first_len\)/);

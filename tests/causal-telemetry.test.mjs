@@ -60,9 +60,9 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
   assert.equal(
     value.webgpu.uploadAttribution.schema,
-    "wasm-dolphin.wgpu-upload-attribution.v3"
+    "wasm-dolphin.wgpu-upload-attribution.v2"
   );
-  assert.deepEqual(value.webgpu.uploadAttribution.callsByRole, [0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(value.webgpu.uploadAttribution.callsByRole, [0, 0, 0, 0, 0, 0, 0]);
   assert.equal(value.softwareRaster.profileEnabled, false);
   assert.equal(value.softwareRaster.caseSampleSeed, 0);
   assert.equal(value.softwareRaster.rasterTraversalCount, 0);
@@ -854,7 +854,7 @@ test("upload attribution and verified-load timeout deltas flatten into CSV-safe 
   assert.equal(flat.causalWgpuUploadTimeoutCountAfterVerifiedLoad, 3);
   assert.equal(flat.causalWgpuUploadTotalCalls, 2);
   assert.equal(flat.causalWgpuUploadTotalBytes, 1088);
-  assert.deepEqual(flat.causalWgpuUploadCallsByRole, [0, 0, 0, 1, 1, 0, 0, 0]);
+  assert.deepEqual(flat.causalWgpuUploadCallsByRole, [0, 0, 0, 1, 1, 0, 0]);
   assert.equal(flat.causalWgpuUploadMaxPassCalls, 2);
   assert.equal(flat.causalWgpuUploadMaxPassBytes, 1088);
   assert.equal(flat.causalWgpuUploadMaxDestinationSpanBytes, 1024);

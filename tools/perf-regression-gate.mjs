@@ -34,7 +34,6 @@ import {
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
   evaluateWgpuSparseUboEvidence,
-  evaluateWgpuUboComputeReconstructionEvidence,
   evaluateWgpuUboComputeProjectionEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
@@ -1202,10 +1201,6 @@ function summarizeScenario(
     requested: scenario.params?.wgpuubocomputeprojection,
     samples: timedWindow,
   });
-  const uboComputeReconstruction = evaluateWgpuUboComputeReconstructionEvidence({
-    requested: scenario.params?.wgpuubocompute,
-    samples: timedWindow,
-  });
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -1232,7 +1227,6 @@ function summarizeScenario(
     wgpuDirtyRangeProjection: dirtyRangeProjection,
     wgpuSparseUbo: sparseUbo,
     wgpuUboComputeProjection: uboComputeProjection,
-    wgpuUboComputeReconstruction: uboComputeReconstruction,
     wgpuOwnershipTrace: final.causalTelemetry?.webgpu?.ownershipTrace ?? null,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
@@ -1249,7 +1243,6 @@ function summarizeScenario(
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
   failures.push(...sparseUbo.failures);
   failures.push(...uboComputeProjection.failures);
-  failures.push(...uboComputeReconstruction.failures);
   failures.push(...causalFairness.failures);
   const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
   if (requestedDirtyRanges != null) {

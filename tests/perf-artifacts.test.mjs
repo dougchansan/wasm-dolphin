@@ -30,7 +30,6 @@ import {
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
   evaluateWgpuSparseUboEvidence,
-  evaluateWgpuUboComputeReconstructionEvidence,
   evaluateWgpuUboComputeProjectionEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
@@ -409,7 +408,6 @@ test("metrics-off WGPU evidence requires a matching static runtime config", () =
     wgpuubometrics: "0",
     wgpuuniformfast: "0",
     wgpuubopack: "0",
-    wgpuubocompute: "0",
     wgpustagefast: "0",
     wgpustagingslots: "3",
     wgpumappedtiming: "1",
@@ -427,14 +425,6 @@ test("metrics-off WGPU evidence requires a matching static runtime config", () =
     uboPackEnabled: false,
     producerUboCacheAvailable: true,
     producerUboPackAvailable: true,
-    uboCompute: {
-      requested: false,
-      active: false,
-      protocolNegotiated: false,
-      protocolVersion: 3,
-      codecVersion: 1,
-      producerEncoded: true,
-    },
     mappedStagingFastPath: false,
     mappedStaging: {
       enabled: true,
@@ -984,75 +974,6 @@ test("UBO compute projection evidence requires passive, conserved byte and comma
   ]) {
     assert.match(result.failures.join("\n"), pattern, label);
   }
-});
-
-test("producer UBO compute evidence requires negotiated direct packages and zero JS rebuilds", () => {
-  const snapshot = ({ scale = 1, active = true, packagesEncoded = 0,
-    validationRejects = 0 } = {}) => ({
-    schema: "wasm-dolphin.wgpu-ubo-compute-reconstruction.v1",
-    requested: active,
-    active,
-    runtimeEligible: active,
-    projectionOnly: false,
-    replayBehaviorChanged: active,
-    protocolNegotiated: active,
-    protocolVersion: 3,
-    codecVersion: 1,
-    failed: false,
-    producerPackagesStaged: active ? 10 * scale : 0,
-    producerPackageBytes: active ? 2560 * scale : 0,
-    producerRecordsStaged: active ? 20 * scale : 0,
-    producerFullRecords: active ? 2 * scale : 0,
-    producerDeltaRecords: active ? 12 * scale : 0,
-    producerEqualRecords: active ? 6 * scale : 0,
-    packagesEncoded,
-    copiesEncoded: active ? 10 * scale : 0,
-    dispatchesEncoded: active ? 10 * scale : 0,
-    validationRejects,
-    capacityRejects: 0,
-    batchesRejected: 0,
-    remapFailures: 0,
-    invalidations: 0,
-  });
-  const sample = (uboComputeReconstruction) => ({
-    causalTelemetry: { webgpu: { uboComputeReconstruction } },
-  });
-  const enabled = evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "1",
-    samples: [sample(snapshot()), sample(snapshot({ scale: 2 }))],
-  });
-  assert.deepEqual(enabled.failures, []);
-  assert.equal(enabled.deltas.producerPackagesStaged, 10);
-  assert.equal(enabled.deltas.packagesEncoded, 0);
-
-  const disabled = evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "0",
-    samples: [sample(snapshot({ active: false }))],
-  });
-  assert.deepEqual(disabled.failures, []);
-
-  assert.match(evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "1",
-    samples: [sample(snapshot()), sample(snapshot({ scale: 2, packagesEncoded: 1 }))],
-  }).failures.join("\n"), /rebuilt packages in JS/);
-  assert.match(evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "1",
-    samples: [sample(snapshot()), sample(snapshot({ scale: 2, validationRejects: 1 }))],
-  }).failures.join("\n"), /validationRejects=1/);
-  assert.match(evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "1",
-    samples: [
-      sample(snapshot({ packagesEncoded: 1 })),
-      sample(snapshot({ scale: 2, packagesEncoded: 1 })),
-    ],
-  }).failures.join("\n"), /lifetime packagesEncoded=1/);
-  assert.match(evaluateWgpuUboComputeReconstructionEvidence({
-    requested: "1",
-    samples: [
-      sample(snapshot({ validationRejects: 1 })),
-      sample(snapshot({ scale: 2, validationRejects: 1 })),
-    ],
-  }).failures.join("\n"), /lifetime validationRejects=1/);
 });
 
 test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {

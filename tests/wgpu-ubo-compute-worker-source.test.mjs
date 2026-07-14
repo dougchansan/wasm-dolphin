@@ -18,14 +18,13 @@ test("behavior flag is strict, default-off, mapped-only, and independent of proj
   ]);
   assert.match(host, /requestedWgpuUboComputeReconstruction/);
   assert.match(adapter, /wgpuUboComputeReconstruction = false/);
-  assert.doesNotMatch(worker, /wgpuubocompute=1 requires metrics=1/);
+  assert.match(worker, /wgpuubocompute=1 requires metrics=1/);
   assert.match(worker, /wgpuubocompute=1 requires video=wgpu/);
   assert.match(worker, /wgpuubocompute=1 requires wgpuuploadtransport=mapped/);
   assert.match(menu, /WGPUUBOCOMPUTE/);
   assert.match(gate, /wgpuubocompute/);
   assert.match(worker, /wgpuUboComputeProjectionRequested = Boolean/);
   assert.match(worker, /wgpuUboComputeReconstructionRequested = Boolean/);
-  assert.match(worker, /enableWgpuUboComputePackageProtocol/);
 });
 
 test("worker admits only producer-tagged UBO rings and orders compute before render", async () => {
@@ -33,32 +32,14 @@ test("worker admits only producer-tagged UBO rings and orders compute before ren
   assert.match(worker, /resourceRole === WGPU_BUFFER_RESOURCE_ROLE_UBO_RING/);
   assert.match(worker, /usage \|= 0x0080; \/\/ GPUBufferUsage\.STORAGE/);
   assert.match(worker, /role: WGPU_UBO_RING_ROLE/);
-  assert.ok(
-    worker.indexOf("computeManager.registerResource") <
-      worker.indexOf("enableWgpuUboComputePackageProtocol(ring)"),
-    "the consumer must not advertise producer packages before UBO-ring registration"
-  );
-  assert.match(worker, /role !== WGPU_UPLOAD_ROLE\.UBO_COMPUTE_PACKAGE/);
-  assert.match(worker, /const result = manager\.stageEncodedPackage/);
-  assert.match(
-    worker,
-    /uploadRole === WGPU_UPLOAD_ROLE\.UBO_COMPUTE_PACKAGE[\s\S]*?stageWgpuUboComputePackage/
-  );
-  assert.match(
-    worker,
-    /wgpuUboComputeReconstructionActive &&[\s\S]*?uploadRole === WGPU_UPLOAD_ROLE\.UBO[\s\S]*?stageWgpuUboComputeUpload/
-  );
+  assert.match(worker, /role !== WGPU_UPLOAD_ROLE\.UBO/);
+  assert.match(worker, /const result = manager\.stage/);
   assert.match(
     worker,
     /\.\.\.\(mappedBatch\?\.ordinary[\s\S]*\.\.\.\(mappedBatch\?\.compute[\s\S]*renderCommandBuffer/
   );
   assert.match(worker, /markWgpuReplayFatal\("staging-seal"/);
   assert.match(worker, /markWgpuReplayFatal\("submit-error"/);
-  assert.match(worker, /wgpuUboComputeReconstruction\?\.hasResource\(id\)/);
-  assert.doesNotMatch(
-    worker,
-    /case WGPU_CMD_OP_DESTROY:[\s\S]*?wgpuUboComputeReconstruction\.reset\(`resource-destroy:/
-  );
 });
 
 test("all replay-invalidating lifecycle paths invalidate or reset compute shadows", async () => {

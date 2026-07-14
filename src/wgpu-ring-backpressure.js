@@ -6,7 +6,6 @@ export const WGPU_CONSUMER_STATE_HEADER_INDEX = 5;
 export const WGPU_CONSUMER_ERROR_HEADER_INDEX = 6;
 
 export const WGPU_PROTOCOL_NON_DROPPING_FLAG = 1 << 1;
-export const WGPU_PROTOCOL_UBO_COMPUTE_PACKAGE_FLAG = 1 << 2;
 export const WGPU_CONSUMER_STATE_RUNNING = 1;
 export const WGPU_CONSUMER_STATE_FAILED = 2;
 
@@ -33,22 +32,6 @@ export function enableWgpuNonDroppingBackpressure(ring) {
   Atomics.notify(ring.headerI32, WGPU_PROTOCOL_FLAGS_HEADER_INDEX);
   Atomics.notify(ring.headerI32, WGPU_CONSUMER_STATE_HEADER_INDEX);
   ring.protocolV3Enabled = true;
-  return true;
-}
-
-export function enableWgpuUboComputePackageProtocol(ring) {
-  if (!ring?.protocolV3Enabled ||
-      ring.headerI32.length <= WGPU_PROTOCOL_FLAGS_HEADER_INDEX) {
-    if (ring) ring.uboComputePackageProtocolEnabled = false;
-    return false;
-  }
-  Atomics.or(
-    ring.headerI32,
-    WGPU_PROTOCOL_FLAGS_HEADER_INDEX,
-    WGPU_PROTOCOL_UBO_COMPUTE_PACKAGE_FLAG
-  );
-  Atomics.notify(ring.headerI32, WGPU_PROTOCOL_FLAGS_HEADER_INDEX);
-  ring.uboComputePackageProtocolEnabled = true;
   return true;
 }
 
