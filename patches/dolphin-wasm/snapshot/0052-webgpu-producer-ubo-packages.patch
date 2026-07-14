@@ -140,17 +140,25 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
    return false;
  }
  
-@@ -1475,7 +1484,13 @@ bool WebGPUGfx::PrepareDrawResources()
-   const u32 ubo_control_mode = RefreshUboControlMode();
-   const bool ubo_cache_enabled = (ubo_control_mode & 1u) != 0;
-   const bool uniform_fast_enabled = (ubo_control_mode & 4u) != 0;
--  const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
+@@ -1437,6 +1446,12 @@ bool WebGPUGfx::BeginPassIfNeeded()
+     AbortRecordedPass();
+     return false;
+   }
 +  const bool package_active = m_cmd_stream.UboComputePackageProtocolActive();
 +  if (package_active != m_ubo_compute_package_active)
 +  {
 +    ResetUboComputePackageState();
 +    m_ubo_compute_package_active = package_active;
 +  }
+   if (!m_cmd_stream.PushBeginPass(m_fb_color_id, m_clear_col[0], m_clear_col[1],
+                                   m_clear_col[2], m_clear_col[3],
+                                   m_pending_clear ? 1u : 0u, m_fb_depth_id))
+@@ -1475,7 +1490,8 @@ bool WebGPUGfx::PrepareDrawResources()
+   const u32 ubo_control_mode = RefreshUboControlMode();
+   const bool ubo_cache_enabled = (ubo_control_mode & 1u) != 0;
+   const bool uniform_fast_enabled = (ubo_control_mode & 4u) != 0;
+-  const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
++  const bool package_active = m_ubo_compute_package_active;
 +  const bool dense_ubo_enabled = !package_active && ShouldUseDenseUboPackets(
        s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
    const bool ubo_change_metrics_enabled =

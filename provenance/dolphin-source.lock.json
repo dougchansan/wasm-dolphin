@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "a3623599136b4991cb622a6b8866a9017f0dff084bc8b0b626b9743f3bea791f",
+  "patchSeriesSha256": "7cfd02d0c815c99bfc373162e1b9e1710bed94f41ba38a646f30d5a77e371952",
   "patches": [
     {
       "order": 1,
@@ -424,8 +424,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0052-webgpu-producer-ubo-packages.patch",
-      "size": 21735,
-      "sha256": "cae1026f01ced944b947c904d71f245cc20d27962916b5a14cba995548b87938"
+      "size": 22131,
+      "sha256": "fa13f9dbb5f6370b1506df1159128c892f14db8b55111843ba37bd11ceb9dcf5"
     },
     {
       "order": 51,

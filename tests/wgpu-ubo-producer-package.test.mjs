@@ -64,3 +64,17 @@ test("pass-level package publication preserves cache and rollback boundaries", a
   assert.match(patch, /UboComputeKind::Delta/);
   assert.match(patch, /UboComputeKind::Equal/);
 });
+
+test("default-off producer packages avoid a per-draw protocol poll", async () => {
+  const patch = await source(
+    "patches/dolphin-wasm/snapshot/0052-webgpu-producer-ubo-packages.patch"
+  );
+  const beginPass = patch.indexOf("bool WebGPUGfx::BeginPassIfNeeded()");
+  const prepareDraw = patch.indexOf("bool WebGPUGfx::PrepareDrawResources()");
+  const protocolPoll = patch.indexOf(
+    "m_cmd_stream.UboComputePackageProtocolActive()",
+    beginPass
+  );
+  assert.ok(beginPass >= 0 && prepareDraw > beginPass);
+  assert.ok(protocolPoll > beginPass && protocolPoll < prepareDraw);
+});
