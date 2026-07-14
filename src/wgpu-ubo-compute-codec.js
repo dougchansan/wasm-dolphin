@@ -151,7 +151,11 @@ export function applyWgpuUboComputePackageReference({
   if (!bytes || !(destinations instanceof Map)) {
     throw new TypeError("packageBytes and destination map are required");
   }
-  const parsed = validatePackage(bytes, destinations);
+  const parsed = validateWgpuUboComputePackage({
+    packageBytes: bytes,
+    destinations,
+    shadows,
+  });
   const nextShadows = cloneShadowMap(shadows);
   const destinationCopies = new Map();
   for (const [id, destination] of destinations) {
@@ -183,7 +187,21 @@ export function applyWgpuUboComputePackageReference({
   });
 }
 
-function validatePackage(bytes, destinations) {
+// Validate the complete producer package without mutating the destination or
+// shadow state. The returned shadow set includes speculative records in this
+// package, which permits FULL -> DELTA/EQUAL ordering while still rejecting a
+// delta whose class has not been established in the current generation.
+export function validateWgpuUboComputePackage({
+  packageBytes,
+  destinations,
+  shadows = new Map(),
+  shadowValidity,
+  expectedResourceId,
+} = {}) {
+  const bytes = viewBytes(packageBytes, true);
+  if (!bytes || !(destinations instanceof Map)) {
+    throw new TypeError("packageBytes and destination map are required");
+  }
   if (bytes.byteLength < HEADER_BYTES || bytes.byteLength % WGPU_UBO_COMPUTE_PACKAGE_ALIGNMENT !== 0) {
     throw new RangeError("package size/alignment is invalid");
   }
@@ -198,6 +216,10 @@ function validatePackage(bytes, destinations) {
   const logicalBytes = readU32(view, 20);
   const declaredPackageBytes = readU32(view, 24);
   const resourceId = readU32(view, 28);
+  if (expectedResourceId !== undefined &&
+      resourceId !== normalizeU32(expectedResourceId, "expectedResourceId")) {
+    throw new RangeError("package resource does not match command resource");
+  }
   if (recordCount === 0 || recordCount > 256 ||
       rangeStart !== HEADER_BYTES + recordCount * RECORD_BYTES ||
       payloadStart < rangeStart || (payloadStart & 15) !== 0 ||
@@ -206,7 +228,15 @@ function validatePackage(bytes, destinations) {
     throw new RangeError("package header is inconsistent");
   }
   const destination = destinations.get(resourceId);
-  if (!(destination instanceof Uint8Array)) throw new RangeError("unknown destination resource");
+  const destinationBytes = destination instanceof Uint8Array
+    ? destination.byteLength
+    : Number(destination?.size ?? destination);
+  if (!Number.isSafeInteger(destinationBytes) || destinationBytes <= 0) {
+    throw new RangeError("unknown destination resource");
+  }
+  const nextShadowValidity = shadowValidity instanceof Set
+    ? new Set(shadowValidity)
+    : new Set([...shadows.keys()]);
   const records = [];
   let expectedRangeOffset = rangeStart;
   let expectedPayloadOffset = payloadStart;
@@ -222,7 +252,7 @@ function validatePackage(bytes, destinations) {
     const payloadLength = readU32(view, offset + 28);
     if (kind > KIND.EQUAL || classId >= CLASS_NAME.length ||
         objectBytes !== WGPU_UBO_COMPUTE_CLASS_BYTES[CLASS_NAME[classId]] ||
-        (destinationOffset & 3) !== 0 || destinationOffset + objectBytes > destination.byteLength ||
+        (destinationOffset & 3) !== 0 || destinationOffset + objectBytes > destinationBytes ||
         rangeCount > Math.ceil(objectBytes / WGPU_UBO_COMPUTE_DIFF_GRANULARITY) ||
         rangeOffset !== expectedRangeOffset || payloadOffset !== expectedPayloadOffset) {
       throw new RangeError("record descriptor is invalid");
@@ -254,6 +284,11 @@ function validatePackage(bytes, destinations) {
         (kind === KIND.FULL && (rangeCount !== 1 || ranges[0]?.offset !== 0 || payloadLength !== objectBytes))) {
       throw new RangeError("record payload accounting is invalid");
     }
+    const key = shadowKey(resourceId, classId);
+    if (kind !== KIND.FULL && !nextShadowValidity.has(key)) {
+      throw new Error("DELTA/EQUAL record has no valid prior shadow");
+    }
+    nextShadowValidity.add(key);
     expectedRangeOffset += rangeCount * RANGE_BYTES;
     expectedPayloadOffset += payloadLength;
     records.push({ kind, classId, destinationOffset, objectBytes, payloadOffset, ranges });
@@ -261,7 +296,17 @@ function validatePackage(bytes, destinations) {
   if (expectedRangeOffset > payloadStart || expectedPayloadOffset !== logicalBytes) {
     throw new RangeError("package accounting is invalid");
   }
-  return { resourceId, records, logicalBytes };
+  return Object.freeze({
+    resourceId,
+    recordCount: records.length,
+    records: Object.freeze(records.map((record) => Object.freeze({
+      ...record,
+      ranges: Object.freeze(record.ranges.map((range) => Object.freeze({ ...range }))),
+    }))),
+    logicalBytes,
+    packageBytes: bytes.byteLength,
+    nextShadowValidity,
+  });
 }
 
 function findChangedRanges(previous, next) {

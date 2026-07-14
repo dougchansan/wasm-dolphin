@@ -9,6 +9,7 @@ export const WGPU_UPLOAD_ROLE_NAMES = Object.freeze([
   "index",
   "texture-adjacent",
   "geometry",
+  "ubo-compute-package",
 ]);
 
 export const WGPU_UPLOAD_ROLE = Object.freeze({
@@ -19,6 +20,7 @@ export const WGPU_UPLOAD_ROLE = Object.freeze({
   INDEX: 4,
   TEXTURE_ADJACENT: 5,
   GEOMETRY: 6,
+  UBO_COMPUTE_PACKAGE: 7,
 });
 
 export const WGPU_UPLOAD_SIZE_BUCKET_LABELS = Object.freeze([
@@ -335,7 +337,7 @@ export function createWgpuUploadAttribution({
 
   function snapshot({ enabled = true } = {}) {
     return {
-      schema: "wasm-dolphin.wgpu-upload-attribution.v2",
+      schema: "wasm-dolphin.wgpu-upload-attribution.v3",
       enabled: Boolean(enabled),
       roleOrder: [...WGPU_UPLOAD_ROLE_NAMES],
       sizeBucketLabels: [...WGPU_UPLOAD_SIZE_BUCKET_LABELS],

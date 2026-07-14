@@ -56,6 +56,7 @@ export function evaluateWgpuRuntimeConfigEvidence({
   const expectedGeometryPack = requestedFlag("wgpugeompack");
   const expectedGeometryRange = expectedGeometryPack && requestedFlag("wgpugeomrange");
   const expectedTailGate = requestedFlag("wgputailgate");
+  const expectedUboCompute = requestedFlag("wgpuubocompute");
   const expect = (label, actual, expected) => {
     if (actual !== expected) {
       failures.push(
@@ -69,6 +70,18 @@ export function evaluateWgpuRuntimeConfigEvidence({
   expect("UBO cache", runtimeConfig?.uboCacheEnabled, expectedUboCache);
   expect("UBO metrics", runtimeConfig?.producerUboCacheMetricsEnabled, expectedUboMetrics);
   expect("uniform fast", runtimeConfig?.producerUniformFastEnabled, expectedUniformFast);
+  expect("UBO compute requested", runtimeConfig?.uboCompute?.requested, expectedUboCompute);
+  expect("UBO compute active", runtimeConfig?.uboCompute?.active, expectedUboCompute);
+  expect(
+    "UBO compute protocol",
+    runtimeConfig?.uboCompute?.protocolNegotiated,
+    expectedUboCompute
+  );
+  if (expectedUboCompute) {
+    expect("UBO compute protocol version", runtimeConfig?.uboCompute?.protocolVersion, 3);
+    expect("UBO compute codec version", runtimeConfig?.uboCompute?.codecVersion, 1);
+    expect("UBO compute producer encoding", runtimeConfig?.uboCompute?.producerEncoded, true);
+  }
   expect("UBO pack", runtimeConfig?.uboPackEnabled, expectedUboPack);
   if ((expectedUboCache || expectedUboMetrics || expectedUniformFast) &&
       runtimeConfig?.producerUboCacheAvailable !== true) {
@@ -2365,6 +2378,139 @@ export function evaluateWgpuUboComputeProjectionEvidence({
     expectedActive,
     activated: final?.active === true,
     schema: final?.schema ?? null,
+    sampleCount: valid.length,
+    initial,
+    final,
+    deltas,
+    failures,
+  };
+}
+
+export function evaluateWgpuUboComputeReconstructionEvidence({
+  requested,
+  samples = [],
+} = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive && String(requested) !== "0") {
+    failures.push(`wgpuubocompute=${requested} is unsupported`);
+  }
+  const counterNames = [
+    "producerPackagesStaged",
+    "producerPackageBytes",
+    "producerRecordsStaged",
+    "producerFullRecords",
+    "producerDeltaRecords",
+    "producerEqualRecords",
+    "packagesEncoded",
+    "copiesEncoded",
+    "dispatchesEncoded",
+    "validationRejects",
+    "capacityRejects",
+    "batchesRejected",
+    "remapFailures",
+    "invalidations",
+  ];
+  const observations = samples.map(
+    (sample) => sample?.causalTelemetry?.webgpu?.uboComputeReconstruction ?? null
+  );
+  const valid = [];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation || typeof observation !== "object") {
+      failures.push(`WGPU UBO compute reconstruction sample ${index} is missing or malformed`);
+      continue;
+    }
+    valid.push(observation);
+    for (const [name, expected] of [
+      ["requested", expectedActive],
+      ["active", expectedActive],
+      ["runtimeEligible", expectedActive],
+      ["projectionOnly", false],
+      ["replayBehaviorChanged", expectedActive],
+      ["protocolNegotiated", expectedActive],
+    ]) {
+      if (observation[name] !== expected) {
+        failures.push(`WGPU UBO compute reconstruction sample ${index} ${name} mismatch`);
+      }
+    }
+    if (expectedActive &&
+        (observation.protocolVersion !== 3 || observation.codecVersion !== 1)) {
+      failures.push(`WGPU UBO compute reconstruction sample ${index} protocol mismatch`);
+    }
+    if (observation.failed === true) {
+      failures.push(`WGPU UBO compute reconstruction sample ${index} is failed`);
+    }
+    for (const name of counterNames) {
+      const value = observation[name] ?? 0;
+      if (!Number.isSafeInteger(value) || value < 0) {
+        failures.push(
+          `WGPU UBO compute reconstruction sample ${index} ${name} is invalid`
+        );
+      }
+    }
+  }
+
+  const initial = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  const deltas = initial && final
+    ? Object.fromEntries(counterNames.map(
+        (name) => [name, (final[name] ?? 0) - (initial[name] ?? 0)]
+      ))
+    : null;
+  if (expectedActive) {
+    if (valid.length < 2) {
+      failures.push("WGPU UBO compute reconstruction needs at least two timed samples");
+    } else {
+      for (const name of counterNames) {
+        if (deltas[name] < 0) {
+          failures.push(`WGPU UBO compute reconstruction ${name} regressed`);
+        }
+      }
+      if (deltas.producerPackagesStaged <= 0 ||
+          deltas.producerPackageBytes <= 0 ||
+          deltas.producerRecordsStaged <= 0 ||
+          deltas.copiesEncoded <= 0 ||
+          deltas.dispatchesEncoded <= 0) {
+        failures.push("WGPU UBO compute reconstruction handled no producer packages");
+      }
+      if (deltas.producerRecordsStaged !==
+          deltas.producerFullRecords + deltas.producerDeltaRecords +
+            deltas.producerEqualRecords) {
+        failures.push("WGPU UBO compute reconstruction record accounting is inconsistent");
+      }
+      if (deltas.packagesEncoded !== 0) {
+        failures.push("WGPU UBO compute reconstruction rebuilt packages in JS");
+      }
+      for (const name of [
+        "validationRejects", "capacityRejects", "batchesRejected",
+        "remapFailures", "invalidations",
+      ]) {
+        if (deltas[name] !== 0) {
+          failures.push(`WGPU UBO compute reconstruction ${name}=${deltas[name]}`);
+        }
+      }
+      for (const name of [
+        "packagesEncoded", "validationRejects", "capacityRejects", "batchesRejected",
+        "remapFailures", "invalidations",
+      ]) {
+        if ((final[name] ?? 0) !== 0) {
+          failures.push(
+            `WGPU UBO compute reconstruction lifetime ${name}=${final[name] ?? 0}`
+          );
+        }
+      }
+    }
+  } else if (valid.some((observation) => counterNames.some(
+    (name) => (observation[name] ?? 0) !== 0
+  ))) {
+    failures.push("WGPU UBO compute reconstruction disabled counters must remain zero");
+  }
+  return {
+    required: true,
+    expectedActive,
+    activated: final?.active === true,
     sampleCount: valid.length,
     initial,
     final,

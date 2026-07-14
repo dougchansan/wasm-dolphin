@@ -10,6 +10,7 @@ import {
   WGPU_UBO_COMPUTE_RECONSTRUCTION_SCHEMA,
   WGPU_UBO_RING_ROLE,
 } from "../src/wgpu-ubo-compute-reconstruction.js";
+import { encodeWgpuUboComputePackage } from "../src/wgpu-ubo-compute-codec.js";
 
 const STORAGE = 0x0080;
 const CLASS_BYTES = { VS: 4112, PS: 1536, GS: 64 };
@@ -236,6 +237,35 @@ test("never infers UBO identity from size and rejects malformed uploads", () => 
   }), { ok: false, reason: "invalid-upload" });
 });
 
+test("unrelated resources do not retire the UBO ring and active retirement is deferred", async () => {
+  const fake = createFakeDevice();
+  const manager = createManager(fake);
+  registerRing(manager);
+  const shadow = fake.buffers.at(-1);
+  assert.equal(manager.hasResource(7), true);
+  assert.equal(manager.hasResource(99), false);
+  assert.equal(manager.unregisterResource(99), false);
+  assert.equal(manager.hasResource(7), true);
+  assert.equal(shadow.destroys, 0);
+
+  manager.stage({
+    resourceId: 7,
+    resourceClass: "GS",
+    destinationOffset: 0,
+    bytes: bytes("GS", 0x2a),
+  });
+  const completion = deferred();
+  const accepted = manager.accept(manager.seal(), completion.promise);
+  assert.equal(manager.snapshot().activeBatches, 1);
+  assert.equal(manager.unregisterResource(7), true);
+  assert.equal(manager.hasResource(7), false);
+  assert.equal(shadow.destroys, 0, "shadow remains alive for submitted GPU work");
+  completion.resolve();
+  assert.equal(await accepted, true);
+  await Promise.resolve();
+  assert.equal(shadow.destroys, 1);
+});
+
 test("encodes package copy immediately before one ordered 64-lane dispatch", async () => {
   const fake = createFakeDevice();
   const manager = createManager(fake);
@@ -261,6 +291,80 @@ test("encodes package copy immediately before one ordered 64-lane dispatch", asy
   assert.match(shader, /for \(var record_index/);
   await manager.accept(batch);
   assert.equal(manager.snapshot().batchesCompleted, 1);
+});
+
+test("stages producer package bytes unchanged without JS re-encoding", async () => {
+  const fake = createFakeDevice();
+  const manager = createManager(fake);
+  registerRing(manager);
+  const encoded = encodeWgpuUboComputePackage({
+    uploads: [{
+      resourceId: 7,
+      resourceClass: "GS",
+      destinationOffset: 256,
+      bytes: bytes("GS", 0x5c),
+    }],
+  });
+  const staged = manager.stageEncodedPackage({
+    resourceId: 7,
+    packageBytes: encoded.bytes,
+  });
+  assert.equal(staged.ok, true);
+  const staging = fake.buffers.find((buffer) =>
+    buffer.descriptor.label === "Dolphin UBO compute staging 0");
+  assert.deepEqual(
+    new Uint8Array(staging.storage, 0, encoded.packageBytes),
+    encoded.bytes
+  );
+  const batch = manager.seal();
+  assert.equal(batch.producerEncoded, true);
+  assert.equal(batch.packageCount, 1);
+  assert.equal(batch.recordCount, 1);
+  await manager.accept(batch);
+  const snapshot = manager.snapshot();
+  assert.equal(snapshot.producerPackagesStaged, 1);
+  assert.equal(snapshot.producerRecordsStaged, 1);
+  assert.equal(snapshot.producerFullRecords, 1);
+  assert.equal(snapshot.packagesEncoded, 0, "consumer did not build a package");
+});
+
+test("producer DELTA requires an accepted FULL in the current generation", async () => {
+  const fake = createFakeDevice();
+  const manager = createManager(fake);
+  registerRing(manager);
+  const initial = bytes("GS", 0x10);
+  const changed = initial.slice();
+  changed.fill(0x20, 16, 32);
+  const full = encodeWgpuUboComputePackage({
+    uploads: [{ resourceId: 7, resourceClass: "GS", destinationOffset: 0, bytes: initial }],
+  });
+  const delta = encodeWgpuUboComputePackage({
+    uploads: [{ resourceId: 7, resourceClass: "GS", destinationOffset: 64, bytes: changed }],
+    shadows: full.nextShadows,
+  });
+  assert.equal(manager.stageEncodedPackage({
+    resourceId: 7,
+    packageBytes: delta.bytes,
+  }).ok, false);
+  assert.equal(manager.stageEncodedPackage({
+    resourceId: 7,
+    packageBytes: full.bytes,
+  }).ok, true);
+  await manager.accept(manager.seal());
+  assert.equal(manager.stageEncodedPackage({
+    resourceId: 7,
+    packageBytes: delta.bytes,
+  }).ok, true);
+  await manager.accept(manager.seal());
+  manager.reset("save-state-load");
+  const afterReset = manager.stageEncodedPackage({
+    resourceId: 7,
+    packageBytes: delta.bytes,
+  });
+  assert.deepEqual(
+    { ok: afterReset.ok, reason: afterReset.reason },
+    { ok: false, reason: "package-validation" }
+  );
 });
 
 test("splits resource changes into ordered copy-dispatch package pairs", async () => {

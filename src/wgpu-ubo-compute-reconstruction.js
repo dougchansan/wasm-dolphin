@@ -1,7 +1,10 @@
 // Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-import { encodeWgpuUboComputePackage } from "./wgpu-ubo-compute-codec.js";
+import {
+  encodeWgpuUboComputePackage,
+  validateWgpuUboComputePackage,
+} from "./wgpu-ubo-compute-codec.js";
 import { WGPU_UBO_COMPUTE_CLASS_BYTES } from "./wgpu-ubo-compute-projection.js";
 
 export const WGPU_UBO_COMPUTE_RECONSTRUCTION_SCHEMA =
@@ -54,12 +57,15 @@ export function createWgpuUboComputeReconstruction({
   const owner = Symbol("wgpu-ubo-compute-reconstruction");
   const resources = new Map();
   const cpuShadows = new Map();
+  const committedShadowValidity = new Set();
   const resetReasons = Object.create(null);
   const rejectReasons = Object.create(null);
   const slots = [];
   let pipeline = createPipeline(device);
   let bindGroupLayout = pipeline.getBindGroupLayout(0);
   let pending = [];
+  let pendingEncodedPackages = [];
+  let pendingEncodedShadowValidity = null;
   let sealedAwaitingDecision = null;
   let nextBatchId = 1;
   let generation = 1;
@@ -69,6 +75,12 @@ export function createWgpuUboComputeReconstruction({
   const metrics = {
     stagedUploads: 0,
     stagedLogicalBytes: 0,
+    producerPackagesStaged: 0,
+    producerPackageBytes: 0,
+    producerRecordsStaged: 0,
+    producerFullRecords: 0,
+    producerDeltaRecords: 0,
+    producerEqualRecords: 0,
     packagesEncoded: 0,
     packageBytes: 0,
     packagePayloadBytes: 0,
@@ -148,18 +160,30 @@ export function createWgpuUboComputeReconstruction({
 
   function unregisterResource(resourceId) {
     assertUsable();
-    if (pending.length || sealedAwaitingDecision || activeBatches.size) {
+    if (pending.length || pendingEncodedPackages.length || sealedAwaitingDecision) {
       throw new Error("cannot unregister a UBO ring while reconstruction work is pending");
     }
     const id = normalizeResourceId(resourceId);
     const resource = resources.get(id);
     if (!resource) return false;
-    resource.shadow.destroy?.();
     resources.delete(id);
     for (const key of cpuShadows.keys()) {
       if (key.startsWith(`${id}:`)) cpuShadows.delete(key);
     }
+    for (const key of committedShadowValidity) {
+      if (key.startsWith(`${id}:`)) committedShadowValidity.delete(key);
+    }
+    const completions = [...activeBatches].map((batch) => batch.completion);
+    if (completions.length > 0) {
+      Promise.allSettled(completions).then(() => resource.shadow.destroy?.());
+    } else {
+      resource.shadow.destroy?.();
+    }
     return true;
+  }
+
+  function hasResource(resourceId) {
+    return resources.has(normalizeResourceId(resourceId));
   }
 
   function stage({
@@ -171,6 +195,7 @@ export function createWgpuUboComputeReconstruction({
   } = {}) {
     assertUsable();
     if (sealedAwaitingDecision) return rejectStage("sealed-batch-awaiting-decision");
+    if (pendingEncodedPackages.length) return rejectStage("mixed-package-mode");
     const id = normalizeResourceId(resourceId);
     const resource = resources.get(id);
     if (!resource || resource.role !== WGPU_UBO_RING_ROLE) {
@@ -195,12 +220,79 @@ export function createWgpuUboComputeReconstruction({
     return Object.freeze({ ok: true, pendingUploads: pending.length });
   }
 
+  function stageEncodedPackage({
+    resourceId,
+    packageBytes,
+  } = {}) {
+    assertUsable();
+    if (sealedAwaitingDecision) return rejectStage("sealed-batch-awaiting-decision");
+    if (pending.length) return rejectStage("mixed-package-mode");
+    const id = normalizeResourceId(resourceId);
+    const resource = resources.get(id);
+    if (!resource || resource.role !== WGPU_UBO_RING_ROLE) {
+      return rejectStage("unregistered-ubo-ring");
+    }
+    const source = viewBytes(packageBytes, true);
+    if (!source) return rejectStage("invalid-package-view");
+    const validity = pendingEncodedShadowValidity ?? committedShadowValidity;
+    let parsed;
+    try {
+      parsed = validateWgpuUboComputePackage({
+        packageBytes: source,
+        destinations: new Map([[id, { size: resource.size }]]),
+        shadowValidity: validity,
+        expectedResourceId: id,
+      });
+    } catch (error) {
+      metrics.validationRejects += 1;
+      return Object.freeze({
+        ok: false,
+        reason: "package-validation",
+        error: errorText(error),
+      });
+    }
+    const allocation = reserveMappedPackageInSlots(slots, parsed.packageBytes);
+    if (!allocation) {
+      metrics.capacityRejects += 1;
+      return Object.freeze({ ok: false, reason: "no-mapped-capacity" });
+    }
+    allocation.slot.mappedBytes.set(source, allocation.offset);
+    allocation.slot.cursor = allocation.offset + parsed.packageBytes;
+    pendingEncodedPackages.push({
+      resource,
+      slot: allocation.slot,
+      offset: allocation.offset,
+      packageBytes: parsed.packageBytes,
+      logicalBytes: parsed.logicalBytes,
+      recordCount: parsed.recordCount,
+    });
+    pendingEncodedShadowValidity = parsed.nextShadowValidity;
+    metrics.producerPackagesStaged += 1;
+    metrics.producerPackageBytes += parsed.packageBytes;
+    metrics.producerRecordsStaged += parsed.recordCount;
+    for (const record of parsed.records) {
+      if (record.kind === 0) metrics.producerFullRecords += 1;
+      else if (record.kind === 1) metrics.producerDeltaRecords += 1;
+      else metrics.producerEqualRecords += 1;
+    }
+    return Object.freeze({
+      ok: true,
+      pendingPackages: pendingEncodedPackages.length,
+      recordCount: parsed.recordCount,
+      packageBytes: parsed.packageBytes,
+    });
+  }
+
   function seal(label = "Dolphin ordered UBO reconstruction") {
     assertUsable();
     if (sealedAwaitingDecision) {
       return Object.freeze({ ok: false, reason: "sealed-batch-awaiting-decision" });
     }
-    if (pending.length === 0) return null;
+    if (pending.length === 0 && pendingEncodedPackages.length === 0) return null;
+
+    if (pendingEncodedPackages.length > 0) {
+      return sealEncodedPackages(label);
+    }
 
     let encoded;
     try {
@@ -293,11 +385,90 @@ export function createWgpuUboComputeReconstruction({
     }
   }
 
+  function sealEncodedPackages(label) {
+    const packages = pendingEncodedPackages;
+    const usedSlots = [...new Set(packages.map((entry) => entry.slot))];
+    try {
+      for (const slot of usedSlots) {
+        slot.staging.unmap();
+        slot.mappedBytes = null;
+        slot.state = "sealed";
+      }
+      const encoder = device.createCommandEncoder({ label });
+      for (let index = 0; index < packages.length; index += 1) {
+        const entry = packages[index];
+        encoder.copyBufferToBuffer(
+          entry.slot.staging,
+          entry.offset,
+          entry.slot.work,
+          entry.offset,
+          entry.packageBytes
+        );
+        const bindGroup = device.createBindGroup({
+          label: `Dolphin producer UBO compute package ${index}`,
+          layout: bindGroupLayout,
+          entries: [
+            { binding: 0, resource: {
+              buffer: entry.slot.work,
+              offset: entry.offset,
+              size: entry.packageBytes,
+            } },
+            { binding: 1, resource: {
+              buffer: entry.resource.shadow,
+              offset: 0,
+              size: SHADOW_BYTES,
+            } },
+            { binding: 2, resource: {
+              buffer: entry.resource.buffer,
+              offset: 0,
+              size: entry.resource.size,
+            } },
+          ],
+        });
+        const pass = encoder.beginComputePass({
+          label: `Dolphin producer UBO reconstruction ${index}`,
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(1, 1, 1);
+        pass.end();
+      }
+      const batch = {
+        ok: true,
+        owner,
+        id: nextBatchId++,
+        generation,
+        state: "sealed",
+        commandBuffer: encoder.finish(),
+        slots: usedSlots,
+        nextShadowValidity: new Set(pendingEncodedShadowValidity),
+        packageCount: packages.length,
+        recordCount: packages.reduce((sum, entry) => sum + entry.recordCount, 0),
+        packageBytes: packages.reduce((sum, entry) => sum + entry.packageBytes, 0),
+        producerEncoded: true,
+      };
+      pendingEncodedPackages = [];
+      pendingEncodedShadowValidity = null;
+      sealedAwaitingDecision = batch;
+      metrics.copiesEncoded += batch.packageCount;
+      metrics.dispatchesEncoded += batch.packageCount;
+      metrics.batchesSealed += 1;
+      return batch;
+    } catch (error) {
+      invalidate(`encode-failed:${errorText(error)}`);
+      return Object.freeze({ ok: false, reason: "encode-failed", error: errorText(error) });
+    }
+  }
+
   function accept(batch, submissionCompletion = Promise.resolve()) {
     validateBatchDecision(batch);
     sealedAwaitingDecision = null;
     batch.state = "accepted";
-    replaceShadowMap(cpuShadows, batch.nextShadows);
+    if (batch.producerEncoded) {
+      replaceSet(committedShadowValidity, batch.nextShadowValidity);
+    } else {
+      replaceShadowMap(cpuShadows, batch.nextShadows);
+    }
     metrics.batchesAccepted += 1;
     activeBatches.add(batch);
     const remaps = remapBatchSlots(batch);
@@ -350,8 +521,11 @@ export function createWgpuUboComputeReconstruction({
     metrics.resets += 1;
     resetReasons[normalizedReason] = (resetReasons[normalizedReason] || 0) + 1;
     pending = [];
+    pendingEncodedPackages = [];
+    pendingEncodedShadowValidity = null;
     sealedAwaitingDecision = null;
     cpuShadows.clear();
+    committedShadowValidity.clear();
     failed = false;
     lastError = null;
     slots.length = 0;
@@ -393,6 +567,7 @@ export function createWgpuUboComputeReconstruction({
       states,
       registeredUboRings: resources.size,
       pendingUploads: pending.length,
+      pendingProducerPackages: pendingEncodedPackages.length,
       sealedAwaitingDecision: Boolean(sealedAwaitingDecision),
       activeBatches: activeBatches.size,
       shadowBytesPerResource: SHADOW_BYTES,
@@ -469,8 +644,11 @@ export function createWgpuUboComputeReconstruction({
     lastError = String(reason || "invalidated");
     metrics.invalidations += 1;
     pending = [];
+    pendingEncodedPackages = [];
+    pendingEncodedShadowValidity = null;
     sealedAwaitingDecision = null;
     cpuShadows.clear();
+    committedShadowValidity.clear();
     for (const slot of slots) slot.state = "failed";
     destroyInternalBuffers();
   }
@@ -486,7 +664,9 @@ export function createWgpuUboComputeReconstruction({
   return Object.freeze({
     registerResource,
     unregisterResource,
+    hasResource,
     stage,
+    stageEncodedPackage,
     seal,
     accept,
     reject,
@@ -494,6 +674,15 @@ export function createWgpuUboComputeReconstruction({
     invalidate,
     snapshot,
   });
+}
+
+function reserveMappedPackageInSlots(slots, packageBytes) {
+  for (const slot of slots) {
+    if (slot.state !== "mapped") continue;
+    const offset = alignUp(slot.cursor, PACKAGE_ALIGNMENT);
+    if (offset + packageBytes <= slot.mappedBytes.byteLength) return { slot, offset };
+  }
+  return null;
 }
 
 function encodePendingPackages(uploads, initialShadows, maxPackageBytes) {
@@ -614,6 +803,11 @@ function cloneShadowMap(source) {
 function replaceShadowMap(destination, source) {
   destination.clear();
   for (const [key, value] of source) destination.set(key, value.slice());
+}
+
+function replaceSet(destination, source) {
+  destination.clear();
+  for (const value of source) destination.add(value);
 }
 
 function errorText(error) {

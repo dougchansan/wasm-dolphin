@@ -27,7 +27,7 @@ test("dirty-range projection is explicit URL opt-in with requested/active state"
   assert.deepEqual(snapshot.gapThresholds, [0, 64, 256, 1024, 4096]);
   assert.deepEqual(snapshot.raw, { uploads: 0, bytes: 0 });
   assert.deepEqual(snapshot.projection.intervalCopiesByGap, [0, 0, 0, 0, 0]);
-  assert.equal(snapshot.roles.length, 7);
+  assert.equal(snapshot.roles.length, 8);
   assert.equal(snapshot.roleProjectionAdditive, false);
 });
 

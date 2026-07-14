@@ -8,7 +8,9 @@ import {
   WGPU_CONSUMER_STATE_HEADER_INDEX,
   WGPU_CONSUMER_STATE_RUNNING,
   WGPU_PROTOCOL_NON_DROPPING_FLAG,
+  WGPU_PROTOCOL_UBO_COMPUTE_PACKAGE_FLAG,
   enableWgpuNonDroppingBackpressure,
+  enableWgpuUboComputePackageProtocol,
   failWgpuRingConsumer,
   publishWgpuRingProgress,
 } from "../src/wgpu-ring-backpressure.js";
@@ -49,6 +51,18 @@ test("fatal replay state wakes both producer wait sites and preserves the first 
   assert.equal(Atomics.load(ring.headerI32, WGPU_CONSUMER_ERROR_HEADER_INDEX), 7);
   assert.equal(failWgpuRingConsumer(ring, 9), false);
   assert.equal(Atomics.load(ring.headerI32, WGPU_CONSUMER_ERROR_HEADER_INDEX), 7);
+});
+
+test("producer UBO packages require an explicit protocol-v3 capability", () => {
+  const ring = makeRing();
+  assert.equal(enableWgpuUboComputePackageProtocol(ring), false);
+  enableWgpuNonDroppingBackpressure(ring);
+  assert.equal(enableWgpuUboComputePackageProtocol(ring), true);
+  assert.equal(ring.uboComputePackageProtocolEnabled, true);
+  assert.equal(
+    Atomics.load(ring.headerI32, 4) & WGPU_PROTOCOL_UBO_COMPUTE_PACKAGE_FLAG,
+    WGPU_PROTOCOL_UBO_COMPUTE_PACKAGE_FLAG
+  );
 });
 
 test("publishing ring progress stores and notifies the producer-facing index", () => {

@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 491841,
-      "sha256": "324f4c39a2c3399fbd3ddb7c9ce40a67ee04e36420ff3226a3415be343219635"
+      "size": 493871,
+      "sha256": "2f4fc6de2b3c7c0e058e1abb73150ccc8ae6cf646f6eb15e3d64e59a134ab394"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -188,8 +188,8 @@
     {
       "path": "src/wgpu-upload-attribution.js",
       "hashMode": "lf-normalized",
-      "size": 16466,
-      "sha256": "91ded4e08a71512a5be88695bdb33663b49c97704d6825f39cdf337e302a5e87"
+      "size": 16517,
+      "sha256": "37d7acf7a8769a049e38c34bce5f9e2e7da52146cb998c4eefcd98b14e7a797d"
     },
     {
       "path": "src/wgpu-upload-watermark.js",
@@ -302,14 +302,14 @@
     {
       "path": "src/wgpu-ubo-compute-codec.js",
       "hashMode": "lf-normalized",
-      "size": 13118,
-      "sha256": "e22b6018bb2500a699393971f395553fec8b43ac417820135a4a99cbb3710b6b"
+      "size": 14772,
+      "sha256": "b1db5b0cca4ced0d3a3086eb451c5fea10c7aeea6aa82128c7a4760517f4c4be"
     },
     {
       "path": "src/wgpu-ubo-compute-reconstruction.js",
       "hashMode": "lf-normalized",
-      "size": 22717,
-      "sha256": "d70ee7357fd8ab3c0d1ced427c6b561e35fc94b14ed258f4fd79ff11a0652c3a"
+      "size": 29484,
+      "sha256": "6274911f626f06fd590fb024d3b249de1bc7c39ec9fc3e7e2aa574cf425ef5f4"
     }
   ],
   "memoryContract": {

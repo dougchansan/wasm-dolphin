@@ -13,6 +13,10 @@ const ATTRIBUTION_SCHEMAS = Object.freeze({
   "wasm-dolphin.wgpu-upload-attribution.v2": Object.freeze([
     "unknown", "ubo", "utility-uniform", "vertex", "index", "texture-adjacent", "geometry",
   ]),
+  "wasm-dolphin.wgpu-upload-attribution.v3": Object.freeze([
+    "unknown", "ubo", "utility-uniform", "vertex", "index", "texture-adjacent", "geometry",
+    "ubo-compute-package",
+  ]),
 });
 const REPLAY_SCHEMA = "wasm-dolphin.wgpu-replay-op-metrics.v1";
 const BUCKET_LABELS = Object.freeze([

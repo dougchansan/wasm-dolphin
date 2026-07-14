@@ -1,0 +1,530 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -55,6 +55,7 @@ static constexpr u32 kRingCapacity = 262144;
+ // reading. Mirrors the Day-20 XFB-ring idea (no per-frame malloc).
+ static constexpr u32 kProtocolUploadWatermark = 1u << 0;
+ static constexpr u32 kProtocolNonDroppingBackpressure = 1u << 1;
++static constexpr u32 kProtocolUboComputePackage = 1u << 2;
+ static constexpr u32 kConsumerStateFailed = 2;
+ static constexpr u32 kOwnershipTraceVersion = 1;
+ static constexpr u32 kOwnershipTraceCapacity = 131072;
+@@ -79,6 +80,15 @@ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+   return true;
+ }
+ 
++bool WebGPUCommandStream::UboComputePackageProtocolActive() const
++{
++  if (!m_header)
++    return false;
++  const u32 flags = m_header->protocol_flags.load(std::memory_order_acquire);
++  return (flags & (kProtocolNonDroppingBackpressure | kProtocolUboComputePackage)) ==
++         (kProtocolNonDroppingBackpressure | kProtocolUboComputePackage);
++}
++
+ void WebGPUCommandStream::EnsureOwnershipTrace()
+ {
+   if (m_trace_header)
+@@ -1037,6 +1047,12 @@ bool WebGPUCommandStream::PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_
+     PoisonPass();
+     return false;
+   }
++  if (role == BufferUploadRole::UboComputePackage && !UboComputePackageProtocolActive())
++  {
++    RollbackLastUpload(src_heap_ptr, len);
++    PoisonPass();
++    return false;
++  }
+   CmdRecord rec{};
+   rec.op = static_cast<u32>(CmdOp::UploadBuffer);
+   rec.arg.u[0] = id;
+@@ -1766,6 +1782,47 @@ extern "C" EMSCRIPTEN_KEEPALIVE int RunWebGpuDenseUboPacketSmoke()
+     if (actual_bytes[offset] != 0)
+       return FailDenseUboSmoke(310, "actual-size packet tail is not zero");
+   }
++  for (u32 index = 0; index < actual_vs.size(); ++index)
++    actual_vs[index] = static_cast<u8>((index * 17u + 3u) & 0xffu);
++  UboComputePackageBuilder compute_builder;
++  if (!compute_builder.Add(UboComputeClass::Vertex, 0, actual_vs.data(),
++                           static_cast<u32>(actual_vs.size()), nullptr, false))
++    return FailDenseUboSmoke(312, "compute FULL record rejected");
++  if (!compute_builder.Add(UboComputeClass::Vertex, 8192, actual_vs.data(),
++                           static_cast<u32>(actual_vs.size()), actual_vs.data(), true))
++    return FailDenseUboSmoke(313, "compute EQUAL record rejected");
++  std::array<u8, 4112> changed_vs = actual_vs;
++  std::fill(changed_vs.begin() + 32, changed_vs.begin() + 48, 0xaa);
++  if (!compute_builder.Add(UboComputeClass::Vertex, 16384, changed_vs.data(),
++                           static_cast<u32>(changed_vs.size()), actual_vs.data(), true))
++    return FailDenseUboSmoke(314, "compute DELTA record rejected");
++  const std::vector<u8> compute_package = compute_builder.Encode(41);
++  const auto get_u32 = [&compute_package](u32 offset) {
++    return static_cast<u32>(compute_package[offset]) |
++           (static_cast<u32>(compute_package[offset + 1]) << 8) |
++           (static_cast<u32>(compute_package[offset + 2]) << 16) |
++           (static_cast<u32>(compute_package[offset + 3]) << 24);
++  };
++  if (compute_package.empty() ||
++      (compute_package.size() % kUboComputePackageAlignment) != 0 ||
++      get_u32(0) != kUboComputeCodecMagic || get_u32(4) != kUboComputeCodecVersion ||
++      get_u32(8) != 3 || get_u32(28) != 41 ||
++      get_u32(kUboComputeHeaderBytes) != static_cast<u32>(UboComputeKind::Full) ||
++      get_u32(kUboComputeHeaderBytes + kUboComputeRecordBytes) !=
++          static_cast<u32>(UboComputeKind::Equal) ||
++      get_u32(kUboComputeHeaderBytes + 2 * kUboComputeRecordBytes) !=
++          static_cast<u32>(UboComputeKind::Delta))
++  {
++    return FailDenseUboSmoke(315, "compute package header or record kinds differ");
++  }
++  const u32 compute_logical_bytes = get_u32(20);
++  const u32 compute_package_bytes = get_u32(24);
++  if (compute_package_bytes != compute_package.size() ||
++      !std::all_of(compute_package.begin() + compute_logical_bytes, compute_package.end(),
++                   [](u8 value) { return value == 0; }))
++  {
++    return FailDenseUboSmoke(316, "compute package tail is not zero padded");
++  }
+   if (!ShouldUseDenseUboPackets(true, false) || ShouldUseDenseUboPackets(true, true) ||
+       ShouldUseDenseUboPackets(false, false))
+     return FailDenseUboSmoke(311, "cache fallback predicate differs");
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -136,7 +136,8 @@ enum class BufferUploadRole : u32
+   Index = 4,
+   TextureAdjacent = 5,
+   Geometry = 6,
+-  Count = 7,
++  UboComputePackage = 7,
++  Count = 8,
+ };
+ 
+ // Stable identity for buffers whose consumer-side usage or replay strategy
+@@ -282,6 +283,7 @@ public:
+   // been handed to JS, same-value reapplication is a no-op and a different
+   // request is rejected rather than invalidating the shared pointer.
+   bool ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled);
++  bool UboComputePackageProtocolActive() const;
+ 
+   // Allocate and publish the native ownership sideband only after an explicit
+   // opt-in. Disabling leaves the allocation inert; it does not invalidate a
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1381,6 +1381,8 @@ void WebGPUGfx::AbortRecordedPass()
+   InvalidateGeometryUploadPack();
+   if (m_ubo_cache_active)
+     InvalidateUboSlices();
++  else
++    ResetUboComputePackageState();
+   ResetRecordedPassState();
+ }
+ 
+@@ -1411,6 +1413,11 @@ bool WebGPUGfx::EndPassIfOpen()
+     AbortRecordedPass();
+     return false;
+   }
++  if (!FlushUboComputePackage())
++  {
++    AbortRecordedPass();
++    return false;
++  }
+   const bool committed = m_cmd_stream.PushEndPass();
+   m_pass_open = false;
+   ResetRecordedPassState();
+@@ -1423,6 +1430,8 @@ bool WebGPUGfx::EndPassIfOpen()
+   InvalidateGeometryUploadPack();
+   if (m_ubo_cache_active)
+     InvalidateUboSlices();
++  else
++    ResetUboComputePackageState();
+   return false;
+ }
+ 
+@@ -1475,7 +1484,13 @@ bool WebGPUGfx::PrepareDrawResources()
+   const u32 ubo_control_mode = RefreshUboControlMode();
+   const bool ubo_cache_enabled = (ubo_control_mode & 1u) != 0;
+   const bool uniform_fast_enabled = (ubo_control_mode & 4u) != 0;
+-  const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
++  const bool package_active = m_cmd_stream.UboComputePackageProtocolActive();
++  if (package_active != m_ubo_compute_package_active)
++  {
++    ResetUboComputePackageState();
++    m_ubo_compute_package_active = package_active;
++  }
++  const bool dense_ubo_enabled = !package_active && ShouldUseDenseUboPackets(
+       s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
+   const bool ubo_change_metrics_enabled =
+       s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed);
+@@ -1608,6 +1623,8 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+ 
+   auto& vsm = system.GetVertexShaderManager();
++  static_assert(sizeof(vsm.constants) == 4112,
++                "UBO compute codec v1 requires the locked VS object size");
+   if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
+   {
+     // DIAG one-shot: is the VS UBO actually populated? Dump dirty +
+@@ -1714,7 +1731,8 @@ bool WebGPUGfx::PrepareDrawResources()
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_vs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
+-                   AllocUboSlice(&vsm.constants, sizeof(vsm.constants), BufferUploadRole::Ubo);
++                   AllocUboClassSlice(UboClass::Vertex, &vsm.constants,
++                                      sizeof(vsm.constants));
+     RecordUboPrepareCpu(0, cpu_start_ms);
+     if (ubo_cache_enabled && m_vs_off == kUboOffNone)
+       return false;
+@@ -1735,6 +1753,8 @@ bool WebGPUGfx::PrepareDrawResources()
+   // highlighted "VERY EASY" while the rest of the screen stayed
+   // black). Content diff is immune to every missed-dirty path.
+   auto& psm = system.GetPixelShaderManager();
++  static_assert(sizeof(psm.constants) == 1536,
++                "UBO compute codec v1 requires the locked PS object size");
+   static_assert(sizeof(psm.constants) <= sizeof(m_ps_shadow),
+                 "PS shadow must cover PixelShaderConstants");
+   const bool ps_expired = ubo_cache_enabled && m_ps_off != kUboOffNone &&
+@@ -1774,7 +1794,8 @@ bool WebGPUGfx::PrepareDrawResources()
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_ps_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
+-                   AllocUboSlice(&psm.constants, sizeof(psm.constants), BufferUploadRole::Ubo);
++                   AllocUboClassSlice(UboClass::Pixel, &psm.constants,
++                                      sizeof(psm.constants));
+     RecordUboPrepareCpu(1, cpu_start_ms);
+     if (ubo_cache_enabled && m_ps_off == kUboOffNone)
+       return false;
+@@ -1822,6 +1843,8 @@ bool WebGPUGfx::PrepareDrawResources()
+   }
+ #endif
+   auto& gsm = system.GetGeometryShaderManager();
++  static_assert(sizeof(gsm.constants) == 64,
++                "UBO compute codec v1 requires the locked GS object size");
+   static_assert(sizeof(gsm.constants) <= sizeof(m_gs_shadow),
+                 "GS shadow must cover GeometryShaderConstants");
+   const bool gs_expired = ubo_cache_enabled && m_gs_off != kUboOffNone &&
+@@ -1861,7 +1884,8 @@ bool WebGPUGfx::PrepareDrawResources()
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_gs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
+-                   AllocUboSlice(&gsm.constants, sizeof(gsm.constants), BufferUploadRole::Ubo);
++                   AllocUboClassSlice(UboClass::Geometry, &gsm.constants,
++                                      sizeof(gsm.constants));
+     RecordUboPrepareCpu(2, cpu_start_ms);
+     if (ubo_cache_enabled && m_gs_off == kUboOffNone)
+       return false;
+@@ -2161,6 +2185,7 @@ void WebGPUGfx::ExpireUboClass(UboClass ubo_class)
+ void WebGPUGfx::InvalidateUboSlices()
+ {
+   ResetUboSliceCache();
++  ResetUboComputePackageState();
+   m_ps_off = kUboOffNone;
+   m_vs_off = kUboOffNone;
+   m_gs_off = kUboOffNone;
+@@ -2234,12 +2259,79 @@ u32 WebGPUGfx::AcquireUboSlice(UboClass ubo_class, const void* data, u32 size)
+     return entry.offset;
+   }
+ 
+-  const u32 offset = AllocUboSlice(data, size, BufferUploadRole::Ubo);
++  const u32 offset = AllocUboClassSlice(ubo_class, data, size);
+   if (offset != kUboOffNone)
+     StoreUboSlice(ubo_class, data, size, offset, m_last_ubo_slice_serial);
+   return offset;
+ }
+ 
++u32 WebGPUGfx::AllocUboClassSlice(UboClass ubo_class, const void* data, u32 size)
++{
++  if (!m_ubo_compute_package_active)
++    return AllocUboSlice(data, size, BufferUploadRole::Ubo);
++  if (m_ubo_ring == 0 || data == nullptr || size == 0 || size > kUboSliceStride)
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
++    else
++      ResetUboComputePackageState();
++    return kUboOffNone;
++  }
++  if (m_ubo_compute_package.full() && !FlushUboComputePackage())
++    return kUboOffNone;
++  if (m_ubo_ring_off + kUboSliceStride > kUboRingSize)
++    m_ubo_ring_off = 0;
++  const u32 offset = m_ubo_ring_off;
++  const u32 class_index = static_cast<u32>(ubo_class);
++  if (class_index >= static_cast<u32>(UboClass::Count) ||
++      !m_ubo_compute_package.Add(
++          static_cast<UboComputeClass>(class_index), offset, data, size,
++          m_ubo_compute_shadows[class_index].data(),
++          m_ubo_compute_shadow_valid[class_index]))
++  {
++    m_cmd_stream.FailRequiredPublication();
++    return kUboOffNone;
++  }
++  std::memcpy(m_ubo_compute_shadows[class_index].data(), data, size);
++  m_ubo_compute_shadow_valid[class_index] = true;
++  m_ubo_ring_off = offset + kUboSliceStride;
++  m_last_ubo_slice_serial = ++m_ubo_publication_serial;
++  return offset;
++}
++
++bool WebGPUGfx::FlushUboComputePackage()
++{
++  if (m_ubo_compute_package.empty())
++    return true;
++  if (!m_ubo_compute_package_active || m_ubo_ring == 0)
++    return false;
++  const std::vector<u8> package = m_ubo_compute_package.Encode(m_ubo_ring);
++  if (package.empty())
++  {
++    m_cmd_stream.FailRequiredPublication();
++    return false;
++  }
++  const u32 source =
++      m_cmd_stream.UploadAlloc(package.data(), static_cast<u32>(package.size()), 256);
++  if (source == 0 ||
++      !m_cmd_stream.PushUploadBuffer(m_ubo_ring, 0, source,
++                                     static_cast<u32>(package.size()),
++                                     BufferUploadRole::UboComputePackage))
++  {
++    if (source == 0)
++      m_cmd_stream.FailRequiredPublication();
++    return false;
++  }
++  m_ubo_compute_package.Reset();
++  return true;
++}
++
++void WebGPUGfx::ResetUboComputePackageState()
++{
++  m_ubo_compute_package.Reset();
++  m_ubo_compute_shadow_valid.fill(false);
++}
++
+ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size, BufferUploadRole role)
+ {
+   if (m_ubo_ring == 0 || size == 0 || size > kUboSliceStride)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -189,6 +189,9 @@ private:
+     Count = 3
+   };
+   u32 AllocUboSlice(const void* data, u32 size, BufferUploadRole role);
++  u32 AllocUboClassSlice(UboClass ubo_class, const void* data, u32 size);
++  bool FlushUboComputePackage();
++  void ResetUboComputePackageState();
+   u32 AcquireUboSlice(UboClass ubo_class, const void* data, u32 size);
+   u32 RefreshUboControlMode();
+   bool IsUboSliceLive(u64 publication_serial) const;
+@@ -262,6 +265,11 @@ private:
+   u64 m_ubo_cache_epoch = 0;
+   u64 m_ubo_cache_mru_serial = 0;
+   bool m_ubo_cache_active = false;
++  bool m_ubo_compute_package_active = false;
++  UboComputePackageBuilder m_ubo_compute_package;
++  std::array<std::array<u8, kUboSliceStride>, static_cast<u32>(UboClass::Count)>
++      m_ubo_compute_shadows{};
++  std::array<bool, static_cast<u32>(UboClass::Count)> m_ubo_compute_shadow_valid{};
+   std::array<std::array<UboSliceCacheEntry, 2>, static_cast<u32>(UboClass::Count)>
+       m_ubo_slice_cache{};
+   u32 m_ps_off = kUboOffNone;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUUboPacket.h
+@@ -4,7 +4,10 @@
+ #pragma once
+ 
+ #include <array>
++#include <cstring>
+ #include <limits>
++#include <utility>
++#include <vector>
+ 
+ #include "Common/CommonTypes.h"
+ 
+@@ -99,4 +102,187 @@ constexpr bool ShouldUseDenseUboPackets(bool requested, bool ubo_cache_enabled)
+ {
+   return requested && !ubo_cache_enabled;
+ }
++
++constexpr u32 kUboComputeCodecMagic = 0x55424350;
++constexpr u32 kUboComputeCodecVersion = 1;
++constexpr u32 kUboComputePackageAlignment = 256;
++constexpr u32 kUboComputeDiffGranularity = 16;
++constexpr u32 kUboComputeHeaderBytes = 32;
++constexpr u32 kUboComputeRecordBytes = 32;
++constexpr u32 kUboComputeRangeBytes = 8;
++constexpr u32 kUboComputeMaxRecords = 256;
++
++enum class UboComputeKind : u32
++{
++  Full = 0,
++  Delta = 1,
++  Equal = 2,
++};
++
++enum class UboComputeClass : u32
++{
++  Vertex = 0,
++  Pixel = 1,
++  Geometry = 2,
++  Count = 3,
++};
++
++struct UboComputeRange
++{
++  u32 offset = 0;
++  u32 length = 0;
++};
++
++struct UboComputeRecord
++{
++  UboComputeKind kind = UboComputeKind::Full;
++  UboComputeClass ubo_class = UboComputeClass::Vertex;
++  u32 destination_offset = 0;
++  u32 object_bytes = 0;
++  std::vector<UboComputeRange> ranges;
++  std::vector<u8> payload;
++};
++
++class UboComputePackageBuilder
++{
++public:
++  bool empty() const { return m_records.empty(); }
++  u32 size() const { return static_cast<u32>(m_records.size()); }
++  bool full() const { return m_records.size() >= kUboComputeMaxRecords; }
++  void Reset() { m_records.clear(); }
++
++  bool Add(UboComputeClass ubo_class, u32 destination_offset, const void* data, u32 size,
++           const void* previous, bool previous_valid)
++  {
++    if (full() || data == nullptr || size == 0 || (size & 15u) != 0 ||
++        (destination_offset & 3u) != 0)
++    {
++      return false;
++    }
++    const auto* const bytes = static_cast<const u8*>(data);
++    const auto* const old = static_cast<const u8*>(previous);
++    UboComputeRecord record{};
++    record.ubo_class = ubo_class;
++    record.destination_offset = destination_offset;
++    record.object_bytes = size;
++
++    if (previous_valid && old != nullptr)
++    {
++      u32 range_start = std::numeric_limits<u32>::max();
++      for (u32 offset = 0; offset < size; offset += kUboComputeDiffGranularity)
++      {
++        const bool changed =
++            std::memcmp(bytes + offset, old + offset, kUboComputeDiffGranularity) != 0;
++        if (changed && range_start == std::numeric_limits<u32>::max())
++          range_start = offset;
++        if (!changed && range_start != std::numeric_limits<u32>::max())
++        {
++          record.ranges.push_back({range_start, offset - range_start});
++          range_start = std::numeric_limits<u32>::max();
++        }
++      }
++      if (range_start != std::numeric_limits<u32>::max())
++        record.ranges.push_back({range_start, size - range_start});
++
++      if (record.ranges.empty())
++      {
++        record.kind = UboComputeKind::Equal;
++      }
++      else
++      {
++        u32 changed_bytes = 0;
++        for (const UboComputeRange& range : record.ranges)
++          changed_bytes += range.length;
++        if (changed_bytes + record.ranges.size() * kUboComputeRangeBytes < size)
++        {
++          record.kind = UboComputeKind::Delta;
++          record.payload.reserve(changed_bytes);
++          for (const UboComputeRange& range : record.ranges)
++          {
++            record.payload.insert(record.payload.end(), bytes + range.offset,
++                                  bytes + range.offset + range.length);
++          }
++        }
++        else
++        {
++          record.kind = UboComputeKind::Full;
++          record.ranges = {{0, size}};
++          record.payload.assign(bytes, bytes + size);
++        }
++      }
++    }
++    else
++    {
++      record.kind = UboComputeKind::Full;
++      record.ranges = {{0, size}};
++      record.payload.assign(bytes, bytes + size);
++    }
++    m_records.emplace_back(std::move(record));
++    return true;
++  }
++
++  std::vector<u8> Encode(u32 resource_id) const
++  {
++    if (m_records.empty() || m_records.size() > kUboComputeMaxRecords)
++      return {};
++    u32 range_bytes = 0;
++    u32 payload_bytes = 0;
++    for (const UboComputeRecord& record : m_records)
++    {
++      range_bytes += static_cast<u32>(record.ranges.size()) * kUboComputeRangeBytes;
++      payload_bytes += static_cast<u32>(record.payload.size());
++    }
++    const u32 range_start =
++        kUboComputeHeaderBytes + static_cast<u32>(m_records.size()) * kUboComputeRecordBytes;
++    const u32 payload_start = AlignDenseUbo(range_start + range_bytes, 16);
++    if (payload_start > std::numeric_limits<u32>::max() - payload_bytes)
++      return {};
++    const u32 logical_bytes = payload_start + payload_bytes;
++    const u32 package_bytes = AlignDenseUbo(logical_bytes, kUboComputePackageAlignment);
++    std::vector<u8> output(package_bytes, 0);
++    const auto put_u32 = [&output](u32 offset, u32 value) {
++      output[offset] = static_cast<u8>(value);
++      output[offset + 1] = static_cast<u8>(value >> 8);
++      output[offset + 2] = static_cast<u8>(value >> 16);
++      output[offset + 3] = static_cast<u8>(value >> 24);
++    };
++    put_u32(0, kUboComputeCodecMagic);
++    put_u32(4, kUboComputeCodecVersion);
++    put_u32(8, static_cast<u32>(m_records.size()));
++    put_u32(12, range_start);
++    put_u32(16, payload_start);
++    put_u32(20, logical_bytes);
++    put_u32(24, package_bytes);
++    put_u32(28, resource_id);
++
++    u32 next_range = range_start;
++    u32 next_payload = payload_start;
++    for (u32 index = 0; index < m_records.size(); ++index)
++    {
++      const UboComputeRecord& record = m_records[index];
++      const u32 descriptor = kUboComputeHeaderBytes + index * kUboComputeRecordBytes;
++      put_u32(descriptor, static_cast<u32>(record.kind));
++      put_u32(descriptor + 4, static_cast<u32>(record.ubo_class));
++      put_u32(descriptor + 8, record.destination_offset);
++      put_u32(descriptor + 12, record.object_bytes);
++      put_u32(descriptor + 16, static_cast<u32>(record.ranges.size()));
++      put_u32(descriptor + 20, next_range);
++      put_u32(descriptor + 24, next_payload);
++      put_u32(descriptor + 28, static_cast<u32>(record.payload.size()));
++      for (const UboComputeRange& range : record.ranges)
++      {
++        put_u32(next_range, range.offset);
++        put_u32(next_range + 4, range.length);
++        next_range += kUboComputeRangeBytes;
++      }
++      if (!record.payload.empty())
++        std::memcpy(output.data() + next_payload, record.payload.data(), record.payload.size());
++      next_payload += static_cast<u32>(record.payload.size());
++    }
++    return output;
++  }
++
++private:
++  std::vector<UboComputeRecord> m_records;
++};
+ }  // namespace WebGPU
