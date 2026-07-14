@@ -459,7 +459,12 @@ async function runScenario(scenario, context) {
       context.browserCpuAffinity
     );
     browser = browserLaunch.browser;
-    page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page = browserLaunch.persistentProfileDir
+      ? await browser.newPage()
+      : await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    if (browserLaunch.persistentProfileDir) {
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
     const recordConsole = (scope, message) => {
       const line = `[${scope}${message.type()}] ${message.text()}`;
       consoleLines.push(line);
@@ -480,7 +485,9 @@ async function runScenario(scenario, context) {
         consoleErrors.push(line);
       });
     });
-    const browserVersion = browser.version();
+    const browserVersion = typeof browser.version === "function"
+      ? browser.version()
+      : browser.browser?.()?.version?.() || null;
     manifest = await collectRunMetadata({
       root,
       url: url.href,
@@ -531,9 +538,13 @@ async function runScenario(scenario, context) {
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
-    manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
+    manifest.benchmark.cacheState = scenario.experiment?.cacheState || (
+      browserLaunch.persistentProfileDir ? "persistent-reuse" : "cold-ephemeral"
+    );
     manifest.benchmark.continueInvalidCheckpoint = context.continueInvalidCheckpoint;
-    manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
+    manifest.browser.profileId = browserLaunch.persistentProfileDir
+      ? `persistent:${browserLaunch.persistentProfileDir}`
+      : `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
     manifest.buildProvenance = structuredClone(context.buildProvenance.buildProvenance);
     manifest.buildProvenance.evidenceBundle = await packageBuildProvenance(
       scenarioDir,
@@ -1967,6 +1978,13 @@ async function readWebGpuAdapter(page) {
 }
 
 async function launchBrowser(chromium, headed, cpuAffinity) {
+  // Persistent profiles are opt-in and caller-owned. Closing the context
+  // releases Chrome after each run but deliberately leaves origin storage on disk.
+  const requestedPersistentProfile = process.env.PERF_PERSIST_DIR?.trim();
+  const persistentProfileDir = requestedPersistentProfile
+    ? path.resolve(requestedPersistentProfile)
+    : null;
+  if (persistentProfileDir) await mkdir(persistentProfileDir, { recursive: true });
   const args = [
     "--autoplay-policy=no-user-gesture-required",
     "--enable-webgl",
@@ -1999,11 +2017,14 @@ async function launchBrowser(chromium, headed, cpuAffinity) {
       : findInstalledBrowserExecutable(requestedChannel);
     if (configuredExecutable) {
       try {
-        const browser = await chromium.launch({
+        const launchOptions = {
           executablePath: configuredExecutable,
           headless: !headed,
           args,
-        });
+        };
+        const browser = persistentProfileDir
+          ? await chromium.launchPersistentContext(persistentProfileDir, launchOptions)
+          : await chromium.launch(launchOptions);
         return {
           browser,
           requestedChannel,
@@ -2011,13 +2032,17 @@ async function launchBrowser(chromium, headed, cpuAffinity) {
           executablePath: configuredExecutable,
           args: [...args],
           source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
+          persistentProfileDir,
         };
       } catch (error) {
         console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
       }
     }
     const executablePath = path.resolve(chromium.executablePath());
-    const browser = await chromium.launch({ executablePath, headless: !headed, args });
+    const launchOptions = { executablePath, headless: !headed, args };
+    const browser = persistentProfileDir
+      ? await chromium.launchPersistentContext(persistentProfileDir, launchOptions)
+      : await chromium.launch(launchOptions);
     return {
       browser,
       requestedChannel,
@@ -2025,6 +2050,7 @@ async function launchBrowser(chromium, headed, cpuAffinity) {
       executablePath,
       args: [...args],
       source: "playwright-bundled",
+      persistentProfileDir,
     };
   }, cpuAffinity);
   return { ...launched.value, cpuAffinity: launched.cpuAffinity };
