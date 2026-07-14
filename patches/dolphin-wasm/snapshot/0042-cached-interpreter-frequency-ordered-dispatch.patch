@@ -1,0 +1,90 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index f82426f62c..85b38788fe 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -58,6 +58,10 @@
+ #define DOLPHIN_WEB_HOT_COUNTERS 1
+ #endif
+ 
++#ifndef DOLPHIN_WEB_HOT_DISPATCH_ORDER
++#define DOLPHIN_WEB_HOT_DISPATCH_ORDER 1
++#endif
++
+ #if DOLPHIN_WEB_HOT_COUNTERS
+ #define DOLPHIN_WEB_HOT_COUNT(statement) \
+   do                                         \
+@@ -7730,6 +7734,65 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+       Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
++#if DOLPHIN_WEB_HOT_DISPATCH_ORDER
++    // DOLPHIN_WEB_HOT_DISPATCH_ORDER_BEGIN
++    else if (callback == AnyCallbackCast(FastInteger))
++    {
++      if (FastInteger(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++        normal_entry = payload + sizeof(FastInstructionOperands);
++      else
++        break;
++    }
++    else if (callback == AnyCallbackCast(FastBranch))
++    {
++      FastBranch(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    else if (callback == AnyCallbackCast(FastFloat))
++    {
++      if (FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++        normal_entry = payload + sizeof(FastInstructionOperands);
++      else
++        break;
++    }
++    else if (callback == AnyCallbackCast(FastBranchBdnz))
++    {
++      FastBranchBdnz(ppc_state, *reinterpret_cast<const FastBranchBdnzOperands*>(payload));
++      normal_entry = payload + sizeof(FastBranchBdnzOperands);
++    }
++    else if (callback == AnyCallbackCast(Interpret<true>))
++    {
++      Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
++      normal_entry = payload + sizeof(InterpretOperands);
++    }
++    else if (callback == AnyCallbackCast(FastMfmsr))
++    {
++      FastMfmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    else if (callback == AnyCallbackCast(FastMtmsr))
++    {
++      FastMtmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    else if (callback == AnyCallbackCast(FastMfspr))
++    {
++      FastMfspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    else if (callback == AnyCallbackCast(FastMtspr))
++    {
++      FastMtspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    else if (callback == AnyCallbackCast(FastSystemNoop))
++    {
++      FastSystemNoop(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      normal_entry = payload + sizeof(FastInstructionOperands);
++    }
++    // DOLPHIN_WEB_HOT_DISPATCH_ORDER_END
++#else
++    // DOLPHIN_WEB_LEGACY_DISPATCH_ORDER_BEGIN
+     else if (callback == AnyCallbackCast(Interpret<true>))
+     {
+       Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+@@ -7784,6 +7847,8 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+       else
+         break;
+     }
++    // DOLPHIN_WEB_LEGACY_DISPATCH_ORDER_END
++#endif
+     else if (callback == AnyCallbackCast(FastMeleeIdlePollLoop))
+     {
+       if (FastMeleeIdlePollLoop(ppc_state,

@@ -6,20 +6,95 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
-  parseWgpuProducerStateStats
+  parseWgpuDrawProfileStats,
+  parseWgpuProducerProfileStats,
+  parseWgpuProducerStateStats,
+  parseWgpuTailGateStats
 } from "../src/wgpu-pass-state-cache.js";
+
+test("draw profile parser preserves its independent fixed phase ABI", () => {
+  const parsed = parseWgpuDrawProfileStats(
+    "wgdraw:1,1,3,7 " +
+    "wgdrd:64,64,256,64,64,64,256 " +
+    "wgdrc:640,640,2560,640,640,640,2560 " +
+    "wgdrs:10,10,10,10,10,10,10 " +
+    "wgdrt:100,200,300,400,500,600,700 " +
+    "wgdrm:10,20,30,40,50,60,70"
+  );
+  assert.equal(parsed.schema, WGPU_DRAW_PROFILE_SCHEMA);
+  assert.equal(parsed.enabled, true);
+  assert.equal(parsed.epoch, 3);
+  assert.deepEqual(parsed.phaseOrder, [...WGPU_DRAW_PROFILE_PHASE_ORDER]);
+  assert.deepEqual(parsed.estimatedTotalNs, [6400, 12800, 76800, 25600, 32000, 38400, 179200]);
+  assert.equal(parseWgpuDrawProfileStats("wgdraw:1,1,3,7 wgdrd:64"), null);
+});
+
+test("producer profile parser preserves the fixed phase ABI and derives sampled totals", () => {
+  const parsed = parseWgpuProducerProfileStats(
+    "wgstate:0 pipe:0 bg:0,0,0 vb:0 ib:0 wgdrop:0 " +
+    "wgprod:1,1,7,12 " +
+    "wgprd:1,2,3,4,5,6,7,8,9,10,11,12 " +
+    "wgprc:10,20,30,40,50,60,70,80,90,100,110,120 " +
+    "wgprs:5,10,15,20,25,30,35,40,45,50,55,60 " +
+    "wgprt:100,200,300,400,500,600,700,800,900,1000,1100,1200 " +
+    "wgprm:11,22,33,44,55,66,77,88,99,111,122,133"
+  );
+  assert.equal(parsed.schema, WGPU_PRODUCER_PROFILE_SCHEMA);
+  assert.equal(parsed.enabled, true);
+  assert.equal(parsed.epoch, 7);
+  assert.equal(parsed.phaseCount, 12);
+  assert.deepEqual(parsed.phaseOrder, [...WGPU_PRODUCER_PROFILE_PHASE_ORDER]);
+  assert.deepEqual(parsed.periods, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(parsed.estimatedTotalNs, [
+    100, 400, 900, 1600, 2500, 3600, 4900, 6400, 8100, 10000, 12100, 14400,
+  ]);
+  assert.deepEqual(parsed.sampleMaxNs, [11, 22, 33, 44, 55, 66, 77, 88, 99, 111, 122, 133]);
+  assert.equal(parseWgpuProducerProfileStats("wgprod:1,1,7,11"), null);
+  assert.equal(parseWgpuProducerProfileStats(
+    "wgprod:1,1,7,12 wgprd:1,1,1,1,1,1,1,1,1,1,1,1"
+  ), null);
+});
+
+test("idle FIFO tail gate parser preserves the stable sampled wire schema", () => {
+  assert.deepEqual(
+    parseWgpuTailGateStats("wgstate:0 pipe:0 wgtail:1,1,7,64,100,20,30,60,0"),
+    {
+      schema: WGPU_TAIL_GATE_SCHEMA,
+      version: 1,
+      enabled: true,
+      epoch: 7,
+      period: 64,
+      payloadSamples: 100,
+      flushNeededSamples: 20,
+      refreshNeededSamples: 30,
+      bothCleanSamples: 60,
+      dirtyAtSkip: 0,
+    }
+  );
+  assert.equal(parseWgpuTailGateStats("wgtail:2,1,7,64,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,2,7,64,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,0,100,20,30,60,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,64,100,20,30,60"), null);
+});
 
 test("producer stats expose suppression counts and invalidate dropped runs", () => {
   assert.deepEqual(
     parseWgpuProducerStateStats(
       "wgstate:1 pipe:4 bg:5,6,7 vb:8 ib:9 wgdrop:0 " +
       "wgbabort:10 wgboversize:11 wguploadto:12 " +
-      "wgubo:1 wgubometrics:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
+      "wgubo:1 wgubometrics:1 wgubopack:1 ulook:13,14,15 uhit:16,17,18 uexp:19,20,21 " +
       "usupcall:22,23,24 usupbyte:25,26,27 " +
       "umask:1,2,3,4,5,6,7,8 upack:9,10,11,12 " +
       "ucpucall:13,14,15 ucpuns:16,17,18 wggeom:1 wggeomepoch:28 " +
-      "wgarena:67108864,67108864,29,30,31,33554432"
+      "wguniformfast:1 ufskip:41,42,43 ufkeep:44,45,46 ufmiss:47,48,49 " +
+      "wgarena:67108864,67108864,29,30,31,33554432 " +
+      "wgwait:32,33000,3400,35,36000,3700"
     ),
     {
       enabled: true,
@@ -33,12 +108,32 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadTimeoutCount: 12,
       uboCacheEnabled: true,
       uboCacheMetricsEnabled: true,
+      uboPackEnabled: true,
+      uniformFastEnabled: true,
+      uniformFastClassOrder: ["vs", "ps", "gs"],
+      uniformFastSkippedComparisons: [41, 42, 43],
+      uniformFastKeptComparisons: [44, 45, 46],
+      uniformFastChangedComparisons: [47, 48, 49],
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [13, 14, 15],
       uboCacheHits: [16, 17, 18],
       uboCacheExpired: [19, 20, 21],
       uboUploadCallsSuppressed: [22, 23, 24],
       uboUploadBytesSuppressed: [25, 26, 27],
+      uboChangeClassOrder: ["vs", "ps", "gs"],
+      uboChangeSchemaVersion: 0,
+      uboChangeAvailable: false,
+      uboChangeEnabled: false,
+      uboChangeEpoch: 0,
+      uboChangeUploadCalls: [0, 0, 0],
+      uboChangeFullBytes: [0, 0, 0],
+      uboChangedBytes: [0, 0, 0],
+      uboChangeBaselineFullCount: [0, 0, 0],
+      uboChangeBaselineFullBytes: [0, 0, 0],
+      uboDirty16Bytes: [0, 0, 0],
+      uboDirty16Ranges: [0, 0, 0],
+      uboDirty256Bytes: [0, 0, 0],
+      uboDirty256Ranges: [0, 0, 0],
       uboChangeMaskHistogram: [1, 2, 3, 4, 5, 6, 7, 8],
       uboPacketEligibleCount: 9,
       uboPacketTheoreticalCallsRemoved: 10,
@@ -53,7 +148,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadArenaFallbackCount: 29,
       uploadArenaLateRejectCount: 30,
       uploadArenaWrapCount: 31,
-      uploadArenaInflightHighWaterBytes: 33554432
+      uploadArenaInflightHighWaterBytes: 33554432,
+      ringWaitCount: 32,
+      ringWaitTotalUs: 33000,
+      ringWaitMaxUs: 3400,
+      uploadWaitCount: 35,
+      uploadWaitTotalUs: 36000,
+      uploadWaitMaxUs: 3700
     }
   );
   assert.deepEqual(
@@ -72,12 +173,32 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadTimeoutCount: 0,
       uboCacheEnabled: false,
       uboCacheMetricsEnabled: false,
+      uboPackEnabled: false,
+      uniformFastEnabled: false,
+      uniformFastClassOrder: ["vs", "ps", "gs"],
+      uniformFastSkippedComparisons: [0, 0, 0],
+      uniformFastKeptComparisons: [0, 0, 0],
+      uniformFastChangedComparisons: [0, 0, 0],
       uboCacheClassOrder: ["vs", "ps", "gs"],
       uboCacheLookups: [0, 0, 0],
       uboCacheHits: [0, 0, 0],
       uboCacheExpired: [0, 0, 0],
       uboUploadCallsSuppressed: [0, 0, 0],
       uboUploadBytesSuppressed: [0, 0, 0],
+      uboChangeClassOrder: ["vs", "ps", "gs"],
+      uboChangeSchemaVersion: 0,
+      uboChangeAvailable: false,
+      uboChangeEnabled: false,
+      uboChangeEpoch: 0,
+      uboChangeUploadCalls: [0, 0, 0],
+      uboChangeFullBytes: [0, 0, 0],
+      uboChangedBytes: [0, 0, 0],
+      uboChangeBaselineFullCount: [0, 0, 0],
+      uboChangeBaselineFullBytes: [0, 0, 0],
+      uboDirty16Bytes: [0, 0, 0],
+      uboDirty16Ranges: [0, 0, 0],
+      uboDirty256Bytes: [0, 0, 0],
+      uboDirty256Ranges: [0, 0, 0],
       uboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
       uboPacketEligibleCount: 0,
       uboPacketTheoreticalCallsRemoved: 0,
@@ -92,7 +213,13 @@ test("producer stats expose suppression counts and invalidate dropped runs", () 
       uploadArenaFallbackCount: 0,
       uploadArenaLateRejectCount: 0,
       uploadArenaWrapCount: 0,
-      uploadArenaInflightHighWaterBytes: 0
+      uploadArenaInflightHighWaterBytes: 0,
+      ringWaitCount: 0,
+      ringWaitTotalUs: 0,
+      ringWaitMaxUs: 0,
+      uploadWaitCount: 0,
+      uploadWaitTotalUs: 0,
+      uploadWaitMaxUs: 0
     }
   );
   assert.equal(parseWgpuProducerStateStats("wgstate:1 pipe:4"), null);
@@ -279,6 +406,15 @@ test("worker integrates the cache without crossing pass, load, or destroy bounda
     /wgpuConsumerStateCacheEnabled =\s*wgpuStateCacheEnabled && !wgpuProducerStateCacheAvailable/);
   assert.match(worker,
     /producerStateCacheEnabled:\s*wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable/);
+  assert.match(worker, /_SetWebGpuProducerProfileEnabled/);
+  assert.match(worker, /parseWgpuProducerProfileStats/);
+  assert.match(worker,
+    /wgpuprodprofile=1 requires SetWebGpuProducerProfileEnabled/);
+  assert.match(worker,
+    /setWebGpuProducerProfileEnabled\?\.\(wgpuProducerProfileRequested \? 1 : 0\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("core reset"\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("slot state reload"\)/);
+  assert.match(worker, /verifyWgpuProducerProfileActivation\("save-state reload"\)/);
   assert.match(worker,
     /case WGPU_CMD_OP_SET_PIPELINE:[\s\S]*?passHasPipe = false;[\s\S]*?passHasPipe = true;/);
   assert.match(worker,
@@ -348,11 +484,11 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
     readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8")
   ]);
 
-  assert.match(gfxSource, /std::atomic<bool> s_ubo_cache_enabled\{false\}/);
+  assert.match(gfxSource, /std::atomic<u32> s_ubo_control_mode\{0\}/);
   assert.match(gfxSource, /std::atomic<bool> s_ubo_cache_metrics_enabled\{false\}/);
   assert.match(gfxSource,
     /EMSCRIPTEN_KEEPALIVE void SetWebGpuUboCacheEnabled\(int mode\)/);
-  assert.match(gfxSource, /s_ubo_cache_enabled\.store\(\(mode & 1\) != 0/);
+  assert.match(gfxSource, /s_ubo_control_mode\.store\(static_cast<u32>\(mode\) & 5u/);
   assert.match(gfxSource, /s_ubo_cache_metrics_enabled\.store\(\(mode & 2\) != 0/);
   assert.match(coreCmake, /'_SetWebGpuUboCacheEnabled'/);
   assert.match(gfxHeader,
@@ -374,7 +510,7 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const acquireStart = gfxSource.indexOf("u32 WebGPUGfx::AcquireUboSlice");
   const acquireEnd = gfxSource.indexOf("u32 WebGPUGfx::AllocUboSlice", acquireStart);
   const acquireSource = gfxSource.slice(acquireStart, acquireEnd);
-  assert.doesNotMatch(acquireSource, /RefreshUboCacheState/,
+  assert.doesNotMatch(acquireSource, /RefreshUboControlMode/,
     "the synchronized caller must not pay redundant epoch refreshes per cache lookup");
   assert.match(acquireSource,
     /const bool record_metrics = s_ubo_cache_metrics_enabled\.load[\s\S]*?if \(record_metrics\)[\s\S]*?s_ubo_cache_lookups/);
@@ -396,7 +532,7 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityStart = gfxSource.indexOf("void WebGPUGfx::UploadUtilityUniforms");
   const utilityEnd = gfxSource.indexOf("void WebGPUGfx::Draw(", utilityStart);
   const utilitySource = gfxSource.slice(utilityStart, utilityEnd);
-  const utilityRefresh = utilitySource.indexOf("RefreshUboCacheState();");
+  const utilityRefresh = utilitySource.indexOf("RefreshUboControlMode();");
   const utilityAlloc = utilitySource.indexOf(
     "AllocUboSlice(data, size, BufferUploadRole::Utility)"
   );
@@ -411,7 +547,12 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   assert.match(worker,
     /api\.loadStateFile\(path\)[\s\S]*?setTimeout\(r, 1200\)[\s\S]*?setWebGpuUboCacheEnabled/);
   assert.match(worker,
-    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?collectMetrics \? 2 : 0/);
+    /function webGpuUboCacheMode\(\)[\s\S]*?wgpuUboCacheEnabled \? 1 : 0[\s\S]*?wgpuUboMetricsEnabled \? 2 : 0[\s\S]*?wgpuUniformFastEnabled \? 4 : 0/);
+  assert.doesNotMatch(
+    worker,
+    /function webGpuUboCacheMode\(\)[\s\S]*?collectMetrics \? 2 : 0/,
+    "ordinary metrics collection must not activate per-draw UBO timing and histogram atomics"
+  );
   assert.match(worker, /setWebGpuUboCacheEnabled\?\.\(webGpuUboCacheMode\(\)\)/);
   assert.match(worker,
     /\? \(mode\) => ccall\("SetWebGpuUboCacheEnabled", null, \["number"\], \[mode \| 0\]\)/);
@@ -442,9 +583,30 @@ test("opt-in geometry packing uses one transactional upload and a published-subm
   assert.match(vertexSource, /kUsageGeometry = 0x20 \| 0x10 \| 0x8/);
   assert.match(vertexSource, /if \(submit_serial != m_geometry_submit_serial\)/);
   assert.match(vertexSource, /PushUploadBuffer\(candidate_buffer_id,[\s\S]*?BufferUploadRole::Geometry\)/);
-  assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet\.total_size/);
+  assert.match(vertexSource, /m_geometry_offset = packet_offset \+ packet_bytes/);
   assert.match(vertexSource, /EnsureLegacyBuffers\(\)/);
   assert.match(gfxSource, /EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled\(int enabled\)/);
+  assert.match(
+    gfxSource,
+    /DiscardOrAbortPendingGeometryRange\(\)[\s\S]*?if \(m_pass_open\)[\s\S]*?AbortRecordedPass\(\);[\s\S]*?else[\s\S]*?DiscardPendingGeometryRange\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(m_cur_pipeline_id == 0\)[\s\S]*?DiscardOrAbortPendingGeometryRange\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(m_cur_pipeline_id == 0 \|\| num_indices == 0\)[\s\S]*?DiscardOrAbortPendingGeometryRange\(\)/
+  );
+  assert.match(gfxSource, /void InvalidateGeometryUploadPack\(\)/);
+  assert.match(
+    gfxSource,
+    /void WebGPUGfx::AbortRecordedPass\(\)[\s\S]*?m_cmd_stream\.AbortPass\(\);[\s\S]*?InvalidateGeometryUploadPack\(\)/
+  );
+  assert.match(
+    gfxSource,
+    /if \(committed\)[\s\S]*?m_cmd_stream\.AbortPass\(\);[\s\S]*?InvalidateGeometryUploadPack\(\)/
+  );
   assert.match(gfxSource, /s_geometry_upload_pack_epoch\.fetch_add\(1, std::memory_order_release\)/);
   assert.match(coreCmake, /'_SetWebGpuGeometryPackEnabled'/);
   assert.match(worker, /case "loadState":[\s\S]*?setWebGpuGeometryPackEnabled[\s\S]*?api\?\.loadState[\s\S]*?setWebGpuGeometryPackEnabled/);

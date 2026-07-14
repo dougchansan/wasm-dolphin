@@ -174,6 +174,7 @@ not current status.
 | `wgpupump=0` | Disable frequent replay polling and the 16,384-record credit window | On for `video=wgpu` |
 | `wgpustatecache=1` | Suppress exact successfully-published stable state records | Off |
 | `wgpuubocache=1` | Reuse exact live producer UBO slices | Off |
+| `wgpuubometrics=1` | Enable detailed per-draw UBO clocks and atomic histograms; requires `metrics=1` | Off |
 | `wgpudetached=1` | Send GPU-completed worker-canvas bitmaps to the main canvas | Off |
 
 ## Validation discipline

@@ -239,12 +239,13 @@ test("the locked source patch blocks upload-arena overwrite", async () => {
   assert.match(patch, /if \(!Push\(rec\)\)/);
   assert.doesNotMatch(patch, /^\+.*head = 0;.*wrap/m);
 
-  const worker = await readFile(new URL(
-    "../src/upstream-discio-worker.js",
-    import.meta.url
-  ), "utf8");
-  assert.match(worker, /protocolVersion\) >= 2/);
-  assert.match(worker, /enableWgpuUploadWatermark\(webGpuCmdRing\)/);
+  const [worker, runtime] = await Promise.all([
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/wgpu-renderer-runtime.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(worker, /wgpuRendererRuntime\.attachRing/);
+  assert.match(runtime, /protocolVersion !== 2 && protocolVersion !== 3/);
+  assert.match(runtime, /enableWgpuUploadWatermark\(ring\)/);
   const replayLoop = worker.indexOf("while (read !== replayLimit)");
   const stagedSuffix = worker.lastIndexOf(
     "stageHeldWgpuUploads(ring, replayLimit, write, u32, heap,"

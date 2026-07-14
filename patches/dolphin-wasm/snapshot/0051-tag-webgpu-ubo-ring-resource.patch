@@ -1,0 +1,74 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -63,7 +63,7 @@ enum class CmdOp : u32
+ 
+   // ---- Phase A (Day-33): full AbstractGfx opcode set --------------
+   // Resource creation / upload.
+-  //   CreateBuffer:   u0=id u1=size u2=usageFlags
++  //   CreateBuffer:   u0=id u1=size u2=usageFlags u3=BufferResourceRole
+   CreateBuffer = 5,
+   //   UploadBuffer:   u0=id u1=dstOffset u2=srcHeapPtr u3=len u4=BufferUploadRole
+   //   (srcHeapPtr is an absolute wasm-heap offset into the upload
+@@ -139,6 +139,17 @@ enum class BufferUploadRole : u32
+   Count = 7,
+ };
+ 
++// Stable identity for buffers whose consumer-side usage or replay strategy
++// differs from ordinary resources. This travels in CreateBuffer's previously
++// unused fourth payload word; old producers and consumers therefore remain
++// compatible through the Unknown zero value.
++enum class BufferResourceRole : u32
++{
++  Unknown = 0,
++  UboRing = 1,
++  Count = 2,
++};
++
+ struct UploadPacket
+ {
+   u32 src_heap_ptr = 0;
+@@ -331,7 +342,8 @@ public:
+   u32 UploadAllocUboPacket(
+       const DenseUboPacketPlan& plan,
+       const std::array<DenseUboClass, kDenseUboClassCount>& classes);
+ 
+-  u32 PushCreateBuffer(u32 size, u32 usage_flags);
++  u32 PushCreateBuffer(u32 size, u32 usage_flags,
++                       BufferResourceRole role = BufferResourceRole::Unknown);
+   bool PushUploadBuffer(u32 id, u32 dst_offset, u32 src_heap_ptr, u32 len,
+                         BufferUploadRole role);
+   u32 PushCreateTexture(u32 w, u32 h, u32 wgpu_format, u32 usage_flags, u32 layers = 1);
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -1010,7 +1010,7 @@ void WebGPUCommandStream::RollbackLastUpload(u32 src_heap_ptr, u32 len)
+   }
+ }
+ 
+-u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
++u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags, BufferResourceRole role)
+ {
+   if (!m_header)
+   {
+@@ -1023,6 +1023,7 @@ u32 WebGPUCommandStream::PushCreateBuffer(u32 size, u32 usage_flags)
+   rec.arg.u[0] = id;
+   rec.arg.u[1] = size;
+   rec.arg.u[2] = usage_flags;
++  rec.arg.u[3] = static_cast<u32>(role);
+   if (!Push(rec))
+     return 0;
+   return id;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1490,7 +1490,8 @@ bool WebGPUGfx::PrepareDrawResources()
+     DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
+         DolphinWeb::WebGpuDrawProfile::Phase::DrawResourceInit);
+     if (m_ubo_ring == 0)
+-      m_ubo_ring = m_cmd_stream.PushCreateBuffer(kUboRingSize, kUsageUniform);
++      m_ubo_ring = m_cmd_stream.PushCreateBuffer(kUboRingSize, kUsageUniform,
++                                                 BufferResourceRole::UboRing);
+     if (m_ssbo_bbox == 0)
+       m_ssbo_bbox = m_cmd_stream.PushCreateBuffer(16u, kUsageStorage);
+     if (m_dummy_tex == 0)

@@ -15,23 +15,46 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
+  requestedWgpuRendererWorkerProbe,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
   requestedWgpuReplayDiagnostics,
+  requestedWgpuDiagnosticQuiet,
+  requestedWgpuProducerProfile,
+  requestedWgpuDrawProfile,
+  requestedWgpuTailGate,
   requestedWgpuStateCache,
   requestedWgpuGeometryPack,
+  requestedWgpuGeometryRange,
+  requestedWgpuMappedStageTimingStride,
+  requestedWgpuMappedStagingSlotCount,
   requestedWgpuUploadArenaMiB,
-  requestedWgpuUboCache
+  requestedWgpuUploadTransport,
+  requestedWgpuMappedStageFast,
+  requestedWgpuMappedDrainCoalescing,
+  requestedWgpuUboCache,
+  requestedWgpuUboMetrics,
+  requestedWgpuUniformFast,
+  requestedWgpuUboPack
 } from "./wgpu-replay-diagnostics.js";
 import { instantiateDemoCore } from "./wasm/demo-core.js";
 import { createCausalTelemetry, deepMerge } from "./causal-telemetry.js";
 import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
+import { requestedWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
+import { requestedWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { requestedWgpuUploadRunProjection } from "./wgpu-upload-run-projection.js";
+import { requestedWgpuUboComputeProjection } from "./wgpu-ubo-compute-projection.js";
+import { requestedWgpuUboComputeReconstruction } from "./wgpu-ubo-compute-reconstruction.js";
+import { requestedWgpuOwnershipTrace } from "./wgpu-ownership-trace.js";
+import { requestedWgpuSemanticRuntime } from "./wgpu-semantic-runtime.js";
 import {
   requestedInputLatencyDiagnostics,
   requestedInputReadbackDiagnostics
 } from "./input-latency-telemetry.js";
 import { requestedInputPhotonMarkerConfig } from "./input-visual-marker.js";
+import { requestedWgpuVisualCadence } from "./wgpu-visual-cadence.js";
+import { requestedWgpuSparseUbo } from "./wgpu-sparse-ubo-copy-forward.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -96,11 +119,51 @@ export class EmulatorHost {
     this.wgpuReplayBudgetMs = requestedWgpuReplayBudgetMs(window.location.search);
     this.wgpuPowerPreference = requestedWgpuPowerPreference(window.location.search);
     this.wgpuAtomicPassReplay = requestedWgpuAtomicPassReplay(window.location.search);
+    this.wgpuDiagnosticQuiet = requestedWgpuDiagnosticQuiet(window.location.search);
+    this.wgpuProducerProfile = this.collectMetrics &&
+      requestedWgpuProducerProfile(window.location.search);
+    this.wgpuDrawProfile = requestedWgpuDrawProfile(window.location.search);
+    // Preserve the raw request so the worker can fail closed when the
+    // correctness-sensitive experiment is used without metrics or true WGPU.
+    this.wgpuTailGate = requestedWgpuTailGate(window.location.search);
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
+    this.wgpuUboMetrics = requestedWgpuUboMetrics(window.location.search);
+    this.wgpuUniformFast = requestedWgpuUniformFast(window.location.search);
+    this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
+    this.wgpuSparseUbo = requestedWgpuSparseUbo(window.location.search);
     this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
+    this.wgpuGeometryRange =
+      this.wgpuGeometryPack && requestedWgpuGeometryRange(window.location.search);
     this.wgpuUploadArenaMiB = requestedWgpuUploadArenaMiB(window.location.search);
+    this.wgpuUploadTransport = requestedWgpuUploadTransport(window.location.search);
+    this.wgpuMappedStagingSlotCount = requestedWgpuMappedStagingSlotCount(
+      window.location.search
+    );
+    this.wgpuMappedStageFast = requestedWgpuMappedStageFast(window.location.search);
+    this.wgpuMappedStageTimingStride = requestedWgpuMappedStageTimingStride(
+      window.location.search
+    );
+    this.wgpuMappedDrainCoalescing = requestedWgpuMappedDrainCoalescing(
+      window.location.search
+    );
+    this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
+    this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search);
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
+    this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
+    this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(
+      window.location.search
+    );
+    this.wgpuUploadRunProjection = requestedWgpuUploadRunProjection(window.location.search);
+    this.wgpuUboComputeProjection = requestedWgpuUboComputeProjection(
+      window.location.search
+    );
+    this.wgpuUboComputeReconstruction = requestedWgpuUboComputeReconstruction(
+      window.location.search
+    );
+    this.wgpuOwnershipTrace = requestedWgpuOwnershipTrace(window.location.search);
+    this.wgpuSemanticRuntime = requestedWgpuSemanticRuntime(window.location.search);
+    if (this.wgpuSemanticRuntime) this.wgpuOwnershipTrace = true;
     this.inputPhotonMarker = requestedInputPhotonMarkerConfig(window.location.search);
     this.inputLatencyDiagnostics =
       requestedInputLatencyDiagnostics(window.location.search) || this.inputPhotonMarker.enabled;
@@ -320,11 +383,34 @@ export class EmulatorHost {
             wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
             wgpuPowerPreference: this.wgpuPowerPreference,
             wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+            wgpuDiagnosticQuiet: this.wgpuDiagnosticQuiet,
+            wgpuProducerProfile: this.wgpuProducerProfile,
+            wgpuDrawProfile: this.wgpuDrawProfile,
+            wgpuTailGate: this.wgpuTailGate,
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
+            wgpuUboMetrics: this.wgpuUboMetrics,
+            wgpuUniformFast: this.wgpuUniformFast,
+            wgpuUboPack: this.wgpuUboPack,
+            wgpuSparseUbo: this.wgpuSparseUbo,
             wgpuGeometryPack: this.wgpuGeometryPack,
+            wgpuGeometryRange: this.wgpuGeometryRange,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
+            wgpuUploadTransport: this.wgpuUploadTransport,
+            wgpuMappedStagingSlotCount: this.wgpuMappedStagingSlotCount,
+            wgpuMappedStageFast: this.wgpuMappedStageFast,
+            wgpuMappedStageTimingStride: this.wgpuMappedStageTimingStride,
+            wgpuMappedDrainCoalescing: this.wgpuMappedDrainCoalescing,
+            wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
+            wgpuVisualCadence: this.wgpuVisualCadence,
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+            wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
+            wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+            wgpuUploadRunProjection: this.wgpuUploadRunProjection,
+            wgpuUboComputeProjection: this.wgpuUboComputeProjection,
+            wgpuUboComputeReconstruction: this.wgpuUboComputeReconstruction,
+            wgpuOwnershipTrace: this.wgpuOwnershipTrace,
+            wgpuSemanticRuntime: this.wgpuSemanticRuntime,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,
             inputReadbackDiagnostics: this.inputReadbackDiagnostics,
             inputPhotonDiagnostics: this.inputPhotonMarker.enabled,
@@ -565,6 +651,13 @@ export class EmulatorHost {
     if (this.mode === "dolphin") {
       this.adapter.setAudioMuted?.(muted);
     }
+  }
+
+  configureAudioWorklet(config) {
+    if (this.mode !== "dolphin" || typeof this.adapter.configureAudioWorklet !== "function") {
+      return Promise.resolve({ active: false, reason: "core-not-loaded" });
+    }
+    return this.adapter.configureAudioWorklet(config);
   }
 
   loop = () => {
@@ -821,6 +914,8 @@ export class EmulatorHost {
       visualFrameHash: this.mode === "dolphin" ? this.visibleFrameHash || this.adapter.visualFrameHash : 0,
       visualSampleSource:
         this.mode === "dolphin" ? this.adapter.visualSampleSource ?? "none" : "demo",
+      visualCadenceTelemetry:
+        this.mode === "dolphin" ? this.adapter.visualCadenceTelemetry ?? null : null,
       oglGlError: this.mode === "dolphin" ? this.adapter.oglGlError ?? 0 : 0,
       visibleSampleError: this.mode === "dolphin" ? this.visibleSampleError : "",
       presentedFrame,

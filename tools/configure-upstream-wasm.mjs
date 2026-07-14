@@ -15,6 +15,38 @@ const nagaLibrary = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/n
 const nagaLibraryAlternate = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/libnaga_spirv_wgsl.a");
 const jitCachePreJs = resolve(root, "tools/jit-cache-prejs.js");
 const wasmMemoryPages = 24576;
+const fastBranchInline = String(
+  process.env.DOLPHIN_WEB_INLINE_FAST_BRANCH ?? "1"
+).trim();
+if (!["0", "1"].includes(fastBranchInline)) {
+  throw new Error(
+    `DOLPHIN_WEB_INLINE_FAST_BRANCH must be 0 or 1, got ${JSON.stringify(fastBranchInline)}`
+  );
+}
+const fallbackMapDiagnostics = String(
+  process.env.DOLPHIN_WEB_FALLBACK_MAP_DIAGNOSTICS ?? "0"
+).trim();
+if (!["0", "1"].includes(fallbackMapDiagnostics)) {
+  throw new Error(
+    `DOLPHIN_WEB_FALLBACK_MAP_DIAGNOSTICS must be 0 or 1, got ${JSON.stringify(fallbackMapDiagnostics)}`
+  );
+}
+const fallbackMapBits = String(
+  process.env.DOLPHIN_WEB_FALLBACK_MAP_BITS ?? "16"
+).trim();
+if (!["16", "18", "20"].includes(fallbackMapBits)) {
+  throw new Error(
+    `DOLPHIN_WEB_FALLBACK_MAP_BITS must be 16, 18, or 20, got ${JSON.stringify(fallbackMapBits)}`
+  );
+}
+const directWasmBlockDispatch = String(
+  process.env.DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH ?? "0"
+).trim();
+if (!["0", "1"].includes(directWasmBlockDispatch)) {
+  throw new Error(
+    `DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH must be 0 or 1, got ${JSON.stringify(directWasmBlockDispatch)}`
+  );
+}
 
 function quoteShellArg(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
@@ -66,7 +98,12 @@ if (!existsSync(resolvedNagaLibrary)) {
 // flags so subprojects that replace their Release flags still retain LTO, but
 // make try_compile use Debug and append overrides that disable optimization
 // and LTO for probes only. Clang/Emscripten honors the last -O*/-f*lto option.
-const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0";
+const wasmCompileFlags =
+  "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0 -DDOLPHIN_WEB_HOT_COUNTERS=0 " +
+  `-DDOLPHIN_WEB_INLINE_FAST_BRANCH=${fastBranchInline} ` +
+  `-DDOLPHIN_WEB_FALLBACK_MAP_DIAGNOSTICS=${fallbackMapDiagnostics} ` +
+  `-DDOLPHIN_WEB_FALLBACK_MAP_BITS=${fallbackMapBits} ` +
+  `-DDOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH=${directWasmBlockDispatch}`;
 const wasmDebugProbeFlags = "-O0 -fno-lto";
 const cmakeArgs = [
   cmake,
@@ -145,6 +182,10 @@ writeFileSync(resolve(buildDir, "wasm-dolphin-configure.json"), `${JSON.stringif
   nagaLibrarySha256: sha256File(resolvedNagaLibrary),
   jitCachePreJs,
   wasmMemoryPages,
+  fastBranchInline,
+  fallbackMapDiagnostics,
+  fallbackMapBits,
+  directWasmBlockDispatch,
   wasmCompileFlags,
   cmakeArgs,
   toolchainLockSha256: toolchain.hashes.lock,

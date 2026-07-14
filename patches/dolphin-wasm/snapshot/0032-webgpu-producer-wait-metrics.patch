@@ -1,0 +1,154 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 0e785ef710..6c735b5807 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "VideoBackends/WebGPU/WebGPUCommandStream.h"
+ 
++#include <algorithm>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
+@@ -152,16 +153,31 @@ bool WebGPUCommandStream::WaitForRingSpace(u32 write, u32 count)
+   if (!is_full())
+     return true;
+ 
++  const double wait_started_ms = emscripten_get_now();
++  const auto finish_wait = [&](bool result) {
++    const u64 elapsed_us = static_cast<u64>(
++        std::max(0.0, (emscripten_get_now() - wait_started_ms) * 1000.0));
++    m_ring_wait_count.fetch_add(1, std::memory_order_relaxed);
++    m_ring_wait_total_us.fetch_add(elapsed_us, std::memory_order_relaxed);
++    u64 observed_max = m_ring_wait_max_us.load(std::memory_order_relaxed);
++    while (observed_max < elapsed_us &&
++           !m_ring_wait_max_us.compare_exchange_weak(observed_max, elapsed_us,
++                                                     std::memory_order_relaxed))
++    {
++    }
++    return result;
++  };
++
+   if (ProtocolV3Active())
+   {
+     while (is_full())
+     {
+       if (ConsumerFailed())
+-        return false;
++        return finish_wait(false);
+       const u32 observed = m_header->read.load(std::memory_order_acquire);
+       emscripten_futex_wait(reinterpret_cast<volatile void*>(&m_header->read), observed, 4.0);
+     }
+-    return !ConsumerFailed();
++    return finish_wait(!ConsumerFailed());
+   }
+ 
+   constexpr u32 kMaxSpins = 500000u;
+@@ -169,9 +185,9 @@ bool WebGPUCommandStream::WaitForRingSpace(u32 write, u32 count)
+   while (is_full())
+   {
+     if (++spins >= kMaxSpins)
+-      return false;
++      return finish_wait(false);
+   }
+-  return true;
++  return finish_wait(true);
+ }
+ 
+ bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
+@@ -182,17 +198,32 @@ bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
+   if (!is_full())
+     return !ConsumerFailed();
+ 
++  const double wait_started_ms = emscripten_get_now();
++  const auto finish_wait = [&](bool result) {
++    const u64 elapsed_us = static_cast<u64>(
++        std::max(0.0, (emscripten_get_now() - wait_started_ms) * 1000.0));
++    m_upload_wait_count.fetch_add(1, std::memory_order_relaxed);
++    m_upload_wait_total_us.fetch_add(elapsed_us, std::memory_order_relaxed);
++    u64 observed_max = m_upload_wait_max_us.load(std::memory_order_relaxed);
++    while (observed_max < elapsed_us &&
++           !m_upload_wait_max_us.compare_exchange_weak(observed_max, elapsed_us,
++                                                       std::memory_order_relaxed))
++    {
++    }
++    return result;
++  };
++
+   if (ProtocolV3Active())
+   {
+     while (is_full())
+     {
+       if (ConsumerFailed())
+-        return false;
++        return finish_wait(false);
+       const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
+       emscripten_futex_wait(
+           reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
+     }
+-    return !ConsumerFailed();
++    return finish_wait(!ConsumerFailed());
+   }
+ 
+   constexpr u32 kMaxUploadWaits = 250u;
+@@ -203,9 +234,9 @@ bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
+     emscripten_futex_wait(
+         reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
+     if (++waits >= kMaxUploadWaits)
+-      return false;
++      return finish_wait(false);
+   }
+-  return true;
++  return finish_wait(true);
+ }
+ 
+ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index bb78f36634..91c48b9786 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -351,6 +351,12 @@ public:
+   {
+     return m_upload_high_water_bytes.load(std::memory_order_relaxed);
+   }
++  u64 GetRingWaitCount() const { return m_ring_wait_count.load(std::memory_order_relaxed); }
++  u64 GetRingWaitTotalUs() const { return m_ring_wait_total_us.load(std::memory_order_relaxed); }
++  u64 GetRingWaitMaxUs() const { return m_ring_wait_max_us.load(std::memory_order_relaxed); }
++  u64 GetUploadWaitCount() const { return m_upload_wait_count.load(std::memory_order_relaxed); }
++  u64 GetUploadWaitTotalUs() const { return m_upload_wait_total_us.load(std::memory_order_relaxed); }
++  u64 GetUploadWaitMaxUs() const { return m_upload_wait_max_us.load(std::memory_order_relaxed); }
+   bool GetUploadArenaMetricsEnabled() const
+   {
+     return m_upload_metrics_enabled.load(std::memory_order_relaxed);
+@@ -404,6 +410,12 @@ private:
+   std::atomic<u64> m_upload_late_reject_count{0};
+   std::atomic<u64> m_upload_wrap_count{0};
+   std::atomic<u64> m_upload_high_water_bytes{0};
++  std::atomic<u64> m_ring_wait_count{0};
++  std::atomic<u64> m_ring_wait_total_us{0};
++  std::atomic<u64> m_ring_wait_max_us{0};
++  std::atomic<u64> m_upload_wait_count{0};
++  std::atomic<u64> m_upload_wait_total_us{0};
++  std::atomic<u64> m_upload_wait_max_us{0};
+ 
+   // BEGIN_PASS..END_PASS records stay private until END_PASS can publish the
+   // entire batch. Resource creation/uploads remain immediate so the consumer
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index b632adcfe9..9a9485c6fa 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -252,7 +252,13 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << GetCommandStream().GetUploadArenaFallbackCount() << ","
+       << GetCommandStream().GetUploadArenaLateRejectCount() << ","
+       << GetCommandStream().GetUploadArenaWrapCount() << ","
+-      << GetCommandStream().GetUploadArenaHighWaterBytes();
++      << GetCommandStream().GetUploadArenaHighWaterBytes()
++      << " wgwait:" << GetCommandStream().GetRingWaitCount() << ","
++      << GetCommandStream().GetRingWaitTotalUs() << ","
++      << GetCommandStream().GetRingWaitMaxUs() << ","
++      << GetCommandStream().GetUploadWaitCount() << ","
++      << GetCommandStream().GetUploadWaitTotalUs() << ","
++      << GetCommandStream().GetUploadWaitMaxUs();
+   stats = out.str();
+   return stats.c_str();
+ }

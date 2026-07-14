@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:03acd0d3f5b6b82fdd4644b03b26addeef8487307211e6eba70a3ee8b66e133b",
+  "coreId": "sha256:fe4448a07a726b67c9b7bd73f2515118b353414a66ac48cc4b1cdd92fb42f2c8",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
-      "size": 262287,
-      "sha256": "e7baa341e84d15cafdc507841a83d25365a1efd685d7762e3a900aed1eb8cf1e"
+      "size": 265140,
+      "sha256": "e94adaa822bbb265ffadae8da40cedcf0bb7d8bbff7b06dc319f5c8e42cbe1b2"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12877445,
-      "sha256": "03acd0d3f5b6b82fdd4644b03b26addeef8487307211e6eba70a3ee8b66e133b"
+      "size": 12916037,
+      "sha256": "fe4448a07a726b67c9b7bd73f2515118b353414a66ac48cc4b1cdd92fb42f2c8"
     }
   ],
   "contractSources": [
@@ -38,32 +38,56 @@
     {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
-      "size": 40001,
-      "sha256": "4bfc9cc73b15c64ffe846c1f8c58030326e713f69a8048fbd2afa69a2864be15"
+      "size": 40339,
+      "sha256": "f36fcbcbbb6553ec9e6d48f6070b178c84a3a632b5406890e034e82a9b703ef5"
     },
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 40001,
-      "sha256": "df4042525e84bae6d9c3efd4c29d0427f0ab37501022e21496af9876a9d84b9a"
+      "size": 40640,
+      "sha256": "7d64f08d02215d764fcf361395b800c5f40ec68f5903aed93a687e1857467e96"
     },
     {
       "path": "src/audio.js",
       "hashMode": "lf-normalized",
-      "size": 8576,
-      "sha256": "a4d46dd19ce907d3bd57684e4902a3b00a916c81cfbc0daccf38bd8e503c7295"
+      "size": 12579,
+      "sha256": "f944d24d654cf8d0c433dac66a9f287e87671eafa3862380450918e892859935"
+    },
+    {
+      "path": "src/audio-pcm-ring.js",
+      "hashMode": "lf-normalized",
+      "size": 7901,
+      "sha256": "470a22753ad5b0563ab68f18c72a044aa700d6e51b780a1861c2a9faf4710dbc"
+    },
+    {
+      "path": "src/audio-pcm-producer.js",
+      "hashMode": "lf-normalized",
+      "size": 5434,
+      "sha256": "6b5f8dc493d25212d7dc5f1753ee69e6006b66603312d1a4730cd48e3eb37225"
+    },
+    {
+      "path": "src/audio-worklet-processor.js",
+      "hashMode": "lf-normalized",
+      "size": 838,
+      "sha256": "30095d01d380741be97b540ed77490ad9e12b076d7c0712d67c0cc96346fc139"
     },
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 43506,
-      "sha256": "7a86be72377b13286fa92d71888f608b2352b7f0ea970ad9ee3c142168879f5f"
+      "size": 68696,
+      "sha256": "e8a3799c80e542818351125822dd30cdc91db63bb7dcb1c93caf0c98d033203e"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 55489,
-      "sha256": "0da81f1d67045e89b4e538bb9aeef34597923ab44a04da1acd3cec036fb3817e"
+      "size": 60771,
+      "sha256": "5455c5847eec83a05960306eaa6e5e53cbba6b45cabd5824f77d291c0f7ed471"
+    },
+    {
+      "path": "src/diagnostic-log-filter.js",
+      "hashMode": "lf-normalized",
+      "size": 1947,
+      "sha256": "ea865f1059d093411437f5a666e0126903f0d1f8ee3639db3a64a9ee4895943c"
     },
     {
       "path": "src/gpu-completion-telemetry.js",
@@ -110,8 +134,20 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 377209,
-      "sha256": "c6f494e16187e1186a081d24c8bbfa8022e685c8023bc90d217b153d092f28eb"
+      "size": 494415,
+      "sha256": "a2e1db24e6dadbc044f511527c21ba37053a2c1f85092cbdfd4da5517a3cc302"
+    },
+    {
+      "path": "src/wgpu-renderer-worker-probe.js",
+      "hashMode": "lf-normalized",
+      "size": 6410,
+      "sha256": "e3573d4406f6c2177ecb1bdb3c376f7776f1ba4b43433236b1b6734b4a877386"
+    },
+    {
+      "path": "src/wgpu-upload-probe-executor.js",
+      "hashMode": "lf-normalized",
+      "size": 28161,
+      "sha256": "ce77119ef6292def31d75967a8da9213f0746ba5c14d4ac9c0ab34ea616c4821"
     },
     {
       "path": "src/upstream-main-thread-adapter.js",
@@ -122,38 +158,170 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 36444,
-      "sha256": "26864c1b2a00667091f18daaf0a45c54ce5df6bf7c868ea6a108c9d385b38252"
+      "size": 40892,
+      "sha256": "3b6f14259c77f535e8c325710de81a6f89efb4a58d46d3fff4bf5f2403cbd5cf"
     },
     {
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "1180fdc9bd62b7be115f7c9e28fa06b2c1aec8c1628916786a19c8b8292ed9e5"
+      "sha256": "f7ea42ba2b16faf6bfa0b081215f3aa5cdb7a003f4d889be6aff216dcec5c7b2"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
       "hashMode": "lf-normalized",
-      "size": 13160,
-      "sha256": "681cf420c5b83aab19983c322b91527520151e1276e31437b3e532ec6c9d8cd3"
+      "size": 20751,
+      "sha256": "5559c0ee184a188f6ca6e5f08093844ea59aac459b7e82df903992e27392ab58"
+    },
+    {
+      "path": "src/wgpu-dirty-range-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 12787,
+      "sha256": "6ab98084f0ed55d7e841c62dbf2d870ab10f21df8cf19b488dc183bd54dd2720"
     },
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 32643,
-      "sha256": "d1399b9134419fe5c72099fd39e5f46596395ca87f4e1644873878d287f22869"
+      "size": 38594,
+      "sha256": "7457ddf67c737ed980a38542e0afff7e80c1400279a8e84c7ddfea2349012e64"
+    },
+    {
+      "path": "src/wgpu-replay-quiescence.js",
+      "hashMode": "lf-normalized",
+      "size": 3195,
+      "sha256": "9d09b59427ddc901b90b369f3b4d5c057f63c1ba635cb81b1e104d7283e9cf5d"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
       "hashMode": "lf-normalized",
-      "size": 10024,
-      "sha256": "03aa5509bbcb8a8418ae98305e94c2201a06d4a7a6fb028051ee4a0ce11972ae"
+      "size": 16466,
+      "sha256": "91ded4e08a71512a5be88695bdb33663b49c97704d6825f39cdf337e302a5e87"
     },
     {
       "path": "src/wgpu-upload-watermark.js",
       "hashMode": "lf-normalized",
       "size": 2808,
       "sha256": "00f9fb14c250c90ec65915b1b66b3b78b4b2fb1964fe7d18368fd656511fa51b"
+    },
+    {
+      "path": "src/wgpu-pass-package-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 12368,
+      "sha256": "a2a927fb57920a07061ef8b3c77f38ee30760cf0cb9f8989bb48fa972a6dc818"
+    },
+    {
+      "path": "src/wgpu-ownership-trace.js",
+      "hashMode": "lf-normalized",
+      "size": 14338,
+      "sha256": "c9195290791e07666708d68834a02dc71333d20238d22d014bfad87246857bbf"
+    },
+    {
+      "path": "src/incremental-sha256.js",
+      "hashMode": "lf-normalized",
+      "size": 7793,
+      "sha256": "daea2976bf7588c8f9287e89a2dbd2d278de7f57e4833de81330c639d0178cc8"
+    },
+    {
+      "path": "src/wgpu-legacy-semantic-decoder.js",
+      "hashMode": "lf-normalized",
+      "size": 12519,
+      "sha256": "b7b40fbb7fea324c070619b03506b134467d1cab9d26228276453501262096f9"
+    },
+    {
+      "path": "src/wgpu-semantic-digest.js",
+      "hashMode": "lf-normalized",
+      "size": 16543,
+      "sha256": "3a84ef49f902f3732231a1b7d22c1a6bf779b76d12a5b9cf4f2449e8c7c9aaed"
+    },
+    {
+      "path": "src/wgpu-ownership-command-correlator.js",
+      "hashMode": "lf-normalized",
+      "size": 36008,
+      "sha256": "d4636d72837faa5bc9353a582242d8ae28c0f7d695fa41ac80a7bf666241afba"
+    },
+    {
+      "path": "src/wgpu-resource-generation-tracker.js",
+      "hashMode": "lf-normalized",
+      "size": 26723,
+      "sha256": "9e471bb98eb7cbff4631e597d82e1d9f3720b05dd9029f23b71fe5229a77f290"
+    },
+    {
+      "path": "src/wgpu-semantic-parity-sink.js",
+      "hashMode": "lf-normalized",
+      "size": 8139,
+      "sha256": "613b99f30f90b67872d79df421e4ee06ee178096b313326b02e42d708ca9a92f"
+    },
+    {
+      "path": "src/wgpu-semantic-v2-decoder.js",
+      "hashMode": "lf-normalized",
+      "size": 21037,
+      "sha256": "7399848fd70833be247e6ac15da2c620be28b6380915ef5eb9500d111537e546"
+    },
+    {
+      "path": "src/wgpu-consumer-reset-attestation.js",
+      "hashMode": "lf-normalized",
+      "size": 3385,
+      "sha256": "d3813888622b5377100e0b58a16a60cb8f5462e3e402606526ba13d95914532b"
+    },
+    {
+      "path": "src/wgpu-semantic-runtime.js",
+      "hashMode": "lf-normalized",
+      "size": 19573,
+      "sha256": "06cadaeb2b0285829d78c90916359146604b595a7c4545368884a127efea2b02"
+    },
+    {
+      "path": "src/wgpu-visual-cadence.js",
+      "hashMode": "lf-normalized",
+      "size": 2589,
+      "sha256": "f0100e086fc770f36ea71bdaf6f40be276870c081045425e911c9ee6e0f70893"
+    },
+    {
+      "path": "src/wgpu-sparse-ubo-copy-forward.js",
+      "hashMode": "lf-normalized",
+      "size": 7503,
+      "sha256": "08661edab9d9db7a4500587e4e6f9d24bf576b17b450e714fd0ac23cf6b926cc"
+    },
+    {
+      "path": "src/wgpu-mapped-staging-pool.js",
+      "hashMode": "lf-normalized",
+      "size": 33136,
+      "sha256": "e4a3ad1b169c5fb9e888e82f1433cc7cfdebbc44516835a8e56c67a542bebd4c"
+    },
+    {
+      "path": "src/jit-cache-identity.js",
+      "hashMode": "lf-normalized",
+      "size": 2470,
+      "sha256": "cefdd0471021456bd80bf90437cf8b9f5fe20e1fa6f414d56ea3792a3c3333c3"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 15475,
+      "sha256": "dd04e6619a238d829e0de74db608567525f8f25b252c106963840df134388cf4"
+    },
+    {
+      "path": "src/wgpu-upload-run-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 11761,
+      "sha256": "f58874238197bcafd4ec37f171366f73a52776611714c9f269bd29e81459579c"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-codec.js",
+      "hashMode": "lf-normalized",
+      "size": 13118,
+      "sha256": "e22b6018bb2500a699393971f395553fec8b43ac417820135a4a99cbb3710b6b"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-reconstruction.js",
+      "hashMode": "lf-normalized",
+      "size": 22717,
+      "sha256": "d70ee7357fd8ab3c0d1ced427c6b561e35fc94b14ed258f4fd79ff11a0652c3a"
+    },
+    {
+      "path": "src/wgpu-renderer-runtime.js",
+      "hashMode": "lf-normalized",
+      "size": 14307,
+      "sha256": "a7f221188aaa9dc307dd9518488c60f8c4ccf52a5cecf5c4dffbc33c218cdb2e"
     }
   ],
   "memoryContract": {
@@ -184,6 +352,7 @@
   "memoryContractStatus": "consistent",
   "sourceOnlyExportsPendingRebuild": [],
   "moduleExports": [
+    "_AcknowledgeWebGpuOwnershipTraceCapture",
     "_AudioBuffer",
     "_AudioBufferFrames",
     "_AudioChannels",
@@ -243,7 +412,12 @@
     "_GetRootEntryPath",
     "_GetRootEntrySize",
     "_GetVideoStats",
+    "_GetWebGpuCommandStreamGeometrySmokeError",
+    "_GetWebGpuDenseUboSmokeError",
+    "_GetWebGpuOwnershipTraceCapacity",
+    "_GetWebGpuOwnershipTracePtr",
     "_GetWebGpuStateCacheStats",
+    "_GetWebGpuVertexManagerGeometrySmokeError",
     "_LoadCoreState",
     "_LoadState",
     "_LoadStateFile",
@@ -265,6 +439,14 @@
     "_RunPpcWasmSinglePrecisionArithmeticSmoke",
     "_RunPpcWasmStateAddiSmoke",
     "_RunWasmJitSmoke",
+    "_RunWebGpuCommandStreamGeometryParitySmoke",
+    "_RunWebGpuCommandStreamGeometryRollbackSmoke",
+    "_RunWebGpuDenseUboPacketSmoke",
+    "_RunWebGpuDenseUboRollbackSmoke",
+    "_RunWebGpuVertexManagerGeometryLifecycleSmoke",
+    "_RunWebGpuVertexManagerGeometryParitySmoke",
+    "_RunWebGpuVertexManagerGeometryRangeSmoke",
+    "_RunWebGpuVertexManagerGeometryRollbackSmoke",
     "_SaveCoreState",
     "_SaveState",
     "_SaveStateFile",
@@ -284,10 +466,17 @@
     "_SetSoftwareRasterProfileEnabled",
     "_SetSoftwareTevHotCaseMode",
     "_SetVideoBackend",
+    "_SetWebGpuDrawProfileEnabled",
     "_SetWebGpuGeometryPackEnabled",
+    "_SetWebGpuGeometryRangeEnabled",
+    "_SetWebGpuOwnershipTraceEnabled",
+    "_SetWebGpuProducerProfileEnabled",
     "_SetWebGpuStateCacheEnabled",
     "_SetWebGpuUboCacheEnabled",
+    "_SetWebGpuUboPackEnabled",
     "_SetWebGpuUploadArenaMiB",
+    "_SetWgpuDeepDiagnosticsEnabled",
+    "_SetWgpuIdleFifoTailElisionEnabled",
     "_SetXfbFastPaths",
     "_StopCore",
     "_TestDcbxLoopPattern",
@@ -318,6 +507,7 @@
     ],
     "requestTypes": [
       "bootProbe",
+      "configureAudioWorklet",
       "load",
       "loadState",
       "loadStateFile",
@@ -331,6 +521,12 @@
       "setAudioMuted",
       "setInputMask",
       "setInputState",
+      "validationBeginWgpuRendererProbeMeasurement",
+      "validationFinalizeWgpuMappedDrain",
+      "validationFinalizeWgpuRendererProbe",
+      "validationFinalizeWgpuReplay",
+      "validationReadCoreProgress",
+      "validationReadJitCacheReadiness",
       "validationSetCorePaused"
     ],
     "notificationFields": {

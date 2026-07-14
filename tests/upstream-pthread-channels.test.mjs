@@ -14,11 +14,25 @@ function fakePthreadWorker({ throwOnPost = false } = {}) {
     listeners: [],
     messages: [],
     addEventListener(type, listener) {
-      this.listeners.push({ type, name: listener.name });
+      this.listeners.push({ type, name: listener.name, listener });
     },
     postMessage(message) {
       if (throwOnPost) throw new Error("intentional cache post failure");
       this.messages.push(message);
+      if (message.type === "dolphin-jit-cache-barrier") {
+        const entry = this.listeners.find(
+          ({ name }) => name === "handleDolphinJitPthreadBarrierAckEvent"
+        );
+        entry?.listener?.({
+          currentTarget: this,
+          data: {
+            type: "dolphin-jit-cache-barrier-ack",
+            generation: message.generation,
+            installed: true,
+            cacheSize: 0,
+          },
+        });
+      }
     }
   };
 }
@@ -51,7 +65,7 @@ test("pthread renderer transport is independent of the optional JIT cache channe
 
   const cacheDisabledRunning = fakePthreadWorker();
   const cacheDisabledUnused = fakePthreadWorker();
-  installDolphinPthreadChannels(
+  await installDolphinPthreadChannels(
     {
       PThread: {
         runningWorkers: [cacheDisabledRunning],
@@ -67,35 +81,50 @@ test("pthread renderer transport is independent of the optional JIT cache channe
   }
   assert.deepEqual(statusMessages, []);
 
+  const overlappingWorker = fakePthreadWorker();
+  await installDolphinPthreadChannels(
+    {
+      PThread: {
+        runningWorkers: [overlappingWorker],
+        unusedWorkers: [overlappingWorker]
+      }
+    },
+    { jitCacheEnabled: false }
+  );
+  assert.deepEqual(listenerNames(overlappingWorker), rendererListenerNames);
+
   const cacheEnabled = fakePthreadWorker();
-  installDolphinPthreadChannels(
+  await installDolphinPthreadChannels(
     { PThread: { runningWorkers: [cacheEnabled], unusedWorkers: [] } },
     { jitCacheEnabled: true }
   );
   assert.deepEqual(listenerNames(cacheEnabled), [
     ...rendererListenerNames,
+    "handleDolphinJitPthreadBarrierAckEvent",
     "handleDolphinJitNewCompile"
   ]);
-  assert.equal(cacheEnabled.messages.length, 1);
+  assert.equal(cacheEnabled.messages.length, 2);
   assert.equal(cacheEnabled.messages[0].type, "dolphin-jit-cache");
+  assert.equal(cacheEnabled.messages[1].type, "dolphin-jit-cache-barrier");
 
   const cachePostFailure = fakePthreadWorker({ throwOnPost: true });
-  installDolphinPthreadChannels(
+  await installDolphinPthreadChannels(
     { PThread: { runningWorkers: [cachePostFailure], unusedWorkers: [] } },
     { jitCacheEnabled: true }
   );
   assert.deepEqual(listenerNames(cachePostFailure), [
     ...rendererListenerNames,
+    "handleDolphinJitPthreadBarrierAckEvent",
     "handleDolphinJitNewCompile"
   ]);
 });
 
-test("loadCore always installs pthread channels and only passes cache enablement as data", async () => {
+test("loadCore awaits pthread cache installation before returning", async () => {
   const source = await readFile(workerUrl, "utf8");
 
   assert.match(
     source,
-    /installDolphinPthreadChannels\(moduleInstance, \{\s*jitCacheEnabled: !noJitCache\s*\}\);/
+    /await installDolphinPthreadChannels\(moduleInstance, \{\s*jitCacheEnabled: !noJitCache\s*\}\);/
   );
   assert.doesNotMatch(
     source,

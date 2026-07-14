@@ -11,6 +11,12 @@ import {
 import { parseDolHeader } from "./dol.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 import {
+  JIT_CACHE_ENTRY_KEY_SCHEMA,
+  canonicalCoreFingerprint,
+  classifyJitCacheIdentity,
+  verifyCanonicalWasmBlockKey
+} from "./jit-cache-identity.js";
+import {
   createCausalTelemetry,
   emptyStageWindow,
   parseCoreProfileTelemetry,
@@ -26,9 +32,14 @@ import {
   createWgpuReplayClassifier,
   createWgpuReplayBudgetGate,
   findPublishedAtomicPassEnd,
+  isIntentionalBlankWgpuProbe,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "./wgpu-replay-diagnostics.js";
+import {
+  WgpuRendererRuntime,
+  failWgpuRingDescriptor,
+} from "./wgpu-renderer-runtime.js";
 import {
   FRESH_FRAME_DELIVERY,
   freshFrameDeliveryForPacing
@@ -54,17 +65,76 @@ import {
 import {
   enableWgpuUploadWatermark,
   nextWgpuUploadRead,
-  publishWgpuUploadRead,
   rebaseWgpuStagedUploadWindow
 } from "./wgpu-upload-watermark.js";
 import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
   createWgpuPassStateCache,
-  parseWgpuProducerStateStats
+  parseWgpuDrawProfileStats,
+  parseWgpuProducerProfileStats,
+  parseWgpuProducerStateStats,
+  parseWgpuTailGateStats
 } from "./wgpu-pass-state-cache.js";
 import {
   WGPU_UPLOAD_ROLE,
   createWgpuUploadAttribution
 } from "./wgpu-upload-attribution.js";
+import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
+import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { createWgpuUploadRunProjection } from "./wgpu-upload-run-projection.js";
+import {
+  WGPU_UBO_COMPUTE_CLASS_BYTES,
+  createWgpuUboComputeProjection
+} from "./wgpu-ubo-compute-projection.js";
+import {
+  WGPU_UBO_RING_ROLE,
+  createWgpuUboComputeReconstruction
+} from "./wgpu-ubo-compute-reconstruction.js";
+import {
+  WGPU_OWNERSHIP_EVENT,
+  attachWgpuOwnershipTraceFromApi,
+  createWgpuOwnershipTrace
+} from "./wgpu-ownership-trace.js";
+import {
+  captureInitialWgpuConsumerResetAttestation,
+} from "./wgpu-consumer-reset-attestation.js";
+import { createWgpuSemanticRuntime } from "./wgpu-semantic-runtime.js";
+import { handleWgpuDeviceLoss } from "./wgpu-device-lifecycle.js";
+import {
+  attemptRetainedWgpuUpload,
+  createWgpuMappedStagingPool
+} from "./wgpu-mapped-staging-pool.js";
+import { createWgpuSparseUboCopyForward } from "./wgpu-sparse-ubo-copy-forward.js";
+import {
+  WGPU_MAPPED_DRAIN_FORCE_REASONS,
+  createWgpuMappedDrainCoalescer
+} from "./wgpu-mapped-drain-coalescer.js";
+import {
+  WGPU_CONSUMER_ERROR_DEVICE_LOST,
+  WGPU_CONSUMER_ERROR_SUBMIT,
+  WGPU_CONSUMER_ERROR_UNKNOWN,
+  enableWgpuNonDroppingBackpressure,
+  failWgpuRingConsumer
+} from "./wgpu-ring-backpressure.js";
+import {
+  WGPU_UPLOAD_PROBE_SCHEMA,
+  createWgpuUploadProbeExecutor
+} from "./wgpu-upload-probe-executor.js";
+import { AudioPcmProducer } from "./audio-pcm-producer.js";
+import { installWgpuDiagnosticLogFilter } from "./diagnostic-log-filter.js";
+import {
+  WGPU_VISUAL_BYTES_PER_ROW,
+  WGPU_VISUAL_READBACK_BYTES,
+  WGPU_VISUAL_READBACK_RING_SIZE,
+  WGPU_VISUAL_SAMPLE_HEIGHT,
+  WGPU_VISUAL_SAMPLE_WIDTH,
+  createWgpuVisualCadenceTelemetry,
+  hashWgpuVisualSample
+} from "./wgpu-visual-cadence.js";
 
 // Day-25: mark this thread. The discio worker owns the WebGPU device
 // (createWebGpuPresenter runs here). WebGPU objects aren't shareable
@@ -78,6 +148,8 @@ console.log(`[boot-phase] discio-worker module-eval at perf.now=${performance.no
 let coreUrl = DEFAULT_UPSTREAM_CORE_URL;
 let moduleInstance = null;
 let api = null;
+let wgpuDiagnosticQuiet = false;
+let wgpuDiagnosticLogFilter = installWgpuDiagnosticLogFilter({ enabled: false });
 let mounted = false;
 let inputMask = 0;
 let workerOwnsCanvas = false;
@@ -151,15 +223,77 @@ let wgpuInputBackbufferReadbackPending = false;
 let wgpuInputVisualBaselineReady = false;
 let wgpuLastBackbufferSourceTextureId = 0;
 let wgpuAtomicPassReplay = true;
+let wgpuProducerProfileRequested = false;
+let wgpuProducerProfileAvailable = false;
+let wgpuDrawProfileRequested = false;
+let wgpuDrawProfileAvailable = false;
+let wgpuTailGateRequested = false;
+let wgpuTailGateAvailable = false;
 let wgpuStateCacheEnabled = false;
 let wgpuUboCacheEnabled = false;
+let wgpuUboMetricsEnabled = false;
+let wgpuUniformFastEnabled = false;
+let wgpuUboPackEnabled = false;
+let wgpuSparseUboEnabled = false;
+let wgpuSparseUbo = null;
 let wgpuGeometryPackEnabled = false;
+let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
+let wgpuUploadTransport = "queue";
+const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
+const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
+let wgpuMappedStagingSlotCount = WGPU_MAPPED_STAGING_SLOT_COUNT;
+let wgpuMappedStageFastEnabled = false;
+const WGPU_FAST_STAGE_ACCEPTED = Object.freeze({ ok: true, reason: null });
+let wgpuMappedDrainCoalescingEnabled = false;
+let wgpuRendererWorkerProbe = "off";
+let wgpuVisualCadenceEnabled = false;
+let wgpuVisualCadenceResources = null;
+let wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(false);
+let wgpuVisualCadenceSequence = 0;
+let wgpuUploadProbeExecutor = null;
+let wgpuUploadProbeWorker = null;
+let wgpuUploadProbeOwnerBuffer = null;
+let wgpuUploadProbeRing = null;
+let wgpuUploadProbeInitMetrics = null;
+let wgpuUploadProbeNextRequestId = 1;
+const wgpuUploadProbePendingRequests = new Map();
+let wgpuMappedStagingPool = null;
+let wgpuMappedRemapPromises = new Set();
+let wgpuMappedCapacityBlocked = false;
+let wgpuMappedCapacityBlockedAt = 0;
+let wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+let wgpuMappedStagingGeneration = 0;
+let wgpuMappedStageTimingStride = 1;
+let wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer();
+let wgpuMappedDrainTimer = null;
+let wgpuMappedDrainTimerToken = null;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
 let wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
 let wgpuUploadAttribution = createWgpuUploadAttribution();
+let wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
+let wgpuDirtyRangeProjectionRequested = false;
+let wgpuDirtyRangeProjectionActive = false;
+let wgpuPassPackageProjection = createWgpuPassPackageProjection();
+let wgpuPassPackageProjectionRequested = false;
+let wgpuPassPackageProjectionActive = false;
+let wgpuUploadRunProjection = createWgpuUploadRunProjection();
+let wgpuUploadRunProjectionRequested = false;
+let wgpuUploadRunProjectionActive = false;
+let wgpuUboComputeProjection = createWgpuUboComputeProjection();
+let wgpuUboComputeProjectionRequested = false;
+let wgpuUboComputeProjectionActive = false;
+let wgpuUboComputeReconstruction = null;
+let wgpuUboComputeReconstructionRequested = false;
+let wgpuUboComputeReconstructionActive = false;
+let wgpuOwnershipTrace = createWgpuOwnershipTrace();
+let wgpuOwnershipTraceRequested = false;
+let wgpuOwnershipTraceActive = false;
+let wgpuSemanticRuntime = createWgpuSemanticRuntime();
+let wgpuSemanticRuntimeRequested = false;
+let wgpuSemanticRuntimeActive = false;
 let wgpuDeepReplayDiagnostics = false;
 let gpuCompletionDiagnostics = false;
 let gpuCompletionTracker = createGpuCompletionTracker();
@@ -177,6 +311,7 @@ let wgpuReplayPumpEnabled = false;
 let wgpuReplayPumpTimer = null;
 let wgpuReplayBudgetMs = 0;
 let wgpuPowerPreference = "high-performance";
+let wgpuReplayFatal = null;
 let wgpuReplayYieldPending = false;
 let wgpuReplayPumpScheduledAt = 0;
 let wgpuReplayPumpDueAt = 0;
@@ -198,6 +333,18 @@ const causalAudioStats = {
   workerMixTotalMs: 0,
   workerMixMaxMs: 0
 };
+const workletAudioProducer = new AudioPcmProducer({
+  api: () => ({
+    mixAudio: api?.mixAudio,
+    audioBuffer: api?.audioBuffer,
+    audioBufferFrames: api?.audioBufferFrames,
+    audioChannels: api?.audioChannels,
+    audioSampleRate: api?.audioSampleRate,
+    heapU8: moduleInstance?.HEAPU8,
+  }),
+  recordMix: (requested, returned, durationMs) =>
+    recordWorkerAudioMix(requested, returned, durationMs),
+});
 const causalInputStats = {
   workerPostApplyCount: 0,
   workerSabApplyCount: 0,
@@ -434,7 +581,15 @@ function inputPhotonOverheadDiagnosticsPayload() {
 }
 
 function webGpuUboCacheMode() {
-  return (wgpuUboCacheEnabled ? 1 : 0) | (collectMetrics ? 2 : 0);
+  return (wgpuUboCacheEnabled ? 1 : 0) |
+    (wgpuUboMetricsEnabled ? 2 : 0) |
+    (wgpuUniformFastEnabled ? 4 : 0);
+}
+
+function webGpuUboPackMode() {
+  // The exact-slice cache owns independent class lifetimes. Dense packets use
+  // one shared publication serial, so cache mode deliberately forces legacy.
+  return wgpuUboPackEnabled && !wgpuUboCacheEnabled ? 1 : 0;
 }
 
 function recordRendererError(kind, message) {
@@ -457,6 +612,56 @@ function recordRendererError(kind, message) {
   return entry;
 }
 
+function wgpuOutputContractPayload() {
+  const intentionalBlankProbe = isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe);
+  return {
+    schema: "wasm-dolphin.wgpu-output-contract.v1",
+    disposition: intentionalBlankProbe ? "intentional-blank-probe" : "visible-canvas",
+    expectsVisibleCanvas: !intentionalBlankProbe,
+    activePresenterBackend: renderBackend,
+    probeMode: intentionalBlankProbe ? wgpuRendererWorkerProbe : null
+  };
+}
+
+function wgpuRuntimeConfigPayload() {
+  return {
+    schema: "wasm-dolphin.wgpu-runtime-config.v1",
+    metricsEnabled: causalMetricsEnabled,
+    uploadTransport: wgpuUploadTransport,
+    stateCacheEnabled: wgpuStateCacheEnabled,
+    uboCacheEnabled: Boolean(webGpuUboCacheMode() & 1),
+    producerUboCacheMetricsEnabled: Boolean(webGpuUboCacheMode() & 2),
+    producerUniformFastEnabled: Boolean(webGpuUboCacheMode() & 4),
+    uboPackEnabled: Boolean(webGpuUboPackMode()),
+    producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
+    producerUboPackAvailable: Boolean(api?.setWebGpuUboPackEnabled),
+    geometryPackEnabled: wgpuGeometryPackEnabled,
+    geometryRangeEnabled: wgpuGeometryRangeEnabled,
+    producerGeometryRangeAvailable: Boolean(api?.setWebGpuGeometryRangeEnabled),
+    mappedStagingFastPath: wgpuMappedStageFastEnabled,
+    mappedStaging: {
+      enabled: wgpuUploadTransport === "mapped",
+      slotCount: wgpuMappedStagingSlotCount,
+      recordStore: wgpuMappedStageFastEnabled ? "flat" : "objects",
+      timing: {
+        enabled: causalMetricsEnabled,
+        stride: wgpuMappedStageTimingStride,
+      },
+    },
+    uploadAttribution: {
+      mappedStageTiming: { stride: wgpuMappedStageTimingStride },
+    },
+    mappedDrainCoalescingEnabled: wgpuMappedDrainCoalescingEnabled,
+    tailGate: {
+      schema: WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: 1,
+      requested: wgpuTailGateRequested,
+      available: wgpuTailGateAvailable,
+      enabled: wgpuTailGateRequested && wgpuTailGateAvailable,
+    },
+  };
+}
+
 function rendererDiagnosticsPayload() {
   return {
     ...rendererDiagnostics,
@@ -468,9 +673,39 @@ function rendererDiagnosticsPayload() {
     statusHistory: rendererDiagnostics.statusHistory.map((entry) => ({ ...entry })),
     fatalStatusHistory: rendererDiagnostics.fatalStatusHistory.map((entry) => ({ ...entry })),
     workerTransport: workerTransportTelemetry(),
+    diagnosticLogFilter: wgpuDiagnosticLogFilter.snapshot(),
+    outputContract: wgpuOutputContractPayload(),
+    runtimeConfig: wgpuRuntimeConfigPayload(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
     wgpuUploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
+    wgpuDirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
+      requested: wgpuDirtyRangeProjectionRequested,
+      active: wgpuDirtyRangeProjectionActive
+    }),
+    wgpuPassPackageProjection: wgpuPassPackageProjection.snapshot({
+      requested: wgpuPassPackageProjectionRequested,
+      active: wgpuPassPackageProjectionActive
+    }),
+    wgpuUploadRunProjection: wgpuUploadRunProjection.snapshot({
+      requested: wgpuUploadRunProjectionRequested,
+      active: wgpuUploadRunProjectionActive
+    }),
+    wgpuUboComputeProjection: wgpuUboComputeProjection.snapshot({
+      requested: wgpuUboComputeProjectionRequested,
+      active: wgpuUboComputeProjectionActive
+    }),
+    wgpuUboComputeReconstruction: wgpuUboComputeReconstructionSnapshot(),
+    wgpuOwnershipTrace: wgpuOwnershipTrace.snapshot(),
+    wgpuSemanticRuntime: wgpuSemanticRuntime.snapshot(),
+    wgpuVisualCadence: wgpuVisualCadenceSnapshot(),
+  };
+}
+
+function wgpuVisualCadenceSnapshot() {
+  return {
+    ...wgpuVisualCadenceTelemetry,
+    visualFps: wgpuVisualCadenceEnabled ? visualChangeFps : 0
   };
 }
 
@@ -528,12 +763,57 @@ self.addEventListener("message", async (event) => {
 async function handleMessage(type, payload) {
   switch (type) {
     case "load":
+      if (!moduleInstance) {
+        cancelWgpuMappedDrainTimer();
+        wgpuMappedStagingGeneration += 1;
+      }
       causalMetricsEnabled = Boolean(payload.collectMetrics);
       collectMetrics = Boolean(payload.collectMetrics);
       metricsDiagnostics = createMetricsDiagnostics();
       metricsDiagnostics.enabled = collectMetrics;
       wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
-      wgpuUploadAttribution = createWgpuUploadAttribution();
+      wgpuMappedStageTimingStride = Number(payload.wgpuMappedStageTimingStride) === 64
+        ? 64
+        : 1;
+      wgpuUploadAttribution = createWgpuUploadAttribution({
+        mappedStageTimingStride: wgpuMappedStageTimingStride,
+      });
+      wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
+      wgpuDirtyRangeProjectionRequested = Boolean(payload.wgpuDirtyRangeProjection);
+      wgpuDirtyRangeProjectionActive =
+        wgpuDirtyRangeProjectionRequested && causalMetricsEnabled;
+      wgpuPassPackageProjection = createWgpuPassPackageProjection();
+      wgpuPassPackageProjectionRequested = Boolean(payload.wgpuPassPackageProjection);
+      wgpuPassPackageProjectionActive = wgpuPassPackageProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
+      wgpuUploadRunProjection = createWgpuUploadRunProjection({
+        maxEnvelopeBytes: WGPU_MAPPED_STAGING_SLOT_BYTES,
+      });
+      wgpuUploadRunProjectionRequested = Boolean(payload.wgpuUploadRunProjection);
+      wgpuUploadRunProjectionActive = wgpuUploadRunProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
+      wgpuUboComputeProjection = createWgpuUboComputeProjection();
+      wgpuUboComputeProjectionRequested = Boolean(payload.wgpuUboComputeProjection);
+      wgpuUboComputeProjectionActive = wgpuUboComputeProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
+      wgpuUboComputeReconstruction = null;
+      wgpuUboComputeReconstructionRequested = Boolean(
+        payload.wgpuUboComputeReconstruction
+      );
+      wgpuUboComputeReconstructionActive =
+        wgpuUboComputeReconstructionRequested && causalMetricsEnabled &&
+        payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
+      wgpuOwnershipTrace = createWgpuOwnershipTrace();
+      wgpuSemanticRuntimeRequested = Boolean(payload.wgpuSemanticRuntime);
+      wgpuSemanticRuntimeActive = wgpuSemanticRuntimeRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
+      wgpuOwnershipTraceRequested = Boolean(payload.wgpuOwnershipTrace) ||
+        wgpuSemanticRuntimeRequested;
+      wgpuOwnershipTraceActive = wgpuOwnershipTraceRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
       gpuCompletionDiagnostics = Boolean(payload.gpuCompletionDiagnostics);
       gpuCompletionTracker = createGpuCompletionTracker({
         enabled: gpuCompletionDiagnostics
@@ -611,10 +891,31 @@ async function handleMessage(type, payload) {
         wgpuReplayBudgetMs: payload.wgpuReplayBudgetMs,
         wgpuPowerPreference: payload.wgpuPowerPreference,
         wgpuAtomicPassReplay: payload.wgpuAtomicPassReplay,
+        wgpuDiagnosticQuiet: payload.wgpuDiagnosticQuiet,
+        wgpuProducerProfile: payload.wgpuProducerProfile,
+        wgpuDrawProfile: payload.wgpuDrawProfile,
+        wgpuTailGate: payload.wgpuTailGate,
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
+        wgpuUboMetrics: payload.wgpuUboMetrics,
+        wgpuUniformFast: payload.wgpuUniformFast,
+        wgpuUboPack: payload.wgpuUboPack,
+        wgpuSparseUbo: payload.wgpuSparseUbo,
         wgpuGeometryPack: payload.wgpuGeometryPack,
+        wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
+        wgpuUploadTransport: payload.wgpuUploadTransport,
+        wgpuMappedStagingSlotCount: payload.wgpuMappedStagingSlotCount,
+        wgpuMappedStageFast: payload.wgpuMappedStageFast,
+        wgpuMappedDrainCoalescing: payload.wgpuMappedDrainCoalescing,
+        wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
+        wgpuVisualCadence: payload.wgpuVisualCadence,
+        wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
+        wgpuUploadRunProjection: payload.wgpuUploadRunProjection,
+        wgpuUboComputeProjection: payload.wgpuUboComputeProjection,
+        wgpuUboComputeReconstruction: payload.wgpuUboComputeReconstruction,
+        wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
+        wgpuSemanticRuntime: payload.wgpuSemanticRuntime,
         oglSabEnabled: oglPixelSabView !== null
       });
       return metadataPayload();
@@ -647,11 +948,26 @@ async function handleMessage(type, payload) {
       }
       return framePayload();
     case "reset":
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.RESET);
+      wgpuSparseUbo?.reset("core-reset");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("core-reset");
+      }
+      wgpuUboComputeReconstruction?.reset("core-reset");
+      workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+      applyWgpuTailGate("core reset");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
+        verifyWgpuProducerProfileActivation("core reset");
+      }
       api?.setInputMask(inputMask);
       return framePayload();
     case "bootProbe":
@@ -659,14 +975,34 @@ async function handleMessage(type, payload) {
     case "saveState":
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
+      wgpuSparseUbo?.reset("slot-state-load");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("slot-state-load");
+      }
+      wgpuUboComputeReconstruction?.reset("slot-state-load");
+      workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+      applyWgpuTailGate("slot state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       const loaded = Boolean(api?.loadState(payload.slot | 0));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+      applyWgpuTailGate("slot state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
+        verifyWgpuProducerProfileActivation("slot state reload");
+      }
       return { loaded, ...framePayload() };
     }
     case "validationSetCorePaused": {
@@ -676,18 +1012,125 @@ async function handleMessage(type, payload) {
         return { paused: false, error: "SetCorePaused export unavailable" };
       }
       const paused = Boolean(payload.paused);
+      const transitionAtMs = performance.now();
       api.setCorePaused(paused ? 1 : 0);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
+      const observedAtMs = performance.now();
       return {
         paused: api?.getCoreStateName?.() === "Paused",
         requestedPaused: paused,
         coreStateName: api?.getCoreStateName?.() ?? "",
+        transitionAtMs,
+        observedAtMs,
         ...framePayload(),
       };
+    }
+    case "validationReadCoreProgress": {
+      const loadedCheckpoint = readLastLoadedCheckpoint();
+      return {
+        frame: api?.getFrame?.() ?? 0,
+        coreTicks: readCoreTicks(),
+        coreTicksPerSecond: readCoreTicksPerSecond(),
+        ppcPc: api?.getPpcPc?.() ?? 0,
+        loadedCheckpointGeneration: loadedCheckpoint.generation,
+        loadedCheckpointTicks: loadedCheckpoint.ticks,
+        loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
+        observedAtMs: performance.now(),
+      };
+    }
+    case "validationReadJitCacheReadiness": {
+      const requiredWorkers = dolphinJitPthreadRuntime
+        ? [...new Set(dolphinJitPthreadRuntime.runningWorkers || [])]
+        : [];
+      const requiredBarrierAcked = requiredWorkers.filter(
+        (worker) =>
+          dolphinJitPthreadBarrierAckGeneration.get(worker) ===
+          dolphinJitPthreadBarrierGeneration
+      ).length;
+      return {
+        schema: "wasm-dolphin.jit-cache-readiness.v1",
+        enabled: dolphinJitCachePersistenceEnabled,
+        bootLoadComplete: dolphinJitBootLoadComplete,
+        bootLoadedEntries: dolphinJitBootLoadedEntries,
+        lazyFillStarted: dolphinJitLazyFillStarted,
+        lazyFillActive: dolphinJitLazyFillActive,
+        lazyFillCompleted: dolphinJitLazyFillCompleted,
+        lazyFillSourceEntries: dolphinJitLazyFillSourceEntries,
+        lazyFillProcessedEntries: dolphinJitLazyFillProcessedEntries,
+        lazyFillAddedEntries: dolphinJitLazyFillAddedEntries,
+        lazyFillTerminalReason: dolphinJitLazyFillTerminalReason,
+        lazyFillFailureCount: dolphinJitLazyFillFailureCount,
+        cacheSize: dolphinJitCacheMap.size,
+        newCompileCount: dolphinJitNewCompileCount,
+        verificationPending: dolphinJitVerificationPending.size,
+        compilePending: dolphinJitCompilePending,
+        idbWritesPending: dolphinJitIdbWritesPending,
+        idbWriteCount: dolphinJitIdbWriteCount,
+        pthreadWorkerCount: dolphinJitPthreadWorkers.length,
+        pthreadBarrierGeneration: dolphinJitPthreadBarrierGeneration,
+        pthreadBarrierExpected: dolphinJitPthreadBarrierExpected,
+        pthreadBarrierAcked: dolphinJitPthreadBarrierAcked,
+        pthreadRequiredWorkerCount: requiredWorkers.length,
+        pthreadRequiredBarrierAcked: requiredBarrierAcked,
+        pthreadInstallPostFailures: dolphinJitPthreadInstallPostFailures,
+        pthreadBarrierInvalidAcks: dolphinJitPthreadBarrierInvalidAcks,
+        observedAtMs: performance.now(),
+      };
+    }
+    case "validationFinalizeWgpuRendererProbe": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU renderer probe finalization requires a paused core");
+      }
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.FINALIZATION);
+      const finalized = await finalizeWgpuUploadProbe(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 10_000))
+      );
+      return { ...finalized, ...framePayload({ forceCausalTelemetry: true }) };
+    }
+    case "validationFinalizeWgpuMappedDrain": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU mapped drain finalization requires a paused core");
+      }
+      const mappedDrainFinalization = await finalizeWgpuMappedDrain(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 10_000))
+      );
+      return {
+        mappedDrainFinalization,
+        ...framePayload({ forceCausalTelemetry: true }),
+      };
+    }
+    case "validationFinalizeWgpuReplay": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU replay finalization requires a paused core");
+      }
+      const replayQuiescence = await finalizeWgpuReplayQuiescence(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 30_000)),
+        { requireRing: Boolean(payload.requireRing) }
+      );
+      return {
+        replayQuiescence,
+        ...framePayload({ forceCausalTelemetry: true }),
+      };
+    }
+    case "validationBeginWgpuRendererProbeMeasurement": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU renderer probe measurement boundary requires a paused core");
+      }
+      const begun = await beginWgpuUploadProbeMeasurement(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 10_000))
+      );
+      return { ...begun, ...framePayload({ forceCausalTelemetry: true }) };
     }
     case "rendererDiagnostics":
       return rendererDiagnosticsPayload();
     case "loadStateFile": {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
+      wgpuSparseUbo?.reset("save-state-load");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("save-state-load");
+      }
+      wgpuUboComputeReconstruction?.reset("save-state-load");
+      workletAudioProducer.transition();
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
       // locked — a state from a different Dolphin will be rejected by
@@ -740,17 +1183,30 @@ async function handleMessage(type, payload) {
       }
       const beforeState = api?.getCoreStateName?.() ?? "";
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+      applyWgpuTailGate("save-state pre-load");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       const rc = api.loadStateFile(path) | 0;
       // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
       // step the core) — wait real wall-clock time so the restore
       // actually takes effect before we sample/screenshot.
       await new Promise((r) => setTimeout(r, 1200));
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+      api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+      api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+      applyWgpuTailGate("save-state reload");
       api?.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+      api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+      api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
       api?.setSoftwareTevHotCaseMode?.(softwareTevHotCaseMode);
+      if (wgpuProducerProfileRequested || wgpuDrawProfileRequested) {
+        verifyWgpuProducerProfileActivation("save-state reload");
+      }
       collectWebGpuProducerStateStats();
       const uploadTimeoutCountImmediatelyAfterLoad = webGpuCausalStats.uploadTimeoutCount;
       const uploadTimeoutBoundaryVerified = rc === 1 && collectMetrics;
@@ -872,7 +1328,19 @@ async function handleMessage(type, payload) {
     }
     case "setAudioMuted":
       api?.setAudioMuted?.(payload.muted ? 1 : 0);
+      workletAudioProducer.setMuted(Boolean(payload.muted));
       return {};
+    case "configureAudioWorklet": {
+      if (!payload.enabled) {
+        workletAudioProducer.stop();
+        return { active: false, reason: "disabled" };
+      }
+      const result = workletAudioProducer.install(payload.sab, {
+        muted: Boolean(payload.muted),
+      });
+      if (result.active) api?.setAudioMuted?.(payload.muted ? 1 : 0);
+      return result;
+    }
     default:
       throw new Error(`Unknown upstream worker message: ${type}`);
   }
@@ -913,16 +1381,43 @@ async function loadCore({
   wgpuReplayBudgetMs: requestedWgpuReplayBudgetMs = 0,
   wgpuPowerPreference: requestedWgpuPowerPreference = "high-performance",
   wgpuAtomicPassReplay: requestedWgpuAtomicPassReplay = true,
+  wgpuDiagnosticQuiet: requestedWgpuDiagnosticQuiet = false,
+  wgpuProducerProfile: requestedWgpuProducerProfile = false,
+  wgpuDrawProfile: requestedWgpuDrawProfile = false,
+  wgpuTailGate: requestedWgpuTailGate = false,
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
+  wgpuUboMetrics: requestedWgpuUboMetrics = false,
+  wgpuUniformFast: requestedWgpuUniformFast = false,
+  wgpuUboPack: requestedWgpuUboPack = false,
+  wgpuSparseUbo: requestedWgpuSparseUbo = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
+  wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
+  wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
+  wgpuMappedStagingSlotCount: requestedWgpuMappedStagingSlotCount =
+    WGPU_MAPPED_STAGING_SLOT_COUNT,
+  wgpuMappedStageFast: requestedWgpuMappedStageFast = false,
+  wgpuMappedDrainCoalescing: requestedWgpuMappedDrainCoalescing = false,
+  wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
+  wgpuVisualCadence: requestedWgpuVisualCadence = false,
+  wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
+  wgpuUploadRunProjection: requestedWgpuUploadRunProjection = false,
+  wgpuUboComputeProjection: requestedWgpuUboComputeProjection = false,
+  wgpuUboComputeReconstruction: requestedWgpuUboComputeReconstruction = false,
+  wgpuOwnershipTrace: requestedWgpuOwnershipTrace = false,
+  wgpuSemanticRuntime: requestedWgpuSemanticRuntime = false,
   oglSabEnabled = false
 } = {}) {
   if (moduleInstance) {
     return moduleInstance;
   }
   rendererDiagnostics = createRendererDiagnostics();
+  wgpuDiagnosticQuiet = Boolean(requestedWgpuDiagnosticQuiet);
+  wgpuDiagnosticLogFilter.restore();
+  wgpuDiagnosticLogFilter = installWgpuDiagnosticLogFilter({
+    enabled: wgpuDiagnosticQuiet,
+  });
   rendererDiagnostics.coreSelection = normalizedCoreSelection(
     reportedCoreSelection,
     nextCoreUrl,
@@ -943,10 +1438,152 @@ async function loadCore({
   wgpuInputVisualBaselineReady = false;
   wgpuLastBackbufferSourceTextureId = 0;
   wgpuAtomicPassReplay = Boolean(requestedWgpuAtomicPassReplay);
+  if (requestedWgpuPassPackageProjection && !collectMetrics) {
+    throw new Error("wgpupackageprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuPassPackageProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpupackageprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUploadRunProjection && !collectMetrics) {
+    throw new Error("wgpuuploadrunprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuUploadRunProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuuploadrunprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUploadRunProjection && requestedWgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuuploadrunprojection=1 requires wgpuuploadtransport=mapped");
+  }
+  if (requestedWgpuUboComputeProjection && !collectMetrics) {
+    throw new Error("wgpuubocomputeprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuUboComputeProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubocomputeprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUboComputeProjection && requestedWgpuUploadTransport !== "mapped") {
+    throw new Error(
+      "wgpuubocomputeprojection=1 requires wgpuuploadtransport=mapped"
+    );
+  }
+  if (requestedWgpuUboComputeReconstruction && !collectMetrics) {
+    throw new Error("wgpuubocompute=1 requires metrics=1");
+  }
+  if (requestedWgpuUboComputeReconstruction && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubocompute=1 requires video=wgpu");
+  }
+  if (requestedWgpuUboComputeReconstruction &&
+      requestedWgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuubocompute=1 requires wgpuuploadtransport=mapped");
+  }
+  if (requestedWgpuOwnershipTrace && !collectMetrics) {
+    throw new Error("wgpuownershiptrace=1 requires metrics=1");
+  }
+  if (requestedWgpuOwnershipTrace && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuownershiptrace=1 requires video=wgpu");
+  }
+  if (requestedWgpuSemanticRuntime && !collectMetrics) {
+    throw new Error("wgpusemantic=1 requires metrics=1");
+  }
+  if (requestedWgpuSemanticRuntime && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpusemantic=1 requires video=wgpu");
+  }
+  wgpuProducerProfileRequested = collectMetrics && Boolean(requestedWgpuProducerProfile);
+  wgpuProducerProfileAvailable = false;
+  wgpuDrawProfileRequested = Boolean(requestedWgpuDrawProfile);
+  wgpuDrawProfileAvailable = false;
+  webGpuCausalStats.producerProfile = {
+    ...webGpuCausalStats.producerProfile,
+    requested: wgpuProducerProfileRequested,
+    available: false,
+    enabled: false,
+  };
+  webGpuCausalStats.drawProfile = {
+    ...webGpuCausalStats.drawProfile,
+    requested: wgpuDrawProfileRequested,
+    available: false,
+    enabled: false,
+  };
+  if (wgpuDrawProfileRequested && !collectMetrics) {
+    throw new Error("wgpudrawprofile=1 requires metrics=1");
+  }
+  if (wgpuDrawProfileRequested && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpudrawprofile=1 requires video=wgpu");
+  }
+  wgpuTailGateRequested = Boolean(requestedWgpuTailGate);
+  wgpuTailGateAvailable = false;
+  webGpuCausalStats.tailGate = {
+    ...webGpuCausalStats.tailGate,
+    schema: WGPU_TAIL_GATE_SCHEMA,
+    requested: wgpuTailGateRequested,
+    available: false,
+    enabled: false,
+  };
+  if (wgpuTailGateRequested && !collectMetrics) {
+    throw new Error("wgputailgate=1 requires metrics=1");
+  }
+  if (wgpuTailGateRequested && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgputailgate=1 requires the true hardware WebGPU backend");
+  }
   wgpuStateCacheEnabled = Boolean(requestedWgpuStateCache);
   wgpuUboCacheEnabled = Boolean(requestedWgpuUboCache);
+  if (requestedWgpuUboMetrics && !collectMetrics) {
+    throw new Error("wgpuubometrics=1 requires metrics=1");
+  }
+  if (requestedWgpuUboMetrics && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubometrics=1 requires video=wgpu");
+  }
+  wgpuUboMetricsEnabled = collectMetrics && Boolean(requestedWgpuUboMetrics);
+  if (requestedWgpuUniformFast && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuuniformfast=1 requires video=wgpu");
+  }
+  wgpuUniformFastEnabled = Boolean(requestedWgpuUniformFast);
+  wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
+  if (requestedWgpuSparseUbo && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubosparse=1 requires video=wgpu");
+  }
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
+  wgpuGeometryRangeEnabled =
+    wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
+  wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
+  wgpuMappedStagingSlotCount = Number(requestedWgpuMappedStagingSlotCount) === 4
+    ? 4
+    : WGPU_MAPPED_STAGING_SLOT_COUNT;
+  if (requestedWgpuSparseUbo && wgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuubosparse=1 requires wgpuuploadtransport=mapped");
+  }
+  wgpuSparseUboEnabled = Boolean(requestedWgpuSparseUbo);
+  wgpuMappedStageFastEnabled =
+    wgpuUploadTransport === "mapped" && Boolean(requestedWgpuMappedStageFast);
+  wgpuMappedDrainCoalescingEnabled =
+    wgpuUploadTransport === "mapped" && Boolean(requestedWgpuMappedDrainCoalescing);
+  wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer({
+    enabled: wgpuMappedDrainCoalescingEnabled,
+    generation: wgpuMappedStagingGeneration,
+  });
+  wgpuRendererWorkerProbe = new Set([
+    "canary", "inline-upload", "worker-upload", "null-drain"
+  ]).has(requestedWgpuRendererWorkerProbe) ? requestedWgpuRendererWorkerProbe : "off";
+  if (requestedWgpuVisualCadence && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuvisual=1 requires video=wgpu");
+  }
+  destroyWgpuVisualCadenceResources();
+  wgpuVisualCadenceEnabled = Boolean(requestedWgpuVisualCadence);
+  wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(
+    wgpuVisualCadenceEnabled
+  );
+  wgpuVisualCadenceSequence = 0;
+  wgpuMappedStagingPool?.invalidate("core reloaded");
+  wgpuMappedStagingPool = null;
+  wgpuSparseUbo?.reset("core-reload");
+  wgpuSparseUbo = null;
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset("core-reload");
+  }
+  wgpuUboComputeReconstruction = null;
+  wgpuMappedRemapPromises = new Set();
+  wgpuMappedCapacityBlocked = false;
+  wgpuMappedCapacityBlockedAt = 0;
+  wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
   wgpuProducerStateCacheAvailable = false;
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
@@ -962,10 +1599,38 @@ async function loadCore({
   wgpuPowerPreference = requestedWgpuPowerPreference === "low-power"
     ? "low-power"
     : "high-performance";
+  webGpuCausalStats.rendererWorkerProbe = {
+    ...webGpuCausalStats.rendererWorkerProbe,
+    requested: wgpuRendererWorkerProbe,
+    active: false,
+    passed: false,
+    error: "",
+  };
+  if (wgpuRendererWorkerProbe === "canary") {
+    try {
+      await runWgpuRendererWorkerCanary();
+    } catch (error) {
+      webGpuCausalStats.rendererWorkerProbe.error = String(error?.message || error);
+      throw error;
+    }
+  } else if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
+    if (videoBackend !== "WebGPU-Real") {
+      throw new Error("WGPU upload probes require the true hardware WebGPU backend");
+    }
+    try {
+      await initializeWgpuUploadProbe(wgpuRendererWorkerProbe);
+    } catch (error) {
+      webGpuCausalStats.rendererWorkerProbe.error = String(error?.message || error);
+      throw error;
+    }
+  }
   wgpuReplayYieldPending = false;
   webGpuCausalStats.replayBudgetEnabled = wgpuReplayBudgetMs > 0;
   webGpuCausalStats.replayBudgetMs = wgpuReplayBudgetMs;
   webGpuCausalStats.replayWindowRecords = WGPU_REPLAY_WINDOW_RECORDS;
+  webGpuCausalStats.uploadTransport = wgpuUploadTransport;
+  webGpuCausalStats.mappedStagingFastPath = wgpuMappedStageFastEnabled;
+  webGpuCausalStats.mappedDrainCoalescingEnabled = wgpuMappedDrainCoalescingEnabled;
   rendererDiagnostics.requestedVideoBackend = videoBackend;
   softwareTevHotCaseMode = (Number(requestedSoftwareTevHotCaseMode) || 0) & 3;
   rendererDiagnostics.requestedPresenterBackend = normalizePresenterBackend(presenterBackend);
@@ -1053,7 +1718,13 @@ async function loadCore({
     workerOwnsCanvas = true;
   }
 
-  if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
+  if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
+    renderCanvas = null;
+    renderBackend = "wgpu-upload-probe";
+    rendererDiagnostics.activePresenterBackend = renderBackend;
+    cmdRingOwnsCanvas = true;
+    postStatus(`WGPU ${wgpuRendererWorkerProbe} probe active (blank output)`);
+  } else if (canvas && (videoBackend !== "OGL" || readbackOgl)) {
     preferredPresenterBackend = normalizePresenterBackend(presenterBackend);
     await setupSoftwarePresenter(canvas, preferredPresenterBackend);
   } else if (detachedWgpuCanvas) {
@@ -1094,24 +1765,32 @@ async function loadCore({
   // boot-time mass re-instantiation of thousands of cached WebAssembly
   // Modules, no persistence). Deterministic isolation/mitigation for the
   // renderer OOM — the JIT just recompiles fresh this session.
-  // §28cg prebuilt cache pre-warm. If the app ships a `/prebuilt-jit-cache.bin`
-  // matching this build's fingerprint, populate IDB from it BEFORE
-  // reconcileJitCacheWithBuild runs — that function then loads the modules out
-  // of IDB via the existing async-compile batches (same path warm boots take).
+  // §28cg prebuilt cache pre-warm. Reconcile identity first so legacy,
+  // missing-metadata, or stale rows are cleared before a prebuilt file can
+  // seed the v3 store. Newly seeded rows then use the same verified load path.
   // First-session cold starts get the same warm-cache treatment as session 2+,
   // killing the menu-nav interpret stall measured in §28bz/§28cf.
-  if (!noJitCache && buildFingerprint) {
-    const _t_prebuilt = performance.now();
-    const seeded = await maybeSeedIdbFromPrebuiltCache(coreUrl, buildFingerprint);
-    console.log(`[boot-phase] prebuilt-jit-cache seed took ${(performance.now() - _t_prebuilt).toFixed(1)}ms (seeded ${seeded} new IDB entries)`);
-  }
   const _t_idb = performance.now();
+  dolphinJitCachePersistenceEnabled = !noJitCache;
+  dolphinJitBootLoadComplete = false;
+  dolphinJitBootLoadedEntries = 0;
   if (!noJitCache) {
     await reconcileJitCacheWithBuild(buildFingerprint);
   } else {
     postStatus("jit-cache: DISABLED via ?nojitcache=1 (no IDB load/persist)");
   }
   console.log(`[boot-phase] reconcileJitCacheWithBuild took ${(performance.now() - _t_idb).toFixed(1)}ms (cache size now ${dolphinJitCacheMap.size})`);
+  if (!noJitCache && buildFingerprint) {
+    const _t_prebuilt = performance.now();
+    const seeded = await maybeSeedIdbFromPrebuiltCache(coreUrl, buildFingerprint);
+    if (seeded > 0) {
+      const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
+      if (loaded >= DOLPHIN_JIT_PREWARM_THRESHOLD) dolphinJitCachePreWarmed = true;
+    }
+    console.log(`[boot-phase] prebuilt-jit-cache seed took ${(performance.now() - _t_prebuilt).toFixed(1)}ms (seeded ${seeded} new IDB entries)`);
+  }
+  dolphinJitBootLoadedEntries = dolphinJitCacheMap.size;
+  dolphinJitBootLoadComplete = true;
 
   // Day-15 (wasm-dolphin) WebGPU video backend: when the user selects
   // `?video=webgpu`, the existing WebGPU presenter (createWebGpuPresenter)
@@ -1178,6 +1857,59 @@ async function loadCore({
   }
 
   api = bindApi(moduleInstance);
+  const ownershipTraceSetterAvailable = Boolean(
+    api.setWebGpuOwnershipTraceEnabled &&
+    api.getWebGpuOwnershipTracePtr &&
+    api.getWebGpuOwnershipTraceCapacity
+  );
+  wgpuOwnershipTrace.configure({
+    requested: wgpuOwnershipTraceRequested,
+    active: wgpuOwnershipTraceActive,
+    setterAvailable: ownershipTraceSetterAvailable,
+    setterInvoked: wgpuOwnershipTraceActive && ownershipTraceSetterAvailable,
+  });
+  if (wgpuOwnershipTraceRequested && !ownershipTraceSetterAvailable) {
+    throw new Error(
+      "wgpuownershiptrace=1 requires ownership trace setter and descriptor getters"
+    );
+  }
+  if (wgpuSemanticRuntimeActive &&
+      !api.acknowledgeWebGpuOwnershipTraceCapture) {
+    throw new Error(
+      "wgpusemantic=1 requires AcknowledgeWebGpuOwnershipTraceCapture"
+    );
+  }
+  api.setWgpuDeepDiagnosticsEnabled?.(wgpuDeepReplayDiagnostics ? 1 : 0);
+  wgpuProducerProfileAvailable = Boolean(
+    api.setWebGpuProducerProfileEnabled && api.getWebGpuStateCacheStats
+  );
+  wgpuDrawProfileAvailable = Boolean(
+    api.setWebGpuDrawProfileEnabled && api.getWebGpuStateCacheStats
+  );
+  webGpuCausalStats.producerProfile.available = wgpuProducerProfileAvailable;
+  webGpuCausalStats.drawProfile.available = wgpuDrawProfileAvailable;
+  if (wgpuProducerProfileRequested && !wgpuProducerProfileAvailable) {
+    throw new Error(
+      "wgpuprodprofile=1 requires SetWebGpuProducerProfileEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
+  if (wgpuDrawProfileRequested && !wgpuDrawProfileAvailable) {
+    throw new Error(
+      "wgpudrawprofile=1 requires SetWebGpuDrawProfileEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
+  wgpuTailGateAvailable = Boolean(
+    api.setWgpuIdleFifoTailElisionEnabled && api.getWebGpuStateCacheStats
+  );
+  webGpuCausalStats.tailGate.available = wgpuTailGateAvailable;
+  if (wgpuTailGateRequested && !wgpuTailGateAvailable) {
+    throw new Error(
+      "wgputailgate=1 requires SetWgpuIdleFifoTailElisionEnabled and " +
+      "GetWebGpuStateCacheStats exports"
+    );
+  }
   wgpuProducerStateCacheAvailable = Boolean(api.setWebGpuStateCacheEnabled);
   // The producer and consumer see the same ordered SET_* stream. Once the
   // producer suppresses exact repeats, comparing every remaining record again
@@ -1187,9 +1919,43 @@ async function loadCore({
     wgpuStateCacheEnabled && !wgpuProducerStateCacheAvailable;
   // Renderer transport is required even when persistent JIT caching is not.
   // ?nojitcache=1 gates only the optional cache channel below.
-  installDolphinPthreadChannels(moduleInstance, {
+  await installDolphinPthreadChannels(moduleInstance, {
     jitCacheEnabled: !noJitCache
   });
+  if (wgpuOwnershipTraceActive) {
+    const heap = moduleInstance?.HEAPU8;
+    if (!heap || !(heap.buffer instanceof SharedArrayBuffer)) {
+      throw new Error("wgpuownershiptrace=1 requires a shared wasm heap");
+    }
+    const initialConsumerResetAttestation = wgpuSemanticRuntimeActive
+      ? captureInitialWgpuConsumerResetAttestation({
+          resourceMaps: webGpuObjects,
+          videoBackend,
+          renderDeviceReady: Boolean(renderGpu?.device),
+          capturedBeforeTraceAttach: true,
+          commandRingRegistered: Boolean(webGpuCmdRing),
+          commandsProcessed: webGpuCausalStats.commandsProcessed,
+          canvasOwnedByCommandRing: cmdRingOwnsCanvas,
+          replayFatal: wgpuReplayFatal,
+        })
+      : null;
+    attachWgpuOwnershipTraceFromApi(
+      wgpuOwnershipTrace,
+      api,
+      heap.buffer
+    );
+    wgpuSemanticRuntime = createWgpuSemanticRuntime({
+      requested: wgpuSemanticRuntimeRequested,
+      active: wgpuSemanticRuntimeActive,
+      initialConsumerResetAttestation,
+    });
+  } else {
+    api.setWebGpuOwnershipTraceEnabled?.(0);
+    wgpuSemanticRuntime = createWgpuSemanticRuntime({
+      requested: wgpuSemanticRuntimeRequested,
+      active: false,
+    });
+  }
   if (api.setVideoBackend) {
     api.setVideoBackend(videoBackend);
     rendererDiagnostics.configuredVideoBackend = videoBackend;
@@ -1213,9 +1979,14 @@ async function loadCore({
   api.setPpcWasmJitEnabled?.(0);
   api.setPpcProfileEnabled?.(ppcProfile ? 1 : 0);
   api.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
+  api.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
+  api.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
+  applyWgpuTailGate("core boot");
   api.setWebGpuStateCacheEnabled?.(wgpuStateCacheEnabled ? 1 : 0);
   api.setWebGpuUboCacheEnabled?.(webGpuUboCacheMode());
+  api.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
   api.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+  api.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
   api.setCpuOverclock?.(Number(cpuOverclock));
   api.setEmulationSpeed?.(Number(emulationSpeed));
   api.setPresentationScale?.(Number(presentationScale));
@@ -1225,6 +1996,8 @@ async function loadCore({
   api.setSoftwareRasterProfileEnabled?.(
     collectMetrics && videoBackend === "Software Renderer" ? 1 : 0
   );
+  if (wgpuProducerProfileRequested || wgpuDrawProfileRequested)
+    verifyWgpuProducerProfileActivation("core boot");
   const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
@@ -1287,13 +2060,68 @@ function bindApi(module) {
       typeof module._SetWebGpuStateCacheEnabled === "function"
         ? (enabled) => ccall("SetWebGpuStateCacheEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
+    setWebGpuProducerProfileEnabled:
+      typeof module._SetWebGpuProducerProfileEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuProducerProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWebGpuDrawProfileEnabled:
+      typeof module._SetWebGpuDrawProfileEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuDrawProfileEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWebGpuOwnershipTraceEnabled:
+      typeof module._SetWebGpuOwnershipTraceEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWebGpuOwnershipTraceEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    acknowledgeWebGpuOwnershipTraceCapture:
+      typeof module._AcknowledgeWebGpuOwnershipTraceCapture === "function"
+        ? (captureId) => ccall(
+            "AcknowledgeWebGpuOwnershipTraceCapture",
+            "number",
+            ["number"],
+            [captureId >>> 0]
+          ) !== 0
+        : null,
+    getWebGpuOwnershipTracePtr:
+      typeof module._GetWebGpuOwnershipTracePtr === "function"
+        ? () => ccall("GetWebGpuOwnershipTracePtr", "number", [], []) >>> 0
+        : null,
+    getWebGpuOwnershipTraceCapacity:
+      typeof module._GetWebGpuOwnershipTraceCapacity === "function"
+        ? () => ccall("GetWebGpuOwnershipTraceCapacity", "number", [], []) >>> 0
+        : null,
+    setWgpuDeepDiagnosticsEnabled:
+      typeof module._SetWgpuDeepDiagnosticsEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWgpuDeepDiagnosticsEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
+    setWgpuIdleFifoTailElisionEnabled:
+      typeof module._SetWgpuIdleFifoTailElisionEnabled === "function"
+        ? (enabled) => ccall(
+            "SetWgpuIdleFifoTailElisionEnabled", null, ["number"], [enabled ? 1 : 0]
+          )
+        : null,
     setWebGpuUboCacheEnabled:
       typeof module._SetWebGpuUboCacheEnabled === "function"
         ? (mode) => ccall("SetWebGpuUboCacheEnabled", null, ["number"], [mode | 0])
         : null,
+    setWebGpuUboPackEnabled:
+      typeof module._SetWebGpuUboPackEnabled === "function"
+        ? (enabled) => ccall("SetWebGpuUboPackEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
     setWebGpuGeometryPackEnabled:
       typeof module._SetWebGpuGeometryPackEnabled === "function"
         ? (enabled) => ccall("SetWebGpuGeometryPackEnabled", null, ["number"], [enabled ? 1 : 0])
+        : null,
+    setWebGpuGeometryRangeEnabled:
+      typeof module._SetWebGpuGeometryRangeEnabled === "function"
+        ? (enabled) => ccall("SetWebGpuGeometryRangeEnabled", null, ["number"], [enabled ? 1 : 0])
         : null,
     setWebGpuUploadArenaMiB:
       typeof module._SetWebGpuUploadArenaMiB === "function"
@@ -1547,7 +2375,9 @@ function resetPresentationBuffer() {
   lastVisualFrameHash = 0;
   lastOglSwapCount = 0;
   oglGlError = 0;
-  visualSampleSource = "none";
+  visualSampleSource = wgpuVisualCadenceEnabled
+    ? wgpuVisualCadenceTelemetry.source
+    : "none";
   visualChangesSincePresentationFps = 0;
   framesSincePresentationFps = 0;
   intervalSumSincePresentationFps = 0;
@@ -1584,10 +2414,71 @@ function readDetailedCoreStat(name, readStat) {
   return readStat();
 }
 
+function applyWgpuProducerProfileStats(profile) {
+  if (!profile) return false;
+  webGpuCausalStats.producerProfile = {
+    ...profile,
+    requested: wgpuProducerProfileRequested,
+    available: wgpuProducerProfileAvailable,
+  };
+  return true;
+}
+
+function applyWgpuDrawProfileStats(profile) {
+  if (!profile) return false;
+  webGpuCausalStats.drawProfile = {
+    ...profile,
+    requested: wgpuDrawProfileRequested,
+    available: wgpuDrawProfileAvailable,
+  };
+  return true;
+}
+
+function verifyWgpuProducerProfileActivation(scope) {
+  const text = api?.getWebGpuStateCacheStats?.() ?? "";
+  const profile = parseWgpuProducerProfileStats(text);
+  const drawProfile = parseWgpuDrawProfileStats(text);
+  const drawProfileValid = !wgpuDrawProfileRequested && !wgpuDrawProfileAvailable ||
+    applyWgpuDrawProfileStats(drawProfile) &&
+      drawProfile.enabled === wgpuDrawProfileRequested;
+  if (!applyWgpuProducerProfileStats(profile) ||
+      profile.enabled !== wgpuProducerProfileRequested ||
+      !drawProfileValid) {
+    throw new Error(`WGPU producer/draw profile failed to activate during ${scope}`);
+  }
+  return profile;
+}
+
+function applyWgpuTailGate(scope) {
+  api?.setWgpuIdleFifoTailElisionEnabled?.(wgpuTailGateRequested ? 1 : 0);
+  if (!wgpuTailGateRequested) return null;
+  const text = api?.getWebGpuStateCacheStats?.() ?? "";
+  const stats = parseWgpuTailGateStats(text);
+  if (!stats || stats.enabled !== true) {
+    throw new Error(`WGPU idle FIFO tail elision failed to activate during ${scope}`);
+  }
+  webGpuCausalStats.tailGate = {
+    ...stats,
+    requested: true,
+    available: wgpuTailGateAvailable,
+  };
+  return stats;
+}
+
 function collectWebGpuProducerStateStats() {
   if (!collectMetrics) return null;
   const text = api?.getWebGpuStateCacheStats?.() ?? null;
   const parsed = parseWgpuProducerStateStats(text);
+  applyWgpuProducerProfileStats(parseWgpuProducerProfileStats(text));
+  applyWgpuDrawProfileStats(parseWgpuDrawProfileStats(text));
+  const tailGate = parseWgpuTailGateStats(text);
+  if (tailGate) {
+    webGpuCausalStats.tailGate = {
+      ...tailGate,
+      requested: wgpuTailGateRequested,
+      available: wgpuTailGateAvailable,
+    };
+  }
   if (parsed) {
     webGpuCausalStats.producerStateCacheEnabled = parsed.enabled;
     webGpuCausalStats.producerPipelineRecordsSuppressed =
@@ -1609,6 +2500,8 @@ function collectWebGpuProducerStateStats() {
       );
     }
     webGpuCausalStats.producerUboCacheEnabled = parsed.uboCacheEnabled;
+    webGpuCausalStats.producerUniformFastEnabled = parsed.uniformFastEnabled;
+    webGpuCausalStats.producerUboPackEnabled = parsed.uboPackEnabled;
     webGpuCausalStats.producerUboCacheMetricsEnabled = parsed.uboCacheMetricsEnabled;
     webGpuCausalStats.producerUboCacheClassOrder = parsed.uboCacheClassOrder;
     webGpuCausalStats.producerUboCacheLookups = parsed.uboCacheLookups;
@@ -1626,6 +2519,29 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.producerUboPacketAlignedBytes = parsed.uboPacketAlignedBytes;
     webGpuCausalStats.producerUboPrepareCpuCalls = parsed.uboPrepareCpuCalls;
     webGpuCausalStats.producerUboPrepareCpuNs = parsed.uboPrepareCpuNs;
+    webGpuCausalStats.producerUboChangeClassOrder = parsed.uboChangeClassOrder;
+    webGpuCausalStats.producerUboChangeSchemaVersion = parsed.uboChangeSchemaVersion;
+    webGpuCausalStats.producerUboChangeAvailable = parsed.uboChangeAvailable;
+    webGpuCausalStats.producerUboChangeEnabled = parsed.uboChangeEnabled;
+    webGpuCausalStats.producerUboChangeEpoch = parsed.uboChangeEpoch;
+    webGpuCausalStats.producerUboChangeUploadCalls = parsed.uboChangeUploadCalls;
+    webGpuCausalStats.producerUboChangeFullBytes = parsed.uboChangeFullBytes;
+    webGpuCausalStats.producerUboChangedBytes = parsed.uboChangedBytes;
+    webGpuCausalStats.producerUboChangeBaselineFullCount =
+      parsed.uboChangeBaselineFullCount;
+    webGpuCausalStats.producerUboChangeBaselineFullBytes =
+      parsed.uboChangeBaselineFullBytes;
+    webGpuCausalStats.producerUboDirty16Bytes = parsed.uboDirty16Bytes;
+    webGpuCausalStats.producerUboDirty16Ranges = parsed.uboDirty16Ranges;
+    webGpuCausalStats.producerUboDirty256Bytes = parsed.uboDirty256Bytes;
+    webGpuCausalStats.producerUboDirty256Ranges = parsed.uboDirty256Ranges;
+    webGpuCausalStats.producerUniformFastClassOrder = parsed.uniformFastClassOrder;
+    webGpuCausalStats.producerUniformFastSkippedComparisons =
+      parsed.uniformFastSkippedComparisons;
+    webGpuCausalStats.producerUniformFastKeptComparisons =
+      parsed.uniformFastKeptComparisons;
+    webGpuCausalStats.producerUniformFastChangedComparisons =
+      parsed.uniformFastChangedComparisons;
     webGpuCausalStats.producerGeometryPackEnabled = parsed.geometryPackEnabled;
     webGpuCausalStats.producerGeometryPackEpoch = parsed.geometryPackEpoch;
     webGpuCausalStats.producerUploadArenaRequestedBytes = parsed.uploadArenaRequestedBytes;
@@ -1635,6 +2551,12 @@ function collectWebGpuProducerStateStats() {
     webGpuCausalStats.producerUploadArenaWrapCount = parsed.uploadArenaWrapCount;
     webGpuCausalStats.producerUploadArenaInflightHighWaterBytes =
       parsed.uploadArenaInflightHighWaterBytes;
+    webGpuCausalStats.producerRingWaitCount = parsed.ringWaitCount;
+    webGpuCausalStats.producerRingWaitTotalUs = parsed.ringWaitTotalUs;
+    webGpuCausalStats.producerRingWaitMaxUs = parsed.ringWaitMaxUs;
+    webGpuCausalStats.producerUploadWaitCount = parsed.uploadWaitCount;
+    webGpuCausalStats.producerUploadWaitTotalUs = parsed.uploadWaitTotalUs;
+    webGpuCausalStats.producerUploadWaitMaxUs = parsed.uploadWaitMaxUs;
   }
   return text;
 }
@@ -1811,7 +2733,7 @@ function readRootEntries(rootEntryCount) {
   return entries;
 }
 
-function framePayload() {
+function framePayload({ forceCausalTelemetry = false } = {}) {
   if (!moduleInstance || !api) {
     return { frameBuffer: null };
   }
@@ -1855,10 +2777,10 @@ function framePayload() {
       visualSampleSource = "xfb-hash";
     }
     oglGlError = oglStats.glError;
-  } else {
+  } else if (!wgpuVisualCadenceEnabled) {
     visualSampleSource = "xfb-hash";
   }
-  const causalTelemetry = maybeCreateCausalTelemetry(videoStats);
+  const causalTelemetry = maybeCreateCausalTelemetry(videoStats, { force: forceCausalTelemetry });
   let frameBuffer = null;
   let transfer = [];
 
@@ -1925,6 +2847,7 @@ function framePayload() {
     visualChangeFps,
     visualFrameHash,
     visualSampleSource,
+    visualCadenceTelemetry: wgpuVisualCadenceSnapshot(),
     oglGlError,
     frameBuffer,
     transfer,
@@ -1932,14 +2855,22 @@ function framePayload() {
   };
 }
 
-function maybeCreateCausalTelemetry(videoStats) {
+function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
   if (!causalMetricsEnabled) return null;
   const now = performance.now();
-  if (lastCausalTelemetryAt > 0 && now - lastCausalTelemetryAt < CAUSAL_TELEMETRY_INTERVAL_MS) {
+  if (
+    !force &&
+    lastCausalTelemetryAt > 0 &&
+    now - lastCausalTelemetryAt < CAUSAL_TELEMETRY_INTERVAL_MS
+  ) {
     return null;
   }
   lastCausalTelemetryAt = now;
+  if (wgpuOwnershipTraceActive) drainWgpuSemanticOwnership();
   const loadedCheckpoint = readLastLoadedCheckpoint();
+  const uploadAttributionSnapshot = wgpuUploadAttribution.snapshot({
+    enabled: causalMetricsEnabled,
+  });
   return createCausalTelemetry({
     enabled: true,
     capturedAtMs: now,
@@ -1991,19 +2922,47 @@ function maybeCreateCausalTelemetry(videoStats) {
     },
     webgpu: {
       ...webGpuCausalStats,
+      visualCadence: wgpuVisualCadenceSnapshot(),
+      mappedStaging: wgpuMappedStagingPool?.snapshot() ?? null,
+      mappedDrainCoalescing: wgpuMappedDrainCoalescer.snapshot(),
+      uboSparse: wgpuSparseUboSnapshot(),
       backlogSampleP95: wgpuBacklogSampleP95(),
       replayPumpWakeDelayAverageMs: webGpuCausalStats.replayPumpWakeCount > 0
         ? webGpuCausalStats.replayPumpWakeDelayTotalMs /
           webGpuCausalStats.replayPumpWakeCount
         : 0,
       replayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
-      uploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
+      uploadAttribution: uploadAttributionSnapshot,
+      dirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
+        requested: wgpuDirtyRangeProjectionRequested,
+        active: wgpuDirtyRangeProjectionActive
+      }),
+      passPackageProjection: wgpuPassPackageProjection.snapshot({
+        requested: wgpuPassPackageProjectionRequested,
+        active: wgpuPassPackageProjectionActive
+      }),
+      uploadRunProjection: wgpuUploadRunProjection.snapshot({
+        requested: wgpuUploadRunProjectionRequested,
+        active: wgpuUploadRunProjectionActive
+      }),
+      uboComputeProjection: wgpuUboComputeProjection.snapshot({
+        requested: wgpuUboComputeProjectionRequested,
+        active: wgpuUboComputeProjectionActive
+      }),
+      uboComputeReconstruction: wgpuUboComputeReconstructionSnapshot(),
+      ownershipTrace: wgpuOwnershipTrace.snapshot(),
+      semanticRuntime: wgpuSemanticRuntime.snapshot(),
       registered: Boolean(webGpuCmdRing),
       stateCacheEnabled: wgpuStateCacheEnabled,
       uboCacheEnabled: wgpuUboCacheEnabled,
+      uniformFastEnabled: wgpuUniformFastEnabled,
+      uboPackEnabled: Boolean(webGpuUboPackMode()),
       geometryPackEnabled: wgpuGeometryPackEnabled,
+      geometryRangeEnabled: wgpuGeometryRangeEnabled,
       producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
+      producerUboPackAvailable: Boolean(api?.setWebGpuUboPackEnabled),
       producerGeometryPackAvailable: Boolean(api?.setWebGpuGeometryPackEnabled),
+      producerGeometryRangeAvailable: Boolean(api?.setWebGpuGeometryRangeEnabled),
       producerUploadArenaAvailable: Boolean(api?.setWebGpuUploadArenaMiB),
       producerStateCacheEnabled:
         wgpuStateCacheEnabled && wgpuProducerStateCacheAvailable,
@@ -2012,6 +2971,7 @@ function maybeCreateCausalTelemetry(videoStats) {
     },
     audio: {
       ...causalAudioStats,
+      ...workletAudioProducer.telemetry(),
     },
     input: {
       workerPostApplyCount: causalInputStats.workerPostApplyCount,
@@ -2838,7 +3798,9 @@ function presentFrame(width, height, pointer, length, coreFrame = api?.getFrame?
   }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(sourceFrameView), true);
+  if (!wgpuVisualCadenceEnabled) {
+    recordVisualFrameHash(hashFrameBytes(sourceFrameView), true);
+  }
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -2968,7 +3930,9 @@ function presentFrameBytes(width, height, bytes, coreFrame) {
   }
 
   const hashStartedAt = startProfileSample();
-  recordVisualFrameHash(hashFrameBytes(bytes), true);
+  if (!wgpuVisualCadenceEnabled) {
+    recordVisualFrameHash(hashFrameBytes(bytes), true);
+  }
   finishProfileSample("hash", hashStartedAt);
   recordPresentedFrame(coreFrame);
   finishProfileSample("present", presentStartedAt);
@@ -3592,7 +4556,8 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       format,
       alphaMode: "opaque",
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0) |
+        (wgpuVisualCadenceEnabled ? textureUsage.TEXTURE_BINDING : 0)
     });
   } catch (e) {
     recordRendererError("validation", `context.configure: ${e?.message || e}`);
@@ -3615,16 +4580,185 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
     uploadBuffer: null
   };
 
+  if (wgpuVisualCadenceEnabled) {
+    ensureWgpuVisualCadenceResources(state);
+    visualSampleSource = wgpuVisualCadenceTelemetry.source;
+  }
+
+  wgpuReplayFatal = null;
+
   device.lost.then((info) => {
-    recordRendererError("device-lost", info?.message || info?.reason || "unknown");
-    if (renderGpu?.device === device) {
-      renderGpu = null;
-      renderBackend = "webgpu-lost";
-      postStatus(`WebGPU device lost: ${info?.message || info?.reason || "unknown"}`);
-    }
+    handleWgpuDeviceLoss({
+      activeDevice: renderGpu?.device,
+      lostDevice: device,
+      info,
+      recordError: recordRendererError,
+      markFatal: markWgpuReplayFatal,
+      cancelReplay: cancelWgpuReplayPump,
+      clearReplayState: clearWgpuReplayStateAfterDeviceLoss,
+      invalidateGeometry: () => {
+        api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
+        api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
+      },
+      clearActiveDevice: () => { renderGpu = null; },
+      setBackend: (backend) => { renderBackend = backend; },
+      postStatus,
+    });
   });
 
   return state;
+}
+
+function ensureWgpuVisualCadenceResources(gpu = renderGpu) {
+  if (!wgpuVisualCadenceEnabled || !gpu?.device || wgpuVisualCadenceResources) {
+    return wgpuVisualCadenceResources;
+  }
+  const device = gpu.device;
+  const sampleTexture = device.createTexture({
+    label: "dolphin-wgpu-visual-sample",
+    size: {
+      width: WGPU_VISUAL_SAMPLE_WIDTH,
+      height: WGPU_VISUAL_SAMPLE_HEIGHT,
+      depthOrArrayLayers: 1
+    },
+    format: gpu.format,
+    usage: 0x10 | 0x01 // RENDER_ATTACHMENT | COPY_SRC
+  });
+  const slots = Array.from({ length: WGPU_VISUAL_READBACK_RING_SIZE }, (_, index) => ({
+    buffer: device.createBuffer({
+      label: `dolphin-wgpu-visual-readback-${index}`,
+      size: WGPU_VISUAL_READBACK_BYTES,
+      usage: 0x01 | 0x08 // MAP_READ | COPY_DST
+    }),
+    sequence: 0,
+    state: "idle"
+  }));
+  wgpuVisualCadenceResources = {
+    sampleTexture,
+    sampleView: sampleTexture.createView(),
+    slots
+  };
+  return wgpuVisualCadenceResources;
+}
+
+function destroyWgpuVisualCadenceResources() {
+  if (!wgpuVisualCadenceResources) return;
+  try { wgpuVisualCadenceResources.sampleTexture?.destroy(); } catch {}
+  for (const slot of wgpuVisualCadenceResources.slots || []) {
+    try { slot.buffer?.destroy(); } catch {}
+  }
+  wgpuVisualCadenceResources = null;
+}
+
+function encodeWgpuVisualCadence(encoder, sourceTexture) {
+  if (!wgpuVisualCadenceEnabled || !encoder || !sourceTexture || !renderGpu) {
+    return null;
+  }
+  const telemetry = wgpuVisualCadenceTelemetry;
+  telemetry.encodeAttemptCount += 1;
+  const resources = ensureWgpuVisualCadenceResources(renderGpu);
+  const slot = resources?.slots.find((candidate) => candidate.state === "idle");
+  if (!slot) {
+    telemetry.busyDropCount += 1;
+    return null;
+  }
+
+  slot.state = "encoded";
+  slot.sequence = ++wgpuVisualCadenceSequence;
+  telemetry.inFlightCount += 1;
+  telemetry.inFlightHighWater = Math.max(
+    telemetry.inFlightHighWater,
+    telemetry.inFlightCount
+  );
+  let pass = null;
+  try {
+    // Reuse the presenter's fullscreen triangle, sampler, bind-group layout,
+    // and target format. Only the destination changes to a 96x72 texture.
+    const bindGroup = renderGpu.device.createBindGroup({
+      label: "dolphin-wgpu-visual-bind-group",
+      layout: renderGpu.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: renderGpu.sampler },
+        { binding: 1, resource: sourceTexture.createView() }
+      ]
+    });
+    pass = encoder.beginRenderPass({
+      label: "dolphin-wgpu-visual-downsample",
+      colorAttachments: [{
+        view: resources.sampleView,
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        loadOp: "clear",
+        storeOp: "store"
+      }]
+    });
+    pass.setPipeline(renderGpu.pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+    pass = null;
+    encoder.copyTextureToBuffer(
+      { texture: resources.sampleTexture },
+      {
+        buffer: slot.buffer,
+        bytesPerRow: WGPU_VISUAL_BYTES_PER_ROW,
+        rowsPerImage: WGPU_VISUAL_SAMPLE_HEIGHT
+      },
+      {
+        width: WGPU_VISUAL_SAMPLE_WIDTH,
+        height: WGPU_VISUAL_SAMPLE_HEIGHT,
+        depthOrArrayLayers: 1
+      }
+    );
+    telemetry.encodedSampleCount += 1;
+    return slot;
+  } catch (error) {
+    try { pass?.end(); } catch {}
+    telemetry.encodeErrorCount += 1;
+    releaseWgpuVisualCadenceSlot(slot);
+    recordRendererError("wgpu-visual-encode", error?.message || error);
+    return null;
+  }
+}
+
+function mapWgpuVisualCadenceSlot(slot, submitted) {
+  if (!slot) return;
+  if (!submitted) {
+    releaseWgpuVisualCadenceSlot(slot);
+    return;
+  }
+  slot.state = "mapping";
+  slot.buffer.mapAsync(0x01).then(() => {
+    const bytes = new Uint8Array(slot.buffer.getMappedRange());
+    const hash = hashWgpuVisualSample(bytes);
+    const telemetry = wgpuVisualCadenceTelemetry;
+    if (slot.sequence > telemetry.latestCompletedSequence) {
+      if (telemetry.latestHash && hash && telemetry.latestHash !== hash) {
+        telemetry.changedSampleCount += 1;
+      }
+      telemetry.latestHash = hash;
+      telemetry.latestCompletedSequence = slot.sequence;
+      telemetry.completedSampleCount += 1;
+      visualSampleSource = telemetry.source;
+      recordVisualFrameHash(hash);
+    }
+    slot.buffer.unmap();
+    releaseWgpuVisualCadenceSlot(slot);
+  }).catch((error) => {
+    wgpuVisualCadenceTelemetry.mapErrorCount += 1;
+    try { slot.buffer.unmap(); } catch {}
+    releaseWgpuVisualCadenceSlot(slot);
+    recordRendererError("wgpu-visual-map", error?.message || error);
+  });
+}
+
+function releaseWgpuVisualCadenceSlot(slot) {
+  if (!slot || slot.state === "idle") return;
+  slot.state = "idle";
+  slot.sequence = 0;
+  wgpuVisualCadenceTelemetry.inFlightCount = Math.max(
+    0,
+    wgpuVisualCadenceTelemetry.inFlightCount - 1
+  );
 }
 
 // Day-17 (wasm-dolphin) C++ → JS bridge for the real WebGPU video
@@ -3795,7 +4929,8 @@ function drawFrameBytesToWebGpu(width, height, frameView) {
       device: gpu.device,
       format: gpu.format,
       usage: textureUsage.RENDER_ATTACHMENT |
-        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0)
+        ((wgpuReplayClassifier || inputReadbackDiagnostics) ? textureUsage.COPY_SRC : 0) |
+        (wgpuVisualCadenceEnabled ? textureUsage.TEXTURE_BINDING : 0)
     });
     gpu.canvasWidth = width;
     gpu.canvasHeight = height;
@@ -4083,11 +5218,11 @@ function isFatalStatusMessage(message) {
 // pool so each pthread can consult it from its EM_JS compile body. Each
 // pthread instantiates cached Modules locally on its own wasmTable —
 // bypassing the cross-pthread-table problem from Day 6.
-const dolphinJitCacheMap = new Map(); // Map<hashHex, WebAssembly.Module>
+const dolphinJitCacheMap = new Map(); // Map<canonical SHA-256 key, WebAssembly.Module>
 const DOLPHIN_JIT_IDB_NAME = "dolphin-jit-cache";
 const DOLPHIN_JIT_IDB_STORE = "modules";
 const DOLPHIN_JIT_IDB_META = "metadata";
-const DOLPHIN_JIT_IDB_VERSION = 2;
+const DOLPHIN_JIT_IDB_VERSION = 3;
 // §28u: 8192 was far too small for full Melee — the user's cache
 // plateaued at ~8135 (cap hit) while still in the menus, so EVERY
 // later 3D scene (intro/2nd cutscene, battle) exceeded the cap →
@@ -4110,9 +5245,26 @@ const DOLPHIN_JIT_CACHE_MAX = 49152; // hard cap on in-memory entries
 // to PTHREAD_POOL_SIZE.
 const DOLPHIN_JIT_IDB_BOOT_LOAD_MAX = 8192;
 const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
+const DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY = "entryKeySchema";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
 let dolphinJitIdbWriteCount = 0;
+async function verifyDolphinJitEntries(entries, batchSize = 64) {
+  const verified = [];
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const batch = entries.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(async (entry) => {
+      const key = String(entry.hash ?? entry.key ?? "");
+      const value = entry.bytes ?? entry.value;
+      const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+      if (!(bytes instanceof Uint8Array)) return null;
+      return await verifyCanonicalWasmBlockKey(key, bytes) ? { ...entry, key, bytes } : null;
+    }));
+    if (results.some((entry) => entry === null)) return null;
+    verified.push(...results);
+  }
+  return verified;
+}
 function openDolphinJitIdb() {
   return new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
@@ -4129,10 +5281,10 @@ function openDolphinJitIdb() {
     }
     request.onupgradeneeded = (event) => {
       const db = request.result;
-      // v1 → v2: add metadata store. The pre-v2 modules have no associated
-      // build fingerprint, so clear them on upgrade — they'd otherwise be
-      // treated as belonging to the current build and only grow stale.
-      if (event.oldVersion < 2 && db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
+      // v3 replaces collision-prone FNV keys with canonical SHA-256 keys.
+      // Existing rows cannot be migrated without re-hashing their bytes, so
+      // drop them atomically and let the current build repopulate the store.
+      if (event.oldVersion < 3 && db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
         db.deleteObjectStore(DOLPHIN_JIT_IDB_STORE);
       }
       if (!db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
@@ -4222,13 +5374,21 @@ async function loadDolphinJitCacheFromIdb(db) {
   const COMPILE_BATCH = 64;
   for (let i = 0; i < entries.length; i += COMPILE_BATCH) {
     if (dolphinJitCacheMap.size >= DOLPHIN_JIT_IDB_BOOT_LOAD_MAX) break;
-    const batch = [];
+    const candidates = [];
     for (const { key, value } of entries.slice(i, i + COMPILE_BATCH)) {
       if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
       if (dolphinJitCacheMap.has(key)) continue;
       const buf = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-      batch.push({ key, p: WebAssembly.compile(buf) });
+      candidates.push({ key: String(key), buf });
     }
+    const verified = await Promise.all(candidates.map(async ({ key, buf }) => ({
+      key,
+      buf,
+      valid: await verifyCanonicalWasmBlockKey(String(key), buf)
+    })));
+    const batch = verified
+      .filter(({ valid }) => valid)
+      .map(({ key, buf }) => ({ key, p: WebAssembly.compile(buf) }));
     const res = await Promise.allSettled(batch.map((b) => b.p));
     for (let k = 0; k < res.length; k++) {
       if (res[k].status === "fulfilled") {
@@ -4240,8 +5400,16 @@ async function loadDolphinJitCacheFromIdb(db) {
   }
   return loaded;
 }
-function writeDolphinJitEntryToIdb(hash, bytes) {
+async function writeDolphinJitEntryToIdb(hash, bytes) {
   if (!dolphinJitIdb) return;
+  const buf = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+  if (!(buf instanceof Uint8Array) || !(await verifyCanonicalWasmBlockKey(String(hash), buf))) {
+    if (!self._dolphinJitIdbIdentityErrLogged) {
+      self._dolphinJitIdbIdentityErrLogged = true;
+      postStatus("jit-cache: rejected IDB write with mismatched block identity");
+    }
+    return;
+  }
   try {
     const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
     tx.onabort = () => {
@@ -4252,7 +5420,7 @@ function writeDolphinJitEntryToIdb(hash, bytes) {
     };
     const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
     dolphinJitIdbWritesPending += 1;
-    const req = store.put(bytes, hash);
+    const req = store.put(buf, hash);
     req.onsuccess = () => {
       dolphinJitIdbWritesPending -= 1;
       dolphinJitIdbWriteCount += 1;
@@ -4284,7 +5452,6 @@ async function fetchWasmAndFingerprint(coreUrlValue, expectedSha256 = DEFAULT_UP
   // wasm sits beside it under the conventional name.
   const wasmUrl = new URL("dolphin-core-upstream.wasm", coreUrlValue).href;
   let buffer = null;
-  let fingerprint = null;
   try {
     const resp = await fetch(wasmUrl);
     if (!resp.ok) {
@@ -4298,16 +5465,9 @@ async function fetchWasmAndFingerprint(coreUrlValue, expectedSha256 = DEFAULT_UP
   if (actualSha256 !== expectedSha256) {
     throw new Error(`Core WASM SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
   }
-  // Stride-64 FNV-1a over the full wasm. 8MB / 64 = 128K iters ≈ 1ms.
-  // Wasm files have distinct bytes throughout (code section, data section,
-  // import/export names), so any non-trivial build change moves the hash.
-  const view = new Uint8Array(buffer);
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < view.length; i += 64) {
-    h ^= view[i];
-    h = Math.imul(h, 16777619);
-  }
-  fingerprint = ((h ^ view.length) >>> 0).toString(16) + ":" + view.length.toString(16);
+  // The verified artifact digest is already available. Reuse the complete
+  // SHA-256 rather than a sampled fingerprint that can alias distinct cores.
+  const fingerprint = canonicalCoreFingerprint(actualSha256);
   return { wasmBinary: buffer, fingerprint, sha256: actualSha256 };
 }
 // Open IDB eagerly so loadCore() doesn't pay the open latency. Module load
@@ -4375,14 +5535,23 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
     );
     return 0;
   }
+  if (decoded.entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+    postStatus("jit-cache: prebuilt entry-key schema mismatch; ignored");
+    return 0;
+  }
+  const verifiedEntries = await verifyDolphinJitEntries(decoded.entries);
+  if (!verifiedEntries) {
+    postStatus("jit-cache: prebuilt block identity mismatch; entire file ignored");
+    return 0;
+  }
   // §28ch: only seed the FIRST DOLPHIN_JIT_IDB_BOOT_LOAD_MAX entries into
   // IDB synchronously — past testing showed a 16k-entry IDB tx blocks the
   // main thread ~3s and re-inflates the startup freeze the prebuilt cache
   // was meant to fix. Stash the OVERFLOW in `dolphinJitPrebuiltOverflow`;
   // the lazy-fill task drains it post-boot and writes-back to IDB after
   // each successful compile so subsequent sessions read from the IDB path.
-  const boot = decoded.entries.slice(0, DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
-  const overflow = decoded.entries.slice(DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  const boot = verifiedEntries.slice(0, DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  const overflow = verifiedEntries.slice(DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
   if (overflow.length > 0) {
     dolphinJitPrebuiltOverflow = overflow;
   }
@@ -4391,8 +5560,8 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
       const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
       const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
       let inserted = 0;
-      for (const { hash, bytes } of boot) {
-        store.put(bytes, hash);
+      for (const { key, bytes } of boot) {
+        store.put(bytes, key);
         inserted += 1;
       }
       tx.oncomplete = () => resolve(inserted);
@@ -4406,6 +5575,11 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
   // a same-build cache and just loads (vs clearing) the seeded modules.
   if (seeded > 0) {
     await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, currentFingerprint);
+    await writeDolphinJitMetadata(
+      dolphinJitIdb,
+      DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY,
+      JIT_CACHE_ENTRY_KEY_SCHEMA
+    );
     postStatus(`jit-cache: seeded ${seeded} prebuilt modules into IDB (fingerprint match)`);
   }
   return seeded;
@@ -4414,15 +5588,34 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
 async function reconcileJitCacheWithBuild(fingerprint) {
   await dolphinJitIdbReady;
   if (!dolphinJitIdb) return 0;
-  const stored = await readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY);
-  if (stored && fingerprint && stored !== fingerprint) {
+  const [storedFingerprint, storedEntryKeySchema] = await Promise.all([
+    readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY),
+    readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY)
+  ]);
+  const identity = classifyJitCacheIdentity({
+    storedFingerprint,
+    storedEntryKeySchema,
+    currentFingerprint: fingerprint
+  });
+  if (identity.reset) {
     await clearDolphinJitModulesStore(dolphinJitIdb);
+    dolphinJitCacheMap.clear();
+    dolphinJitPrebuiltOverflow = null;
     postStatus(
-      `jit-cache: build changed (${stored.slice(0, 8)} → ${fingerprint.slice(0, 8)}); cleared stale modules`
+      `jit-cache: identity reset (${identity.reason}); cleared unverified modules`
     );
   }
   if (fingerprint) {
-    await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, fingerprint);
+    await Promise.all([
+      writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, fingerprint),
+      writeDolphinJitMetadata(
+        dolphinJitIdb,
+        DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY,
+        JIT_CACHE_ENTRY_KEY_SCHEMA
+      )
+    ]);
+  } else {
+    return 0;
   }
   const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
   if (loaded > 0) {
@@ -4437,33 +5630,56 @@ async function reconcileJitCacheWithBuild(fingerprint) {
   return loaded;
 }
 let dolphinJitNewCompileCount = 0;
-function handleDolphinJitNewCompile(event) {
+let dolphinJitCompilePending = 0;
+const dolphinJitVerificationPending = new Set();
+async function handleDolphinJitNewCompile(event) {
   const data = event.data;
   if (!data || data.type !== "dolphin-jit-new-compile") return;
-  dolphinJitNewCompileCount += 1;
   if (!data.hash || !data.bytes) return;
-  if (dolphinJitCacheMap.has(data.hash)) return;
+  const key = String(data.hash);
+  const bytes = data.bytes instanceof ArrayBuffer ? new Uint8Array(data.bytes) : data.bytes;
+  if (!(bytes instanceof Uint8Array)) return;
+  if (dolphinJitCacheMap.has(key) || dolphinJitVerificationPending.has(key)) return;
   if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) return;
+  dolphinJitVerificationPending.add(key);
+  let valid = false;
+  try {
+    valid = await verifyCanonicalWasmBlockKey(String(data.hash), bytes);
+  } finally {
+    dolphinJitVerificationPending.delete(key);
+  }
+  if (!valid) {
+    if (!self._dolphinJitIncomingIdentityErrLogged) {
+      self._dolphinJitIncomingIdentityErrLogged = true;
+      postStatus("jit-cache: rejected pthread compile with mismatched block identity");
+    }
+    return;
+  }
+  if (dolphinJitCacheMap.has(key)) return;
+  dolphinJitNewCompileCount += 1;
   // Reserve the slot synchronously so duplicate notifications dedupe even
   // before the async compile finishes. Replace with the real Module once
   // compilation completes. Async to keep discio off-critical-path. After
   // the compile lands, persist to IndexedDB so subsequent boots can
   // pre-warm without recompiling.
-  dolphinJitCacheMap.set(data.hash, null);
+  dolphinJitCacheMap.set(key, null);
   // Persist bytes synchronously (fire-and-forget IDB put). Storage format
   // is raw wasm bytes; we recompile at boot. WebAssembly.Module storage in
   // IDB proved unreliable empirically (put().oncomplete fires but
   // req.onsuccess never does, and the data doesn't survive). Bytes are
   // boring TypedArrays and clone reliably.
-  writeDolphinJitEntryToIdb(data.hash, data.bytes);
-  WebAssembly.compile(data.bytes).then((mod) => {
-    dolphinJitCacheMap.set(data.hash, mod);
+  void writeDolphinJitEntryToIdb(key, bytes);
+  dolphinJitCompilePending += 1;
+  WebAssembly.compile(bytes).then((mod) => {
+    dolphinJitCacheMap.set(key, mod);
   }).catch((err) => {
-    dolphinJitCacheMap.delete(data.hash);
+    dolphinJitCacheMap.delete(key);
     if (!self._dolphinJitNewCompileErrLogged) {
       self._dolphinJitNewCompileErrLogged = true;
       postStatus(`jit-cache: async compile-on-discio failed: ${err?.message || err}`);
     }
+  }).finally(() => {
+    dolphinJitCompilePending -= 1;
   });
   if (
     dolphinJitNewCompileCount === 1 ||
@@ -4479,7 +5695,27 @@ function handleDolphinJitNewCompile(event) {
 // task (kicked off after reconcileJitCacheWithBuild) can broadcast new
 // modules to pthread workers as they become available.
 let dolphinJitPthreadWorkers = [];
+let dolphinJitPthreadRuntime = null;
+let dolphinJitCachePersistenceEnabled = false;
+let dolphinJitBootLoadComplete = false;
+let dolphinJitBootLoadedEntries = 0;
 let dolphinJitLazyFillActive = false;
+let dolphinJitLazyFillStarted = false;
+let dolphinJitLazyFillCompleted = false;
+let dolphinJitLazyFillSourceEntries = 0;
+let dolphinJitLazyFillProcessedEntries = 0;
+let dolphinJitLazyFillAddedEntries = 0;
+let dolphinJitLazyFillTerminalReason = "not-started";
+let dolphinJitLazyFillFailureCount = 0;
+let dolphinJitLazyFillPromise = null;
+let dolphinJitPthreadBarrierGeneration = 0;
+let dolphinJitPthreadBarrierExpected = 0;
+let dolphinJitPthreadBarrierAcked = 0;
+let dolphinJitPthreadInstallPostFailures = 0;
+let dolphinJitPthreadBarrierInvalidAcks = 0;
+const dolphinJitPthreadBarrierAckGeneration = new WeakMap();
+const dolphinJitPthreadBarrierListeners = new WeakSet();
+const dolphinJitPthreadCompileListeners = new WeakSet();
 // §28ch overflow buffer: prebuilt entries beyond the boot-load cap that
 // we DON'T write to IDB upfront (the 20MiB IDB tx blocked the main thread
 // long enough to inflate the startup freeze). Lazy fill compiles from
@@ -4487,21 +5723,78 @@ let dolphinJitLazyFillActive = false;
 // sessions can read from the existing IDB-path.
 let dolphinJitPrebuiltOverflow = null;
 
-export function installDolphinPthreadChannels(
+function handleDolphinJitPthreadBarrierAck(event, worker) {
+  const data = event.data;
+  if (data?.type !== "dolphin-jit-cache-barrier-ack") return;
+  if (Number(data.generation) !== dolphinJitPthreadBarrierGeneration) return;
+  if (dolphinJitPthreadBarrierAckGeneration.get(worker) === data.generation) return;
+  if (data.installed !== true || !Number.isFinite(Number(data.cacheSize))) {
+    dolphinJitPthreadBarrierInvalidAcks += 1;
+    return;
+  }
+  dolphinJitPthreadBarrierAckGeneration.set(worker, data.generation);
+  dolphinJitPthreadBarrierAcked += 1;
+}
+
+function handleDolphinJitPthreadBarrierAckEvent(event) {
+  handleDolphinJitPthreadBarrierAck(event, event.currentTarget);
+}
+
+function ensureDolphinJitPthreadListeners(worker) {
+  if (!dolphinJitPthreadBarrierListeners.has(worker)) {
+    worker.addEventListener("message", handleDolphinJitPthreadBarrierAckEvent);
+    dolphinJitPthreadBarrierListeners.add(worker);
+  }
+  if (!dolphinJitPthreadCompileListeners.has(worker)) {
+    worker.addEventListener("message", handleDolphinJitNewCompile);
+    dolphinJitPthreadCompileListeners.add(worker);
+  }
+}
+
+function publishDolphinJitPthreadBarrier(workers = dolphinJitPthreadWorkers) {
+  const targets = [...new Set(workers)];
+  dolphinJitPthreadBarrierGeneration += 1;
+  dolphinJitPthreadBarrierExpected = targets.length;
+  dolphinJitPthreadBarrierAcked = 0;
+  dolphinJitPthreadBarrierInvalidAcks = 0;
+  for (const worker of targets) {
+    try {
+      worker.postMessage({
+        type: "dolphin-jit-cache-barrier",
+        generation: dolphinJitPthreadBarrierGeneration,
+      });
+    } catch {
+      dolphinJitPthreadInstallPostFailures += 1;
+    }
+  }
+}
+
+async function waitForDolphinJitPthreadBarrier(timeoutMs = 30_000) {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt <= timeoutMs) {
+    if (dolphinJitPthreadInstallPostFailures > 0) return false;
+    if (dolphinJitPthreadBarrierAcked === dolphinJitPthreadBarrierExpected) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+export async function installDolphinPthreadChannels(
   moduleInstance,
   { jitCacheEnabled = true } = {}
 ) {
   const pthread = moduleInstance?.PThread;
+  dolphinJitPthreadRuntime = pthread || null;
   if (!pthread) {
     if (jitCacheEnabled) {
       postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
     }
     return;
   }
-  const workers = [
+  const workers = [...new Set([
     ...(pthread.runningWorkers || []),
     ...(pthread.unusedWorkers || [])
-  ];
+  ])];
 
   // These messages originate on whichever pthread owns Dolphin's video
   // thread. They are transport, not JIT-cache functionality.
@@ -4530,6 +5823,7 @@ export function installDolphinPthreadChannels(
   // reconcileJitCacheWithBuild before reaching this call site), so we
   // can push immediately.
   dolphinJitPthreadWorkers = workers;
+  dolphinJitPthreadInstallPostFailures = 0;
   if (!workers.length) {
     postStatus("jit-cache: no pthread workers visible at boot (PTHREAD_POOL_SIZE may be 0)");
     return;
@@ -4542,20 +5836,14 @@ export function installDolphinPthreadChannels(
   let sent = 0;
   for (const w of workers) {
     try {
+      ensureDolphinJitPthreadListeners(w);
       w.postMessage({ type: "dolphin-jit-cache", cache: dolphinJitCacheMap });
       sent += 1;
     } catch (err) {
+      dolphinJitPthreadInstallPostFailures += 1;
       if (!self._dolphinJitChannelErrLogged) {
         self._dolphinJitChannelErrLogged = true;
         postStatus(`jit-cache: postMessage to pthread worker failed: ${err?.message || err}`);
-      }
-    }
-    try {
-      w.addEventListener("message", handleDolphinJitNewCompile);
-    } catch (err) {
-      if (!self._dolphinJitListenerErrLogged) {
-        self._dolphinJitListenerErrLogged = true;
-        postStatus(`jit-cache: listener installation failed: ${err?.message || err}`);
       }
     }
   }
@@ -4565,7 +5853,20 @@ export function installDolphinPthreadChannels(
   // the game runs. Cost: small CPU on discio worker + N postMessages,
   // each well under the 16ms frame budget. Gain: bigger effective cache
   // covering menu-nav transitions that the bounded boot-load missed.
-  startLazyJitCacheFill();
+  dolphinJitLazyFillPromise = startLazyJitCacheFill().catch((error) => {
+    dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillCompleted = false;
+    dolphinJitLazyFillTerminalReason = "error";
+    dolphinJitLazyFillFailureCount += 1;
+    postStatus(`jit-cache: lazy fill failed: ${error?.message || error}`);
+  });
+  await dolphinJitLazyFillPromise;
+  publishDolphinJitPthreadBarrier(workers);
+  const synchronized = await waitForDolphinJitPthreadBarrier();
+  postStatus(
+    `jit-cache: pre-boot pthread fence ${synchronized ? "complete" : "incomplete"} ` +
+    `(${dolphinJitPthreadBarrierAcked}/${dolphinJitPthreadBarrierExpected} acknowledged)`
+  );
 }
 
 // §28ch: continue loading IDB modules past DOLPHIN_JIT_IDB_BOOT_LOAD_MAX,
@@ -4574,8 +5875,18 @@ export function installDolphinPthreadChannels(
 // the per-pthread Module._dolphinJitCache. Idempotent: starts once,
 // silently no-ops on subsequent calls.
 async function startLazyJitCacheFill() {
-  if (dolphinJitLazyFillActive) return;
-  if (!dolphinJitIdb) return;
+  if (dolphinJitLazyFillStarted) return;
+  dolphinJitLazyFillStarted = true;
+  dolphinJitLazyFillCompleted = false;
+  dolphinJitLazyFillSourceEntries = 0;
+  dolphinJitLazyFillProcessedEntries = 0;
+  dolphinJitLazyFillAddedEntries = 0;
+  dolphinJitLazyFillTerminalReason = "running";
+  dolphinJitLazyFillFailureCount = 0;
+  if (!dolphinJitIdb) {
+    dolphinJitLazyFillTerminalReason = "indexeddb-unavailable";
+    return;
+  }
   dolphinJitLazyFillActive = true;
   const startedAt = performance.now();
   const startSize = dolphinJitCacheMap.size;
@@ -4586,6 +5897,7 @@ async function startLazyJitCacheFill() {
   // cap fall back to the IDB-cursor path.
   let remaining = [];
   let fromOverflow = false;
+  let cursorFailed = false;
   if (dolphinJitPrebuiltOverflow && dolphinJitPrebuiltOverflow.length > 0) {
     fromOverflow = true;
     for (const { hash, bytes } of dolphinJitPrebuiltOverflow) {
@@ -4608,12 +5920,27 @@ async function startLazyJitCacheFill() {
           }
           cursor.continue();
         };
-        cur.onerror = () => resolve(out);
-      } catch { resolve(out); }
+        cur.onerror = () => {
+          cursorFailed = true;
+          resolve(out);
+        };
+      } catch {
+        cursorFailed = true;
+        resolve(out);
+      }
     });
+  }
+  dolphinJitLazyFillSourceEntries = remaining.length;
+  if (cursorFailed) {
+    dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillTerminalReason = "cursor-error";
+    dolphinJitLazyFillFailureCount += 1;
+    return;
   }
   if (remaining.length === 0) {
     dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillCompleted = true;
+    dolphinJitLazyFillTerminalReason = "complete";
     return;
   }
   postStatus(`jit-cache: lazy fill starting on ${remaining.length} extra IDB entries`);
@@ -4626,29 +5953,45 @@ async function startLazyJitCacheFill() {
   for (let i = 0; i < remaining.length; i += LAZY_BATCH) {
     if (dolphinJitCacheMap.size >= HARD_CAP) break;
     const slice = remaining.slice(i, i + LAZY_BATCH);
-    const compiles = slice.map((entry) => {
+    const verifiedSlice = await Promise.all(slice.map(async (entry) => {
       if (!(entry.value instanceof Uint8Array) && !(entry.value instanceof ArrayBuffer)) {
         return null;
       }
       const buf = entry.value instanceof ArrayBuffer
         ? new Uint8Array(entry.value)
         : entry.value;
+      if (!(await verifyCanonicalWasmBlockKey(String(entry.key), buf))) return null;
+      return { entry, buf };
+    }));
+    const compiles = verifiedSlice.map((verified) => {
+      if (!verified) return null;
+      const { entry, buf } = verified;
       // Only carry bytes through when sourced from the overflow buffer —
       // those need IDB write-back. IDB-sourced entries are already there.
       return { key: entry.key, p: WebAssembly.compile(buf), bytes: fromOverflow ? buf : null };
     }).filter(Boolean);
+    dolphinJitLazyFillFailureCount += verifiedSlice.length - compiles.length;
     const settled = await Promise.allSettled(compiles.map((c) => c.p));
+    dolphinJitLazyFillProcessedEntries += slice.length;
     for (let k = 0; k < settled.length; k++) {
-      if (settled[k].status !== "fulfilled") continue;
+      if (settled[k].status !== "fulfilled") {
+        dolphinJitLazyFillFailureCount += 1;
+        continue;
+      }
       const key = compiles[k].key;
       const mod = settled[k].value;
       const bytes = compiles[k].bytes;
       dolphinJitCacheMap.set(key, mod);
       added += 1;
+      dolphinJitLazyFillAddedEntries = added;
       // Push to every pthread worker. Modules are structured-clone-safe
       // so the receiver can install them on its local wasmTable.
       for (const w of dolphinJitPthreadWorkers) {
-        try { w.postMessage({ type: "dolphin-jit-cache-add", hash: key, module: mod }); } catch {}
+        try {
+          w.postMessage({ type: "dolphin-jit-cache-add", hash: key, module: mod });
+        } catch {
+          dolphinJitLazyFillFailureCount += 1;
+        }
       }
       // §28ch persist-on-fill: when the source was the prebuilt-overflow
       // (not already in IDB), write the bytes so subsequent sessions skip
@@ -4664,6 +6007,14 @@ async function startLazyJitCacheFill() {
     `jit-cache: lazy fill done — added ${added} (cache ${startSize}→${dolphinJitCacheMap.size}) in ${ms}ms`
   );
   dolphinJitLazyFillActive = false;
+  dolphinJitLazyFillCompleted =
+    dolphinJitLazyFillProcessedEntries === dolphinJitLazyFillSourceEntries &&
+    dolphinJitLazyFillFailureCount === 0;
+  dolphinJitLazyFillTerminalReason = dolphinJitLazyFillCompleted
+    ? "complete"
+    : dolphinJitCacheMap.size >= HARD_CAP
+      ? "capacity"
+      : "incomplete";
 }
 
 // Day-27: cross-thread WebGPU command ring. The video pthread can't
@@ -4674,9 +6025,10 @@ async function startLazyJitCacheFill() {
 // backend. Day-27 implements the transport + OP_CLEAR; the full
 // AbstractGfx opcode set layers on next.
 //
-// Header layout (CmdRingHeader, 16 bytes @ headerPtr):
+// Header layout (CmdRingHeader, protocol-dependent @ headerPtr):
 //   [0] u32 write (atomic)  [1] u32 read (atomic)
 //   [2] u32 capacity        [3] u32 upload_read (atomic byte watermark)
+//   [4] u32 protocol_flags  [5] u32 consumer_state [6] u32 consumer_error
 // Slot layout (CmdRecord, 32 bytes @ slotsPtr + i*32):
 //   [0] u32 op   [1..7] 7 words (f32/u32 per opcode)
 const WGPU_CMD_OP_NOP = 0;
@@ -4692,6 +6044,8 @@ const WGPU_CMD_OP_DRAW_TEST = 4;
 // catastrophic. Non-shared so no engine rejects it (cf. TextDecoder).
 const WGPU_DYN_OFF_SCRATCH = new Uint32Array(4);
 const WGPU_CMD_OP_CREATE_BUFFER = 5;
+const WGPU_BUFFER_RESOURCE_ROLE_UNKNOWN = 0;
+const WGPU_BUFFER_RESOURCE_ROLE_UBO_RING = 1;
 const WGPU_CMD_OP_UPLOAD_BUFFER = 6;
 const WGPU_CMD_OP_CREATE_TEXTURE = 7;
 const WGPU_CMD_OP_UPLOAD_TEXTURE = 8;
@@ -4724,6 +6078,22 @@ let wgpuBacklogLastSampleAt = 0;
 let wgpuBacklogLastValue = 0;
 let wgpuBacklogNonzeroSince = 0;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
+let wgpuRendererHeapBuffer = null;
+let wgpuRendererHeapGeneration = 0;
+const wgpuRendererRuntime = new WgpuRendererRuntime({
+  drain: ({ source = "pump" } = {}) => drainWebGpuCmdRing(source),
+  mappedSnapshot: () => ({
+    ...pendingWgpuUploadSnapshot(),
+    pendingRemaps: wgpuMappedRemapPromises.size,
+    capacityBlocked: wgpuMappedCapacityBlocked,
+    timerPending: wgpuMappedDrainTimer !== null,
+  }),
+  finalizeMapped: (timeoutMs) => finalizeWgpuMappedDrain(timeoutMs),
+  queue: () => renderGpu?.device?.queue ?? null,
+  coreState: () => api?.getCoreStateName?.() ?? "",
+  loadFenceActive: () => wgpuLoadFenceActive,
+  fatal: () => wgpuReplayFatal,
+});
 // Day-28/29 resource object table: producer-assigned id → real GPU
 // object built here on renderGpu.device. Phase A widens this to the
 // full AbstractGfx resource set.
@@ -4871,29 +6241,55 @@ function handleWebGpuCmdRing(event) {
     postStatus("webgpu-cmd-ring: wasm heap is not shared; bridge disabled");
     return;
   }
-  const uploadWatermarkProtocol = Number(data.protocolVersion) >= 2 &&
-    Number(data.headerWords) >= 5;
-  const headerWords = uploadWatermarkProtocol ? 5 : 4;
-  webGpuCmdRing = {
-    headerI32: new Int32Array(heap.buffer, data.headerPtr, headerWords),
-    headerU32: new Uint32Array(heap.buffer, data.headerPtr, headerWords),
-    consumerRead: new Uint32Array(heap.buffer, data.headerPtr, headerWords)[1] >>> 0,
-    slotsBase: data.slotsPtr,
-    capacity: data.capacity >>> 0,
-    // Phase A: per-frame upload arena base (absolute wasm-heap
-    // offset). UploadBuffer/UploadTexture src pointers are absolute
-    // heap offsets into this region; the consumer reads them straight
-    // from moduleInstance.HEAPU8 (zero-copy).
-    uploadBase: (data.uploadPtr >>> 0) || 0,
-    uploadSize: (data.uploadSize >>> 0) || 0,
-    uploadWatermarkEnabled: false,
-    stagedUploads: new Map(),
-    stagedUploadBytes: 0,
-    heldReplayStart: null,
-    stagedPassStart: null,
-    stagedScanCursor: null
-  };
-  if (uploadWatermarkProtocol) enableWgpuUploadWatermark(webGpuCmdRing);
+  if (isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
+    attachWgpuUploadProbeRing(data, heap.buffer);
+    return;
+  }
+  if (wgpuReplayFatal) {
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    postStatus("webgpu-cmd-ring: attach rejected after fatal replay state");
+    return;
+  }
+  if (wgpuRendererRuntime.ring) {
+    // The committed producer is a process-lifetime singleton: EnsureRing()
+    // allocates once and never frees or replaces its header. An exact repeat
+    // is therefore a transport retransmission, not a new renderer epoch.
+    if (wgpuRendererRuntime.matchesRing({
+      heapBuffer: heap.buffer,
+      descriptor: data,
+    })) {
+      postStatus("webgpu-cmd-ring: duplicate attachment ignored");
+      return;
+    }
+    const detail = "a different command ring arrived while the renderer still owns one";
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    recordRendererError("webgpu-command-ring-ownership", detail);
+    markWgpuReplayFatal("webgpu-command-ring-ownership", detail);
+    postStatus(`webgpu-cmd-ring: attach rejected: ${detail}`);
+    return;
+  }
+  if (wgpuRendererHeapBuffer !== heap.buffer) {
+    wgpuRendererHeapBuffer = heap.buffer;
+    wgpuRendererHeapGeneration += 1;
+  }
+  try {
+    // The renderer runtime is the sole owner of the live command-ring views.
+    // UploadBuffer/UploadTexture source pointers remain absolute offsets into
+    // the shared wasm heap, so replay stays zero-copy on this thread.
+    webGpuCmdRing = wgpuRendererRuntime.attachRing({
+      sessionId: "inline-discio",
+      heapGeneration: wgpuRendererHeapGeneration,
+      heapBuffer: heap.buffer,
+      descriptor: data,
+    });
+  } catch (error) {
+    const detail = error?.message || String(error);
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    recordRendererError("webgpu-command-ring-attach", detail);
+    markWgpuReplayFatal("webgpu-command-ring-attach", detail);
+    postStatus(`webgpu-cmd-ring: attach failed: ${detail}`);
+    return;
+  }
   publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
   collectWebGpuProducerStateStats();
   const requestedArenaBytes = wgpuUploadArenaMiB * 1024 * 1024;
@@ -4918,18 +6314,27 @@ function handleWebGpuCmdRing(event) {
 }
 
 function currentWgpuReadIndex(ring) {
-  return ring?.consumerRead == null
-    ? Atomics.load(ring.headerI32, 1) >>> 0
-    : ring.consumerRead >>> 0;
+  if (!ring) return 0;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU read requested by a non-owner");
+  }
+  return wgpuRendererRuntime.currentReadIndex();
 }
 
 function currentWgpuUploadReadIndex(ring) {
-  return ring?.headerI32 ? Atomics.load(ring.headerI32, 3) >>> 0 : 0;
+  if (!ring) return 0;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU upload read requested by a non-owner");
+  }
+  return wgpuRendererRuntime.currentUploadReadIndex();
 }
 
 function releaseWgpuUploadPayload(ring, uploadPointer, uploadBytes) {
   if (!ring?.uploadWatermarkEnabled) return null;
-  const nextRead = publishWgpuUploadRead(ring, uploadPointer, uploadBytes);
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU upload release attempted by a non-owner");
+  }
+  const nextRead = wgpuRendererRuntime.publishUploadRead(uploadPointer, uploadBytes);
   if (nextRead === null) {
     webGpuCausalStats.errorCount += 1;
     recordRendererError(
@@ -5072,13 +6477,14 @@ function stageHeldWgpuUploads(
 }
 
 function publishWgpuReadIndex(ring, readIndex) {
-  const normalized = readIndex >>> 0;
-  ring.consumerRead = normalized;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU read publication attempted by a non-owner");
+  }
   // Slot ownership follows actual consumption. The old replay-pump path
   // subtracted capacity-16K here, which made the producer treat already
   // consumed slots as occupied and reduced a 262K ring to an effective 16K.
   // WGPU_REPLAY_WINDOW_RECORDS is a per-drain work budget, not a reservation.
-  Atomics.store(ring.headerI32, 1, normalized | 0);
+  return wgpuRendererRuntime.publishReadIndex(readIndex);
 }
 
 function startWgpuReplayPump() {
@@ -5106,7 +6512,10 @@ function startWgpuReplayPump() {
     } else {
       webGpuCausalStats.replayPumpEmptyPollCount += 1;
     }
-    scheduleWgpuReplayPump(pump, write === read ? 4 : 0);
+    scheduleWgpuReplayPump(
+      pump,
+      write === read || wgpuMappedCapacityBlocked ? 4 : 0
+    );
   };
   scheduleWgpuReplayPump(pump, 0);
 }
@@ -5120,6 +6529,854 @@ function scheduleWgpuReplayPump(callback, delayMs) {
   if (delay === 0) webGpuCausalStats.replayPumpBacklogScheduleCount += 1;
   else webGpuCausalStats.replayPumpIdleScheduleCount += 1;
   wgpuReplayPumpTimer = setTimeout(callback, delay);
+}
+
+function cancelWgpuReplayPump() {
+  if (wgpuReplayPumpTimer !== null) clearTimeout(wgpuReplayPumpTimer);
+  wgpuReplayPumpTimer = null;
+  wgpuReplayYieldPending = false;
+  wgpuReplayPumpScheduledAt = 0;
+  wgpuReplayPumpDueAt = 0;
+}
+
+function clearWgpuReplayStateAfterDeviceLoss() {
+  wgpuMappedStagingGeneration += 1;
+  resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.DEVICE_LOSS);
+  wgpuUploadAttribution.cancelCapacityWait();
+  destroyWgpuVisualCadenceResources();
+  if (wgpuSemanticRuntimeActive) {
+    wgpuSemanticRuntime.invalidate(
+      "device loss does not clear all browser WebGPU resource maps"
+    );
+  }
+  wgpuMappedStagingPool?.invalidate("WebGPU device lost");
+  wgpuUboComputeReconstruction?.invalidate("device-loss");
+  wgpuSparseUbo?.reset("device-loss");
+  wgpuSparseUbo = null;
+  wgpuMappedCapacityBlocked = false;
+  wgpuMappedCapacityBlockedAt = 0;
+  wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+  if (webGpuCmdRing) {
+    webGpuCmdRing.heldReplayStart = null;
+    webGpuCmdRing.stagedUploads?.clear();
+    webGpuCmdRing.stagedUploadBytes = 0;
+    webGpuCmdRing.stagedPassStart = null;
+    webGpuCmdRing.stagedScanCursor = null;
+  }
+  wgpuPassStateCache.reset("device-lost");
+  if (wgpuPassPackageProjectionActive) {
+    wgpuPassPackageProjection.reset("device-lost");
+  }
+  if (wgpuUploadRunProjectionActive) {
+    wgpuUploadRunProjection.reset("device-lost");
+  }
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset("device-lost");
+  }
+}
+
+function ensureWgpuMappedStagingPool(device) {
+  if (wgpuUploadTransport !== "mapped") return null;
+  if (!wgpuMappedStagingPool) {
+    wgpuMappedStagingPool = createWgpuMappedStagingPool({
+      device,
+      slotCount: wgpuMappedStagingSlotCount,
+      slotSize: WGPU_MAPPED_STAGING_SLOT_BYTES,
+      // MAP_WRITE | COPY_SRC and GPUMapMode.WRITE. Passing the numeric
+      // values keeps the worker test seam independent of WebGPU globals.
+      bufferUsage: 0x0002 | 0x0004,
+      mapMode: 0x0002,
+      watchDeviceLoss: false,
+      flatRecords: wgpuMappedStageFastEnabled,
+    });
+  }
+  return wgpuMappedStagingPool;
+}
+
+function ensureWgpuUboComputeReconstruction(device) {
+  if (!wgpuUboComputeReconstructionActive) return null;
+  wgpuUboComputeReconstruction ??= createWgpuUboComputeReconstruction({
+    device,
+    watchDeviceLoss: true,
+  });
+  return wgpuUboComputeReconstruction;
+}
+
+function wgpuUboComputeReconstructionSnapshot() {
+  const snapshot = wgpuUboComputeReconstruction?.snapshot() ?? null;
+  return {
+    schema: snapshot?.schema ?? "wasm-dolphin.wgpu-ubo-compute-reconstruction.v1",
+    requested: wgpuUboComputeReconstructionRequested,
+    eligible: wgpuUboComputeReconstructionRequested,
+    active: wgpuUboComputeReconstructionActive && Boolean(snapshot?.active),
+    runtimeEligible: wgpuUboComputeReconstructionActive,
+    projectionOnly: false,
+    replayBehaviorChanged: wgpuUboComputeReconstructionActive,
+    disabledReason: wgpuUboComputeReconstructionRequested &&
+        !wgpuUboComputeReconstructionActive
+      ? "requires-metrics-hardware-wgpu-mapped"
+      : null,
+    ...(snapshot ?? {}),
+  };
+}
+
+function pendingWgpuUploadSnapshot() {
+  const mapped = wgpuMappedStagingPool?.snapshot() ?? null;
+  const compute = wgpuUboComputeReconstruction?.snapshot() ?? null;
+  return {
+    pendingUploads: (mapped?.pendingUploads ?? 0) + (compute?.pendingUploads ?? 0),
+    pendingBytes: mapped?.pendingBytes ?? 0,
+    oldestPendingAgeMs: mapped?.oldestPendingAgeMs ?? 0,
+    mapped,
+    compute,
+  };
+}
+
+function ensureWgpuSparseUbo(device) {
+  if (!wgpuSparseUboEnabled) return null;
+  wgpuSparseUbo ??= createWgpuSparseUboCopyForward({ device });
+  return wgpuSparseUbo;
+}
+
+function classifyWgpuUboComputeUpload(role, byteLength) {
+  if (role === WGPU_UPLOAD_ROLE.UTILITY_UNIFORM) {
+    return { resourceClass: "RAW_FULL", utility: true, rawReason: "utility" };
+  }
+  if (role !== WGPU_UPLOAD_ROLE.UBO) return null;
+  for (const [resourceClass, classBytes] of Object.entries(
+    WGPU_UBO_COMPUTE_CLASS_BYTES
+  )) {
+    if (byteLength === classBytes) {
+      return { resourceClass, utility: false, rawReason: null };
+    }
+  }
+  return {
+    resourceClass: "RAW_FULL",
+    utility: false,
+    rawReason: "unknown-class-size",
+  };
+}
+
+function stageWgpuUboComputeUpload({
+  resourceId,
+  role,
+  destinationOffset,
+  data,
+  borrowBytes = false,
+} = {}) {
+  if (!wgpuUboComputeReconstructionActive || role !== WGPU_UPLOAD_ROLE.UBO) {
+    return null;
+  }
+  const classification = classifyWgpuUboComputeUpload(role, data?.byteLength ?? 0);
+  if (!classification || classification.resourceClass === "RAW_FULL") return null;
+  const manager = wgpuUboComputeReconstruction;
+  if (!manager) {
+    return { handled: true, ok: false, reason: "ubo-compute-manager-unavailable" };
+  }
+  const result = manager.stage({
+    resourceId,
+    resourceClass: classification.resourceClass,
+    destinationOffset,
+    bytes: data,
+    borrowBytes,
+  });
+  return { handled: true, ...result };
+}
+
+function wgpuSparseUboSnapshot() {
+  if (wgpuSparseUbo) {
+    return wgpuSparseUbo.snapshot({ requested: true, active: wgpuSparseUboEnabled });
+  }
+  return {
+    schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+    instanceId: 0,
+    requested: wgpuSparseUboEnabled,
+    active: false,
+    coverageThreshold: 0.5,
+    maxSparseRanges: 0,
+    classOrder: ["vs", "ps", "gs"],
+    classSizes: [4112, 1536, 64],
+    shadowValid: [false, false, false],
+    eligibleCalls: 0,
+    baselineCalls: 0,
+    sparseCalls: 0,
+    equalCalls: 0,
+    fullFallbackCalls: 0,
+    capacityMisses: 0,
+    fullBytes: 0,
+    stagedBytes: 0,
+    avoidedStagedBytes: 0,
+    copyForwardBytes: 0,
+    overlayRanges: 0,
+    overlayBytes: 0,
+    predictedGpuCopyBytes: 0,
+    invalidations: 0,
+    invalidationReasons: {},
+    callsByClass: [0, 0, 0],
+    sparseCallsByClass: [0, 0, 0],
+    stagedBytesByClass: [0, 0, 0],
+  };
+}
+
+function cancelWgpuMappedDrainTimer(token = null) {
+  if (token && wgpuMappedDrainTimerToken &&
+      (token.generation !== wgpuMappedDrainTimerToken.generation ||
+       token.sequence !== wgpuMappedDrainTimerToken.sequence)) {
+    return false;
+  }
+  if (wgpuMappedDrainTimer !== null) clearTimeout(wgpuMappedDrainTimer);
+  wgpuMappedDrainTimer = null;
+  wgpuMappedDrainTimerToken = null;
+  return true;
+}
+
+function resetWgpuMappedDrainCoalescing(reason, { clearTelemetry = false } = {}) {
+  cancelWgpuMappedDrainTimer();
+  wgpuMappedDrainCoalescer.reset({
+    generation: wgpuMappedStagingGeneration,
+    reason,
+    clearTelemetry,
+  });
+}
+
+function mappedDrainForceReason(reason) {
+  if (reason === "staging-capacity") return WGPU_MAPPED_DRAIN_FORCE_REASONS.CAPACITY;
+  if (reason === "present") return WGPU_MAPPED_DRAIN_FORCE_REASONS.PRESENT;
+  if (reason.includes("readback")) return WGPU_MAPPED_DRAIN_FORCE_REASONS.READBACK;
+  if (reason === "blit") return WGPU_MAPPED_DRAIN_FORCE_REASONS.BLIT;
+  if (reason === "destroy") return WGPU_MAPPED_DRAIN_FORCE_REASONS.DESTROY;
+  return WGPU_MAPPED_DRAIN_FORCE_REASONS.RENDER;
+}
+
+function prepareWgpuMappedDrainSubmission(reason, decisionPrepared = false) {
+  const snapshot = pendingWgpuUploadSnapshot();
+  const pending = (snapshot?.pendingUploads ?? 0) > 0;
+  if (!decisionPrepared) {
+    const decision = wgpuMappedDrainCoalescer.force(mappedDrainForceReason(reason), {
+      pending,
+      pendingBytes: snapshot?.pendingBytes ?? 0,
+      pendingRecords: snapshot?.pendingUploads ?? 0,
+      pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+    });
+    if (decision.cancelledTimerToken) {
+      cancelWgpuMappedDrainTimer(decision.cancelledTimerToken);
+    }
+  }
+  return pending;
+}
+
+function submitPendingWgpuMappedUploads(reason = "coalescing-deadline") {
+  const pool = wgpuMappedStagingPool;
+  const queue = renderGpu?.device?.queue;
+  if (!pool || !queue) return false;
+  let batch = null;
+  let computeBatch = null;
+  try {
+    batch = pool.seal();
+    if (wgpuUboComputeReconstructionActive && wgpuUboComputeReconstruction) {
+      computeBatch = wgpuUboComputeReconstruction.seal(
+        `Dolphin ordered UBO reconstruction: ${reason}`
+      );
+      if (computeBatch && !computeBatch.ok) {
+        throw new Error(`UBO compute seal failed: ${computeBatch.reason}`);
+      }
+    }
+    if (!batch && !computeBatch) return false;
+    if (wgpuUboComputeProjectionActive) {
+      wgpuUboComputeProjection.boundary(reason);
+    }
+    queue.submit([
+      ...(batch ? [batch.commandBuffer] : []),
+      ...(computeBatch ? [computeBatch.commandBuffer] : []),
+    ]);
+    gpuCompletionTracker.recordSubmittedWork(queue, "hardware-upload-staging");
+    if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
+    wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
+    if (batch) {
+      wgpuMappedDrainCoalescer.recordSubmission(
+        Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
+      );
+      trackWgpuMappedRemap(pool.acceptSubmission(batch));
+    }
+    if (computeBatch) {
+      trackWgpuMappedRemap(wgpuUboComputeReconstruction.accept(computeBatch));
+    }
+    return true;
+  } catch (error) {
+    if (batch) {
+      try {
+        pool.rejectSubmission(batch, error);
+      } catch {
+        pool.invalidate(error);
+      }
+    }
+    if (computeBatch?.ok) {
+      try {
+        trackWgpuMappedRemap(
+          wgpuUboComputeReconstruction.reject(computeBatch, "submit-error")
+        );
+      } catch {
+        wgpuUboComputeReconstruction = null;
+      }
+    }
+    recordRendererError("submit-error", error?.message || error);
+    markWgpuReplayFatal("submit-error", error?.message || error);
+    wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error });
+    return false;
+  }
+}
+
+function scheduleWgpuMappedDrainDeadline(decision) {
+  cancelWgpuMappedDrainTimer();
+  const token = decision.timerToken;
+  if (!token) return;
+  wgpuMappedDrainTimerToken = token;
+  const timerHandle = setTimeout(() => {
+    const isCurrentTimer = wgpuMappedDrainTimer === timerHandle &&
+      wgpuMappedDrainTimerToken?.generation === token.generation &&
+      wgpuMappedDrainTimerToken?.sequence === token.sequence;
+    if (!isCurrentTimer) {
+      wgpuMappedDrainCoalescer.onTimer(token, {
+        pending: false,
+        generation: token.generation,
+      });
+      return;
+    }
+    wgpuMappedDrainTimer = null;
+    wgpuMappedDrainTimerToken = null;
+    const snapshot = pendingWgpuUploadSnapshot();
+    const pending = (snapshot?.pendingUploads ?? 0) > 0;
+    const timerDecision = wgpuMappedDrainCoalescer.onTimer(token, {
+      pending,
+      pendingBytes: snapshot?.pendingBytes ?? 0,
+      pendingRecords: snapshot?.pendingUploads ?? 0,
+      pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+    });
+    if (timerDecision.action === "flush") {
+      submitPendingWgpuMappedUploads("coalescing-deadline");
+    }
+  }, Math.max(0, decision.delayMs));
+  wgpuMappedDrainTimer = timerHandle;
+}
+
+function forceWgpuMappedDrainLifecycle(reason) {
+  if (!wgpuMappedDrainCoalescingEnabled) {
+    return submitPendingWgpuMappedUploads(reason);
+  }
+  const snapshot = pendingWgpuUploadSnapshot();
+  const pending = (snapshot?.pendingUploads ?? 0) > 0;
+  const decision = wgpuMappedDrainCoalescer.force(reason, {
+    pending,
+    pendingBytes: snapshot?.pendingBytes ?? 0,
+    pendingRecords: snapshot?.pendingUploads ?? 0,
+    pendingAgeMs: snapshot?.oldestPendingAgeMs ?? 0,
+    generation: wgpuMappedStagingGeneration,
+  });
+  if (decision.cancelledTimerToken) {
+    cancelWgpuMappedDrainTimer(decision.cancelledTimerToken);
+  }
+  if (decision.action === "flush") {
+    submitPendingWgpuMappedUploads(reason);
+  }
+  resetWgpuMappedDrainCoalescing(reason);
+  return decision.action === "flush";
+}
+
+async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
+  const deadlineAt = globalThis.performance.now() + timeoutMs;
+  for (;;) {
+    const snapshot = pendingWgpuUploadSnapshot();
+    if ((snapshot?.pendingUploads ?? 0) > 0) {
+      forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.FINALIZATION);
+    }
+    const pendingRemaps = [...wgpuMappedRemapPromises];
+    if (pendingRemaps.length === 0) break;
+    const remainingMs = deadlineAt - globalThis.performance.now();
+    if (remainingMs <= 0) {
+      throw new Error("WGPU mapped drain finalization timed out");
+    }
+    let timeoutHandle;
+    try {
+      await Promise.race([
+        Promise.all(pendingRemaps),
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error("WGPU mapped drain finalization timed out")),
+            remainingMs
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+    await Promise.resolve();
+  }
+  const finalSnapshot = pendingWgpuUploadSnapshot();
+  const mappedFinal = finalSnapshot.mapped;
+  const computeFinal = finalSnapshot.compute;
+  const quiesced = !wgpuReplayFatal &&
+    (finalSnapshot?.pendingUploads ?? 0) === 0 &&
+    (mappedFinal?.activeBatches ?? 0) === 0 &&
+    (mappedFinal?.states?.remapping ?? 0) === 0 &&
+    (computeFinal?.activeBatches ?? 0) === 0 &&
+    (computeFinal?.states?.remapping ?? 0) === 0 &&
+    wgpuMappedRemapPromises.size === 0 &&
+    !wgpuMappedCapacityBlocked;
+  if (!quiesced) {
+    throw new Error("WGPU mapped drain finalization did not quiesce");
+  }
+  return {
+    quiesced: true,
+    pendingUploads: finalSnapshot?.pendingUploads ?? 0,
+    activeBatches: (mappedFinal?.activeBatches ?? 0) +
+      (computeFinal?.activeBatches ?? 0),
+    remappingSlots: (mappedFinal?.states?.remapping ?? 0) +
+      (computeFinal?.states?.remapping ?? 0),
+    activeCapacityWait: false,
+  };
+}
+
+function wgpuReplayQuiescenceSnapshot() {
+  return wgpuRendererRuntime.snapshot();
+}
+
+async function finalizeWgpuReplayQuiescence(
+  timeoutMs = 30_000,
+  { requireRing = false } = {}
+) {
+  return wgpuRendererRuntime.quiesce(timeoutMs, {
+    requireRing,
+  });
+}
+
+function drainWgpuSemanticOwnership() {
+  if (!wgpuOwnershipTraceActive) return 0;
+  if (!wgpuSemanticRuntimeActive) return wgpuOwnershipTrace.drain();
+  if (!wgpuSemanticRuntime.isOpen() ||
+      !wgpuSemanticRuntime.canDrainOwnership()) return 0;
+  const loadedCheckpointGeneration = readLastLoadedCheckpoint().generation;
+  const records = wgpuOwnershipTrace.drain({
+    collect: true,
+    stopAfterEvent: WGPU_OWNERSHIP_EVENT.LOAD_REQUESTED,
+  });
+  wgpuSemanticRuntime.pushOwnership(records, wgpuOwnershipTrace.snapshot(), {
+    loadedCheckpointGeneration,
+  });
+  return records.length;
+}
+
+function advanceWgpuSemanticCapture(ring, read) {
+  if (!wgpuSemanticRuntimeActive || !ring?.headerI32) return;
+  drainWgpuSemanticOwnership();
+  const ownershipHealth = wgpuOwnershipTrace.snapshot();
+  const write = Atomics.load(ring.headerI32, 0) >>> 0;
+  const loadedCheckpointGeneration = readLastLoadedCheckpoint().generation;
+  if (wgpuSemanticRuntime.maybeRequestCaptureEnd({
+    commandRingRead: read,
+    commandRingWrite: write,
+    ownershipHealth,
+    loadedCheckpointGeneration,
+  })) {
+    try {
+      api.setWebGpuOwnershipTraceEnabled(0);
+      wgpuSemanticRuntime.markNativeStopRequestSent();
+    } catch (error) {
+      wgpuSemanticRuntime.invalidate(
+        `native capture-stop request failed: ${error?.message || error}`
+      );
+    }
+  }
+  const frozen = wgpuSemanticRuntime.maybeFreezeCapture({
+    commandRingRead: read,
+    commandRingWrite: write,
+    ownershipHealth,
+    loadedCheckpointGeneration,
+  });
+  if (!frozen) return;
+  if (!api.acknowledgeWebGpuOwnershipTraceCapture(frozen.captureId)) {
+    markWgpuReplayFatal(
+      "semantic-capture-ack",
+      `native capture ${frozen.captureId} acknowledgement was rejected`
+    );
+  }
+}
+
+async function initializeWgpuUploadProbe(mode) {
+  if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer !== "function") {
+    throw new Error("WGPU upload probes require cross-origin isolation");
+  }
+  if (wgpuUploadProbeExecutor || wgpuUploadProbeWorker) {
+    throw new Error("WGPU upload probe is already initialized");
+  }
+  wgpuUploadProbeOwnerBuffer = new SharedArrayBuffer(16);
+  wgpuUploadProbeRing = null;
+  const startedAt = performance.now();
+  if (mode === "inline-upload") {
+    if (!self.navigator?.gpu) throw new Error("WebGPU is unavailable in disc worker");
+    const adapterStartedAt = performance.now();
+    const adapter = await self.navigator.gpu.requestAdapter({
+      powerPreference: wgpuPowerPreference
+    });
+    const adapterMs = performance.now() - adapterStartedAt;
+    if (!adapter) throw new Error("disc worker requestAdapter returned null");
+    const deviceStartedAt = performance.now();
+    const device = await adapter.requestDevice();
+    const deviceMs = performance.now() - deviceStartedAt;
+    wgpuUploadProbeExecutor = createWgpuUploadProbeExecutor({
+      mode,
+      device,
+      ownerBuffer: wgpuUploadProbeOwnerBuffer,
+      onSnapshot: mergeWgpuUploadProbeSnapshot,
+      onFatal: (fatal) => recordRendererError("wgpu-upload-probe", fatal.detail)
+    });
+    wgpuUploadProbeInitMetrics = {
+      adapterMs,
+      deviceMs,
+      totalMs: performance.now() - startedAt
+    };
+  } else {
+    const worker = new Worker(new URL("./wgpu-renderer-worker-probe.js", import.meta.url), {
+      type: "module",
+      name: "dolphin-wgpu-upload-probe"
+    });
+    wgpuUploadProbeWorker = worker;
+    const ready = new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("nested WGPU upload probe initialization timed out")),
+        10_000
+      );
+      const onMessage = (event) => {
+        if (event.data?.type !== "upload-probe-ready") return;
+        clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        if (!event.data.ok || event.data.schema !== WGPU_UPLOAD_PROBE_SCHEMA) {
+          reject(new Error(event.data.error || "nested WGPU upload probe schema mismatch"));
+          return;
+        }
+        resolve(event.data);
+      };
+      worker.addEventListener("message", onMessage);
+    });
+    worker.addEventListener("message", handleWgpuUploadProbeWorkerMessage);
+    worker.addEventListener("error", (event) => {
+      failWgpuUploadProbeRing(event.message || "nested WGPU upload probe worker failed");
+    });
+    worker.addEventListener("messageerror", () => {
+      failWgpuUploadProbeRing("nested WGPU upload probe message deserialization failed");
+    });
+    worker.postMessage({
+      type: "upload-probe-init",
+      mode,
+      ownerBuffer: wgpuUploadProbeOwnerBuffer,
+      powerPreference: wgpuPowerPreference
+    });
+    const result = await ready;
+    wgpuUploadProbeInitMetrics = {
+      adapterMs: Number(result.adapterMs) || 0,
+      deviceMs: Number(result.deviceMs) || 0,
+      totalMs: Number(result.totalMs) || performance.now() - startedAt
+    };
+  }
+  webGpuCausalStats.rendererWorkerProbe = {
+    ...webGpuCausalStats.rendererWorkerProbe,
+    requested: mode,
+    active: false,
+    passed: false,
+    schema: WGPU_UPLOAD_PROBE_SCHEMA,
+    blankOutput: true,
+    sharedHeap: true,
+    ...wgpuUploadProbeInitMetrics,
+    error: ""
+  };
+}
+
+function attachWgpuUploadProbeRing(data, heapBuffer) {
+  if (wgpuUploadProbeRing) {
+    failWgpuUploadProbeRing("duplicate WGPU upload probe ring handoff");
+    return;
+  }
+  try {
+    if (!(heapBuffer instanceof SharedArrayBuffer)) {
+      throw new TypeError("upload probe handoff requires a shared WASM heap");
+    }
+    const headerPtr = Number(data.headerPtr);
+    const headerWords = Number(data.headerWords);
+    if (!Number.isSafeInteger(headerPtr) || headerPtr < 0 || headerPtr % 4 ||
+        !Number.isSafeInteger(headerWords) || headerWords < 7 ||
+        headerPtr + 7 * 4 > heapBuffer.byteLength) {
+      throw new RangeError("upload probe header is outside the shared WASM heap");
+    }
+    wgpuUploadProbeRing = {
+      headerI32: new Int32Array(heapBuffer, headerPtr, 7),
+      protocolV3Enabled: false
+    };
+    if (Number(data.protocolVersion) !== 3) {
+      failWgpuUploadProbeRing("upload probe requires protocol v3 handoff");
+      return;
+    }
+    const descriptor = {
+      heapBuffer,
+      headerPtr,
+      headerWords,
+      slotsPtr: Number(data.slotsPtr),
+      capacity: Number(data.capacity),
+      uploadPtr: Number(data.uploadPtr),
+      uploadSize: Number(data.uploadSize),
+      protocolVersion: Number(data.protocolVersion),
+      start: true
+    };
+    if (wgpuRendererWorkerProbe === "inline-upload") {
+      mergeWgpuUploadProbeSnapshot(wgpuUploadProbeExecutor.attach(descriptor));
+    } else {
+      wgpuUploadProbeWorker.postMessage({ type: "upload-probe-attach", descriptor });
+    }
+  } catch (error) {
+    if (wgpuUploadProbeRing) failWgpuUploadProbeRing(error?.message || error);
+    else recordRendererError("wgpu-upload-probe", error?.message || error);
+  }
+}
+
+function handleWgpuUploadProbeWorkerMessage(event) {
+  const message = event.data;
+  if (!message) return;
+  if (message.snapshot) mergeWgpuUploadProbeSnapshot(message.snapshot);
+  if (message.type === "upload-probe-telemetry" ||
+      message.type === "upload-probe-attached") {
+    if (message.type === "upload-probe-attached" && message.ok) {
+      wgpuUploadProbeRing.protocolV3Enabled = true;
+      postStatus(`WGPU ${wgpuRendererWorkerProbe} ring attached`);
+    }
+    return;
+  }
+  if (message.type === "upload-probe-fatal") {
+    const detail = message.fatal?.detail || "nested WGPU upload probe failed";
+    recordRendererError("wgpu-upload-probe", detail);
+    return;
+  }
+  if (message.type === "upload-probe-error") {
+    failWgpuUploadProbeRing(message.error || "nested WGPU upload probe error");
+  }
+  if (message.id != null) {
+    const pending = wgpuUploadProbePendingRequests.get(message.id);
+    if (pending) {
+      wgpuUploadProbePendingRequests.delete(message.id);
+      clearTimeout(pending.timeout);
+      if (message.ok) pending.resolve(message);
+      else pending.reject(new Error(message.error || `${message.type} failed`));
+    }
+  }
+}
+
+function mergeWgpuUploadProbeSnapshot(snapshot) {
+  if (!snapshot || snapshot.schema !== WGPU_UPLOAD_PROBE_SCHEMA) return;
+  webGpuCausalStats.rendererWorkerProbe = {
+    ...snapshot,
+    ...wgpuUploadProbeInitMetrics,
+    error: snapshot.fatalError || ""
+  };
+  if (wgpuUploadProbeRing && snapshot.active) {
+    wgpuUploadProbeRing.protocolV3Enabled = true;
+  }
+}
+
+function failWgpuUploadProbeRing(detail) {
+  const message = String(detail || "WGPU upload probe failed");
+  if (wgpuUploadProbeRing && !wgpuUploadProbeRing.protocolV3Enabled) {
+    enableWgpuUploadWatermark(wgpuUploadProbeRing);
+    enableWgpuNonDroppingBackpressure(wgpuUploadProbeRing);
+  }
+  failWgpuRingConsumer(wgpuUploadProbeRing, WGPU_CONSUMER_ERROR_UNKNOWN);
+  webGpuCausalStats.rendererWorkerProbe = {
+    ...webGpuCausalStats.rendererWorkerProbe,
+    passed: false,
+    error: message
+  };
+  recordRendererError("wgpu-upload-probe", message);
+}
+
+function requestWgpuUploadProbeWorker(type, payload = {}, timeoutMs = 15_000) {
+  if (!wgpuUploadProbeWorker) throw new Error("nested WGPU upload probe is unavailable");
+  const id = wgpuUploadProbeNextRequestId++;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      wgpuUploadProbePendingRequests.delete(id);
+      failWgpuUploadProbeRing(`${type} timed out`);
+      reject(new Error(`${type} timed out`));
+    }, timeoutMs);
+    wgpuUploadProbePendingRequests.set(id, { resolve, reject, timeout });
+    wgpuUploadProbeWorker.postMessage({ type, id, ...payload });
+  });
+}
+
+async function finalizeWgpuUploadProbe(timeoutMs = 10_000) {
+  if (!isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
+    return { required: false, snapshot: null };
+  }
+  let snapshot;
+  if (wgpuRendererWorkerProbe === "inline-upload") {
+    snapshot = await wgpuUploadProbeExecutor.finalize({ timeoutMs });
+  } else {
+    const result = await requestWgpuUploadProbeWorker(
+      "upload-probe-finalize",
+      { timeoutMs },
+      timeoutMs + 5000
+    );
+    snapshot = result.snapshot;
+  }
+  mergeWgpuUploadProbeSnapshot(snapshot);
+  return { required: true, snapshot: webGpuCausalStats.rendererWorkerProbe };
+}
+
+async function beginWgpuUploadProbeMeasurement(timeoutMs = 10_000) {
+  if (!isIntentionalBlankWgpuProbe(wgpuRendererWorkerProbe)) {
+    return { required: false, snapshot: null };
+  }
+  let snapshot;
+  if (wgpuRendererWorkerProbe === "inline-upload") {
+    snapshot = await wgpuUploadProbeExecutor.beginMeasurement({ timeoutMs });
+  } else {
+    const result = await requestWgpuUploadProbeWorker(
+      "upload-probe-begin-measurement",
+      { timeoutMs },
+      timeoutMs + 5000
+    );
+    snapshot = result.snapshot;
+  }
+  mergeWgpuUploadProbeSnapshot(snapshot);
+  return { required: true, snapshot: webGpuCausalStats.rendererWorkerProbe };
+}
+
+async function runWgpuRendererWorkerCanary() {
+  if (!(globalThis.crossOriginIsolated && typeof SharedArrayBuffer === "function")) {
+    throw new Error("renderer worker canary requires cross-origin isolation");
+  }
+  const sharedCanary = new SharedArrayBuffer(4);
+  const atomics = new Int32Array(sharedCanary);
+  const worker = new Worker(new URL("./wgpu-renderer-worker-probe.js", import.meta.url), {
+    type: "module",
+    name: "dolphin-wgpu-renderer-probe",
+  });
+  const result = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("renderer worker canary timed out")), 10_000);
+    worker.addEventListener("message", (event) => {
+      if (event.data?.type !== "canary-result") return;
+      clearTimeout(timeout);
+      resolve(event.data);
+    }, { once: true });
+    worker.addEventListener("error", (event) => {
+      clearTimeout(timeout);
+      reject(new Error(event.message || "renderer worker canary failed"));
+    }, { once: true });
+    worker.postMessage({
+      type: "canary",
+      sharedCanary,
+      powerPreference: wgpuPowerPreference,
+    });
+  }).finally(() => worker.terminate());
+  const expectedCanary = 0x57a6cafe;
+  const expectedSchema = "wasm-dolphin.wgpu-renderer-worker-canary.v1";
+  const observedCanary = Atomics.load(atomics, 0) >>> 0;
+  if (
+    !result?.ok ||
+    result.schema !== expectedSchema ||
+    observedCanary !== expectedCanary ||
+    result.observed !== expectedCanary
+  ) {
+    throw new Error(result?.error || `renderer worker canary mismatch: ${observedCanary.toString(16)}`);
+  }
+  webGpuCausalStats.rendererWorkerProbe = {
+    requested: "canary",
+    active: true,
+    passed: true,
+    schema: expectedSchema,
+    adapterMs: Number(result.adapterMs) || 0,
+    deviceMs: Number(result.deviceMs) || 0,
+    gpuCompletionMs: Number(result.gpuCompletionMs) || 0,
+    mapMs: Number(result.mapMs) || 0,
+    totalMs: Number(result.totalMs) || 0,
+    error: "",
+  };
+  postStatus(
+    `WGPU renderer worker canary passed in ${webGpuCausalStats.rendererWorkerProbe.totalMs.toFixed(1)}ms`
+  );
+  return webGpuCausalStats.rendererWorkerProbe;
+}
+
+function trackWgpuMappedRemap(remapPromise) {
+  const generation = wgpuMappedStagingGeneration;
+  const attribution = wgpuUploadAttribution;
+  const tracked = Promise.resolve(remapPromise).then((ok) => {
+    if (generation !== wgpuMappedStagingGeneration) return ok;
+    if (!ok) {
+      webGpuCausalStats.mappedStagingRemapFailureCount += 1;
+      markWgpuReplayFatal(
+        "staging-remap",
+        wgpuMappedStagingPool?.snapshot().lastError || "mapped staging remap failed"
+      );
+    }
+    return ok;
+  }, (error) => {
+    if (generation !== wgpuMappedStagingGeneration) return false;
+    webGpuCausalStats.mappedStagingRemapFailureCount += 1;
+    wgpuMappedStagingPool?.invalidate(error);
+    markWgpuReplayFatal("staging-remap", error?.message || error);
+    return false;
+  }).finally(() => {
+    wgpuMappedRemapPromises.delete(tracked);
+    if (generation !== wgpuMappedStagingGeneration) return;
+    if (wgpuMappedCapacityBlocked) {
+      const waitedMs = Math.max(0, performance.now() - wgpuMappedCapacityBlockedAt);
+      webGpuCausalStats.mappedStagingCapacityWaitTotalMs += waitedMs;
+      webGpuCausalStats.mappedStagingCapacityWaitMaxMs = Math.max(
+        webGpuCausalStats.mappedStagingCapacityWaitMaxMs,
+        waitedMs
+      );
+      attribution.recordCapacityWaitDuration(
+        wgpuMappedCapacityBlockedRole,
+        waitedMs
+      );
+      wgpuMappedCapacityBlocked = false;
+      wgpuMappedCapacityBlockedAt = 0;
+      wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
+    }
+    if (!wgpuReplayFatal && webGpuCmdRing) startWgpuReplayPump();
+  });
+  wgpuMappedRemapPromises.add(tracked);
+  return tracked;
+}
+
+function markWgpuMappedCapacityWait(uploadRole = WGPU_UPLOAD_ROLE.UNKNOWN) {
+  webGpuCausalStats.mappedStagingCapacityWaitCount += 1;
+  const normalizedRole = wgpuUploadAttribution.recordCapacityWaitAttempt(uploadRole);
+  if (!wgpuMappedCapacityBlocked) {
+    wgpuMappedCapacityBlocked = true;
+    wgpuMappedCapacityBlockedAt = performance.now();
+    wgpuMappedCapacityBlockedRole = normalizedRole;
+    wgpuUploadAttribution.beginCapacityWait(normalizedRole);
+  }
+}
+
+function markWgpuReplayFatal(scope, detail) {
+  if (wgpuReplayFatal) return false;
+  wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
+  resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.FATAL);
+  wgpuSparseUbo?.reset(`fatal-${scope}`);
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset(`fatal-${scope}`);
+  }
+  wgpuUboComputeReconstruction?.invalidate(`fatal-${scope}`);
+  if (wgpuMappedStagingPool?.snapshot().pendingUploads > 0) {
+    wgpuMappedStagingPool.invalidate(`fatal ${scope}: ${detail || "unknown"}`);
+  }
+  const errorCode = scope === "device-lost"
+    ? WGPU_CONSUMER_ERROR_DEVICE_LOST
+    : scope === "submit-error"
+      ? WGPU_CONSUMER_ERROR_SUBMIT
+      : WGPU_CONSUMER_ERROR_UNKNOWN;
+  wgpuRendererRuntime.emergencyFail(errorCode);
+  return true;
 }
 
 function summarizeCurrentWgpuRing({
@@ -5702,7 +7959,55 @@ const webGpuCausalStats = {
   producerBindGroupRecordsSuppressed: [0, 0, 0],
   producerVertexBufferRecordsSuppressed: 0,
   producerIndexBufferRecordsSuppressed: 0,
+  producerProfile: {
+    schema: WGPU_PRODUCER_PROFILE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    phaseCount: WGPU_PRODUCER_PROFILE_PHASE_ORDER.length,
+    phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    calls: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    samples: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+    estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+  },
+  drawProfile: {
+    schema: WGPU_DRAW_PROFILE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    phaseCount: WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+    phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    periods: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    calls: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    samples: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    sampleMaxNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+    estimatedTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+  },
+  tailGate: {
+    schema: WGPU_TAIL_GATE_SCHEMA,
+    requested: false,
+    available: false,
+    version: 1,
+    enabled: false,
+    epoch: 0,
+    period: 0,
+    payloadSamples: 0,
+    flushNeededSamples: 0,
+    refreshNeededSamples: 0,
+    bothCleanSamples: 0,
+    dirtyAtSkip: 0,
+  },
   producerUboCacheEnabled: false,
+  producerUniformFastEnabled: false,
+  producerUboPackEnabled: false,
   producerUboCacheMetricsEnabled: false,
   producerUboCacheClassOrder: ["vs", "ps", "gs"],
   producerUboCacheLookups: [0, 0, 0],
@@ -5717,6 +8022,24 @@ const webGpuCausalStats = {
   producerUboPacketAlignedBytes: 0,
   producerUboPrepareCpuCalls: [0, 0, 0],
   producerUboPrepareCpuNs: [0, 0, 0],
+  producerUboChangeClassOrder: ["vs", "ps", "gs"],
+  producerUboChangeSchemaVersion: 0,
+  producerUboChangeAvailable: false,
+  producerUboChangeEnabled: false,
+  producerUboChangeEpoch: 0,
+  producerUboChangeUploadCalls: [0, 0, 0],
+  producerUboChangeFullBytes: [0, 0, 0],
+  producerUboChangedBytes: [0, 0, 0],
+  producerUboChangeBaselineFullCount: [0, 0, 0],
+  producerUboChangeBaselineFullBytes: [0, 0, 0],
+  producerUboDirty16Bytes: [0, 0, 0],
+  producerUboDirty16Ranges: [0, 0, 0],
+  producerUboDirty256Bytes: [0, 0, 0],
+  producerUboDirty256Ranges: [0, 0, 0],
+  producerUniformFastClassOrder: ["vs", "ps", "gs"],
+  producerUniformFastSkippedComparisons: [0, 0, 0],
+  producerUniformFastKeptComparisons: [0, 0, 0],
+  producerUniformFastChangedComparisons: [0, 0, 0],
   producerGeometryPackEnabled: false,
   producerGeometryPackEpoch: 0,
   producerUploadArenaRequestedBytes: 0,
@@ -5738,6 +8061,18 @@ const webGpuCausalStats = {
   uploadTimeoutCountBeforeVerifiedLoad: 0,
   uploadTimeoutCountAfterVerifiedLoad: 0,
   queueSubmissionCount: 0,
+  uploadTransport: "queue",
+  mappedStagingFastPath: false,
+  mappedDrainCoalescingEnabled: false,
+  mappedStagingCopyCount: 0,
+  mappedStagingCopyBytes: 0,
+  mappedStagingCopyTotalMs: 0,
+  mappedStagingCopyMaxMs: 0,
+  mappedStagingCapacityWaitCount: 0,
+  mappedStagingCapacityWaitTotalMs: 0,
+  mappedStagingCapacityWaitMaxMs: 0,
+  mappedStagingRemapFailureCount: 0,
+  mappedStagingUnsafeCapacityCount: 0,
   heldUploadScannedRecords: 0,
   heldUploadScanTotalMs: 0,
   heldUploadScanMaxMs: 0,
@@ -5833,8 +8168,14 @@ function recordBoundedHistogram(values, bounds, value) {
 }
 
 function drainWebGpuCmdRing(source = "presentation") {
+  if (wgpuReplayFatal) return;
   const ring = webGpuCmdRing;
   if (!ring || !renderGpu) return;
+  if (wgpuSemanticRuntimeActive) drainWgpuSemanticOwnership();
+  if (wgpuUploadTransport === "mapped" && wgpuMappedCapacityBlocked &&
+      wgpuMappedRemapPromises.size > 0) {
+    return;
+  }
   const normalizedSource = source === "pump" ? "pump" : "presentation";
   const collectReplayMetrics = causalMetricsEnabled || wgpuReplayBudgetMs > 0;
   if (collectReplayMetrics) {
@@ -5896,7 +8237,30 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     const discardedRecords = (discardTo - read) >>> 0;
     if (discardedRecords > 0) {
-      if (causalMetricsEnabled) wgpuUploadAttribution.recordIncompletePass();
+      if (wgpuSemanticRuntimeActive) {
+        wgpuSemanticRuntime.invalidate(
+          `load fence permanently discarded ${discardedRecords} published records`
+        );
+      }
+      if (causalMetricsEnabled) {
+        wgpuUploadAttribution.recordIncompletePass();
+        if (wgpuDirtyRangeProjectionActive) {
+          wgpuDirtyRangeProjection.recordSegmentBoundary({
+            kind: "load-fence",
+            complete: false
+          });
+        }
+      }
+      if (wgpuPassPackageProjectionActive) {
+        wgpuPassPackageProjection.reset("load-fence-discard");
+      }
+      if (wgpuUploadRunProjectionActive) {
+        wgpuUploadRunProjection.reset("load-fence-discard");
+      }
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("load-fence-discard");
+      }
+      wgpuUboComputeReconstruction?.reset("load-fence-discard");
       publishWgpuReadIndex(ring, discardTo);
       wgpuReplayClassifier?.recordLoadFence({
         discardedRecords,
@@ -5929,6 +8293,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
   }
   if (write === read) {
+    if (wgpuUploadRunProjectionActive) wgpuUploadRunProjection.boundary("drain");
     webGpuCausalStats.replayBudgetStopReasons.empty += 1;
     webGpuCausalStats.backlogAfterLast = 0;
     webGpuCausalStats.emptyDrainCount += 1;
@@ -6048,6 +8413,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     };
   };
   let errScope = false;
+  let mappedCapacityHold = false;
   // One-shot present-path diagnostic: per-pass tally of pipeline/bind/
   // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
   // passes — tells us whether the present/XFB-copy draw actually runs.
@@ -6149,15 +8515,110 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     return enc;
   };
-  const submitEnc = (reason = "drain-boundary") => {
-    if (!enc) return false;
+  const acceptMappedBatch = (batch) => {
+    if (!batch) return;
+    if (batch.ordinary) {
+      wgpuMappedDrainCoalescer.recordSubmission(
+        Math.max(0, globalThis.performance.now() - batch.ordinary.oldestPendingAtMs)
+      );
+      trackWgpuMappedRemap(wgpuMappedStagingPool.acceptSubmission(batch.ordinary));
+    }
+    if (batch.compute) {
+      trackWgpuMappedRemap(wgpuUboComputeReconstruction.accept(batch.compute));
+    }
+  };
+  const rejectMappedBatch = (batch, error) => {
+    if (!batch) return;
+    if (batch.ordinary) {
+      try {
+        wgpuMappedStagingPool.rejectSubmission(batch.ordinary, error);
+      } catch {
+        wgpuMappedStagingPool.invalidate(error);
+      }
+    }
+    if (batch.compute) {
+      try {
+        trackWgpuMappedRemap(
+          wgpuUboComputeReconstruction.reject(batch.compute, "submit-error")
+        );
+      } catch {
+        wgpuUboComputeReconstruction = null;
+      }
+    }
+  };
+  const sealMappedBatch = (reason = "drain-boundary", decisionPrepared = false) => {
+    if (wgpuUploadTransport !== "mapped") return null;
+    prepareWgpuMappedDrainSubmission(reason, decisionPrepared);
+    let ordinary = null;
+    let compute = null;
+    try {
+      ordinary = ensureWgpuMappedStagingPool(dev).seal();
+      compute = wgpuUboComputeReconstructionActive &&
+          wgpuUboComputeReconstruction
+        ? wgpuUboComputeReconstruction.seal(
+            `Dolphin ordered UBO reconstruction: ${reason}`
+          )
+        : null;
+      if (compute && !compute.ok) {
+        throw new Error(`UBO compute seal failed: ${compute.reason}`);
+      }
+      if ((ordinary || compute) && wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.boundary(reason);
+      }
+      return ordinary || compute ? { ordinary, compute } : null;
+    } catch (error) {
+      if (ordinary) {
+        try {
+          wgpuMappedStagingPool.rejectSubmission(ordinary, error);
+        } catch {
+          wgpuMappedStagingPool.invalidate(error);
+        }
+      }
+      markWgpuReplayFatal("staging-seal", error?.message || error);
+      return null;
+    }
+  };
+  const flushMappedUploadsOnly = (
+    reason = "staging-capacity",
+    decisionPrepared = false
+  ) => {
+    prepareWgpuMappedDrainSubmission(reason, decisionPrepared);
+    return submitPendingWgpuMappedUploads(reason);
+  };
+  let lastSubmitFailureReason = null;
+  const submitEnc = (reason = "drain-boundary", decisionPrepared = false) => {
+    lastSubmitFailureReason = null;
+    if (!enc) {
+      // Upload-only drains still have to seal and submit their mapped batch,
+      // but callers use the return value to decide whether a render/present
+      // command buffer was submitted.
+      flushMappedUploadsOnly(reason, decisionPrepared);
+      lastSubmitFailureReason = wgpuReplayFatal ? "replay-fatal" : "no-command-encoder";
+      return false;
+    }
+    const mappedBatch = sealMappedBatch(reason, decisionPrepared);
+    if (wgpuReplayFatal) {
+      lastSubmitFailureReason = wgpuReplayFatal.scope === "submit-error"
+        ? "submit-error"
+        : "replay-fatal";
+      return false;
+    }
     let submitted = false;
     try {
-      q.submit([enc.finish()]);
+      const renderCommandBuffer = enc.finish();
+      q.submit([
+        ...(mappedBatch?.ordinary ? [mappedBatch.ordinary.commandBuffer] : []),
+        ...(mappedBatch?.compute ? [mappedBatch.compute.commandBuffer] : []),
+        renderCommandBuffer,
+      ]);
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
+      acceptMappedBatch(mappedBatch);
       submitted = true;
     } catch (e) {
+      lastSubmitFailureReason = "submit-error";
+      rejectMappedBatch(mappedBatch, e);
       recordRendererError("submit-error", e?.message || e);
+      markWgpuReplayFatal("submit-error", e?.message || e);
       wgpuReplayClassifier?.recordSubmission({ reason, submitted: false, error: e });
     }
     if (submitted) {
@@ -6205,6 +8666,12 @@ function drainWebGpuCmdRing(source = "presentation") {
           wgpuUploadAttribution.recordPassEnd();
         } else {
           wgpuUploadAttribution.recordIncompletePass();
+        }
+        if (wgpuDirtyRangeProjectionActive) {
+          wgpuDirtyRangeProjection.recordSegmentBoundary({
+            kind: reason,
+            complete: reason === "explicit" || reason === "submit-present"
+          });
         }
       }
       pass = null;
@@ -6284,7 +8751,9 @@ function drainWebGpuCmdRing(source = "presentation") {
           readback?.destroy();
         }
       }
+      return true;
     }
+    return false;
   };
   const heapCopy = (off, len) => heap.slice(off, off + len);
   // Atomic replay normally stops before an incomplete BEGIN_PASS and leaves
@@ -6350,7 +8819,25 @@ function drainWebGpuCmdRing(source = "presentation") {
     } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
       self._wgBpDefer = 0;
     }
-    const replayOpStartedAt = causalMetricsEnabled ? performance.now() : 0;
+    const retainedSemanticPayload = ring.stagedUploads?.get(read)?.data ?? null;
+    const exactRetainedSemanticPayload = retainedSemanticPayload &&
+        op === WGPU_CMD_OP_UPLOAD_BUFFER
+      ? retainedSemanticPayload.subarray(0, u32[recWord + 4])
+      : retainedSemanticPayload;
+    const preparedSemanticRecord = wgpuSemanticRuntimeActive &&
+        wgpuSemanticRuntime.isOpen()
+      ? wgpuSemanticRuntime.prepareLegacy(
+          u32.subarray(recWord, recWord + 8),
+          heap,
+          exactRetainedSemanticPayload
+            ? { payloadBytes: exactRetainedSemanticPayload }
+            : undefined
+        )
+      : null;
+    const replayOpStartedAt = causalMetricsEnabled
+      ? wgpuReplayOpMetrics.beginReplay(op)
+      : null;
+    let replayRecordAccepted = true;
     try {
       switch (op) {
         case WGPU_CMD_OP_CREATE_SHADER:
@@ -6369,8 +8856,42 @@ function drainWebGpuCmdRing(source = "presentation") {
           const id = u32[recWord + 1];
           if (!webGpuObjects.buffers.has(id)) {
             const size = Math.max(16, (u32[recWord + 2] + 3) & ~3);
-            webGpuObjects.buffers.set(id,
-              dev.createBuffer({ size, usage: u32[recWord + 3] }));
+            const producerUsage = u32[recWord + 3];
+            const resourceRole = u32[recWord + 4] || WGPU_BUFFER_RESOURCE_ROLE_UNKNOWN;
+            let computeManager = null;
+            let usage = producerUsage;
+            if (wgpuUboComputeReconstructionActive &&
+                resourceRole === WGPU_BUFFER_RESOURCE_ROLE_UBO_RING) {
+              try {
+                computeManager = ensureWgpuUboComputeReconstruction(dev);
+                usage |= 0x0080; // GPUBufferUsage.STORAGE
+              } catch (error) {
+                wgpuUboComputeReconstructionActive = false;
+                console.warn(
+                  `[webgpu-ubo-compute] disabled before replay: ${error?.message || error}`
+                );
+              }
+            }
+            const createdBuffer = dev.createBuffer({ size, usage });
+            webGpuObjects.buffers.set(id, createdBuffer);
+            if (computeManager) {
+              try {
+                computeManager.registerResource({
+                  resourceId: id,
+                  role: WGPU_UBO_RING_ROLE,
+                  buffer: createdBuffer,
+                  size,
+                  usage,
+                });
+              } catch (error) {
+                wgpuUboComputeReconstructionActive = false;
+                wgpuUboComputeReconstruction = null;
+                console.warn(
+                  `[webgpu-ubo-compute] resource registration fell back to legacy: ` +
+                  `${error?.message || error}`
+                );
+              }
+            }
             // The utility UBO is the unique 4096-byte uniform buffer
             // (kUtilUboSize). Track its id so we can dump what
             // UploadUtilityUniforms actually writes (src_offset/size
@@ -6390,7 +8911,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const uploadBytes = u32[recWord + 4];
           const uploadRole = u32[recWord + 5];
           const stagedUpload = ring.stagedUploads?.get(read) ?? null;
-          if (stagedUpload) {
+          if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(
               0,
@@ -6400,7 +8921,10 @@ function drainWebGpuCmdRing(source = "presentation") {
           const buf = webGpuObjects.buffers.get(bufferId);
           const len = (uploadBytes + 3) & ~3;
           const uploadSource = stagedUpload?.data ??
-            new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len);
+            (uploadBytes === len
+              ? new Uint8Array(moduleInstance.HEAPU8.buffer, srcP, len)
+              : copyWgpuUploadPayload(heap, srcP, uploadBytes, true));
+          let mappedStageAccepted = false;
           try {
             if (!buf) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-buffer", id: bufferId });
@@ -6537,6 +9061,148 @@ function drainWebGpuCmdRing(source = "presentation") {
               if (self._wgVbSnap.size > 64)
                 self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
             }
+              if (wgpuUploadTransport === "mapped") {
+                const stageStartedAt = causalMetricsEnabled
+                  ? wgpuUploadAttribution.beginMappedStageTiming(uploadRole)
+                  : null;
+                const pool = ensureWgpuMappedStagingPool(dev);
+                let retainedAccepted = false;
+                let stageAccepted;
+                let stageReason = null;
+                const destinationOffset = u32[recWord + 2] & ~3;
+                if (stagedUpload) {
+                  const stage = (data) => {
+                    const compute = stageWgpuUboComputeUpload({
+                      resourceId: bufferId,
+                      role: uploadRole,
+                      destinationOffset,
+                      data,
+                      borrowBytes: true,
+                    });
+                    if (compute?.handled) return compute;
+                    const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                      pool,
+                      data,
+                      destination: buf,
+                      destinationOffset,
+                      role: uploadRole,
+                    });
+                    if (sparse?.handled) return sparse;
+                    if (wgpuMappedStageFastEnabled) {
+                      const reason = pool.stageBufferFast(data, buf, destinationOffset);
+                      return reason === null
+                        ? WGPU_FAST_STAGE_ACCEPTED
+                        : { ok: false, reason };
+                    }
+                    return pool.stageBuffer({ data, destination: buf, destinationOffset });
+                  };
+                  const retainedAttempt = attemptRetainedWgpuUpload({
+                    stagedUploads: ring.stagedUploads,
+                    recordIndex: read,
+                    stage,
+                  });
+                  stageAccepted = retainedAttempt.result.ok;
+                  stageReason = retainedAttempt.result.reason ?? null;
+                  retainedAccepted = retainedAttempt.accepted;
+                } else {
+                  const compute = stageWgpuUboComputeUpload({
+                    resourceId: bufferId,
+                    role: uploadRole,
+                    destinationOffset,
+                    data: uploadSource,
+                  });
+                  const sparse = compute?.handled ? null : ensureWgpuSparseUbo(dev)?.stage({
+                    pool,
+                    data: uploadSource,
+                    destination: buf,
+                    destinationOffset,
+                    role: uploadRole,
+                  });
+                  if (compute?.handled) {
+                    stageAccepted = compute.ok;
+                    stageReason = compute.reason ?? null;
+                  } else if (sparse?.handled) {
+                    stageAccepted = sparse.ok;
+                    stageReason = sparse.reason ?? null;
+                  } else if (wgpuMappedStageFastEnabled) {
+                    stageReason = pool.stageBufferFast(uploadSource, buf, destinationOffset);
+                    stageAccepted = stageReason === null;
+                  } else {
+                    const staged = pool.stageBuffer({
+                      data: uploadSource,
+                      destination: buf,
+                      destinationOffset,
+                    });
+                    stageAccepted = staged.ok;
+                    stageReason = staged.reason ?? null;
+                  }
+                }
+                const stageElapsedMs = stageStartedAt !== null
+                  ? wgpuUploadAttribution.finishMappedStageTiming(
+                    uploadRole, stageStartedAt, len
+                  )
+                  : null;
+                if (wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null) {
+                  webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                  webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                    webGpuCausalStats.mappedStagingCopyMaxMs,
+                    stageElapsedMs
+                  );
+                }
+                webGpuCausalStats.mappedStagingCopyCount += stageAccepted ? 1 : 0;
+                webGpuCausalStats.mappedStagingCopyBytes += stageAccepted ? len : 0;
+                if (!stageAccepted) {
+                  mappedCapacityHold = true;
+                  if (stageReason === "no-capacity") {
+                    markWgpuMappedCapacityWait(uploadRole);
+                  } else {
+                    webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+                    markWgpuReplayFatal("staging-capacity", stageReason);
+                  }
+                  break;
+                }
+                mappedStageAccepted = true;
+                if (retainedAccepted) {
+                  ring.stagedUploadBytes = Math.max(
+                    0,
+                    ring.stagedUploadBytes - stagedUpload.data.byteLength
+                  );
+                }
+                if (causalMetricsEnabled) {
+                  wgpuUploadAttribution.recordUpload(
+                    uploadRole,
+                    uploadBytes,
+                    u32[recWord + 2] & ~3
+                  );
+                  if (wgpuUboComputeProjectionActive) {
+                    const classification = classifyWgpuUboComputeUpload(
+                      uploadRole,
+                      uploadBytes
+                    );
+                    if (classification) {
+                      wgpuUboComputeProjection.observeUpload({
+                        resourceId: bufferId,
+                        destinationOffset,
+                        bytes: uploadSource.subarray(0, uploadBytes),
+                        ...classification,
+                      });
+                    }
+                  }
+                  if (wgpuDirtyRangeProjectionActive) {
+                    wgpuDirtyRangeProjection.recordUpload({
+                      bufferId,
+                      destinationOffset: u32[recWord + 2] & ~3,
+                      bytes: len,
+                      role: uploadRole,
+                      sourcePointer: srcP,
+                      sourceBytes: len,
+                      sourceArenaBase: ring.uploadBase,
+                      sourceArenaSize: ring.uploadSize,
+                      recordIndex: read,
+                    });
+                  }
+                }
+              } else {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
@@ -6568,16 +9234,42 @@ function drainWebGpuCmdRing(source = "presentation") {
                   uploadBytes,
                   u32[recWord + 2] & ~3
                 );
+                if (wgpuDirtyRangeProjectionActive) {
+                  wgpuDirtyRangeProjection.recordUpload({
+                    bufferId,
+                    destinationOffset: u32[recWord + 2] & ~3,
+                    bytes: len,
+                    role: uploadRole,
+                    sourcePointer: srcP,
+                    sourceBytes: len,
+                    sourceArenaBase: ring.uploadBase,
+                    sourceArenaSize: ring.uploadSize,
+                    recordIndex: read,
+                  });
+                }
                 wgpuReplayOpMetrics.recordQueueUpload(
                   WGPU_CMD_OP_UPLOAD_BUFFER,
                   uploadPayload.byteLength
                 );
               }
+              }
             }
           } finally {
             // heapCopy/q.writeBuffer have synchronously detached this upload
             // from shared wasm memory, so the producer may now recycle it.
-            if (!stagedUpload) releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+            if (wgpuUploadTransport !== "mapped") {
+              if (!stagedUpload) releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+            } else if (mappedStageAccepted || !buf) {
+              if (!mappedStageAccepted && stagedUpload) {
+                ring.stagedUploads.delete(read);
+                ring.stagedUploadBytes = Math.max(
+                  0,
+                  ring.stagedUploadBytes - stagedUpload.data.byteLength
+                );
+              } else if (!stagedUpload) {
+                releaseWgpuUploadPayload(ring, srcP, uploadBytes);
+              }
+            }
           }
           break;
         }
@@ -6603,7 +9295,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const h = u32[recWord + 5];
           const uploadBytes = Math.imul(bpr, h) >>> 0;
           const stagedUpload = ring.stagedUploads?.get(read) ?? null;
-          if (stagedUpload) {
+          if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(
               0,
@@ -6613,6 +9305,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const t = webGpuObjects.textures.get(textureId);
           const uploadSource = stagedUpload?.data ??
             new Uint8Array(moduleInstance.HEAPU8.buffer, src, uploadBytes);
+          let mappedStageAccepted = false;
           try {
             if (!t) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
@@ -6635,6 +9328,96 @@ function drainWebGpuCmdRing(source = "presentation") {
                 `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
+              if (wgpuUploadTransport === "mapped") {
+                const stageStartedAt = causalMetricsEnabled
+                  ? wgpuUploadAttribution.beginMappedStageTiming(
+                      WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT
+                    )
+                  : null;
+                const pool = ensureWgpuMappedStagingPool(dev);
+                const copySize = { width: w, height: h, depthOrArrayLayers: 1 };
+                const origin = { x: 0, y: 0, z: uz };
+                let retainedAccepted = false;
+                let stageAccepted;
+                let stageReason = null;
+                if (wgpuMappedStageFastEnabled) {
+                  stageReason = pool.stageTextureFast(
+                    stagedUpload?.data ?? uploadSource,
+                    t.tex,
+                    copySize,
+                    bpr,
+                    h,
+                    origin,
+                    u32[recWord + 6]
+                  );
+                  stageAccepted = stageReason === null;
+                  if (stagedUpload && stageAccepted) {
+                    ring.stagedUploads.delete(read);
+                    retainedAccepted = true;
+                  }
+                } else {
+                  const stage = (data) => pool.stageTexture({
+                    data,
+                    destination: t.tex,
+                    sourceBytesPerRow: bpr,
+                    sourceRowsPerImage: h,
+                    mipLevel: u32[recWord + 6],
+                    origin,
+                    copySize,
+                  });
+                  const retainedAttempt = stagedUpload
+                    ? attemptRetainedWgpuUpload({
+                        stagedUploads: ring.stagedUploads,
+                        recordIndex: read,
+                        stage,
+                      })
+                    : null;
+                  const staged = retainedAttempt?.result ?? stage(uploadSource);
+                  stageAccepted = staged.ok;
+                  stageReason = staged.reason ?? null;
+                  retainedAccepted = Boolean(retainedAttempt?.accepted);
+                }
+                const stageElapsedMs = stageStartedAt !== null
+                  ? wgpuUploadAttribution.finishMappedStageTiming(
+                    WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT,
+                    stageStartedAt,
+                    uploadBytes
+                  )
+                  : null;
+                if (wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null) {
+                  webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                  webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                    webGpuCausalStats.mappedStagingCopyMaxMs,
+                    stageElapsedMs
+                  );
+                }
+                webGpuCausalStats.mappedStagingCopyCount += stageAccepted ? 1 : 0;
+                webGpuCausalStats.mappedStagingCopyBytes += stageAccepted ? uploadBytes : 0;
+                if (!stageAccepted) {
+                  mappedCapacityHold = true;
+                  if (stageReason === "no-capacity") {
+                    markWgpuMappedCapacityWait(WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT);
+                  } else {
+                    webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+                    markWgpuReplayFatal("staging-capacity", stageReason);
+                  }
+                  break;
+                }
+                mappedStageAccepted = true;
+                if (retainedAccepted) {
+                  ring.stagedUploadBytes = Math.max(
+                    0,
+                    ring.stagedUploadBytes - stagedUpload.data.byteLength
+                  );
+                }
+                if (causalMetricsEnabled) {
+                  wgpuUploadAttribution.recordUpload(
+                    WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT,
+                    uploadBytes,
+                    0
+                  );
+                }
+              } else {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
@@ -6664,10 +9447,23 @@ function drainWebGpuCmdRing(source = "presentation") {
                   uploadPayload.byteLength
                 );
               }
+              }
             }
           } finally {
             // queue.writeTexture consumes the local heapCopy synchronously.
-            if (!stagedUpload) releaseWgpuUploadPayload(ring, src, uploadBytes);
+            if (wgpuUploadTransport !== "mapped") {
+              if (!stagedUpload) releaseWgpuUploadPayload(ring, src, uploadBytes);
+            } else if (mappedStageAccepted || !t) {
+              if (!mappedStageAccepted && stagedUpload) {
+                ring.stagedUploads.delete(read);
+                ring.stagedUploadBytes = Math.max(
+                  0,
+                  ring.stagedUploadBytes - stagedUpload.data.byteLength
+                );
+              } else if (!stagedUpload) {
+                releaseWgpuUploadPayload(ring, src, uploadBytes);
+              }
+            }
           }
           break;
         }
@@ -7570,7 +10366,12 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
-          endPass("submit-present", read);
+          if (!endPass("submit-present", read) && wgpuDirtyRangeProjectionActive) {
+            wgpuDirtyRangeProjection.recordSegmentBoundary({
+              kind: "submit-present",
+              complete: true
+            });
+          }
           let presentAlreadySubmitted = false;
           const hardwareInputMarkerCoreFrame = api?.getFrame?.() ?? 0;
           const hardwareInputMarker = prepareInputVisualMarker(hardwareInputMarkerCoreFrame);
@@ -7591,6 +10392,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
             return hardwareInputMarkerApplied;
           };
+          // Keep the sample on the same command encoder and before the
+          // optional input marker so it represents the unmodified game
+          // output submitted by this hardware present.
+          const visualCadenceSlot = wgpuVisualCadenceEnabled && lastBackbufferTexture
+            ? encodeWgpuVisualCadence(ensureEnc(), lastBackbufferTexture)
+            : null;
           if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
             const efb = webGpuObjects.textures.get(self._wgEfbColorId);
             const bs = efb ? ensureBlitState() : null;
@@ -7870,7 +10677,24 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (!presentAlreadySubmitted) applyHardwareInputMarker();
           const submittedPresent = presentAlreadySubmitted || submitEnc("present");
-          if (!submittedPresent) break;
+          mapWgpuVisualCadenceSlot(visualCadenceSlot, submittedPresent);
+          if (!submittedPresent) {
+            const rejectionReason = lastSubmitFailureReason ||
+              (wgpuReplayFatal?.scope === "submit-error" ? "submit-error" :
+                wgpuReplayFatal ? "replay-fatal" : "unknown");
+            wgpuReplayClassifier?.recordPresentRejected({
+              recordIndex: read,
+              reason: rejectionReason
+            });
+            self._wgPresentRejectedLogCount = (self._wgPresentRejectedLogCount || 0) + 1;
+            if (self._wgPresentRejectedLogCount <= 4) {
+              console.log(
+                `[webgpu-present-rejected] reason=${rejectionReason} ` +
+                `fatalScope=${wgpuReplayFatal?.scope || "none"} record=${read}`
+              );
+            }
+            break;
+          }
           if (hardwareInputMarkerApplied) {
             recordInputMarkerSubmission(
               hardwareInputMarker,
@@ -7904,6 +10728,30 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           break;
         case WGPU_CMD_OP_DESTROY: {
+          const pendingMappedDestroyUploads =
+            pendingWgpuUploadSnapshot().pendingUploads > 0;
+          if (wgpuMappedDrainCoalescingEnabled && pendingMappedDestroyUploads) {
+            if (pass) {
+              markWgpuReplayFatal(
+                "destroy-order",
+                "destroy encountered with pending mapped uploads inside a render pass"
+              );
+              break;
+            }
+            const destroySubmitted = enc
+              ? submitEnc("destroy")
+              : flushMappedUploadsOnly("destroy");
+            const destroyStillPending =
+              pendingWgpuUploadSnapshot().pendingUploads > 0;
+            if (!destroySubmitted || destroyStillPending) {
+              markWgpuReplayFatal(
+                "destroy-order",
+                "destroy could not submit all pending mapped uploads"
+              );
+              break;
+            }
+            if (wgpuReplayFatal) break;
+          }
           const tag = u32[recWord + 1], id = u32[recWord + 2];
           const m = tag === 1 ? webGpuObjects.buffers
                   : tag === 2 ? webGpuObjects.textures
@@ -7941,14 +10789,85 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
       }
     } catch (e) {
+      replayRecordAccepted = false;
       webGpuCausalStats.errorCount += 1;
+      if (wgpuUploadTransport === "mapped" &&
+          (op === WGPU_CMD_OP_UPLOAD_BUFFER || op === WGPU_CMD_OP_UPLOAD_TEXTURE)) {
+        wgpuMappedStagingPool?.invalidate(e);
+        markWgpuReplayFatal("staging-copy", e?.message || e);
+      }
       if (!self._webGpuExecErr) {
         self._webGpuExecErr = true;
         console.log(`[webgpu-exec] op=${op} threw: ${e?.message || e}`);
       }
     }
     if (causalMetricsEnabled) {
-      wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
+      wgpuReplayOpMetrics.finishReplay(op, replayOpStartedAt);
+    }
+    if (wgpuSemanticRuntimeActive && wgpuSemanticRuntime.isOpen()) {
+      if (replayRecordAccepted && !wgpuReplayFatal && !mappedCapacityHold) {
+        wgpuSemanticRuntime.acceptPrepared(preparedSemanticRecord, read);
+      } else if (mappedCapacityHold && !wgpuReplayFatal) {
+        wgpuSemanticRuntime.retryPrepared(preparedSemanticRecord);
+      } else {
+        wgpuSemanticRuntime.discardPrepared(
+          preparedSemanticRecord,
+          `consumer rejected record ${read} opcode ${op}`
+        );
+      }
+    }
+    if (wgpuReplayFatal) break;
+    if (mappedCapacityHold) {
+      // The current upload record is deliberately still owned by the ring.
+      // A completed pass/encoder may be submitted ahead of the retry. An
+      // open render pass cannot survive the asynchronous mapAsync wait, so
+      // failing closed is the only ordering-safe response in that case.
+      if (pass) {
+        webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+        markWgpuReplayFatal(
+          "staging-capacity",
+          "mapped staging capacity exhausted inside an atomic render pass"
+        );
+      } else {
+        const flushed = enc
+          ? submitEnc("staging-capacity")
+          : flushMappedUploadsOnly("staging-capacity");
+        if (!flushed && wgpuMappedRemapPromises.size === 0) {
+          webGpuCausalStats.mappedStagingUnsafeCapacityCount += 1;
+          markWgpuReplayFatal(
+            "staging-capacity",
+            "mapped staging capacity exhausted without a remap path"
+          );
+        }
+      }
+      break;
+    }
+    if (wgpuPassPackageProjectionActive && replayRecordAccepted) {
+      const payloadBytes = op === WGPU_CMD_OP_UPLOAD_BUFFER
+        ? u32[recWord + 4]
+        : op === WGPU_CMD_OP_UPLOAD_TEXTURE
+          ? Math.imul(u32[recWord + 3], u32[recWord + 5]) >>> 0
+          : 0;
+      // Observe only after the handler accepted this record and immediately
+      // before the authoritative legacy read cursor advances.
+      wgpuPassPackageProjection.observeConsumedRecord(op, read, payloadBytes);
+    }
+    if (wgpuUploadRunProjectionActive && replayRecordAccepted) {
+      wgpuUploadRunProjection.observeAcceptedRecord({
+        op,
+        recordIndex: read,
+        sourcePointer: op === WGPU_CMD_OP_UPLOAD_BUFFER ? u32[recWord + 3] : 0,
+        logicalBytes: op === WGPU_CMD_OP_UPLOAD_BUFFER ? u32[recWord + 4] : 0,
+        alignedBytes: op === WGPU_CMD_OP_UPLOAD_BUFFER
+          ? (u32[recWord + 4] + 3) & ~3
+          : 0,
+        sourceArenaBase: ring.uploadBase,
+        sourceArenaSize: ring.uploadSize,
+        hasDestination: op === WGPU_CMD_OP_UPLOAD_BUFFER &&
+          webGpuObjects.buffers.has(u32[recWord + 1]),
+        retained: op === WGPU_CMD_OP_UPLOAD_BUFFER && Boolean(retainedSemanticPayload),
+        semanticCapture: Boolean(preparedSemanticRecord),
+      });
     }
     read = (read + 1) >>> 0;
     if (wgpuReplayBudgetMs > 0) {
@@ -7965,9 +10884,30 @@ function drainWebGpuCmdRing(source = "presentation") {
       }
     }
   }
+  if (wgpuUploadRunProjectionActive) wgpuUploadRunProjection.boundary("drain");
   if (wgpuReplayBudgetMs > 0) replayLimit = read;
-  endPass("drain-boundary", read);
-  submitEnc("drain-boundary");
+  if (!wgpuReplayFatal) {
+    endPass("drain-boundary", read);
+    const mappedSnapshot = pendingWgpuUploadSnapshot();
+    const pendingMappedUploads = (mappedSnapshot?.pendingUploads ?? 0) > 0;
+    const mappedDrainDecision = wgpuMappedDrainCoalescer.atBoundary({
+      pending: pendingMappedUploads,
+      pendingBytes: mappedSnapshot?.pendingBytes ?? 0,
+      pendingRecords: mappedSnapshot?.pendingUploads ?? 0,
+      pendingAgeMs: mappedSnapshot?.oldestPendingAgeMs ?? 0,
+      generation: wgpuMappedStagingGeneration,
+      hasOpenPass: Boolean(pass),
+      hasRenderEncoder: Boolean(enc),
+    });
+    if (mappedDrainDecision.cancelledTimerToken) {
+      cancelWgpuMappedDrainTimer(mappedDrainDecision.cancelledTimerToken);
+    }
+    if (mappedDrainDecision.action === "defer") {
+      scheduleWgpuMappedDrainDeadline(mappedDrainDecision);
+    } else if (enc || mappedDrainDecision.action === "flush") {
+      submitEnc("drain-boundary", true);
+    }
+  }
   const stopReason = deferBeginPass
     ? "deferred-begin"
     : read === write
@@ -7994,6 +10934,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     ring.stagedScanCursor = null;
   }
   publishWgpuReadIndex(ring, read);
+  advanceWgpuSemanticCapture(ring, read);
   const processed = (read - initialRead) >>> 0;
   const backlogAfter = (write - read) >>> 0;
   webGpuCausalStats.backlogAfterLast = backlogAfter;
@@ -8025,6 +10966,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   if (budgetStopReason === "time-budget") {
     webGpuCausalStats.replayBudgetYieldCount += 1;
     webGpuCausalStats.replayBudgetSourceYieldCounts[normalizedSource] += 1;
+    workletAudioProducer.refill(1);
   }
   if (budgetSnapshot?.atomicOverrunCompleted) {
     const atomicOverrunMs = budgetSnapshot.atomicOverrunMs;

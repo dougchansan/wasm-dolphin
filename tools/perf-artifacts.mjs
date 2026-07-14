@@ -4,7 +4,107 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { JIT_CACHE_ENTRY_KEY_SCHEMA, canonicalCoreFingerprint } from
+  "../src/jit-cache-identity.js";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
+import { WGPU_UBO_COMPUTE_PROJECTION_SCHEMA } from
+  "../src/wgpu-ubo-compute-projection.js";
+import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "./dolphin-provenance.mjs";
+import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_PERIODS,
+  WGPU_DRAW_PROFILE_SCHEMA,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
+  WGPU_TAIL_GATE_SCHEMA,
+  parseWgpuDrawProfileStats as parseDrawProfileWire,
+  parseWgpuProducerProfileStats as parseProducerProfileWire,
+  parseWgpuTailGateStats as parseTailGateWire,
+} from "../src/wgpu-pass-state-cache.js";
+
+export {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_TAIL_GATE_SCHEMA,
+};
+export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
+export const WGPU_DRAW_PROFILE_SCHEMA_VERSION = 1;
+export const WGPU_TAIL_GATE_SCHEMA_VERSION = 1;
+export const WGPU_SPARSE_UBO_SCHEMA = "wasm-dolphin.wgpu-sparse-ubo.v1";
+export const WGPU_RUNTIME_CONFIG_SCHEMA = "wasm-dolphin.wgpu-runtime-config.v1";
+
+export function evaluateWgpuRuntimeConfigEvidence({
+  required = false,
+  runtimeConfig,
+  params = {},
+} = {}) {
+  if (!required) return { required: false, runtimeConfig: runtimeConfig ?? null, failures: [] };
+  const failures = [];
+  if (runtimeConfig?.schema !== WGPU_RUNTIME_CONFIG_SCHEMA) {
+    failures.push(
+      `WGPU runtime config schema mismatch: ${runtimeConfig?.schema ?? "unavailable"}`
+    );
+  }
+  const requestedFlag = (name) => String(params?.[name] ?? "0") === "1";
+  const expectedMetricsEnabled = String(params?.metrics) === "1";
+  const expectedUploadTransport = params?.wgpuuploadtransport === "mapped" ? "mapped" : "queue";
+  const expectedUboCache = requestedFlag("wgpuubocache");
+  const expectedUboMetrics = expectedMetricsEnabled && requestedFlag("wgpuubometrics");
+  const expectedUniformFast = requestedFlag("wgpuuniformfast");
+  const expectedUboPack = requestedFlag("wgpuubopack") && !expectedUboCache;
+  const expectedStageFast = expectedUploadTransport === "mapped" && requestedFlag("wgpustagefast");
+  const expectedSlots = String(params?.wgpustagingslots) === "4" ? 4 : 3;
+  const expectedTimingStride = String(params?.wgpumappedtiming) === "64" ? 64 : 1;
+  const expectedGeometryPack = requestedFlag("wgpugeompack");
+  const expectedGeometryRange = expectedGeometryPack && requestedFlag("wgpugeomrange");
+  const expectedTailGate = requestedFlag("wgputailgate");
+  const expect = (label, actual, expected) => {
+    if (actual !== expected) {
+      failures.push(
+        `WGPU runtime config ${label} mismatch: requested=${String(expected)} ` +
+        `active=${actual == null ? "unavailable" : String(actual)}`
+      );
+    }
+  };
+  expect("metrics", runtimeConfig?.metricsEnabled, expectedMetricsEnabled);
+  expect("upload transport", runtimeConfig?.uploadTransport, expectedUploadTransport);
+  expect("UBO cache", runtimeConfig?.uboCacheEnabled, expectedUboCache);
+  expect("UBO metrics", runtimeConfig?.producerUboCacheMetricsEnabled, expectedUboMetrics);
+  expect("uniform fast", runtimeConfig?.producerUniformFastEnabled, expectedUniformFast);
+  expect("UBO pack", runtimeConfig?.uboPackEnabled, expectedUboPack);
+  if ((expectedUboCache || expectedUboMetrics || expectedUniformFast) &&
+      runtimeConfig?.producerUboCacheAvailable !== true) {
+    failures.push("WGPU runtime config UBO cache producer setter is unavailable");
+  }
+  if (expectedUboPack && runtimeConfig?.producerUboPackAvailable !== true) {
+    failures.push("WGPU runtime config UBO pack producer setter is unavailable");
+  }
+  expect("mapped staging", runtimeConfig?.mappedStaging?.enabled,
+    expectedUploadTransport === "mapped");
+  expect("mapped staging fast path", runtimeConfig?.mappedStagingFastPath, expectedStageFast);
+  expect("mapped staging slots", runtimeConfig?.mappedStaging?.slotCount, expectedSlots);
+  expect("mapped staging record store", runtimeConfig?.mappedStaging?.recordStore,
+    expectedStageFast ? "flat" : "objects");
+  expect("mapped timing enabled", runtimeConfig?.mappedStaging?.timing?.enabled,
+    expectedMetricsEnabled);
+  expect("mapped timing stride", runtimeConfig?.mappedStaging?.timing?.stride,
+    expectedTimingStride);
+  expect("geometry pack", runtimeConfig?.geometryPackEnabled, expectedGeometryPack);
+  expect("geometry range", runtimeConfig?.geometryRangeEnabled, expectedGeometryRange);
+  if (expectedGeometryRange && runtimeConfig?.producerGeometryRangeAvailable !== true) {
+    failures.push("WGPU runtime config geometry-range producer setter is unavailable");
+  }
+  expect("tail gate requested", runtimeConfig?.tailGate?.requested, expectedTailGate);
+  expect("tail gate enabled", runtimeConfig?.tailGate?.enabled, expectedTailGate);
+  if (expectedTailGate && runtimeConfig?.tailGate?.available !== true) {
+    failures.push("WGPU runtime config tail-gate producer setter is unavailable");
+  }
+  if (runtimeConfig?.tailGate?.schema !== WGPU_TAIL_GATE_SCHEMA ||
+      runtimeConfig?.tailGate?.schemaVersion !== WGPU_TAIL_GATE_SCHEMA_VERSION) {
+    failures.push("WGPU runtime config tail-gate schema is unavailable or malformed");
+  }
+  return { required: true, runtimeConfig: runtimeConfig ?? null, failures };
+}
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",
@@ -52,6 +152,88 @@ export function expectedBattleCheckpointForParams(params = {}) {
 
 export const HOST_CORE_ABI_VERSION = 1;
 export const PERF_EVENT_SCHEMA_VERSION = 1;
+export const PERF_AUDIO_MODES = Object.freeze(["muted", "audible"]);
+
+export function normalizePerfAudioMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase() || "muted";
+  if (!PERF_AUDIO_MODES.includes(mode)) {
+    throw new Error(
+      `Invalid PERF_AUDIO_MODE=${JSON.stringify(value)}; expected muted or audible`
+    );
+  }
+  return mode;
+}
+
+export function evaluateJitCacheReadiness(snapshot) {
+  if (snapshot?.enabled === false) {
+    return { ready: true, invalidReasons: [] };
+  }
+  const invalidReasons = [];
+  if (snapshot?.enabled !== true) invalidReasons.push("enabled is not true");
+  if (snapshot?.bootLoadComplete !== true) invalidReasons.push("bootLoadComplete is not true");
+  if (snapshot?.lazyFillStarted !== true) invalidReasons.push("lazyFillStarted is not true");
+  if (snapshot?.lazyFillActive !== false) invalidReasons.push("lazyFillActive is not false");
+  if (snapshot?.lazyFillCompleted !== true) invalidReasons.push("lazyFillCompleted is not true");
+  if (snapshot?.lazyFillTerminalReason !== "complete") {
+    invalidReasons.push(`lazyFillTerminalReason is ${snapshot?.lazyFillTerminalReason ?? "missing"}`);
+  }
+  if (Number(snapshot?.lazyFillFailureCount) !== 0) {
+    invalidReasons.push(`lazyFillFailureCount is ${snapshot?.lazyFillFailureCount ?? "missing"}`);
+  }
+  if (Number(snapshot?.verificationPending) !== 0) {
+    invalidReasons.push(`verificationPending is ${snapshot?.verificationPending ?? "missing"}`);
+  }
+  if (Number(snapshot?.compilePending) !== 0) {
+    invalidReasons.push(`compilePending is ${snapshot?.compilePending ?? "missing"}`);
+  }
+  if (Number(snapshot?.idbWritesPending) !== 0) {
+    invalidReasons.push(`idbWritesPending is ${snapshot?.idbWritesPending ?? "missing"}`);
+  }
+  const workerCount = Number(snapshot?.pthreadWorkerCount);
+  if (!(workerCount > 0)) invalidReasons.push(`pthreadWorkerCount is ${snapshot?.pthreadWorkerCount ?? "missing"}`);
+  const requiredWorkerCount = Number(snapshot?.pthreadRequiredWorkerCount);
+  const requiredBarrierAcked = Number(snapshot?.pthreadRequiredBarrierAcked);
+  if (!(requiredWorkerCount > 0)) {
+    invalidReasons.push(
+      `pthreadRequiredWorkerCount is ${snapshot?.pthreadRequiredWorkerCount ?? "missing"}`
+    );
+  }
+  if (requiredBarrierAcked !== requiredWorkerCount) {
+    invalidReasons.push(
+      `pthreadRequiredBarrierAcked is ${snapshot?.pthreadRequiredBarrierAcked ?? "missing"}`
+    );
+  }
+  if (Number(snapshot?.pthreadInstallPostFailures) !== 0) {
+    invalidReasons.push(
+      `pthreadInstallPostFailures is ${snapshot?.pthreadInstallPostFailures ?? "missing"}`
+    );
+  }
+  if (Number(snapshot?.pthreadBarrierInvalidAcks) !== 0) {
+    invalidReasons.push(
+      `pthreadBarrierInvalidAcks is ${snapshot?.pthreadBarrierInvalidAcks ?? "missing"}`
+    );
+  }
+  return { ready: invalidReasons.length === 0, invalidReasons };
+}
+
+export function evaluateAudioClaimQualification({
+  audioMode,
+  headed = false,
+  qualificationEligible = false,
+} = {}) {
+  const mode = normalizePerfAudioMode(audioMode);
+  const audibleRequested = mode === "audible";
+  let reason = null;
+  if (!audibleRequested) reason = "audio-mode-muted";
+  else if (!headed) reason = "headless";
+  else if (!qualificationEligible) reason = "run-not-qualified";
+  return {
+    mode,
+    audibleRequested,
+    eligible: reason === null,
+    reason,
+  };
+}
 
 const POST_LOAD_INPUT_KEYS = new Set([
   "x", "z", "v", "b", "q", "e", "c",
@@ -115,6 +297,65 @@ export function parsePostLoadInputScript(value, { durationSeconds = Infinity } =
 
 export function serializePostLoadInputScript(events) {
   return events.map((event) => `${event.action}:${event.second}:${event.key}`).join(",");
+}
+
+export function summarizePostLoadInputDelivery(
+  events = [],
+  { expectedCount = 0, maxLatenessMs = 100 } = {}
+) {
+  const expected = Math.max(0, Math.trunc(Number(expectedCount) || 0));
+  const latenessLimit = Number(maxLatenessMs);
+  if (!Number.isFinite(latenessLimit) || latenessLimit < 0) {
+    throw new Error("Post-load input maximum lateness must be a non-negative number");
+  }
+  const delivered = (events || []).filter(Boolean);
+  const lateEvents = delivered.filter((event) => Number(event.latenessMs) > latenessLimit);
+  const missingLatenessCount = delivered.filter(
+    (event) => !Number.isFinite(Number(event.latenessMs))
+  ).length;
+  const beforeBaselineCount = delivered.filter((event) => event.afterBaselineSample !== true).length;
+  const markerBarrierUnavailableCount = delivered.filter(
+    (event) => event.markerBarrier?.available !== true
+  ).length;
+  const markerBarrierTimeoutCount = delivered.filter(
+    (event) => event.markerBarrier?.available === true && event.markerBarrier.completed !== true
+  ).length;
+  const failures = [];
+  if (delivered.length !== expected) {
+    failures.push(`post-load input delivered ${delivered.length}/${expected} events`);
+  }
+  if (beforeBaselineCount > 0) {
+    failures.push(`post-load input delivered ${beforeBaselineCount} events before the timed baseline sample`);
+  }
+  if (missingLatenessCount > 0) {
+    failures.push(`post-load input missing lateness for ${missingLatenessCount} events`);
+  }
+  if (lateEvents.length > 0) {
+    failures.push(
+      `post-load input dispatch lateness exceeded ${latenessLimit}ms for ${lateEvents.length} events ` +
+      `(max=${Math.max(...lateEvents.map((event) => Number(event.latenessMs))).toFixed(1)}ms)`
+    );
+  }
+  if (markerBarrierUnavailableCount > 0) {
+    failures.push(`input marker completion barrier unavailable for ${markerBarrierUnavailableCount} events`);
+  }
+  if (markerBarrierTimeoutCount > 0) {
+    failures.push(`input marker completion barrier timed out for ${markerBarrierTimeoutCount} events`);
+  }
+  return {
+    expectedCount: expected,
+    deliveredCount: delivered.length,
+    maxAllowedLatenessMs: latenessLimit,
+    maxObservedLatenessMs: delivered.length
+      ? Math.max(...delivered.map((event) => Number(event.latenessMs) || 0))
+      : 0,
+    lateEventCount: lateEvents.length,
+    missingLatenessCount,
+    beforeBaselineCount,
+    markerBarrierUnavailableCount,
+    markerBarrierTimeoutCount,
+    failures,
+  };
 }
 
 export function selectNextPostLoadBenchmarkAction({
@@ -471,8 +712,10 @@ export function validateLockedBuildProvenance(provenance = {}) {
     require(entry?.exists === true, `evidenceFiles.${key}.exists=true`);
     require(sha(entry?.sha256), `evidenceFiles.${key}.sha256`);
     if (committed) {
-      require(entry?.trackedAtHead === true, `evidenceFiles.${key}.trackedAtHead=true`);
-      require(entry?.matchesHead === true, `evidenceFiles.${key}.matchesHead=true`);
+      const candidateAbi = key === "abiManifest" && provenance.candidateBundle?.verified === true &&
+        entry?.candidateBundleMember === true;
+      require(entry?.trackedAtHead === true || candidateAbi, `evidenceFiles.${key}.trackedAtHead=true`);
+      require(entry?.matchesHead === true || candidateAbi, `evidenceFiles.${key}.matchesHead=true`);
     }
   };
 
@@ -513,6 +756,13 @@ export function validateLockedBuildProvenance(provenance = {}) {
     (abiManifest?.sourceOnlyExportsPendingRebuild ?? []).length === 0,
     "locked.abiManifest.sourceOnlyExportsPendingRebuild must be empty for qualification"
   );
+  require(Array.isArray(abiManifest?.moduleExports), "locked.abiManifest.moduleExports");
+  for (const name of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    require(
+      abiManifest?.moduleExports?.includes(name),
+      `locked.abiManifest.moduleExports includes ${name}`
+    );
+  }
   exact(abiManifest?.upstreamCommit, sourceLock?.upstream?.commit, "locked.abiManifest.upstreamCommit");
   require(sha(String(abiManifest?.coreId || "").replace(/^sha256:/, "")), "locked.abiManifest.coreId");
   require(Array.isArray(abiManifest?.artifacts), "locked.abiManifest.artifacts");
@@ -710,7 +960,8 @@ export function findFatalRuntimeEvidence({ consoleLines = [], statuses = [], ren
   }
   if (
     renderer.requestedPresenterBackend === "webgpu" &&
-    renderer.activePresenterBackend !== "webgpu"
+    renderer.activePresenterBackend !== "webgpu" &&
+    renderer.activePresenterBackend !== "wgpu-upload-probe"
   ) {
     evidence.push(
       `renderer fallback: requested presenter webgpu, active ${renderer.activePresenterBackend || "unknown"}`
@@ -836,6 +1087,8 @@ export function validateComparisonConfig(value) {
   if (!Number.isFinite(minimumEffectPercent) || minimumEffectPercent < 0) {
     throw new Error("minimumEffectPercent must be a non-negative number");
   }
+  const overheadGate = normalizeOverheadGate(value.overheadGate);
+  const stabilityGate = normalizeStabilityGate(value.stabilityGate);
   return {
     schemaVersion: 1,
     mode,
@@ -844,6 +1097,8 @@ export function validateComparisonConfig(value) {
     primaryMetric: value.primaryMetric,
     direction,
     minimumEffectPercent,
+    overheadGate,
+    stabilityGate,
     hypothesis: String(value.hypothesis || "").trim() || null,
     invalidationRules: Array.isArray(value.invalidationRules)
       ? value.invalidationRules.map(String)
@@ -876,6 +1131,8 @@ export function buildComparisonTasklist(configValue) {
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
+    overheadGate: config.overheadGate,
+    stabilityGate: config.stabilityGate,
     hypothesis: config.hypothesis,
     invalidationRules: config.invalidationRules,
     stopRule: config.stopRule,
@@ -919,33 +1176,102 @@ export function summarizeComparison(configValue, runs) {
     if (blockRuns.length !== 4 || armA.length !== 2 || armB.length !== 2) {
       invalidReasons.push(`${blockId}: expected exactly two A and two B runs`);
     }
+    invalidReasons.push(...evaluateWgpuUploadProbeWorkloadEquivalence(blockRuns)
+      .map((reason) => `${blockId}: ${reason}`));
+    invalidReasons.push(...evaluateFixedSceneMeasurementBoundaryEquivalence(blockRuns)
+      .map((reason) => `${blockId}: ${reason}`));
     const valuesA = armA.map((run) => Number(readPath(run, config.primaryMetric)));
     const valuesB = armB.map((run) => Number(readPath(run, config.primaryMetric)));
     if ([...valuesA, ...valuesB].some((number) => !Number.isFinite(number))) {
       invalidReasons.push(`${blockId}: primary metric ${config.primaryMetric} is missing or non-numeric`);
     }
-    const valid = invalidReasons.length === 0;
-    const meanA = valid ? mean(valuesA) : null;
-    const meanB = valid ? mean(valuesB) : null;
-    const rawEffect = valid ? meanB - meanA : null;
-    const normalizedEffect = valid
+    const withinArmStability = {
+      A: valuesA.length === 2 && valuesA.every(Number.isFinite)
+        ? summarizeWithinArmSpread(valuesA)
+        : null,
+      B: valuesB.length === 2 && valuesB.every(Number.isFinite)
+        ? summarizeWithinArmSpread(valuesB)
+        : null,
+    };
+    if (config.stabilityGate) {
+      for (const arm of ["A", "B"]) {
+        const evidence = withinArmStability[arm];
+        if (!evidence || !Number.isFinite(evidence.spreadPercent)) {
+          invalidReasons.push(
+            `${blockId}: primary metric ${config.primaryMetric} arm ${arm} ` +
+            "within-arm spread is unavailable"
+          );
+        } else if (evidence.spreadPercent > config.stabilityGate.maximumWithinArmSpreadPercent) {
+          invalidReasons.push(
+            `${blockId}: primary metric ${config.primaryMetric} arm ${arm} ` +
+            `within-arm spread ${evidence.spreadPercent.toFixed(3)}% exceeds maximum ` +
+            `${config.stabilityGate.maximumWithinArmSpreadPercent}%`
+          );
+        }
+      }
+    }
+    const initiallyValid = invalidReasons.length === 0;
+    const meanA = initiallyValid ? mean(valuesA) : null;
+    const meanB = initiallyValid ? mean(valuesB) : null;
+    const rawEffect = initiallyValid ? meanB - meanA : null;
+    const normalizedEffect = initiallyValid
       ? config.direction === "higher" ? rawEffect : -rawEffect
       : null;
-    const effectPercent = valid
+    const effectPercent = initiallyValid
       ? meanA === 0 ? null : (normalizedEffect / Math.abs(meanA)) * 100
       : null;
-    if (valid && !Number.isFinite(effectPercent)) {
+    if (initiallyValid && !Number.isFinite(effectPercent)) {
       invalidReasons.push(`${blockId}: cannot compute relative effect from zero-valued arm A`);
     }
+    let overheadRegressionPercent = null;
+    const semanticWork = [];
+    if (initiallyValid && config.overheadGate) {
+      overheadRegressionPercent = Math.max(0, -effectPercent);
+      if (overheadRegressionPercent >= config.overheadGate.maximumRegressionPercent) {
+        invalidReasons.push(
+          `${blockId}: overhead regression ${overheadRegressionPercent.toFixed(3)}% ` +
+          `must be <${config.overheadGate.maximumRegressionPercent}%`
+        );
+      }
+      for (const rule of config.overheadGate.semanticWork) {
+        const workA = armA.map((run) => Number(readPath(run, rule.path)));
+        const workB = armB.map((run) => Number(readPath(run, rule.path)));
+        const values = [...workA, ...workB];
+        const meanWorkA = values.every(Number.isFinite) ? mean(workA) : null;
+        const meanWorkB = values.every(Number.isFinite) ? mean(workB) : null;
+        const differencePercent = meanWorkA && meanWorkB != null
+          ? (Math.max(...values) - Math.min(...values)) / Math.abs(meanWorkA) * 100
+          : null;
+        semanticWork.push({
+          path: rule.path,
+          meanA: meanWorkA,
+          meanB: meanWorkB,
+          differencePercent,
+          maximumDifferencePercent: rule.maximumDifferencePercent,
+        });
+        if (!Number.isFinite(differencePercent) ||
+            differencePercent > rule.maximumDifferencePercent) {
+          invalidReasons.push(
+            `${blockId}: semantic work ${rule.path} differs by ` +
+            `${Number.isFinite(differencePercent) ? differencePercent.toFixed(3) : "unavailable"}% ` +
+            `(max ${rule.maximumDifferencePercent}%)`
+          );
+        }
+      }
+    }
+    const valid = invalidReasons.length === 0 && Number.isFinite(effectPercent);
     blocks.push({
       blockId,
-      valid: valid && Number.isFinite(effectPercent),
+      valid,
       invalidReasons,
       runIds: blockRuns.map((run) => run.runId),
       meanA,
       meanB,
       rawEffect,
       effectPercent: Number.isFinite(effectPercent) ? effectPercent : null,
+      overheadRegressionPercent,
+      semanticWork,
+      withinArmStability,
     });
   }
   const validBlocks = blocks.filter((block) => block.valid);
@@ -983,6 +1309,11 @@ export function summarizeComparison(configValue, runs) {
     primaryMetric: config.primaryMetric,
     direction: config.direction,
     minimumEffectPercent: config.minimumEffectPercent,
+    overheadGate: config.overheadGate,
+    stabilityGate: config.stabilityGate,
+    overheadGatePassed: config.overheadGate
+      ? validBlocks.length >= config.blockCount && invalidBlocks.length === 0
+      : null,
     initialValidBlocks: config.blockCount,
     maximumValidBlocks: config.maxBlockCount,
     attemptedBlocks: blocks.length,
@@ -997,6 +1328,101 @@ export function summarizeComparison(configValue, runs) {
     promotable: false,
     blocks,
   };
+}
+
+export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
+  const workloads = runs.map((run) => run?.uploadProbeWorkload ?? null);
+  if (workloads.every((value) => value === null)) return [];
+  const failures = [];
+  if (workloads.some((value) => value === null)) {
+    return ["upload-probe workload evidence is missing from one or more runs"];
+  }
+  const reference = workloads[0];
+  for (const name of ["coreSha256", "saveStateSha256", "checkpointTicks", "checkpointPpcPc"]) {
+    if (workloads.some((value) => value[name] !== reference[name])) {
+      failures.push(`upload-probe ${name} differs across runs`);
+    }
+  }
+  const numeric = (name) => workloads.map((value) => Number(value[name]));
+  const requireFinite = (name, values) => {
+    if (values.some((value) => !Number.isFinite(value))) {
+      failures.push(`upload-probe ${name} is missing or non-numeric`);
+      return false;
+    }
+    return true;
+  };
+  const ticks = numeric("actualCoreTickDelta");
+  if (requireFinite("actualCoreTickDelta", ticks) && relativeSpread(ticks) > 0.0025) {
+    failures.push("upload-probe core tick deltas differ by more than 0.25%");
+  }
+  for (const name of ["actualFrameDelta", "submissionCount"]) {
+    const values = numeric(name);
+    if (requireFinite(name, values) && Math.max(...values) - Math.min(...values) > 1) {
+      failures.push(`upload-probe ${name} differs by more than one`);
+    }
+  }
+  const frames = numeric("actualFrameDelta");
+  if (requireFinite("actualFrameDelta", frames) && frames.every((value) => value > 0)) {
+    for (const name of ["observedRecordCount", "totalUploadBytes"]) {
+      const values = numeric(name);
+      if (requireFinite(name, values)) {
+        const perFrame = values.map((value, index) => value / frames[index]);
+        if (relativeSpread(perFrame) > 0.005) {
+          failures.push(`upload-probe ${name} per frame differs by more than 0.5%`);
+        }
+      }
+    }
+    const semanticOps = [6, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24];
+    const histograms = workloads.map((value) => value.opHistogram);
+    if (histograms.some((value) => !Array.isArray(value) || value.length !== 25)) {
+      failures.push("upload-probe opcode histograms are missing");
+    } else {
+      for (const op of semanticOps) {
+        const perFrame = histograms.map((histogram, index) => Number(histogram[op]) / frames[index]);
+        if (perFrame.some((value) => !Number.isFinite(value)) || relativeSpread(perFrame) > 0.005) {
+          failures.push(`upload-probe opcode ${op} per frame differs by more than 0.5%`);
+        }
+      }
+    }
+  }
+  const digestLists = workloads.map((value) => value.submitDigests);
+  if (digestLists.some((value) => !Array.isArray(value) || value.length === 0)) {
+    failures.push("upload-probe submit digests are missing");
+  } else {
+    const expected = digestLists[0][0];
+    if (digestLists.some((value) => value[0] !== expected)) {
+      failures.push("upload-probe initial submit structure differs across runs");
+    }
+  }
+  return failures;
+}
+
+export function evaluateFixedSceneMeasurementBoundaryEquivalence(runs = []) {
+  const required = runs.some(
+    (run) => run?.fixedEmulatedWork?.enabled === true || run?.fixedSceneMeasurementBoundary != null
+  );
+  if (!required) return [];
+  const signatures = runs.map((run) => run?.fixedSceneMeasurementBoundary?.signature ?? null);
+  if (signatures.some((signature) => signature === null)) {
+    return ["fixed-scene signature is missing from one or more fixed-work runs"];
+  }
+  const failures = [];
+  const reference = signatures[0];
+  for (const field of ["coreTicks", "ppcPc", "xfbHash", "width", "height"]) {
+    if (reference?.[field] == null) {
+      failures.push(`fixed-scene ${field} is missing`);
+    } else if (signatures.some((signature) => signature?.[field] !== reference[field])) {
+      failures.push(`fixed-scene ${field} differs across runs`);
+    }
+  }
+  return failures;
+}
+
+function relativeSpread(values) {
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const scale = Math.max(Math.abs(maximum), Math.abs(minimum));
+  return scale === 0 ? 0 : (maximum - minimum) / scale;
 }
 
 export function summarizeNumeric(values) {
@@ -1086,6 +1512,12 @@ export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 
   const mapDeltas = (fields) => Object.fromEntries(
     Object.entries(fields).map(([name, field]) => [name, delta(field)])
   );
+  const mapValues = (source, fields) => Object.fromEntries(
+    Object.entries(fields).map(([name, field]) => {
+      const value = Number(source[field]);
+      return [name, Number.isFinite(value) ? value : null];
+    })
+  );
   const audioDeltas = mapDeltas(audioCounterFields);
   const stageDeltas = mapDeltas(stageFields);
   const errorDeltas = mapDeltas(errorFields);
@@ -1142,6 +1574,12 @@ export function summarizeCausalFairness(samples = [], { expectedInputEvents = 0 
     sampleCount: timed.length,
     audio: {
       deltas: audioDeltas,
+      counterWindow: {
+        boundary: "first-timed-sample-to-final-timed-sample",
+        baseline: mapValues(first, audioCounterFields),
+        final: mapValues(last, audioCounterFields),
+        excludedBeforeTimedBaseline: mapValues(first, audioCounterFields),
+      },
       extrema: {
         ...Object.fromEntries(
           Object.entries(audioMaximumFields).map(([name, field]) => [name, maximum(field)])
@@ -1411,6 +1849,85 @@ export function resolveCoreArtifactPath(root, urlValue) {
   );
 }
 
+export function selectedCoreServedPaths(root, wasmPath) {
+  const relative = path.relative(root, wasmPath).replaceAll("\\", "/");
+  if (relative === "cores/dolphin/dolphin-core-upstream.wasm") {
+    return {
+      js: "cores/dolphin/dolphin-core-upstream.js",
+      wasm: relative,
+      prebuilt: "cores/dolphin/prebuilt-jit-cache.bin",
+    };
+  }
+  const match = /^build\/core-candidates\/([0-9a-f]{64})\/dolphin-core-upstream\.wasm$/i.exec(relative);
+  if (!match) throw new Error(`Selected core is outside a supported served location: ${relative}`);
+  const prefix = `build/core-candidates/${match[1].toLowerCase()}`;
+  return {
+    js: `${prefix}/dolphin-core-upstream.js`,
+    wasm: `${prefix}/dolphin-core-upstream.wasm`,
+    prebuilt: `${prefix}/prebuilt-jit-cache.bin`,
+  };
+}
+
+export function evaluatePrebuiltJitCacheEvidence({
+  evidence,
+  expectedSha256,
+  manifestEntry,
+  requireManifestEntry = false,
+} = {}) {
+  const expected = String(expectedSha256 || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    failures.push("selected prebuilt expected WASM SHA-256 is invalid");
+  }
+  const expectedFingerprint = /^[0-9a-f]{64}$/.test(expected)
+    ? canonicalCoreFingerprint(expected)
+    : null;
+  if (!evidence) {
+    failures.push("selected prebuilt cache evidence is missing");
+  } else {
+    if (!/^[0-9a-f]{64}$/.test(String(evidence.sha256 || ""))) {
+      failures.push("selected prebuilt cache SHA-256 is invalid");
+    }
+    if (!(Number(evidence.bytes) > 0)) failures.push("selected prebuilt cache size is invalid");
+    if (evidence.fingerprint !== expectedFingerprint) {
+      failures.push(
+        `selected prebuilt fingerprint mismatch: expected=${expectedFingerprint || "invalid"} ` +
+        `actual=${evidence.fingerprint || "missing"}`
+      );
+    }
+    if (evidence.entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+      failures.push("selected prebuilt entry-key schema mismatch");
+    }
+    if (!Number.isSafeInteger(evidence.entryCount) || evidence.entryCount <= 0) {
+      failures.push("selected prebuilt entry count is invalid");
+    }
+    if (evidence.entriesVerified !== true) {
+      failures.push("selected prebuilt entry payload verification is missing");
+    }
+  }
+  if (requireManifestEntry && !manifestEntry) {
+    failures.push("selected prebuilt candidate manifest entry is missing");
+  } else if (manifestEntry) {
+    for (const [field, label] of [
+      ["sha256", "hash"],
+      ["bytes", "size"],
+      ["fingerprint", "fingerprint"],
+      ["entryKeySchema", "entry-key schema"],
+      ["entryCount", "entry count"],
+      ["entriesVerified", "entry payload verification"],
+    ]) {
+      if (manifestEntry[field] !== evidence?.[field]) {
+        failures.push(`selected prebuilt manifest ${label} mismatch`);
+      }
+    }
+  }
+  return {
+    verified: failures.length === 0,
+    evidence: evidence ?? null,
+    failures,
+  };
+}
+
 export function parseProfileMetrics(helper = "", frameProfile = "") {
   const core = /\bcoreprof\s+xfb_dt:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+decode:([\d.]+)\s+avg:([\d.]+)\s+max:([\d.]+)\s+vo_sync:([\d.]+)\/max([\d.]+)\s+vo_pub:([\d.]+)\/max([\d.]+)\s+vo_total:([\d.]+)\/max([\d.]+)\s+swxfb:([\d.]+)\s+conv:([\d.]+)\s+copy:([\d.]+)/.exec(helper);
   const frame = /\bloop:([\d.]+)\s+pump:([\d.]+)\s+run:([\d.]+)\s+api:([\d.]+)\s+cap:([\d.]+)\s+copy:([\d.]+)\s+present:([\d.]+)\s+draw:([\d.]+)\s+hash:([\d.]+)\s+paced:([\d.]+)\s+copy:([\d.]+)MB\/s\s+cap:(\d+)\s+shown:(\d+)/.exec(frameProfile);
@@ -1458,6 +1975,1475 @@ export function recordsToCsv(records) {
   return `${lines.join("\n")}\n`;
 }
 
+export function evaluateCoreSelectionEvidence({ url, artifactSha256, diagnostics } = {}) {
+  const requested = new URL(url, "http://127.0.0.1/")
+    .searchParams.get("coreid")
+    ?.toLowerCase()
+    .replace(/^sha256:/, "") ?? "";
+  const expected = requested || String(artifactSha256 || "").toLowerCase();
+  const selection = diagnostics?.coreSelection || {};
+  const normalize = (value) => String(value || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    failures.push("expected core SHA-256 is unavailable or invalid");
+    return { expectedSha256: expected || null, selection, failures };
+  }
+  if (normalize(artifactSha256) !== expected) {
+    failures.push(
+      `core artifact SHA-256 mismatch: requested=${expected} ` +
+      `artifact=${normalize(artifactSha256) || "unavailable"}`
+    );
+  }
+  for (const [field, label] of [
+    ["requestedCoreSha256", "runtime requested"],
+    ["activeCoreSha256", "runtime active"],
+  ]) {
+    const observed = normalize(selection[field]);
+    if (observed !== expected) {
+      failures.push(
+        `core selection SHA-256 mismatch: expected=${expected} ${label}=${observed || "unavailable"}`
+      );
+    }
+  }
+  if (selection.fallbackReason) {
+    failures.push(`core selection unexpectedly fell back: ${selection.fallbackReason}`);
+  }
+  return { expectedSha256: expected, selection, failures };
+}
+
+export function evaluateCandidateCoreBundle({ manifest, expectedSha256, files } = {}) {
+  const expected = String(expectedSha256 || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+  if (manifest?.schemaVersion !== 1) failures.push("candidate manifest schemaVersion=1");
+  if (manifest?.coreId !== `sha256:${expected}`) failures.push("candidate manifest coreId matches selected core");
+  const declared = new Map((manifest?.files || []).map((entry) => [entry?.name, entry?.sha256]));
+  for (const [name, actualSha256] of Object.entries(files || {})) {
+    if (declared.get(name) !== actualSha256) {
+      failures.push(`candidate manifest hash mismatch: ${name}`);
+    }
+  }
+  if (declared.get("dolphin-core-upstream.wasm") !== expected) {
+    failures.push("candidate manifest WASM hash matches selected core");
+  }
+  if (manifest?.buildInfoSha256 !== declared.get("dolphin-core-upstream.build.json")) {
+    failures.push("candidate manifest buildInfoSha256 matches bundled build info");
+  }
+  return { verified: failures.length === 0, failures };
+}
+
+export function evaluateWgpuGeometryRangeEvidence({ requested, telemetry } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const enabled = telemetry?.geometryRangeEnabled;
+  const available = telemetry?.producerGeometryRangeAvailable;
+  const failures = [];
+  if (enabled !== expectedActive || (expectedActive && available !== true)) {
+    failures.push(
+      `WGPU geometry range mismatch: requested=${expectedActive ? 1 : 0} ` +
+      `active=${enabled == null ? "unavailable" : enabled ? 1 : 0} ` +
+      `producerAvailable=${available == null ? "unavailable" : available ? 1 : 0}`
+    );
+  }
+  return { required: true, expectedActive, enabled, available, failures };
+}
+
+export function evaluateWgpuSemanticQualificationEvidence({
+  requested,
+  telemetry,
+  loadedCheckpointGeneration,
+} = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive) {
+    if (String(requested) !== "0") {
+      failures.push(`wgpusemantic=${requested} is unsupported`);
+    }
+    return { required: false, expectedActive, failures };
+  }
+
+  const semantic = telemetry?.semanticRuntime;
+  const currentLoadedGeneration = Number(loadedCheckpointGeneration);
+  const capturedLoadedGeneration = Number(semantic?.loadedCheckpointGeneration);
+  const loadEpochCount = Number(semantic?.loadEpochCount);
+  const currentEpochCommittedEventCount = Number(
+    semantic?.currentEpochCommittedEventCount
+  );
+  const minimumCommittedEventCount = Number(semantic?.minimumCommittedEventCount);
+
+  if (semantic?.requested !== true || semantic?.active !== true) {
+    failures.push("WGPU semantic runtime was not active when requested");
+  }
+  if (semantic?.captureComplete !== true) {
+    failures.push("WGPU semantic capture did not complete");
+  }
+  if (semantic?.evidenceValid !== true || semantic?.failed === true) {
+    failures.push("WGPU semantic capture evidence is invalid");
+  }
+  if (!Number.isSafeInteger(currentLoadedGeneration) || currentLoadedGeneration < 1) {
+    failures.push("WGPU semantic qualification has no loaded core checkpoint");
+  }
+  if (!Number.isSafeInteger(capturedLoadedGeneration) || capturedLoadedGeneration < 1) {
+    failures.push("WGPU semantic capture did not record a loaded checkpoint generation");
+  } else if (
+    Number.isSafeInteger(currentLoadedGeneration) &&
+    currentLoadedGeneration >= 1 &&
+    capturedLoadedGeneration !== currentLoadedGeneration
+  ) {
+    failures.push(
+      `WGPU semantic checkpoint generation mismatch: capture=${capturedLoadedGeneration} ` +
+      `current=${currentLoadedGeneration}`
+    );
+  }
+  if (!Number.isSafeInteger(loadEpochCount) || loadEpochCount < 1) {
+    failures.push(
+      `WGPU semantic capture observed no load epoch: loadEpochCount=${
+        Number.isFinite(loadEpochCount) ? loadEpochCount : "unavailable"
+      }`
+    );
+  }
+  if (
+    !Number.isSafeInteger(minimumCommittedEventCount) ||
+    minimumCommittedEventCount < 1 ||
+    !Number.isSafeInteger(currentEpochCommittedEventCount) ||
+    currentEpochCommittedEventCount < minimumCommittedEventCount
+  ) {
+    failures.push(
+      `WGPU semantic current epoch is below its committed-event minimum: ` +
+      `current=${Number.isFinite(currentEpochCommittedEventCount)
+        ? currentEpochCommittedEventCount
+        : "unavailable"} ` +
+      `minimum=${Number.isFinite(minimumCommittedEventCount)
+        ? minimumCommittedEventCount
+        : "unavailable"}`
+    );
+  }
+  if (semantic?.qualificationReady !== true) {
+    failures.push("WGPU semantic post-load qualification is not ready");
+  }
+
+  return {
+    required: true,
+    expectedActive,
+    semantic,
+    loadedCheckpointGeneration: currentLoadedGeneration,
+    failures,
+  };
+}
+
+export function parseWgpuTailGateStats(text = "") {
+  const parsed = parseTailGateWire(text);
+  if (!parsed) return null;
+  return {
+    wgpuTailGateSchema: WGPU_TAIL_GATE_SCHEMA,
+    wgpuTailGateSchemaVersion: WGPU_TAIL_GATE_SCHEMA_VERSION,
+    wgpuTailGateEnabled: parsed.enabled,
+    wgpuTailGateEpoch: parsed.epoch,
+    wgpuTailGatePeriod: parsed.period,
+    wgpuTailGatePayloadSamples: parsed.payloadSamples,
+    wgpuTailGateFlushNeededSamples: parsed.flushNeededSamples,
+    wgpuTailGateRefreshNeededSamples: parsed.refreshNeededSamples,
+    wgpuTailGateBothCleanSamples: parsed.bothCleanSamples,
+    wgpuTailGateDirtyAtSkip: parsed.dirtyAtSkip,
+  };
+}
+
+export function evaluateWgpuSparseUboEvidence({ requested, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive && String(requested) !== "0") {
+    failures.push(`wgpuubosparse=${requested} is unsupported`);
+  }
+  const observations = samples.map(
+    (sample) => sample?.causalTelemetry?.webgpu?.uboSparse ?? null
+  );
+  if (!observations.length) failures.push("WGPU sparse UBO has no timed samples");
+  const counters = [
+    "eligibleCalls", "baselineCalls", "sparseCalls", "equalCalls",
+    "fullFallbackCalls", "capacityMisses", "fullBytes", "stagedBytes",
+    "avoidedStagedBytes", "copyForwardBytes", "overlayRanges", "overlayBytes",
+    "predictedGpuCopyBytes", "invalidations",
+  ];
+  const vectorCounters = ["callsByClass", "sparseCallsByClass", "stagedBytesByClass"];
+  const valid = [];
+  let previous = null;
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation || typeof observation !== "object") {
+      failures.push(`WGPU sparse UBO sample ${index} is missing or malformed`);
+      continue;
+    }
+    valid.push(observation);
+    if (observation.schema !== WGPU_SPARSE_UBO_SCHEMA) {
+      failures.push(`WGPU sparse UBO sample ${index} schema mismatch`);
+    }
+    if (observation.requested !== expectedActive) {
+      failures.push(`WGPU sparse UBO sample ${index} requested state mismatch`);
+    }
+    if (observation.active !== expectedActive) {
+      failures.push(`WGPU sparse UBO sample ${index} active state mismatch`);
+    }
+    if (!Number.isSafeInteger(observation.instanceId) || observation.instanceId < 0 ||
+        (expectedActive && observation.instanceId === 0)) {
+      failures.push(`WGPU sparse UBO sample ${index} instanceId is invalid`);
+    }
+    if (observation.coverageThreshold !== 0.5) {
+      failures.push(`WGPU sparse UBO sample ${index} coverage threshold mismatch`);
+    }
+    if (observation.maxSparseRanges !== 0) {
+      failures.push(`WGPU sparse UBO sample ${index} maxSparseRanges mismatch`);
+    }
+    if (JSON.stringify(observation.classOrder) !== JSON.stringify(["vs", "ps", "gs"]) ||
+        JSON.stringify(observation.classSizes) !== JSON.stringify([4112, 1536, 64])) {
+      failures.push(`WGPU sparse UBO sample ${index} class schema mismatch`);
+    }
+    for (const name of counters) {
+      if (!Number.isSafeInteger(observation[name]) || observation[name] < 0) {
+        failures.push(`WGPU sparse UBO sample ${index} ${name} is invalid`);
+      }
+    }
+    for (const name of vectorCounters) {
+      if (!Array.isArray(observation[name]) || observation[name].length !== 3 ||
+          observation[name].some((value) => !Number.isSafeInteger(value) || value < 0)) {
+        failures.push(`WGPU sparse UBO sample ${index} ${name} is invalid`);
+      }
+    }
+    if (observation.eligibleCalls !== observation.baselineCalls + observation.sparseCalls +
+        observation.equalCalls + observation.fullFallbackCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} call accounting is inconsistent`);
+    }
+    if (observation.avoidedStagedBytes !== observation.fullBytes - observation.stagedBytes ||
+        observation.overlayBytes !== observation.stagedBytes) {
+      failures.push(`WGPU sparse UBO sample ${index} byte accounting is inconsistent`);
+    }
+    if (Array.isArray(observation.callsByClass) &&
+        observation.callsByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.eligibleCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class calls are inconsistent`);
+    }
+    if (Array.isArray(observation.sparseCallsByClass) &&
+        observation.sparseCallsByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.sparseCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class sparse calls are inconsistent`);
+    }
+    if (Array.isArray(observation.stagedBytesByClass) &&
+        observation.stagedBytesByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.stagedBytes) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class staged bytes are inconsistent`);
+    }
+    if (!expectedActive && counters.some((name) => observation[name] !== 0)) {
+      failures.push(`WGPU sparse UBO sample ${index} disabled counters must remain zero`);
+    }
+    if (previous) {
+      if (observation.instanceId !== previous.instanceId) {
+        failures.push(
+          `WGPU sparse UBO instance changed ${previous.instanceId}->${observation.instanceId}`
+        );
+      }
+      for (const name of counters) {
+        if (observation[name] < previous[name]) {
+          failures.push(`WGPU sparse UBO sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = observation;
+  }
+
+  const initial = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  let deltas = null;
+  if (expectedActive) {
+    if (valid.length < 2) {
+      failures.push("WGPU sparse UBO needs at least two timed samples");
+    } else {
+      deltas = Object.fromEntries(counters.map(
+        (name) => [name, final[name] - initial[name]]
+      ));
+      if (deltas.eligibleCalls <= 0) {
+        failures.push("WGPU sparse UBO handled no eligible uploads in the timed window");
+      }
+      if (deltas.sparseCalls + deltas.equalCalls <= 0) {
+        failures.push("WGPU sparse UBO reconstructed no copy-forward snapshots in the timed window");
+      }
+      if (!(deltas.stagedBytes < deltas.fullBytes)) {
+        failures.push("WGPU sparse UBO did not reduce mapped bytes in the timed window");
+      }
+    }
+  }
+  return {
+    required: true,
+    expectedActive,
+    activated: final?.active === true,
+    schema: final?.schema ?? null,
+    sampleCount: valid.length,
+    initial,
+    final,
+    deltas,
+    failures,
+  };
+}
+
+export function evaluateWgpuUboComputeProjectionEvidence({
+  requested,
+  samples = [],
+} = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive && String(requested) !== "0") {
+    failures.push(`wgpuubocomputeprojection=${requested} is unsupported`);
+  }
+  const observations = samples.map(
+    (sample) => sample?.causalTelemetry?.webgpu?.uboComputeProjection ?? null
+  );
+  const valid = [];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation || typeof observation !== "object") {
+      failures.push(`WGPU UBO compute projection sample ${index} is missing or malformed`);
+      continue;
+    }
+    valid.push(observation);
+    if (observation.schema !== WGPU_UBO_COMPUTE_PROJECTION_SCHEMA) {
+      failures.push(`WGPU UBO compute projection sample ${index} schema mismatch`);
+    }
+    for (const [name, expected] of [
+      ["requested", expectedActive],
+      ["active", expectedActive],
+      ["enabled", expectedActive],
+      ["projectionOnly", true],
+      ["replayBehaviorChanged", false],
+      ["runtimeEligible", false],
+    ]) {
+      if (observation[name] !== expected) {
+        failures.push(
+          `WGPU UBO compute projection sample ${index} ${name} mismatch`
+        );
+      }
+    }
+    const eligibleCalls = observation.eligible?.calls;
+    const eligibleBytes = observation.eligible?.bytes;
+    const records = observation.records ?? {};
+    const bytes = observation.bytes ?? {};
+    const commands = observation.commands ?? {};
+    const packages = observation.packages ?? {};
+    const nonnegative = [
+      eligibleCalls, eligibleBytes, records.total, records.full, records.delta,
+      records.equal, records.rawFull, records.utilityRaw,
+      records.unknownClassRaw, records.ranges, records.reconstructedBytes,
+      bytes.payload, bytes.descriptors, bytes.packageWork,
+      bytes.packagePadding, bytes.projected, commands.legacyCopy,
+      commands.projectedCopy, commands.dispatches, commands.packages,
+      packages.records, observation.malformed,
+      observation.unclassifiedResourceIdentity,
+    ];
+    if (nonnegative.some(
+      (value) => !Number.isSafeInteger(value) || value < 0
+    )) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} contains invalid counters`
+      );
+      continue;
+    }
+    if (eligibleCalls !== records.total ||
+        eligibleCalls !== commands.legacyCopy ||
+        eligibleCalls !== packages.records ||
+        eligibleBytes !== records.reconstructedBytes ||
+        records.full + records.delta + records.equal + records.rawFull !==
+          records.total) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} record accounting is inconsistent`
+      );
+    }
+    if (bytes.packageWork !== bytes.payload + bytes.descriptors ||
+        bytes.projected !== bytes.packageWork + bytes.packagePadding ||
+        bytes.avoided !== eligibleBytes - bytes.projected) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} byte accounting is inconsistent`
+      );
+    }
+    if (commands.projectedCopy !== commands.packages ||
+        commands.dispatches !== commands.packages ||
+        commands.avoidedCopy !== commands.legacyCopy - commands.projectedCopy) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} command accounting is inconsistent`
+      );
+    }
+    if (records.utilityRaw + records.unknownClassRaw > records.rawFull) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} raw-record accounting is inconsistent`
+      );
+    }
+    if (!expectedActive && (eligibleCalls !== 0 || eligibleBytes !== 0)) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} disabled counters must remain zero`
+      );
+    }
+  }
+
+  const initial = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  let deltas = null;
+  if (expectedActive) {
+    if (valid.length < 2) {
+      failures.push("WGPU UBO compute projection needs at least two timed samples");
+    } else {
+      deltas = {
+        eligibleCalls: final.eligible.calls - initial.eligible.calls,
+        eligibleBytes: final.eligible.bytes - initial.eligible.bytes,
+        projectedBytes: final.bytes.projected - initial.bytes.projected,
+        legacyCopy: final.commands.legacyCopy - initial.commands.legacyCopy,
+        projectedCopy:
+          final.commands.projectedCopy - initial.commands.projectedCopy,
+        dispatches: final.commands.dispatches - initial.commands.dispatches,
+        malformed: final.malformed - initial.malformed,
+        unclassifiedResourceIdentity:
+          final.unclassifiedResourceIdentity - initial.unclassifiedResourceIdentity,
+      };
+      deltas.projectedGpuCommands = deltas.projectedCopy + deltas.dispatches;
+      deltas.avoidedBytes = deltas.eligibleBytes - deltas.projectedBytes;
+      deltas.avoidedGpuCommands = deltas.legacyCopy - deltas.projectedGpuCommands;
+      if (deltas.eligibleCalls <= 0 || deltas.eligibleBytes <= 0) {
+        failures.push(
+          "WGPU UBO compute projection observed no eligible timed uploads"
+        );
+      }
+      if (deltas.malformed !== 0 || deltas.unclassifiedResourceIdentity !== 0) {
+        failures.push(
+          "WGPU UBO compute projection observed malformed or unclassified timed uploads"
+        );
+      }
+      if (!(deltas.projectedBytes < deltas.eligibleBytes)) {
+        failures.push(
+          "WGPU UBO compute projection did not reduce timed package bytes"
+        );
+      }
+      if (!(deltas.projectedGpuCommands < deltas.legacyCopy)) {
+        failures.push(
+          "WGPU UBO compute projection did not reduce total timed GPU commands"
+        );
+      }
+    }
+  }
+  return {
+    required: true,
+    expectedActive,
+    activated: final?.active === true,
+    schema: final?.schema ?? null,
+    sampleCount: valid.length,
+    initial,
+    final,
+    deltas,
+    failures,
+  };
+}
+
+export function evaluateWgpuTailGateEvidence({ requested, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedEnabled = String(requested) === "1";
+  const failures = [];
+  if (!expectedEnabled && String(requested) !== "0") {
+    failures.push(`wgputailgate=${requested} is unsupported`);
+  }
+  const observations = samples.map(tailGateFromSample);
+  if (!observations.length) failures.push("WGPU tail gate has no timed samples");
+  let epoch = null;
+  let previous = null;
+  const valid = [];
+  const counters = [
+    "payloadSamples",
+    "flushNeededSamples",
+    "refreshNeededSamples",
+    "bothCleanSamples",
+    "dirtyAtSkip",
+  ];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation) {
+      failures.push(`WGPU tail gate sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (observation.schema !== WGPU_TAIL_GATE_SCHEMA ||
+        observation.schemaVersion !== WGPU_TAIL_GATE_SCHEMA_VERSION) {
+      failures.push(`WGPU tail gate sample ${index} schema mismatch`);
+    }
+    if (observation.requested != null && observation.requested !== expectedEnabled) {
+      failures.push(`WGPU tail gate sample ${index} requested state mismatch`);
+    }
+    if (observation.available != null && observation.available !== true) {
+      failures.push(`WGPU tail gate sample ${index} producer ABI is unavailable`);
+    }
+    if (observation.enabled !== expectedEnabled) {
+      failures.push(
+        `WGPU tail gate sample ${index} enabled mismatch: requested=${expectedEnabled ? 1 : 0} ` +
+        `active=${observation.enabled == null ? "unavailable" : observation.enabled ? 1 : 0}`
+      );
+    }
+    if (!Number.isSafeInteger(observation.epoch) || observation.epoch < 0) {
+      failures.push(`WGPU tail gate sample ${index} epoch is invalid`);
+    } else if (expectedEnabled && observation.epoch === 0) {
+      failures.push(`WGPU tail gate sample ${index} enabled epoch is zero`);
+    } else if (epoch == null) {
+      epoch = observation.epoch;
+    } else if (observation.epoch !== epoch) {
+      failures.push(`WGPU tail gate epoch changed ${epoch}->${observation.epoch}`);
+    }
+    if (observation.period !== 256) {
+      failures.push(`WGPU tail gate sample ${index} period=${observation.period}, expected 256`);
+    }
+    for (const name of counters) {
+      if (!Number.isSafeInteger(observation[name]) || observation[name] < 0) {
+        failures.push(`WGPU tail gate sample ${index} ${name} is invalid`);
+      }
+    }
+    for (const name of ["flushNeededSamples", "refreshNeededSamples", "bothCleanSamples"]) {
+      if (Number.isSafeInteger(observation[name]) &&
+          Number.isSafeInteger(observation.payloadSamples) &&
+          observation[name] > observation.payloadSamples) {
+        failures.push(`WGPU tail gate sample ${index} ${name} exceeds payloadSamples`);
+      }
+    }
+    if (expectedEnabled && observation.dirtyAtSkip !== 0) {
+      failures.push(`WGPU tail gate sample ${index} dirtyAtSkip=${observation.dirtyAtSkip}`);
+    }
+    if (previous) {
+      for (const name of counters) {
+        if (observation[name] < previous[name]) {
+          failures.push(`WGPU tail gate sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = observation;
+    valid.push(observation);
+  }
+  const first = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    counters.map((name) => [name, final[name] - first[name]])
+  ) : null;
+  if (expectedEnabled && final && final.payloadSamples <= 0) {
+    failures.push("WGPU tail gate payloadSamples must be positive");
+  }
+  if (!expectedEnabled && final && counters.some((name) => final[name] !== 0)) {
+    failures.push("disabled WGPU tail gate counters must remain zero");
+  }
+  if (expectedEnabled && final && final.bothCleanSamples <= 0) {
+    failures.push("WGPU tail gate bothCleanSamples must be positive");
+  }
+  if (expectedEnabled && deltas && deltas.payloadSamples <= 0) {
+    failures.push("WGPU tail gate payloadSamples did not advance during timed window");
+  }
+  if (expectedEnabled && deltas && deltas.bothCleanSamples <= 0) {
+    failures.push("WGPU tail gate bothCleanSamples did not advance during timed window");
+  }
+  return {
+    required: true,
+    expectedEnabled,
+    activated: observations.length > 0 &&
+      observations.every((value) => value?.enabled === expectedEnabled),
+    schemaVersion: final?.schemaVersion ?? null,
+    epoch,
+    period: final?.period ?? null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
+function tailGateFromSample(sample) {
+  const nested = sample?.causalTelemetry?.webgpu?.tailGate;
+  if (nested) {
+    return {
+      schema: nested.schema ?? WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: nested.schemaVersion ?? 1,
+      requested: nested.requested,
+      available: nested.available,
+      enabled: nested.enabled,
+      epoch: nested.epoch,
+      period: nested.period,
+      payloadSamples: nested.payloadSamples,
+      flushNeededSamples: nested.flushNeededSamples,
+      refreshNeededSamples: nested.refreshNeededSamples,
+      bothCleanSamples: nested.bothCleanSamples,
+      dirtyAtSkip: nested.dirtyAtSkip,
+    };
+  }
+  const value = (name) => sample?.[`wgpuTailGate${name}`] ?? sample?.[`causalWgpuTailGate${name}`];
+  if (value("Enabled") != null || value("SchemaVersion") != null) {
+    return {
+      schema: value("Schema") ?? WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: value("SchemaVersion") ?? 1,
+      requested: value("Requested"),
+      available: value("Available"),
+      enabled: value("Enabled"),
+      epoch: value("Epoch"),
+      period: value("Period"),
+      payloadSamples: value("PayloadSamples"),
+      flushNeededSamples: value("FlushNeededSamples"),
+      refreshNeededSamples: value("RefreshNeededSamples"),
+      bothCleanSamples: value("BothCleanSamples"),
+      dirtyAtSkip: value("DirtyAtSkip"),
+    };
+  }
+  const parsed = parseWgpuTailGateStats(sample?.helper);
+  if (!parsed) return null;
+  return {
+    schema: parsed.wgpuTailGateSchema,
+    schemaVersion: parsed.wgpuTailGateSchemaVersion,
+    enabled: parsed.wgpuTailGateEnabled,
+    epoch: parsed.wgpuTailGateEpoch,
+    period: parsed.wgpuTailGatePeriod,
+    payloadSamples: parsed.wgpuTailGatePayloadSamples,
+    flushNeededSamples: parsed.wgpuTailGateFlushNeededSamples,
+    refreshNeededSamples: parsed.wgpuTailGateRefreshNeededSamples,
+    bothCleanSamples: parsed.wgpuTailGateBothCleanSamples,
+    dirtyAtSkip: parsed.wgpuTailGateDirtyAtSkip,
+  };
+}
+
+export function parseWgpuProducerProfileStats(text = "") {
+  const profile = parseProducerProfileWire(text);
+  if (!profile) return null;
+  return {
+    wgpuProducerProfileSchema: profile.schema,
+    wgpuProducerProfileSchemaVersion: profile.version,
+    wgpuProducerProfileEnabled: profile.enabled,
+    wgpuProducerProfileEpoch: profile.epoch,
+    wgpuProducerProfilePhaseCount: profile.phaseCount,
+    wgpuProducerProfilePhaseOrder: profile.phaseOrder,
+    wgpuProducerProfilePeriods: profile.periods,
+    wgpuProducerProfileCalls: profile.calls,
+    wgpuProducerProfileSamples: profile.samples,
+    wgpuProducerProfileSampleTotalNs: profile.sampleTotalNs,
+    wgpuProducerProfileSampleMaxNs: profile.sampleMaxNs,
+    wgpuProducerProfileEstimatedTotalNs: profile.estimatedTotalNs,
+  };
+}
+
+export function parseWgpuDrawProfileStats(text = "") {
+  const profile = parseDrawProfileWire(text);
+  if (!profile) return null;
+  return {
+    wgpuDrawProfileSchema: profile.schema,
+    wgpuDrawProfileSchemaVersion: profile.version,
+    wgpuDrawProfileEnabled: profile.enabled,
+    wgpuDrawProfileEpoch: profile.epoch,
+    wgpuDrawProfilePhaseCount: profile.phaseCount,
+    wgpuDrawProfilePhaseOrder: profile.phaseOrder,
+    wgpuDrawProfilePeriods: profile.periods,
+    wgpuDrawProfileCalls: profile.calls,
+    wgpuDrawProfileSamples: profile.samples,
+    wgpuDrawProfileSampleTotalNs: profile.sampleTotalNs,
+    wgpuDrawProfileSampleMaxNs: profile.sampleMaxNs,
+    wgpuDrawProfileEstimatedTotalNs: profile.estimatedTotalNs,
+  };
+}
+
+export function evaluateWgpuDrawProfileEvidence({ requested, metrics, video, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const failures = [];
+  if (!["0", "1"].includes(String(requested))) {
+    failures.push(`wgpudrawprofile=${requested} is unsupported`);
+  }
+  if (String(metrics) !== "1") failures.push("wgpudrawprofile requires metrics=1");
+  if (video !== "wgpu") failures.push("wgpudrawprofile requires video=wgpu");
+  const expectedEnabled = String(requested) === "1";
+  const profiles = samples.map((sample) => {
+    const flattened = sample?.wgpuDrawProfileSchemaVersion != null ||
+        sample?.causalWgpuDrawProfileSchema != null
+      ? sample
+      : parseWgpuDrawProfileStats(sample?.helper);
+    return flattened ? drawProfileFromFlattenedSample(flattened) : null;
+  });
+  if (!profiles.length) failures.push("WGPU draw profile has no timed samples");
+  let previous = null;
+  let epoch = null;
+  let periods = null;
+  const validProfiles = [];
+  for (let index = 0; index < profiles.length; index += 1) {
+    const profile = profiles[index];
+    const rawSample = samples[index];
+    if (rawSample?.causalWgpuDrawProfileRequested !== expectedEnabled) {
+      failures.push(`WGPU draw profile sample ${index} requested state mismatch`);
+    }
+    if (rawSample?.causalWgpuDrawProfileAvailable !== true) {
+      failures.push(`WGPU draw profile sample ${index} ABI is unavailable`);
+    }
+    if (!profile) {
+      failures.push(`WGPU draw profile sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (profile.schemaVersion !== WGPU_DRAW_PROFILE_SCHEMA_VERSION ||
+        profile.schema !== WGPU_DRAW_PROFILE_SCHEMA) {
+      failures.push(`WGPU draw profile sample ${index} schema mismatch`);
+    }
+    if (profile.enabled !== expectedEnabled) {
+      failures.push(`WGPU draw profile sample ${index} enabled state mismatch`);
+    }
+    if (profile.phaseCount !== WGPU_DRAW_PROFILE_PHASE_ORDER.length ||
+        !sameArray(profile.phaseOrder, WGPU_DRAW_PROFILE_PHASE_ORDER)) {
+      failures.push(`WGPU draw profile sample ${index} phase contract mismatch`);
+    }
+    if (!Number.isSafeInteger(profile.epoch) || profile.epoch < (expectedEnabled ? 1 : 0)) {
+      failures.push(`WGPU draw profile sample ${index} epoch is invalid`);
+    } else if (epoch == null) epoch = profile.epoch;
+    else if (profile.epoch !== epoch) failures.push(`WGPU draw profile epoch changed ${epoch}->${profile.epoch}`);
+    let vectorsValid = validateProfileVector(
+      profile.periods, index, "periods", failures, WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+      { positive: true, label: "draw" }
+    );
+    for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs", "estimatedTotalNs"]) {
+      vectorsValid = validateProfileVector(
+        profile[name], index, name, failures, WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+        { label: "draw" }
+      ) && vectorsValid;
+    }
+    if (!vectorsValid) continue;
+    if (!expectedEnabled && ["calls", "samples", "sampleTotalNs", "sampleMaxNs"].some(
+      (name) => profile[name].some((value) => value !== 0)
+    )) failures.push(`WGPU draw profile sample ${index} disabled counters are nonzero`);
+    if (profile.samples.some((value, phase) => value > profile.calls[phase])) {
+      failures.push(`WGPU draw profile sample ${index} samples exceed calls`);
+    }
+    for (let phase = 0; phase < profile.calls.length; phase += 1) {
+      const calls = profile.calls[phase];
+      const period = profile.periods[phase];
+      const expectedFloor = Math.floor(calls / period);
+      const expectedCeil = Math.ceil(calls / period);
+      if (profile.samples[phase] < Math.max(0, expectedFloor - 1) ||
+          profile.samples[phase] > expectedCeil + 1) {
+        failures.push(
+          `WGPU draw profile sample ${index} phase ${phase} sample cadence mismatch`
+        );
+      }
+    }
+    if (periods == null) periods = profile.periods;
+    else if (!sameArray(profile.periods, periods)) failures.push("WGPU draw profile periods changed");
+    if (!sameArray(profile.periods, WGPU_DRAW_PROFILE_PERIODS)) {
+      failures.push(`WGPU draw profile sample ${index} periods mismatch`);
+    }
+    if (profile.sampleMaxNs.some((value, phase) => value > profile.sampleTotalNs[phase])) {
+      failures.push(`WGPU draw profile sample ${index} max exceeds sampled total`);
+    }
+    const derived = profile.sampleTotalNs.map((value, phase) => value * profile.periods[phase]);
+    if (!sameArray(profile.estimatedTotalNs, derived)) failures.push("WGPU draw profile estimates mismatch");
+    if (previous) {
+      for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+        if (profile[name].some((value, phase) => value < previous[name][phase])) {
+          failures.push(`WGPU draw profile sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = profile;
+    validProfiles.push(profile);
+  }
+  const first = validProfiles[0] ?? null;
+  const final = validProfiles.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"].map((name) => [
+      name, final[name].map((value, phase) => value - first[name][phase]),
+    ])
+  ) : null;
+  if (expectedEnabled && deltas) {
+    for (const name of ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"]) {
+      if (deltas[name].some((value) => value <= 0)) {
+        failures.push(`WGPU draw profile ${name} timed-window delta is not positive`);
+      }
+    }
+  }
+  return {
+    required: true,
+    activated: expectedEnabled && profiles.length > 0 &&
+      profiles.every((profile) => profile?.enabled === true),
+    epoch,
+    phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    periods: periods ? [...periods] : null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
+export function evaluateWgpuProducerProfileEvidence({
+  requested,
+  metrics,
+  samples = [],
+} = {}) {
+  if (requested == null || String(requested) === "0") {
+    return { required: false, failures: [] };
+  }
+  const failures = [];
+  if (String(requested) !== "1") failures.push(`wgpuprodprofile=${requested} is unsupported`);
+  if (String(metrics) !== "1") failures.push("wgpuprodprofile=1 requires metrics=1");
+  const profiles = samples.map((sample) => {
+    const flattened = sample?.wgpuProducerProfileSchemaVersion != null ||
+        sample?.causalWgpuProducerProfileSchema != null
+      ? sample
+      : parseWgpuProducerProfileStats(sample?.helper);
+    return flattened ? producerProfileFromFlattenedSample(flattened) : null;
+  });
+  if (!profiles.length) failures.push("WGPU producer profile has no timed samples");
+  let previous = null;
+  let epoch = null;
+  let periods = null;
+  const validProfiles = [];
+  for (let index = 0; index < profiles.length; index += 1) {
+    const profile = profiles[index];
+    const rawSample = samples[index];
+    if (rawSample?.causalWgpuProducerProfileRequested !== true) {
+      failures.push(`WGPU producer profile sample ${index} requested state is not active`);
+    }
+    if (rawSample?.causalWgpuProducerProfileAvailable !== true) {
+      failures.push(`WGPU producer profile sample ${index} producer ABI is unavailable`);
+    }
+    if (!profile) {
+      failures.push(`WGPU producer profile sample ${index} is missing or malformed`);
+      continue;
+    }
+    if (profile.schemaVersion !== WGPU_PRODUCER_PROFILE_SCHEMA_VERSION) {
+      failures.push(`WGPU producer profile sample ${index} schema=${profile.schemaVersion}`);
+    }
+    if (profile.schema !== WGPU_PRODUCER_PROFILE_SCHEMA) {
+      failures.push(`WGPU producer profile sample ${index} schema name mismatch`);
+    }
+    if (profile.enabled !== true) failures.push(`WGPU producer profile sample ${index} is disabled`);
+    if (profile.phaseCount !== WGPU_PRODUCER_PROFILE_PHASE_ORDER.length) {
+      failures.push(`WGPU producer profile sample ${index} phaseCount=${profile.phaseCount}`);
+    }
+    if (!sameArray(profile.phaseOrder, WGPU_PRODUCER_PROFILE_PHASE_ORDER)) {
+      failures.push(`WGPU producer profile sample ${index} phase order mismatch`);
+    }
+    if (!Number.isSafeInteger(profile.epoch) || profile.epoch <= 0) {
+      failures.push(`WGPU producer profile sample ${index} epoch is not positive`);
+    } else if (epoch == null) {
+      epoch = profile.epoch;
+    } else if (profile.epoch !== epoch) {
+      failures.push(`WGPU producer profile epoch changed ${epoch}->${profile.epoch}`);
+    }
+    let vectorsValid = validateProducerProfileVector(
+      profile.periods, index, "periods", failures, { positive: true }
+    );
+    for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+      vectorsValid = validateProducerProfileVector(profile[name], index, name, failures) &&
+        vectorsValid;
+    }
+    vectorsValid = validateProducerProfileVector(
+      profile.estimatedTotalNs, index, "estimatedTotalNs", failures
+    ) && vectorsValid;
+    if (!vectorsValid) continue;
+    if (profile.samples.some((value, phase) => value > profile.calls[phase])) {
+      failures.push(`WGPU producer profile sample ${index} samples exceed calls`);
+    }
+    if (periods == null) periods = profile.periods;
+    else if (!sameArray(profile.periods, periods)) {
+      failures.push(`WGPU producer profile sample ${index} periods changed within timed window`);
+    }
+    const derived = profile.sampleTotalNs.map((value, phase) => value * profile.periods[phase]);
+    if (!sameArray(profile.estimatedTotalNs, derived)) {
+      failures.push(`WGPU producer profile sample ${index} estimated totals mismatch`);
+    }
+    if (previous) {
+      for (const name of ["calls", "samples", "sampleTotalNs", "sampleMaxNs"]) {
+        if (profile[name].some((value, phase) => value < previous[name][phase])) {
+          failures.push(`WGPU producer profile sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = profile;
+    validProfiles.push(profile);
+  }
+  const first = validProfiles[0] ?? null;
+  const final = validProfiles.at(-1) ?? null;
+  const deltas = first && final ? Object.fromEntries(
+    ["calls", "samples", "sampleTotalNs", "estimatedTotalNs"].map((name) => [
+      name,
+      final[name].map((value, phase) => value - first[name][phase]),
+    ])
+  ) : null;
+  return {
+    required: true,
+    activated: profiles.length > 0 && profiles.every((profile) => profile?.enabled === true),
+    schemaVersion: final?.schemaVersion ?? null,
+    epoch,
+    phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    periods: periods ? [...periods] : null,
+    deltas,
+    final,
+    failures: [...new Set(failures)],
+  };
+}
+
+function producerProfileFromFlattenedSample(sample) {
+  const value = (name) => sample[`wgpuProducerProfile${name}`] ??
+    sample[`causalWgpuProducerProfile${name}`];
+  return {
+    schema: value("Schema"),
+    schemaVersion: value("SchemaVersion") ?? (value("Schema") === WGPU_PRODUCER_PROFILE_SCHEMA ? 1 : null),
+    enabled: value("Enabled"),
+    epoch: value("Epoch"),
+    phaseCount: value("PhaseCount"),
+    phaseOrder: value("PhaseOrder"),
+    periods: value("Periods"),
+    calls: value("Calls"),
+    samples: value("Samples"),
+    sampleTotalNs: value("SampleTotalNs"),
+    sampleMaxNs: value("SampleMaxNs"),
+    estimatedTotalNs: value("EstimatedTotalNs"),
+  };
+}
+
+function drawProfileFromFlattenedSample(sample) {
+  const value = (name) => sample[`wgpuDrawProfile${name}`] ??
+    sample[`causalWgpuDrawProfile${name}`];
+  return {
+    schema: value("Schema"),
+    schemaVersion: value("SchemaVersion") ??
+      (value("Schema") === WGPU_DRAW_PROFILE_SCHEMA ? 1 : null),
+    enabled: value("Enabled"),
+    epoch: value("Epoch"),
+    phaseCount: value("PhaseCount"),
+    phaseOrder: value("PhaseOrder"),
+    periods: value("Periods"),
+    calls: value("Calls"),
+    samples: value("Samples"),
+    sampleTotalNs: value("SampleTotalNs"),
+    sampleMaxNs: value("SampleMaxNs"),
+    estimatedTotalNs: value("EstimatedTotalNs"),
+  };
+}
+
+function validateProfileVector(
+  values,
+  sampleIndex,
+  name,
+  failures,
+  phaseCount,
+  { positive = false, label = "profile" } = {}
+) {
+  const valid = Array.isArray(values) && values.length === phaseCount &&
+    values.every((value) => Number.isSafeInteger(value) && value >= (positive ? 1 : 0));
+  if (!valid) failures.push(`WGPU ${label} profile sample ${sampleIndex} ${name} is invalid`);
+  return valid;
+}
+
+function validateProducerProfileVector(values, sampleIndex, name, failures, { positive = false } = {}) {
+  const valid = Array.isArray(values) &&
+    values.length === WGPU_PRODUCER_PROFILE_PHASE_ORDER.length &&
+    values.every((value) => Number.isSafeInteger(value) && value >= (positive ? 1 : 0));
+  if (!valid) {
+    failures.push(`WGPU producer profile sample ${sampleIndex} ${name} is invalid`);
+  }
+  return valid;
+}
+
+function sameArray(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+    left.every((value, index) => value === right[index]);
+}
+
+export function evaluateWgpuRendererWorkerProbeEvidence({ requested, telemetry } = {}) {
+  if (requested == null || requested === "off") return { required: false, failures: [] };
+  const probe = telemetry?.rendererWorkerProbe;
+  const failures = [];
+  if (probe?.requested !== requested || probe?.active !== true || probe?.passed !== true) {
+    failures.push(
+      `WGPU renderer worker probe mismatch: requested=${requested} ` +
+      `reported=${probe?.requested ?? "unavailable"} active=${probe?.active ? 1 : 0} ` +
+      `passed=${probe?.passed ? 1 : 0}`
+    );
+  }
+  if (requested === "canary" && probe?.schema !== "wasm-dolphin.wgpu-renderer-worker-canary.v1") {
+    failures.push(`WGPU renderer worker canary schema mismatch: ${probe?.schema || "unavailable"}`);
+  }
+  if (["inline-upload", "worker-upload", "null-drain"].includes(requested)) {
+    const expectedExecutor = requested === "inline-upload"
+      ? "inline" : requested === "worker-upload" ? "worker" : "null";
+    const expectedOwner = expectedExecutor === "inline" ? 1 : expectedExecutor === "worker" ? 2 : 3;
+    const histogram = probe?.opHistogram;
+    const observed = Number(probe?.observedRecordCount);
+    const consumed = Number(probe?.consumedRecordCount);
+    const uploadRecords = Number(probe?.uploadRecordCount);
+    const releasedUploads = Number(probe?.releasedUploadCount);
+    const histogramTotal = Array.isArray(histogram)
+      ? histogram.reduce((sum, value) => sum + Number(value || 0), 0)
+      : -1;
+    const expectedUploadRecords = Array.isArray(histogram)
+      ? Number(histogram[6] || 0) + Number(histogram[8] || 0)
+      : -1;
+    if (probe?.schema !== "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1") {
+      failures.push(`WGPU upload probe schema mismatch: ${probe?.schema || "unavailable"}`);
+    }
+    for (const [condition, message] of [
+      [probe?.executorLocation === expectedExecutor, "executor location matches request"],
+      [probe?.blankOutput === true, "blank output is explicit"],
+      [probe?.sharedHeap === true, "shared heap is active"],
+      [probe?.protocolVersion === 3, "protocol v3 is active"],
+      [probe?.claimedOwner === expectedOwner, "owner token matches executor"],
+      [probe?.claimCount === 1 && probe?.conflictCount === 0, "ownership claim is unique"],
+      [probe?.handoffAckCount === 1, "ring handoff is acknowledged once"],
+      [Number.isSafeInteger(observed) && observed > 0, "records were observed"],
+      [consumed === observed, "every observed record was consumed"],
+      [Array.isArray(histogram) && histogram.length === 25 && histogramTotal === observed,
+        "opcode histogram conserves records"],
+      [uploadRecords === expectedUploadRecords && releasedUploads === uploadRecords,
+        "every upload record was released once"],
+      [Number(probe?.totalUploadBytes) > 0, "upload bytes are nonzero"],
+      [probe?.invalidRecordCount === 0 && probe?.unknownOpcodeCount === 0,
+        "record validation is clean"],
+      [probe?.invalidUploadSpanCount === 0 && probe?.uploadReleaseMismatchCount === 0,
+        "upload ownership is clean"],
+      [probe?.missingResourceCount === 0, "resource references are complete"],
+      [probe?.quiesced === true && probe?.backlog === 0, "probe finalized at quiescence"],
+      [probe?.fatalCount === 0 && probe?.consumerState === 1 && probe?.consumerError === 0,
+        "consumer remained healthy"],
+      [/^[0-9a-f]{8}$/.test(String(probe?.streamDigest || "")),
+        "stream digest is present"],
+      [Array.isArray(probe?.submitDigests) && probe.submitDigests.length > 0,
+        "submit-boundary digests are present"],
+    ]) {
+      if (!condition) failures.push(`WGPU upload probe invalid: ${message}`);
+    }
+    if (requested === "null-drain") {
+      if (probe?.submissionCount !== 0 || probe?.gpuCompletionCount !== 0 || probe?.staging !== null) {
+        failures.push("WGPU null-drain unexpectedly performed GPU work");
+      }
+    } else if (!(probe?.submissionCount > 0 &&
+                 probe?.gpuCompletionCount === probe?.submissionCount &&
+                 probe?.staging && probe.staging.failed === false)) {
+      failures.push("WGPU upload probe GPU submissions/completions are incomplete");
+    }
+  }
+  return { required: true, requested, probe, failures };
+}
+
+export function evaluateWgpuOutputContractEvidence({
+  video,
+  requestedProbe,
+  diagnostics,
+} = {}) {
+  const uploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    requestedProbe
+  );
+  const visibleWgpu = ["wgpu", "webgpu-real", "webgpu2"].includes(
+    String(video || "").toLowerCase()
+  );
+  if (!uploadProbe && !visibleWgpu) return { required: false, failures: [] };
+
+  const contract = diagnostics?.outputContract;
+  const expected = uploadProbe
+    ? {
+        disposition: "intentional-blank-probe",
+        expectsVisibleCanvas: false,
+        activePresenterBackend: "wgpu-upload-probe",
+        probeMode: requestedProbe,
+      }
+    : {
+        disposition: "visible-canvas",
+        expectsVisibleCanvas: true,
+        activePresenterBackend: "webgpu",
+        probeMode: null,
+      };
+  const failures = [];
+  if (contract?.schema !== "wasm-dolphin.wgpu-output-contract.v1") {
+    failures.push(`WGPU output contract schema mismatch: ${contract?.schema || "unavailable"}`);
+  }
+  for (const field of [
+    "disposition",
+    "expectsVisibleCanvas",
+    "activePresenterBackend",
+    "probeMode",
+  ]) {
+    if (contract?.[field] !== expected[field]) {
+      failures.push(
+        `WGPU output contract ${field} mismatch: expected=${String(expected[field])} ` +
+        `actual=${contract?.[field] == null ? String(contract?.[field] ?? "unavailable") : String(contract[field])}`
+      );
+    }
+  }
+  if (diagnostics?.activePresenterBackend !== expected.activePresenterBackend) {
+    failures.push(
+      `WGPU output backend mismatch: contract=${expected.activePresenterBackend} ` +
+      `diagnostics=${diagnostics?.activePresenterBackend || "unavailable"}`
+    );
+  }
+  return { required: true, expected, contract, failures };
+}
+
+export function evaluateWgpuDiagnosticLogFilterEvidence({ requested, diagnostics } = {}) {
+  if (String(requested ?? "0") !== "1") return { required: false, failures: [] };
+  const snapshot = diagnostics?.diagnosticLogFilter;
+  const failures = [];
+  if (snapshot?.schema !== "wasm-dolphin.wgpu-diagnostic-log-filter.v1") {
+    failures.push(`WGPU diagnostic log filter schema mismatch: ${snapshot?.schema || "unavailable"}`);
+  }
+  if (snapshot?.enabled !== true) failures.push("WGPU diagnostic log filter is not active");
+  if (!Number.isSafeInteger(snapshot?.droppedCount) || snapshot.droppedCount < 0) {
+    failures.push("WGPU diagnostic log filter droppedCount is invalid");
+  }
+  if (!snapshot?.droppedByTag || typeof snapshot.droppedByTag !== "object" ||
+      Array.isArray(snapshot.droppedByTag)) {
+    failures.push("WGPU diagnostic log filter per-tag evidence is unavailable");
+  }
+  return { required: true, snapshot, failures };
+}
+
+export function validateWgpuUploadProbeFinalization({ requested, finalized } = {}) {
+  const failures = [];
+  const telemetry = finalized?.causalTelemetry;
+  const snapshot = finalized?.snapshot;
+  const captured = telemetry?.webgpu?.rendererWorkerProbe;
+  if (telemetry?.schemaVersion !== CAUSAL_TELEMETRY_SCHEMA_VERSION) {
+    failures.push(
+      `causal telemetry schema must be ${CAUSAL_TELEMETRY_SCHEMA_VERSION}`
+    );
+  }
+  if (!snapshot || !captured) {
+    failures.push("final probe snapshot and captured telemetry must both be present");
+    return { valid: false, failures };
+  }
+  if (captured.requested !== requested) failures.push("captured probe mode must match the request");
+  for (const name of [
+    "schema",
+    "executorLocation",
+    "observedRecordCount",
+    "consumedRecordCount",
+    "totalUploadBytes",
+    "streamDigest",
+    "quiesced",
+    "passed",
+  ]) {
+    if (captured[name] !== snapshot[name]) {
+      failures.push(`captured probe field ${name} must match the finalized snapshot`);
+    }
+  }
+  return { valid: failures.length === 0, failures };
+}
+
+const WGPU_DIRTY_RANGE_PROJECTION_SCHEMA =
+  "wasm-dolphin.wgpu-dirty-range-projection.v1";
+const WGPU_DIRTY_RANGE_HAZARD_COUNTERS = Object.freeze([
+  "overlapUploadCount",
+  "overlapIntervalCount",
+  "overlapBytes",
+  "destinationOrderRegressionCount",
+  "sourceArenaWrapCount",
+  "sourceOutOfArenaCount",
+  "recordIndexWrapCount",
+  "recordOrderHazardCount",
+]);
+
+export function flattenWgpuDirtyRangeProjection(value) {
+  const snapshot = value ?? {};
+  const finalized = snapshot.finalized ?? {};
+  const flattened = {
+    causalWgpuDirtyRangeSchema: snapshot.schema ?? null,
+    causalWgpuDirtyRangeRequested:
+      typeof snapshot.requested === "boolean" ? snapshot.requested : null,
+    causalWgpuDirtyRangeActive:
+      typeof snapshot.active === "boolean" ? snapshot.active : null,
+    causalWgpuDirtyRangeFinalizedSegmentCount:
+      safeNonnegativeInteger(finalized.segmentCount),
+    causalWgpuDirtyRangeRawUploads: safeNonnegativeInteger(finalized.raw?.uploads),
+    causalWgpuDirtyRangeRawBytes: safeNonnegativeInteger(finalized.raw?.bytes),
+  };
+  for (const name of WGPU_DIRTY_RANGE_HAZARD_COUNTERS) {
+    flattened[`causalWgpuDirtyRangeHazard${upperFirst(name)}`] =
+      safeNonnegativeInteger(finalized.hazards?.[name]);
+  }
+  const thresholds = Array.isArray(snapshot.gapThresholds) ? snapshot.gapThresholds : [];
+  const copies = Array.isArray(finalized.projection?.intervalCopiesByGap)
+    ? finalized.projection.intervalCopiesByGap
+    : [];
+  const bytes = Array.isArray(finalized.projection?.copiedBytesByGap)
+    ? finalized.projection.copiedBytesByGap
+    : [];
+  flattened.causalWgpuDirtyRangeGapThresholds = thresholds;
+  for (let index = 0; index < thresholds.length; index += 1) {
+    const suffix = `Gap${thresholds[index]}`;
+    flattened[`causalWgpuDirtyRangeProjectedCopies${suffix}`] =
+      safeNonnegativeInteger(copies[index]);
+    flattened[`causalWgpuDirtyRangeProjectedBytes${suffix}`] =
+      safeNonnegativeInteger(bytes[index]);
+  }
+  return flattened;
+}
+
+export function evaluateWgpuDirtyRangeProjection(samples = []) {
+  const failures = [];
+  const candidates = Array.from(samples, extractDirtyRangeProjection);
+  const firstActiveSampleIndex = candidates.findIndex(hasDirtyRangeActivationSignal);
+  const firstValidSampleIndex = candidates.findIndex(isValidDirtyRangeSnapshot);
+  if (firstActiveSampleIndex < 0) {
+    return dirtyRangeEvaluationResult({
+      failures: ["no requested or active WGPU dirty-range projection snapshot was captured"],
+    });
+  }
+  if (firstValidSampleIndex < 0) {
+    for (let index = firstActiveSampleIndex; index < candidates.length; index += 1) {
+      validateDirtyRangeSnapshot(candidates[index], index, failures);
+    }
+    return dirtyRangeEvaluationResult({
+      failures: failures.length > 0
+        ? failures
+        : ["no active, schema-valid WGPU dirty-range projection snapshot was captured"],
+    });
+  }
+
+  let previous = null;
+  for (let sampleIndex = firstActiveSampleIndex; sampleIndex < candidates.length; sampleIndex += 1) {
+    const snapshot = candidates[sampleIndex];
+    validateDirtyRangeSnapshot(snapshot, sampleIndex, failures);
+    if (previous && snapshot) {
+      validateDirtyRangeMonotonic(previous, snapshot, sampleIndex, failures);
+    }
+    if (isValidDirtyRangeSnapshot(snapshot)) previous = snapshot;
+  }
+
+  const first = candidates[firstValidSampleIndex];
+  const finalSampleIndex = candidates.length - 1;
+  const final = candidates[finalSampleIndex];
+  if (!isValidDirtyRangeSnapshot(final)) {
+    failures.push(`final sample ${finalSampleIndex} is not an active, schema-valid snapshot`);
+    return dirtyRangeEvaluationResult({
+      failures,
+      firstValidSampleIndex,
+      finalSampleIndex,
+      gapThresholds: [...first.gapThresholds],
+    });
+  }
+
+  const finalizedSegmentCount =
+    final.finalized.segmentCount - first.finalized.segmentCount;
+  const rawUploads = final.finalized.raw.uploads - first.finalized.raw.uploads;
+  const rawBytes = final.finalized.raw.bytes - first.finalized.raw.bytes;
+  if (!(finalizedSegmentCount > 0)) {
+    failures.push(`finalized segment delta must be positive, got ${finalizedSegmentCount}`);
+  }
+  if (!(rawUploads > 0)) failures.push(`raw upload delta must be positive, got ${rawUploads}`);
+  if (!(rawBytes > 0)) failures.push(`raw byte delta must be positive, got ${rawBytes}`);
+
+  const hazardDeltas = Object.fromEntries(WGPU_DIRTY_RANGE_HAZARD_COUNTERS.map((name) => [
+    name,
+    final.finalized.hazards[name] - first.finalized.hazards[name],
+  ]));
+  const unresolvedHazardCount = Object.values(hazardDeltas).reduce(
+    (total, value) => total + value,
+    0
+  );
+  const zeroUnresolvedHazards = unresolvedHazardCount === 0;
+  const projections = first.gapThresholds.map((gapThresholdBytes, index) => {
+    const projectedCopies = final.finalized.projection.intervalCopiesByGap[index] -
+      first.finalized.projection.intervalCopiesByGap[index];
+    const projectedBytes = final.finalized.projection.copiedBytesByGap[index] -
+      first.finalized.projection.copiedBytesByGap[index];
+    const copyReductionRatio = rawUploads > 0 ? 1 - projectedCopies / rawUploads : null;
+    const byteInflationRatio = rawBytes > 0 ? projectedBytes / rawBytes - 1 : null;
+    const copyReductionAtLeast80Percent =
+      copyReductionRatio != null && copyReductionRatio >= 0.8;
+    const byteInflationAtMost20Percent =
+      byteInflationRatio != null && byteInflationRatio <= 0.2;
+    return {
+      gapThresholdBytes,
+      projectedCopies,
+      projectedBytes,
+      copyReductionRatio,
+      byteInflationRatio,
+      copyReductionAtLeast80Percent,
+      byteInflationAtMost20Percent,
+      zeroUnresolvedHazards,
+      qualifies:
+        copyReductionAtLeast80Percent &&
+        byteInflationAtMost20Percent &&
+        zeroUnresolvedHazards,
+    };
+  });
+  const qualifyingGapThresholds = projections
+    .filter((entry) => entry.qualifies)
+    .map((entry) => entry.gapThresholdBytes);
+
+  return dirtyRangeEvaluationResult({
+    failures,
+    firstValidSampleIndex,
+    finalSampleIndex,
+    gapThresholds: [...first.gapThresholds],
+    finalizedSegmentCount,
+    raw: { uploads: rawUploads, bytes: rawBytes },
+    hazards: hazardDeltas,
+    unresolvedHazardCount,
+    zeroUnresolvedHazards,
+    projections,
+    qualifyingGapThresholds,
+    selectedQualifyingGapThreshold: qualifyingGapThresholds[0] ?? null,
+  });
+}
+
+function dirtyRangeEvaluationResult(overrides = {}) {
+  const result = {
+    schema: "wasm-dolphin.wgpu-dirty-range-projection-evaluation.v1",
+    valid: false,
+    firstValidSampleIndex: null,
+    finalSampleIndex: null,
+    gapThresholds: [],
+    finalizedSegmentCount: null,
+    raw: null,
+    hazards: null,
+    unresolvedHazardCount: null,
+    zeroUnresolvedHazards: false,
+    projections: [],
+    qualifyingGapThresholds: [],
+    selectedQualifyingGapThreshold: null,
+    failures: [],
+    ...overrides,
+  };
+  result.valid = result.failures.length === 0;
+  return result;
+}
+
+function extractDirtyRangeProjection(sample) {
+  return sample?.causalTelemetry?.webgpu?.dirtyRangeProjection ??
+    sample?.webgpu?.dirtyRangeProjection ??
+    sample?.dirtyRangeProjection ??
+    sample ?? null;
+}
+
+function hasDirtyRangeActivationSignal(snapshot) {
+  return snapshot?.requested === true || snapshot?.active === true || snapshot?.enabled === true;
+}
+
+function isValidDirtyRangeSnapshot(snapshot) {
+  if (snapshot?.schema !== WGPU_DIRTY_RANGE_PROJECTION_SCHEMA ||
+      snapshot.requested !== true || snapshot.active !== true ||
+      snapshot.enabled !== true || snapshot.projectionOnly !== true) return false;
+  const thresholds = snapshot.gapThresholds;
+  const finalized = snapshot.finalized;
+  const copies = finalized?.projection?.intervalCopiesByGap;
+  const bytes = finalized?.projection?.copiedBytesByGap;
+  if (!Array.isArray(thresholds) || thresholds.length === 0 ||
+      !Array.isArray(copies) || !Array.isArray(bytes) ||
+      copies.length !== thresholds.length || bytes.length !== thresholds.length) return false;
+  const counters = [
+    finalized?.segmentCount,
+    finalized?.raw?.uploads,
+    finalized?.raw?.bytes,
+    ...copies,
+    ...bytes,
+  ];
+  return counters.every((value) => safeNonnegativeInteger(value) !== null) &&
+    WGPU_DIRTY_RANGE_HAZARD_COUNTERS.every(
+      (name) => safeNonnegativeInteger(finalized?.hazards?.[name]) !== null
+    ) && thresholds.every((value, index) =>
+      safeNonnegativeInteger(value) !== null && (index === 0 || value > thresholds[index - 1])
+    );
+}
+
+function validateDirtyRangeSnapshot(snapshot, sampleIndex, failures) {
+  if (!snapshot) {
+    failures.push(`sample ${sampleIndex} is missing WGPU dirty-range projection telemetry`);
+    return;
+  }
+  if (snapshot.schema !== WGPU_DIRTY_RANGE_PROJECTION_SCHEMA) {
+    failures.push(`sample ${sampleIndex} has unsupported schema ${snapshot.schema ?? "missing"}`);
+  }
+  for (const [field, value] of [
+    ["requested", snapshot.requested],
+    ["active", snapshot.active],
+    ["enabled", snapshot.enabled],
+    ["projectionOnly", snapshot.projectionOnly],
+  ]) {
+    if (value !== true) failures.push(`sample ${sampleIndex} ${field}=${String(value)} expected true`);
+  }
+  const thresholds = snapshot.gapThresholds;
+  const finalized = snapshot.finalized;
+  if (!finalized || typeof finalized !== "object" || Array.isArray(finalized)) {
+    failures.push(`sample ${sampleIndex} finalized contract is missing`);
+    return;
+  }
+  const copies = finalized.projection?.intervalCopiesByGap;
+  const bytes = finalized.projection?.copiedBytesByGap;
+  if (!Array.isArray(thresholds) || thresholds.length === 0) {
+    failures.push(`sample ${sampleIndex} gapThresholds must be a non-empty array`);
+    return;
+  }
+  if (!Array.isArray(copies) || copies.length !== thresholds.length ||
+      !Array.isArray(bytes) || bytes.length !== thresholds.length) {
+    failures.push(`sample ${sampleIndex} projection arrays do not match gapThresholds`);
+  }
+  validateSafeCounters(
+    finalized,
+    ["segmentCount"],
+    `sample ${sampleIndex} finalized`,
+    failures
+  );
+  validateSafeCounters(
+    finalized.raw,
+    ["uploads", "bytes"],
+    `sample ${sampleIndex} finalized.raw`,
+    failures
+  );
+  validateSafeCounters(
+    finalized.hazards,
+    WGPU_DIRTY_RANGE_HAZARD_COUNTERS,
+    `sample ${sampleIndex} finalized.hazards`,
+    failures
+  );
+  for (let index = 0; index < thresholds.length; index += 1) {
+    if (safeNonnegativeInteger(thresholds[index]) === null ||
+        (index > 0 && thresholds[index] <= thresholds[index - 1])) {
+      failures.push(`sample ${sampleIndex} gapThresholds must be increasing safe integers`);
+      break;
+    }
+  }
+  for (const [label, values] of [["intervalCopiesByGap", copies], ["copiedBytesByGap", bytes]]) {
+    if (Array.isArray(values) && values.some((value) => safeNonnegativeInteger(value) === null)) {
+      failures.push(`sample ${sampleIndex} ${label} contains a non-safe counter`);
+    }
+  }
+}
+
+function validateDirtyRangeMonotonic(previous, current, sampleIndex, failures) {
+  if (!isValidDirtyRangeSnapshot(current)) return;
+  if (JSON.stringify(current.gapThresholds) !== JSON.stringify(previous.gapThresholds)) {
+    failures.push(`sample ${sampleIndex} gapThresholds changed within the timed window`);
+    return;
+  }
+  const paths = [
+    ["finalized", "segmentCount"],
+    ["finalized", "raw", "uploads"],
+    ["finalized", "raw", "bytes"],
+    ...WGPU_DIRTY_RANGE_HAZARD_COUNTERS.map((name) => ["finalized", "hazards", name]),
+  ];
+  for (const path of paths) {
+    const before = path.reduce((value, key) => value[key], previous);
+    const after = path.reduce((value, key) => value[key], current);
+    if (after < before) failures.push(`sample ${sampleIndex} ${path.join(".")} regressed`);
+  }
+  for (const field of ["intervalCopiesByGap", "copiedBytesByGap"]) {
+    const before = previous.finalized.projection[field];
+    const after = current.finalized.projection[field];
+    if (after.some((value, index) => value < before[index])) {
+      failures.push(`sample ${sampleIndex} finalized.projection.${field} regressed`);
+    }
+  }
+}
+
+function validateSafeCounters(value, names, label, failures) {
+  for (const name of names) {
+    if (safeNonnegativeInteger(value?.[name]) === null) {
+      failures.push(`${label}.${name} is not a non-negative safe integer`);
+    }
+  }
+}
+
+function safeNonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function upperFirst(value) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
 function csvCell(value) {
   if (value === undefined || value === null) return "";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);
@@ -1480,6 +3466,52 @@ function normalizeArm(arm, label) {
     ),
     cacheState,
   };
+}
+
+function normalizeOverheadGate(value) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("overheadGate must be an object");
+  }
+  const maximumRegressionPercent = Number(value.maximumRegressionPercent);
+  if (!Number.isFinite(maximumRegressionPercent) || maximumRegressionPercent <= 0) {
+    throw new Error("overheadGate.maximumRegressionPercent must be positive");
+  }
+  if (!Array.isArray(value.semanticWork) || value.semanticWork.length === 0) {
+    throw new Error("overheadGate.semanticWork must contain at least one metric rule");
+  }
+  const semanticWork = value.semanticWork.map((rule, index) => {
+    const path = String(rule?.path || "").trim();
+    const maximumDifferencePercent = Number(rule?.maximumDifferencePercent);
+    if (!path || !Number.isFinite(maximumDifferencePercent) || maximumDifferencePercent < 0) {
+      throw new Error(`overheadGate.semanticWork[${index}] is invalid`);
+    }
+    return { path, maximumDifferencePercent };
+  });
+  return { maximumRegressionPercent, semanticWork };
+}
+
+function normalizeStabilityGate(value) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("stabilityGate must be an object");
+  }
+  const maximumWithinArmSpreadPercent = Number(value.maximumWithinArmSpreadPercent);
+  if (!Number.isFinite(maximumWithinArmSpreadPercent) || maximumWithinArmSpreadPercent < 0) {
+    throw new Error("stabilityGate.maximumWithinArmSpreadPercent must be non-negative");
+  }
+  return { maximumWithinArmSpreadPercent };
+}
+
+function summarizeWithinArmSpread(values) {
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const average = mean(values);
+  const spread = maximum - minimum;
+  const spreadPercent = average === 0
+    ? spread === 0 ? 0 : null
+    : spread / Math.abs(average) * 100;
+  return { min: minimum, max: maximum, mean: average, spreadPercent };
 }
 
 function numericValue(value) {

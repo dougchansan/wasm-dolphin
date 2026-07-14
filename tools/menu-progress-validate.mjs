@@ -21,6 +21,7 @@ import {
   recordsToCsv,
   resolveCoreArtifactPath,
 } from "./perf-artifacts.mjs";
+import { buildVisibleHarnessUrl } from "./benchmark-url.mjs";
 
 const root = process.cwd();
 const args = parseArgs(process.argv.slice(2));
@@ -32,6 +33,10 @@ const sampleMs = args.sampleMs ?? Number(process.env.SAMPLE_MS || 1000);
 const screenshotEverySeconds = args.shotEvery ?? Number(process.env.SHOT_EVERY || 4);
 const captureScreenshots = process.env.CAPTURE_SCREENSHOTS !== "0";
 const showDebugPanel = process.env.SHOW_DEBUG_PANEL === "1";
+const audioMode = String(process.env.AUDIO_MODE || "audible").trim().toLowerCase();
+if (!["audible", "muted"].includes(audioMode)) {
+  throw new Error(`Invalid AUDIO_MODE=${process.env.AUDIO_MODE}; expected audible or muted`);
+}
 const inputMarkerCanvasObservationEnabled =
   process.env.INPUTLATENCY === "1" && process.env.INPUTMARKEROBSERVE !== "0";
 const inputPhotonEnabled = process.env.INPUTPHOTON === "1";
@@ -131,8 +136,15 @@ const browserEngine = browserName === "firefox" ? firefox : chromium;
 await mkdir(outDir, { recursive: true });
 console.log(`[menu-progress] outDir=${outDir} duration=${durationSeconds}s headed=${headed}`);
 
-const url = new URL(baseUrl);
+const { url, removedProbe: removedInheritedWgpuProbe } = buildVisibleHarnessUrl(baseUrl);
+if (removedInheritedWgpuProbe) {
+  console.warn(
+    `[menu-progress] removed inherited wgpurenderprobe=${removedInheritedWgpuProbe}; ` +
+    "playthrough runs require visible output"
+  );
+}
 url.searchParams.set("core", "upstream");
+if (process.env.CORE_ID) url.searchParams.set("coreid", process.env.CORE_ID);
 url.searchParams.set("video", videoMode);
 url.searchParams.set("cpu", process.env.CPU || "dual");
 // §28cx: honor a SPEED override so throughput A/Bs can run unthrottled
@@ -195,12 +207,27 @@ for (const [environmentName, queryName] of [
   ["WGPUPUMP", "wgpupump"],
   ["WGPUSTATECACHE", "wgpustatecache"],
   ["WGPUUBOCACHE", "wgpuubocache"],
+  ["WGPUUBOPACK", "wgpuubopack"],
+  ["WGPUUBOSPARSE", "wgpuubosparse"],
+  ["WGPUUBOMETRICS", "wgpuubometrics"],
+  ["WGPUUNIFORMFAST", "wgpuuniformfast"],
+  ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
+  ["WGPUUPLOADRUNPROJECTION", "wgpuuploadrunprojection"],
+  ["WGPUUBOCOMPUTEPROJECTION", "wgpuubocomputeprojection"],
+  ["WGPUUBOCOMPUTE", "wgpuubocompute"],
+  ["WGPUOWNERSHIPTRACE", "wgpuownershiptrace"],
+  ["WGPUSEMANTIC", "wgpusemantic"],
   ["WGPUGEOMPACK", "wgpugeompack"],
+  ["WGPUGEOMRANGE", "wgpugeomrange"],
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
   ["WGPUATOMIC", "wgpuatomic"],
   ["WGPUUPLOADMB", "wgpuuploadmb"],
+  ["WGPUSTAGINGSLOTS", "wgpustagingslots"],
+  ["WGPUSTAGEFAST", "wgpustagefast"],
+  ["WGPUMAPPEDTIMING", "wgpumappedtiming"],
+  ["WGPUDRAINCOALESCE", "wgpudraincoalesce"],
   ["WGPUREPLAYMS", "wgpureplayms"],
   ["WGPUPOWER", "wgpupower"],
   ["SWTEVFAST", "swtevfast"],
@@ -294,6 +321,7 @@ const runMetadata = await collectRunMetadata({
   inputScript: configuredInputScript,
   sceneLabel,
 });
+runMetadata.benchmark.audioMode = audioMode;
 await writeFile(path.join(outDir, "run-metadata.json"), JSON.stringify(runMetadata, null, 2));
 
 // launchPersistentContext returns a BrowserContext (not Browser). Both
@@ -455,6 +483,116 @@ try {
   console.log(`[menu-progress] mounting ROM…`);
   await waitForMount(page);
   bootMarks.mountComplete = Date.now() - bootT0;
+
+  const loadConfiguredSaveState = async (elapsed) => {
+    saveStateDone = true;
+    let readiness = null;
+    let pauseResponse = null;
+    let resumeResponse = null;
+    let paused = false;
+    // The deterministic direct-save path uses the same pause/load/resume
+    // barrier as the perf gate. Pausing prevents boot commands from racing the
+    // applied-state ownership boundary while State::LoadAs runs.
+    if (elapsed <= 0) {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        readiness = await page.evaluate(() => {
+          const info = window.__lastFrameInfo || {};
+          return {
+            frame: Number(info.frame) || 0,
+            coreTicks: Number(info.coreTicks) || 0,
+            running: Boolean(info.running),
+          };
+        });
+        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
+        await page.waitForTimeout(250);
+      }
+      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
+        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
+      }
+      pauseResponse = await requestWorkerRpc(
+        page,
+        "validationSetCorePaused",
+        { paused: true }
+      );
+      if (!pauseResponse?.paused || pauseResponse?.coreStateName !== "Paused") {
+        throw new Error(
+          `Core did not pause before direct save load: ${JSON.stringify(pauseResponse)}`
+        );
+      }
+      paused = true;
+    }
+    console.log(
+      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
+    );
+    try {
+      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
+      if (!response?.loaded) {
+        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
+      }
+      if (paused) {
+        resumeResponse = await requestWorkerRpc(
+          page,
+          "validationSetCorePaused",
+          { paused: false }
+        );
+        paused = false;
+        if (resumeResponse?.coreStateName !== "Running") {
+          throw new Error(
+            `Core did not resume after direct save load: ${JSON.stringify(resumeResponse)}`
+          );
+        }
+        await page.evaluate(() => {
+          window.__host?.adapter?.onStatus?.("Save state loaded (Running)");
+        });
+      }
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: true,
+        readiness,
+        pauseResponse,
+        resumeResponse,
+        response,
+      };
+      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
+      milestoneLog.push({
+        t: elapsed.toFixed(1),
+        event: "save-state-loaded",
+        response,
+      });
+    } catch (error) {
+      if (paused) {
+        try {
+          resumeResponse = await requestWorkerRpc(
+            page,
+            "validationSetCorePaused",
+            { paused: false }
+          );
+        } catch {
+          // Preserve the original load error. The run already fails closed.
+        }
+      }
+      saveStateLoadResult = {
+        attemptedAtSeconds: Number(elapsed.toFixed(3)),
+        loaded: false,
+        readiness,
+        pauseResponse,
+        resumeResponse,
+        error: error?.message || String(error),
+      };
+      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
+      throw error;
+    }
+    await page.waitForTimeout(1500);
+    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
+  };
+
+  // SAVE_STATE_AT=0 bypasses menu navigation and character select. Load the
+  // Kirby-vs-Link fixture before first-visible and audio sampling so the
+  // headed run begins at the battle rather than presenting boot/menu output.
+  if (saveStateUrl && saveStateAt <= 0) {
+    await loadConfiguredSaveState(0);
+  }
+
   // First-visible-content milestone: poll the canvas hash once a second
   // until we see something other than the all-zeros boot frame. This
   // captures "time-to-first-pixels", separate from "core mounted".
@@ -515,16 +653,16 @@ try {
     }
   }
 
-  // Phase C: install the audio probe. Unmute (audio defaults to muted),
-  // attach an AnalyserNode to the audio graph, and poll envelope
+  // Phase C: apply the explicit test audio mode, attach an AnalyserNode to
+  // the post-gain graph, and poll its envelope
   // every 250 ms. Wrapped in a single page.evaluate so it runs cleanly
   // even if AudioContext isn't available (older browsers) — failures
   // just leave audioSamples empty.
-  await page.evaluate(() => {
+  await page.evaluate((selectedAudioMode) => {
     try {
       const audio = window.__audio;
       if (!audio) return;
-      void audio.setMuted(false);
+      void audio.setMuted(selectedAudioMode === "muted");
       // ensureContext is async; the actual AudioContext + gain node is
       // created on first call. Trigger it now so the analyser can hook
       // in. We don't await — the validator's RAF-driven sampling will
@@ -566,73 +704,10 @@ try {
       // running without audio samples, the assertion just becomes a
       // "not measured" rather than a fail.
     }
-  });
+  }, audioMode);
 
   await capture(page, "00-mounted.png");
   milestoneLog.push({ t: 0, event: "mounted" });
-
-  const loadConfiguredSaveState = async (elapsed) => {
-    saveStateDone = true;
-    let readiness = null;
-    // A mounted worker can still report Dolphin's state as Starting on slower
-    // presenter paths. Loading during that window returns rc=0. Wait for a
-    // small amount of real core-frame progress before transferring the state.
-    if (elapsed <= 0) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        readiness = await page.evaluate(() => {
-          const info = window.__lastFrameInfo || {};
-          return {
-            frame: Number(info.frame) || 0,
-            coreTicks: Number(info.coreTicks) || 0,
-            running: Boolean(info.running),
-          };
-        });
-        if (readiness.running && readiness.frame >= 30 && readiness.coreTicks > 0) break;
-        await page.waitForTimeout(250);
-      }
-      if (!readiness?.running || readiness.frame < 30 || readiness.coreTicks <= 0) {
-        throw new Error(`Core did not become ready for save-state load: ${JSON.stringify(readiness)}`);
-      }
-    }
-    console.log(
-      `[menu-progress] loading save state ${saveStateUrl} at t=${elapsed.toFixed(1)}...`
-    );
-    try {
-      const response = await page.evaluate((u) => window.__loadStateFile(u), saveStateUrl);
-      saveStateLoadResult = {
-        attemptedAtSeconds: Number(elapsed.toFixed(3)),
-        loaded: Boolean(response?.loaded),
-        readiness,
-        response,
-      };
-      console.log(`[menu-progress] loadStateFile -> ${JSON.stringify(response)}`);
-      if (!response?.loaded) {
-        throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
-      }
-      milestoneLog.push({
-        t: elapsed.toFixed(1),
-        event: "save-state-loaded",
-        response,
-      });
-    } catch (error) {
-      saveStateLoadResult = {
-        attemptedAtSeconds: Number(elapsed.toFixed(3)),
-        loaded: false,
-        error: error?.message || String(error),
-      };
-      console.log(`[menu-progress] loadStateFile threw: ${saveStateLoadResult.error}`);
-      throw error;
-    }
-    await page.waitForTimeout(1500);
-    await capture(page, `savestate-loaded-t${Math.round(elapsed)}.png`);
-  };
-
-  // SAVE_STATE_AT=0 is the deterministic battle-benchmark path: mount the
-  // core, load the state immediately, let it settle, then start the timed
-  // sampling window. Menu navigation and character selection are bypassed.
-  if (saveStateUrl && saveStateAt <= 0) {
-    await loadConfiguredSaveState(0);
-  }
 
   const startedAt = Date.now();
   const totalSamples = Math.ceil((durationSeconds * 1000) / sampleMs);
@@ -858,6 +933,7 @@ try {
     inputEvents,
     bootMarks,
   });
+  summary.audio.requestedMode = audioMode;
   summary.inputMarkerCanvas = inputMarkerCanvasObservations?.summary ?? null;
   summary.inputPhoton = {
     enabled: inputPhotonEnabled,
@@ -1451,6 +1527,36 @@ async function waitForMount(page) {
   throw new Error("Timed out waiting for Dolphin mount");
 }
 
+async function requestWorkerRpc(page, type, payload = {}) {
+  const configured = Number(process.env.MENU_WORKER_RPC_TIMEOUT_MS || 30000);
+  const timeoutMs = Number.isFinite(configured) && configured >= 1000
+    ? configured
+    : 30000;
+  return page.evaluate(async ({ type, payload, timeoutMs }) => {
+    const adapter = window.__host?.adapter;
+    if (!adapter?.request) {
+      throw new Error(`Active adapter does not expose worker RPC ${type}`);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Worker RPC ${type} timed out after ${timeoutMs} ms`)),
+        timeoutMs
+      );
+      Promise.resolve(adapter.request(type, payload)).then(
+        (value) => {
+          clearTimeout(timer);
+          adapter.applyFrame?.(value);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }, { type, payload, timeoutMs });
+}
+
 async function readSample(page, elapsedSeconds) {
   return page.evaluate((elapsedSeconds) => {
     const read = (sel) => document.querySelector(sel)?.textContent?.trim() ?? "";
@@ -1816,15 +1922,20 @@ function installInputMarkerCanvasObserver() {
         !Number.isFinite(browserCanvasVisibleAtEpochMs)) {
       return false;
     }
-    const ordered = [
+    // completedAtEpochMs is when the JS onSubmittedWorkDone() callback runs,
+    // not a hardware timestamp. The browser may paint already-submitted work
+    // before that callback receives a main-thread turn, so validate the worker
+    // lifecycle and submitted-to-visible chains independently.
+    const workerOrdered = [
       timestamps.sentAtEpochMs,
       timestamps.appliedAtEpochMs,
       timestamps.polledAtEpochMs,
       timestamps.submittedAtEpochMs,
       timestamps.completedAtEpochMs,
-      browserCanvasVisibleAtEpochMs,
     ];
-    return ordered.every((value, index) => index === 0 || value >= ordered[index - 1]);
+    return workerOrdered.every(
+      (value, index) => index === 0 || value >= workerOrdered[index - 1]
+    ) && browserCanvasVisibleAtEpochMs >= timestamps.submittedAtEpochMs;
   }
 
   function buildGenerationObservation({
@@ -1891,7 +2002,15 @@ function installInputMarkerCanvasObserver() {
         workerAppliedToCorePollMs: stageDelta(polledAtEpochMs, appliedAtEpochMs),
         corePollToMarkerSubmitMs: stageDelta(submittedAtEpochMs, polledAtEpochMs),
         markerSubmitToGpuCompleteMs: stageDelta(completedAtEpochMs, submittedAtEpochMs),
+        markerSubmitToGpuCompletionCallbackMs: stageDelta(
+          completedAtEpochMs,
+          submittedAtEpochMs
+        ),
         gpuCompleteToBrowserCanvasVisibleMs: stageDelta(
+          browserCanvasVisibleAtEpochMs,
+          completedAtEpochMs
+        ),
+        gpuCompletionCallbackToBrowserCanvasVisibleMs: stageDelta(
           browserCanvasVisibleAtEpochMs,
           completedAtEpochMs
         ),
@@ -1905,6 +2024,10 @@ function installInputMarkerCanvasObserver() {
         timestamps,
         browserCanvasVisibleAtEpochMs
       ),
+      completionCallbackAfterCanvasVisible:
+        Number.isFinite(completedAtEpochMs) &&
+        Number.isFinite(browserCanvasVisibleAtEpochMs) &&
+        completedAtEpochMs > browserCanvasVisibleAtEpochMs,
       adapterValidated,
       workerValidated,
       workerTelemetryCapturedAtMs: worker?.telemetryCapturedAtMs ?? null,
@@ -2177,6 +2300,9 @@ function installInputMarkerCanvasObserver() {
     const monotonicTimestampCount = workerValidated.filter(
       (sample) => sample.workerTimestampsMonotonic
     ).length;
+    const completionCallbackAfterCanvasVisibleCount = workerValidated.filter(
+      (sample) => sample.completionCallbackAfterCanvasVisible
+    ).length;
     const acceptanceReasons = [];
     if (expectedGenerationCount < 6) {
       acceptanceReasons.push("expected-generation-count-below-six");
@@ -2225,7 +2351,9 @@ function installInputMarkerCanvasObserver() {
       "workerAppliedToCorePollMs",
       "corePollToMarkerSubmitMs",
       "markerSubmitToGpuCompleteMs",
+      "markerSubmitToGpuCompletionCallbackMs",
       "gpuCompleteToBrowserCanvasVisibleMs",
+      "gpuCompletionCallbackToBrowserCanvasVisibleMs",
       "inputEventToBrowserCanvasVisibleMs",
     ];
     const stageLatency = Object.fromEntries(stageNames.map((name) => [
@@ -2236,6 +2364,8 @@ function installInputMarkerCanvasObserver() {
       enabled: true,
       measurement:
         "worker-validated input generation to first matching 8x8 sample of the 32x32 browser-canvas-visible marker",
+      gpuCompletionTimestampMeaning:
+        "onSubmittedWorkDone callback observation; not an exact hardware completion timestamp",
       observationBoundary: state.observationBoundary,
       scanoutIncluded: false,
       physicalPhotonBoundaryIncluded: false,
@@ -2257,6 +2387,7 @@ function installInputMarkerCanvasObserver() {
       workerValidatedGenerationCount: workerValidated.length,
       workerTimestampJoinCount,
       monotonicTimestampCount,
+      completionCallbackAfterCanvasVisibleCount,
       workerMarkerStats: markerStats,
       acceptance: {
         passed: acceptanceReasons.length === 0,

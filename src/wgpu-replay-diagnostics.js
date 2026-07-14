@@ -35,9 +35,17 @@ export const WGPU_REPLAY_OP_NAMES = Object.freeze([
   "BLIT_TEXTURE"
 ]);
 
-export function createWgpuReplayOpMetrics() {
+export function createWgpuReplayOpMetrics({
+  replayTimingSamplePeriod = 32,
+  now = () => performance.now(),
+} = {}) {
+  const timingSamplePeriod = Math.max(
+    1,
+    Math.trunc(Number(replayTimingSamplePeriod) || 32)
+  );
   const replayCount = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
-  const replayCpuTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayTimingSampleCount = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayCpuSampleTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const replayCpuMaxMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const uploadCopyCalls = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const uploadCopyBytes = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
@@ -54,8 +62,37 @@ export function createWgpuReplayOpMetrics() {
     if (!validOp(op)) return false;
     const elapsed = finiteNonnegative(cpuTimeMs);
     replayCount[op] += 1;
-    replayCpuTotalMs[op] += elapsed;
+    replayTimingSampleCount[op] += 1;
+    replayCpuSampleTotalMs[op] += elapsed;
     replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function beginReplay(op) {
+    if (!validOp(op)) return null;
+    replayCount[op] += 1;
+    const count = replayCount[op];
+    return count === 1 || count % timingSamplePeriod === 0 ? now() : null;
+  }
+
+  function finishReplay(op, startedAt) {
+    if (!validOp(op) || startedAt === null) return false;
+    const elapsed = finiteNonnegative(now() - startedAt);
+    replayTimingSampleCount[op] += 1;
+    replayCpuSampleTotalMs[op] += elapsed;
+    replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function recordReplayBatch(op, count = 0, cpuTimeMs = 0) {
+    if (!validOp(op)) return false;
+    const records = Math.max(0, Math.trunc(Number(count) || 0));
+    if (records === 0) return false;
+    const elapsed = finiteNonnegative(cpuTimeMs);
+    replayCount[op] += records;
+    replayTimingSampleCount[op] += records;
+    replayCpuSampleTotalMs[op] += elapsed;
+    replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed / records);
     return true;
   }
 
@@ -80,7 +117,8 @@ export function createWgpuReplayOpMetrics() {
   function reset() {
     for (const metric of [
       replayCount,
-      replayCpuTotalMs,
+      replayTimingSampleCount,
+      replayCpuSampleTotalMs,
       replayCpuMaxMs,
       uploadCopyCalls,
       uploadCopyBytes,
@@ -94,13 +132,21 @@ export function createWgpuReplayOpMetrics() {
   }
 
   function snapshot({ enabled = true } = {}) {
+    const replayCpuTotalMs = replayCount.map((count, op) => {
+      const samples = replayTimingSampleCount[op];
+      return samples > 0 ? replayCpuSampleTotalMs[op] * (count / samples) : 0;
+    });
     return {
       schema: "wasm-dolphin.wgpu-replay-op-metrics.v1",
       enabled: Boolean(enabled),
+      replayTimingMode: "per-op-periodic-sample",
+      replayTimingSamplePeriod: timingSamplePeriod,
       opCount: WGPU_REPLAY_OP_NAMES.length,
       names: [...WGPU_REPLAY_OP_NAMES],
       histogram: Array.from(replayCount),
       replayCpuTotalMs: Array.from(replayCpuTotalMs),
+      replayTimingSampleCounts: Array.from(replayTimingSampleCount),
+      replayCpuSampleTotalMs: Array.from(replayCpuSampleTotalMs),
       replayCpuMaxMs: Array.from(replayCpuMaxMs),
       uploadCopyCalls: Array.from(uploadCopyCalls),
       uploadCopyBytes: Array.from(uploadCopyBytes),
@@ -115,6 +161,9 @@ export function createWgpuReplayOpMetrics() {
 
   return {
     recordReplay,
+    beginReplay,
+    finishReplay,
+    recordReplayBatch,
     recordUploadCopy,
     recordQueueUpload,
     reset,
@@ -171,6 +220,14 @@ export function requestedWgpuUboCache(
   if (value === "1") return true;
   if (value === "0") return false;
   return Boolean(enabledByDefault);
+}
+
+export function requestedWgpuUboMetrics(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuubometrics") === "1";
+}
+
+export function requestedWgpuUniformFast(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuuniformfast") === "1";
 }
 
 export function requestedWgpuReplayBudgetMs(
@@ -287,10 +344,107 @@ export function requestedWgpuGeometryPack(
   return Boolean(enabledByDefault);
 }
 
+export function requestedWgpuGeometryRange(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpugeomrange");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
 export function requestedWgpuUploadArenaMiB(
   search = globalThis.location?.search ?? ""
 ) {
   return new URLSearchParams(search).get("wgpuuploadmb") === "64" ? 64 : 32;
+}
+
+export function requestedWgpuMappedStagingSlotCount(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpustagingslots") === "4" ? 4 : 3;
+}
+
+export function requestedWgpuMappedStageTimingStride(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpumappedtiming") === "64" ? 64 : 1;
+}
+
+export function requestedWgpuUboPack(
+  search = globalThis.location?.search ?? "",
+  enabledByDefault = false
+) {
+  const value = new URLSearchParams(search).get("wgpuubopack");
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return Boolean(enabledByDefault);
+}
+
+export function requestedWgpuUploadTransport(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpuuploadtransport") === "mapped"
+    ? "mapped"
+    : "queue";
+}
+
+export function requestedWgpuMappedStageFast(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpustagefast") === "1";
+}
+
+export function requestedWgpuMappedDrainCoalescing(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpudraincoalesce") === "1";
+}
+
+export function requestedWgpuProducerProfile(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpuprodprofile") === "1";
+}
+
+export function requestedWgpuDrawProfile(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpudrawprofile") === "1";
+}
+
+export function requestedWgpuTailGate(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgputailgate") === "1";
+}
+
+export function requestedWgpuDiagnosticQuiet(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpudiagquiet") === "1";
+}
+
+export function requestedWgpuRendererWorkerProbe(
+  search = globalThis.location?.search ?? ""
+) {
+  const value = new URLSearchParams(search).get("wgpurenderprobe");
+  return new Set(["canary", "inline-upload", "worker-upload", "null-drain"]).has(value)
+    ? value
+    : "off";
+}
+
+export function isIntentionalBlankWgpuProbe(value) {
+  return value === "inline-upload" || value === "worker-upload" || value === "null-drain";
+}
+
+export function shouldShowIntentionalBlankWgpuNotice(
+  search = globalThis.location?.search ?? ""
+) {
+  const params = new URLSearchParams(search);
+  return params.get("video") === "wgpu" &&
+    isIntentionalBlankWgpuProbe(params.get("wgpurenderprobe"));
 }
 
 export function requestedWgpuAtomicPassReplay(search = globalThis.location?.search ?? "") {
@@ -508,7 +662,16 @@ export function createWgpuReplayClassifier({
     commandCount: 0,
     submittedCount: 0,
     completedCount: 0,
-    errorCount: 0
+    errorCount: 0,
+    rejectedCount: 0,
+    rejectedReasons: {
+      "no-command-encoder": 0,
+      "submit-error": 0,
+      "replay-fatal": 0,
+      unknown: 0
+    },
+    lastRejectedReason: null,
+    lastRejectedRecordIndex: null
   };
   const ringEpoch = {
     loadBoundary: null,
@@ -736,6 +899,20 @@ export function createWgpuReplayClassifier({
     recordEvent("present-command", { recordIndex });
   }
 
+  function recordPresentRejected({ recordIndex = 0, reason = "unknown" } = {}) {
+    const normalizedReason = Object.hasOwn(presentSubmission.rejectedReasons, reason)
+      ? reason
+      : "unknown";
+    presentSubmission.rejectedCount += 1;
+    presentSubmission.rejectedReasons[normalizedReason] += 1;
+    presentSubmission.lastRejectedReason = normalizedReason;
+    presentSubmission.lastRejectedRecordIndex = recordIndex >>> 0;
+    recordEvent("present-rejected", {
+      recordIndex: recordIndex >>> 0,
+      reason: normalizedReason
+    });
+  }
+
   function recordSubmission({ reason = "unknown", submitted = false, error = null } = {}) {
     if (submitted) presentSubmission.submittedCount += 1;
     if (error) presentSubmission.errorCount += 1;
@@ -884,12 +1061,16 @@ export function createWgpuReplayClassifier({
     missingResources.status = missingResources.total ? "fail" : "pending";
     efbMutation.status = efbMutation.nonzeroReadbackCount ? "pass" :
       efbMutation.postDrawReadbackCount ? "fail" : "pending";
-    presentSubmission.status = presentSubmission.errorCount ? "fail" :
+    presentSubmission.status = presentSubmission.errorCount || presentSubmission.rejectedCount ? "fail" :
       presentSubmission.completedCount ? "pass" : presentSubmission.submittedCount ? "running" : "pending";
 
     let classifier = { status: "running", code: "WAITING_FOR_DRAW" };
     if (passAtomicity.splitAtDrainCount) classifier = { status: "fail", code: "PASS_SPLIT_AT_DRAIN" };
     else if (missingResources.total) classifier = { status: "fail", code: "MISSING_RESOURCES" };
+    else if (presentSubmission.rejectedCount) classifier = {
+      status: "fail",
+      code: "PRESENT_SUBMISSION_REJECTED"
+    };
     else if (firstEfbPassReadback.status === "error") classifier = {
       status: "fail",
       code: "FIRST_EFB_PASS_READBACK_ERROR"
@@ -957,6 +1138,7 @@ export function createWgpuReplayClassifier({
     captureEfbDrawCount,
     needsPostDrawEfbReadback,
     recordPresentCommand,
+    recordPresentRejected,
     recordSubmission,
     recordPresentCompletion,
     recordLoadBoundary,

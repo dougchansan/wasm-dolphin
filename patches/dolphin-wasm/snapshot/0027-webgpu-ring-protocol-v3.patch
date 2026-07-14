@@ -1,0 +1,300 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 49c5ca15fe..01688b2f71 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -47,6 +47,8 @@ static constexpr u32 kRingCapacity = 262144;
+ // before the bump pointer wraps back over a region it might still be
+ // reading. Mirrors the Day-20 XFB-ring idea (no per-frame malloc).
+ static constexpr u32 kProtocolUploadWatermark = 1u << 0;
++static constexpr u32 kProtocolNonDroppingBackpressure = 1u << 1;
++static constexpr u32 kConsumerStateFailed = 2;
+ 
+ bool WebGPUCommandStream::ConfigureUploadArenaMiB(u32 mib, bool metrics_enabled)
+ {
+@@ -83,6 +85,8 @@ void WebGPUCommandStream::EnsureRing()
+   m_header->capacity = kRingCapacity;
+   m_header->upload_read.store(0, std::memory_order_relaxed);
+   m_header->protocol_flags.store(0, std::memory_order_relaxed);
++  m_header->consumer_state.store(0, std::memory_order_relaxed);
++  m_header->consumer_error.store(0, std::memory_order_relaxed);
+   m_slots = reinterpret_cast<CmdRecord*>(static_cast<u8*>(block) + sizeof(CmdRingHeader));
+   m_capacity = kRingCapacity;
+ 
+@@ -114,14 +118,94 @@ void WebGPUCommandStream::EnsureRing()
+         if (typeof self !== 'undefined' && self.postMessage)
+           self.postMessage({ type : 'webgpu-cmd-ring', headerPtr : $0,
+                               slotsPtr : $1, capacity : $2, uploadPtr : $3,
+-                              uploadSize : $4, protocolVersion : 2,
+-                              headerWords : 5 });
++                              uploadSize : $4, protocolVersion : 3,
++                              headerWords : 7 });
+       },
+       reinterpret_cast<intptr_t>(m_header), reinterpret_cast<intptr_t>(m_slots),
+       static_cast<int>(m_capacity), reinterpret_cast<intptr_t>(m_upload_base),
+       static_cast<int>(m_upload_size));
+ }
+ 
++bool WebGPUCommandStream::ProtocolV3Active() const
++{
++  return m_header &&
++         (m_header->protocol_flags.load(std::memory_order_acquire) &
++          kProtocolNonDroppingBackpressure) != 0;
++}
++
++bool WebGPUCommandStream::ConsumerFailed() const
++{
++  return ProtocolV3Active() &&
++         m_header->consumer_state.load(std::memory_order_acquire) == kConsumerStateFailed;
++}
++
++bool WebGPUCommandStream::WaitForRingSpace(u32 write, u32 count)
++{
++  if (ConsumerFailed())
++    return false;
++
++  const auto is_full = [&] {
++    return write - m_header->read.load(std::memory_order_acquire) > m_capacity - count;
++  };
++  if (!is_full())
++    return true;
++
++  if (ProtocolV3Active())
++  {
++    while (is_full())
++    {
++      if (ConsumerFailed())
++        return false;
++      const u32 observed = m_header->read.load(std::memory_order_acquire);
++      emscripten_futex_wait(reinterpret_cast<volatile void*>(&m_header->read), observed, 4.0);
++    }
++    return !ConsumerFailed();
++  }
++
++  constexpr u32 kMaxSpins = 500000u;
++  u32 spins = 0;
++  while (is_full())
++  {
++    if (++spins >= kMaxSpins)
++      return false;
++  }
++  return true;
++}
++
++bool WebGPUCommandStream::WaitForUploadSpace(u32 end)
++{
++  const auto is_full = [&] {
++    return end - m_header->upload_read.load(std::memory_order_acquire) > m_upload_size;
++  };
++  if (!is_full())
++    return !ConsumerFailed();
++
++  if (ProtocolV3Active())
++  {
++    while (is_full())
++    {
++      if (ConsumerFailed())
++        return false;
++      const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
++      emscripten_futex_wait(
++          reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
++    }
++    return !ConsumerFailed();
++  }
++
++  constexpr u32 kMaxUploadWaits = 250u;
++  u32 waits = 0;
++  while (is_full())
++  {
++    const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
++    emscripten_futex_wait(
++        reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
++    if (++waits >= kMaxUploadWaits)
++      return false;
++  }
++  return true;
++}
++
+ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+ {
+   if (!m_header)
+@@ -131,8 +215,16 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+   }
+ 
+   const u32 w = m_header->write.load(std::memory_order_relaxed);
+-  if (w - m_header->read.load(std::memory_order_acquire) >= m_capacity)
++  if (!WaitForRingSpace(w, 1))
+   {
++    // Protocol v3 only returns here after the consumer published FAILED.
++    // Do not enter the legacy bounded-spin/drop path after that terminal
++    // state; poison the owning transaction immediately.
++    if (ProtocolV3Active())
++    {
++      PoisonPass();
++      return false;
++    }
+     // Ring full — the consumer (discio worker, a SEPARATE thread that
+     // drains continuously) is behind. The Day-27 policy was "drop
+     // rather than stall the video pthread", but a dropped record is
+@@ -156,28 +248,22 @@ bool WebGPUCommandStream::Push(const CmdRecord& rec)
+     // (consumer draining on its loop), space frees within a few
+     // iterations; when it would deadlock, bail fast and degrade to the
+     // old drop so emulation keeps progressing instead of hanging.
+-    u32 spins = 0;
+-    constexpr u32 kMaxSpins = 500000u;
+-    while (w - m_header->read.load(std::memory_order_acquire) >= m_capacity)
++    // A v2 worker has no fatal-state channel. Its helper retains the bounded
++    // timeout, after which this preserves the legacy drop-and-poison policy.
++    ++m_dropped;
++    s_dropped_record_count.fetch_add(1, std::memory_order_relaxed);
++    if (m_dropped == 1 || (m_dropped % 10000) == 0)
+     {
+-      if (++spins >= kMaxSpins)
+-      {
+-        ++m_dropped;
+-        s_dropped_record_count.fetch_add(1, std::memory_order_relaxed);
+-        if (m_dropped == 1 || (m_dropped % 10000) == 0)
+-        {
+-          EM_ASM(
+-              {
+-                if (typeof console !== 'undefined')
+-                  console.log('[webgpu-ring] DROPPED ' + $0 +
+-                              ' records (consumer stuck — backpressure timed out)');
+-              },
+-              static_cast<int>(m_dropped));
+-        }
+-        PoisonPass();
+-        return false;
+-      }
++      EM_ASM(
++          {
++            if (typeof console !== 'undefined')
++              console.log('[webgpu-ring] DROPPED ' + $0 +
++                          ' records (legacy consumer backpressure timed out)');
++          },
++          static_cast<int>(m_dropped));
+     }
++    PoisonPass();
++    return false;
+   }
+ 
+   m_slots[w % m_capacity] = rec;
+@@ -205,15 +291,10 @@ bool WebGPUCommandStream::PushBatch(const CmdRecord* records, u32 count)
+   // the published write fixed until all slots are populated, then make the
+   // whole pass visible with one release-store.
+   const u32 w = m_header->write.load(std::memory_order_relaxed);
+-  constexpr u32 kMaxSpins = 500000u;
+-  u32 spins = 0;
+-  while (w - m_header->read.load(std::memory_order_acquire) > m_capacity - count)
++  if (!WaitForRingSpace(w, count))
+   {
+-    if (++spins >= kMaxSpins)
+-    {
+-      ++m_batch_abort_count;
+-      return false;
+-    }
++    ++m_batch_abort_count;
++    return false;
+   }
+ 
+   for (u32 i = 0; i < count; ++i)
+@@ -405,30 +486,41 @@ u32 WebGPUCommandStream::ReserveUpload(size_t len, u32 align)
+   if ((m_header->protocol_flags.load(std::memory_order_acquire) &
+        kProtocolUploadWatermark) != 0)
+   {
+-    u32 waits = 0;
+-    constexpr u32 kMaxUploadWaits = 250u;
+-    while (end - m_header->upload_read.load(std::memory_order_acquire) > m_upload_size)
++    if (ProtocolV3Active())
+     {
+-      const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
+-      emscripten_futex_wait(
+-          reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
+-      if (++waits >= kMaxUploadWaits)
++      if (!WaitForUploadSpace(end))
+       {
+-        ++m_upload_wait_timeouts;
+-        m_upload_timeout_count.fetch_add(1, std::memory_order_relaxed);
+-        if (m_upload_wait_timeouts == 1 || (m_upload_wait_timeouts % 100) == 0)
+-        {
+-          EM_ASM(
+-              {
+-                if (typeof console !== 'undefined')
+-                  console.warn('[webgpu-ring] upload watermark wait timed out (' + $0 + ')');
+-              },
+-              static_cast<int>(m_upload_wait_timeouts));
+-        }
+         PoisonPass();
+         return 0;
+       }
+     }
++    else
++    {
++      u32 waits = 0;
++      constexpr u32 kMaxUploadWaits = 250u;
++      while (end - m_header->upload_read.load(std::memory_order_acquire) > m_upload_size)
++      {
++        const u32 observed = m_header->upload_read.load(std::memory_order_acquire);
++        emscripten_futex_wait(
++            reinterpret_cast<volatile void*>(&m_header->upload_read), observed, 4.0);
++        if (++waits >= kMaxUploadWaits)
++        {
++          ++m_upload_wait_timeouts;
++          m_upload_timeout_count.fetch_add(1, std::memory_order_relaxed);
++          if (m_upload_wait_timeouts == 1 || (m_upload_wait_timeouts % 100) == 0)
++          {
++            EM_ASM(
++                {
++                  if (typeof console !== 'undefined')
++                    console.warn('[webgpu-ring] upload watermark wait timed out (' + $0 + ')');
++                },
++                static_cast<int>(m_upload_wait_timeouts));
++          }
++          PoisonPass();
++          return 0;
++        }
++      }
++    }
+   }
+ 
+   if (wrapped)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index f9dba06ff1..94145ed6c2 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -183,14 +183,19 @@ struct CmdRingHeader
+   // makes the expanded header backward-compatible with older workers: they
+   // use the explicitly messaged slots pointer and leave this word at zero.
+   std::atomic<u32> protocol_flags;
++  // Protocol v3 consumer liveness. Older workers never negotiate the v3
++  // flag, so these words remain inert and retain bounded v2 behavior.
++  std::atomic<u32> consumer_state;
++  std::atomic<u32> consumer_error;
+ };
+ // The JS consumer maps write@i32[0], read@i32[1], capacity@i32[2],
+-// upload_read@i32[3], protocol_flags@i32[4]
+-// over this header — it MUST stay 20 bytes (5×u32; std::atomic<u32>
++// upload_read@i32[3], protocol_flags@i32[4], consumer_state@i32[5],
++// consumer_error@i32[6]
++// over this header — it MUST stay 28 bytes (7×u32; std::atomic<u32>
+ // is 4 bytes / 4-aligned on wasm32). Guardrail flagged by the Day-27
+ // transport audit.
+-static_assert(sizeof(CmdRingHeader) == 20,
+-              "CmdRingHeader must stay 20 bytes (JS bridge assumes fixed layout)");
++static_assert(sizeof(CmdRingHeader) == 28,
++              "CmdRingHeader must stay 28 bytes (JS bridge assumes fixed layout)");
+ 
+ // A nonzero count means an immediate command publication failed. Passes are
+ // committed transactionally below, so a failed pass never becomes visible.
+@@ -356,6 +361,10 @@ public:
+   u32 AllocId() { return m_next_id++; }
+ 
+ private:
++  bool ProtocolV3Active() const;
++  bool ConsumerFailed() const;
++  bool WaitForRingSpace(u32 write, u32 count);
++  bool WaitForUploadSpace(u32 end);
+   bool StagePassRecord(const CmdRecord& rec);
+   void PoisonPass();
+   void ResetPassStaging();
+warning: in the working copy of 'Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h', LF will be replaced by CRLF the next time Git touches it

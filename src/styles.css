@@ -270,6 +270,25 @@ canvas {
   background: #050505;
 }
 
+.blank-probe-notice {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 3;
+  width: min(76%, 560px);
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(231, 183, 90, 0.72);
+  border-radius: 8px;
+  background: rgba(20, 16, 7, 0.92);
+  color: var(--amber);
+  padding: 14px 18px;
+  font-size: clamp(0.82rem, 2vw, 1.05rem);
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+}
+
 .scanlines {
   position: absolute;
   inset: 0;

@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import {
   fileRecord,
   inspectMemoryContract,
+  inspectWorkerProtocol,
   loadSourceLock,
   publicModuleExports,
+  REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
   verifyCoreAbiManifest,
 } from "./dolphin-provenance.mjs";
 
@@ -19,11 +21,61 @@ const artifacts = previous.artifacts.map((artifact) => ({
 }));
 const wasm = artifacts.find((artifact) => artifact.path.endsWith(".wasm"));
 if (!wasm) throw new Error("Core ABI manifest has no WASM artifact");
-const contractSources = previous.contractSources.map((source) => ({
+const protocolPath = resolve(root, "src/upstream-worker-protocol.js");
+const coreHashPattern = /(DEFAULT_UPSTREAM_CORE_SHA256\s*=\s*")[0-9a-f]{64}(";)/;
+const protocolSource = readFileSync(protocolPath, "utf8");
+const protocolMatch = coreHashPattern.exec(protocolSource);
+if (!protocolMatch) {
+  throw new Error("Unable to locate DEFAULT_UPSTREAM_CORE_SHA256 in worker protocol");
+}
+const pinnedCoreSha256 = protocolMatch[0].slice(protocolMatch[1].length, -protocolMatch[2].length);
+if (pinnedCoreSha256 !== wasm.sha256) {
+  if (!write) {
+    throw new Error(
+      `Default worker core SHA-256 is stale: ${pinnedCoreSha256}; expected ${wasm.sha256}`
+    );
+  }
+  writeFileSync(
+    protocolPath,
+    protocolSource.replace(coreHashPattern, `$1${wasm.sha256}$2`)
+  );
+}
+const contractSourceDeclarations = [...previous.contractSources];
+for (const requiredPath of [
+  "src/incremental-sha256.js",
+  "src/jit-cache-identity.js",
+  "src/wgpu-consumer-reset-attestation.js",
+  "src/wgpu-legacy-semantic-decoder.js",
+  "src/wgpu-mapped-staging-pool.js",
+  "src/wgpu-ownership-command-correlator.js",
+  "src/wgpu-pass-package-projection.js",
+  "src/wgpu-resource-generation-tracker.js",
+  "src/wgpu-renderer-runtime.js",
+  "src/wgpu-semantic-digest.js",
+  "src/wgpu-semantic-parity-sink.js",
+  "src/wgpu-semantic-runtime.js",
+  "src/wgpu-semantic-v2-decoder.js",
+  "src/wgpu-sparse-ubo-copy-forward.js",
+  "src/wgpu-ubo-compute-projection.js",
+  "src/wgpu-ubo-compute-codec.js",
+  "src/wgpu-ubo-compute-reconstruction.js",
+  "src/wgpu-upload-run-projection.js",
+  "src/wgpu-ownership-trace.js",
+  "src/wgpu-visual-cadence.js",
+]) {
+  if (!contractSourceDeclarations.some((source) => source.path === requiredPath)) {
+    contractSourceDeclarations.push({
+      path: requiredPath,
+      hashMode: "lf-normalized",
+    });
+  }
+}
+const contractSources = contractSourceDeclarations.map((source) => ({
   ...fileRecord(source.path, root, source.hashMode ?? "raw"),
   ...(source.hashMode ? { hashMode: source.hashMode } : {}),
 }));
 const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
+const moduleExports = publicModuleExports(glue);
 const memoryContract = inspectMemoryContract(root);
 const runtimeMethods = inspectRuntimeMethods(lock, glue);
 const manifest = {
@@ -34,9 +86,15 @@ const manifest = {
   contractSources,
   memoryContract,
   memoryContractStatus: memoryContractStatus(memoryContract),
-  sourceOnlyExportsPendingRebuild: [],
-  moduleExports: publicModuleExports(glue),
+  sourceOnlyExportsPendingRebuild: [
+    ...new Set([
+      ...(previous.sourceOnlyExportsPendingRebuild ?? []),
+      ...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
+    ]),
+  ].filter((name) => !moduleExports.includes(name)),
+  moduleExports,
   runtimeMethods,
+  workerProtocol: inspectWorkerProtocol(root),
 };
 
 if (write) {

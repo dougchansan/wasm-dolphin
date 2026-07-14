@@ -22,6 +22,7 @@ import {
   gitBlobSha,
   loadSourceLock,
   patchSeriesDigest,
+  REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
   sha256Bytes,
   validateVendorSnapshotManifest,
   verifyCoreAbiManifest,
@@ -290,13 +291,50 @@ function createDependentLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 27);
+  assert.equal(result.patches.count, 51);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
-  assert.equal(result.vendorSnapshot.rootPaths, 98);
+  assert.equal(result.vendorSnapshot.rootPaths, 108);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
   assert.equal(result.core.abiVersion, 1);
   assert.equal(result.core.memoryContract.jsGlue.initialPages, 24576);
   assert.equal(result.core.memoryContract.activePatchSeries.initialPages, 24576);
+  const coreAbi = JSON.parse(
+    readFileSync(join(projectRoot, "provenance/dolphin-core-abi-v1.json"), "utf8")
+  );
+  assert.ok(
+    coreAbi.contractSources.some(
+      (source) => source.path === "src/wgpu-pass-package-projection.js"
+    ),
+    "pass-package projection must remain covered by the core ABI contract"
+  );
+  assert.ok(
+    coreAbi.contractSources.some(
+      (source) => source.path === "src/wgpu-ownership-trace.js"
+    ),
+    "ownership trace decoder must remain covered by the core ABI contract"
+  );
+  for (const path of [
+    "src/incremental-sha256.js",
+    "src/jit-cache-identity.js",
+    "src/wgpu-consumer-reset-attestation.js",
+    "src/wgpu-legacy-semantic-decoder.js",
+    "src/wgpu-mapped-staging-pool.js",
+    "src/wgpu-ownership-command-correlator.js",
+    "src/wgpu-resource-generation-tracker.js",
+    "src/wgpu-semantic-digest.js",
+    "src/wgpu-semantic-parity-sink.js",
+    "src/wgpu-semantic-runtime.js",
+    "src/wgpu-semantic-v2-decoder.js",
+    "src/wgpu-ubo-compute-projection.js",
+    "src/wgpu-ubo-compute-codec.js",
+    "src/wgpu-ubo-compute-reconstruction.js",
+    "src/wgpu-upload-run-projection.js",
+  ]) {
+    assert.ok(
+      coreAbi.contractSources.some((source) => source.path === path),
+      `${path} must remain covered by the core ABI contract`
+    );
+  }
 });
 
 test("vendor snapshot manifest rejects changed per-path evidence", () => {
@@ -347,7 +385,19 @@ test("ABI verification rejects mutations to every declared contract", () => {
     [(manifest) => { manifest.upstreamCommit = "0".repeat(40); }, /upstream commit/],
     [(manifest) => { manifest.runtimeMethods.pop(); }, /runtime methods/],
     [(manifest) => { manifest.workerProtocol.requestTypes.pop(); }, /Worker protocol fields/],
-    [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/]
+    [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/],
+    [
+      (manifest) => {
+        manifest.moduleExports = manifest.moduleExports.filter(
+          (name) => name !== REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS[0]
+        );
+        manifest.sourceOnlyExportsPendingRebuild =
+          manifest.sourceOnlyExportsPendingRebuild.filter(
+            (name) => name !== REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS[0]
+          );
+      },
+      /Generated core Module exports do not match ABI v1/
+    ]
   ];
   const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-contract-"));
   for (const [mutate, pattern] of mutations) {
@@ -357,6 +407,24 @@ test("ABI verification rejects mutations to every declared contract", () => {
     writeFileSync(manifestPath, JSON.stringify(manifest));
     assert.throws(() => verifyCoreAbiManifest(projectRoot, manifestPath), pattern);
   }
+});
+
+test("ABI verification rejects mapped staging source drift", () => {
+  const manifest = JSON.parse(
+    readFileSync(join(projectRoot, "provenance/dolphin-core-abi-v1.json"), "utf8")
+  );
+  const stagingSource = manifest.contractSources.find(
+    (source) => source.path === "src/wgpu-mapped-staging-pool.js"
+  );
+  assert.ok(stagingSource, "mapped staging must be declared as an ABI contract source");
+  stagingSource.sha256 = "0".repeat(64);
+  const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-staging-"));
+  const manifestPath = join(temporary, "tampered-staging.json");
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.throws(
+    () => verifyCoreAbiManifest(projectRoot, manifestPath),
+    /SHA-256 mismatch/
+  );
 });
 
 test("locked patches replay exactly, are idempotent, and reject every third checkout state", () => {

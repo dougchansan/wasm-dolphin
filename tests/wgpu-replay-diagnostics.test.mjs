@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   WGPU_REPLAY_OP_NAMES,
   createWgpuReplayOpMetrics,
+  isIntentionalBlankWgpuProbe,
   createWgpuReplayClassifier,
   createWgpuReplayBudgetGate,
   findPublishedAtomicPassEnd,
@@ -13,16 +14,88 @@ import {
   requestedWgpuDetachedPresenter,
   requestedWgpuLoadEpochFence,
   requestedWgpuReplayPump,
+  requestedWgpuRendererWorkerProbe,
+  shouldShowIntentionalBlankWgpuNotice,
   requestedWgpuReplayDiagnostics,
   requestedWgpuReplayBudgetMs,
   requestedWgpuPowerPreference,
+  requestedWgpuProducerProfile,
+  requestedWgpuDrawProfile,
   requestedWgpuGeometryPack,
+  requestedWgpuGeometryRange,
+  requestedWgpuMappedStagingSlotCount,
   requestedWgpuUploadArenaMiB,
+  requestedWgpuUploadTransport,
+  requestedWgpuMappedStageFast,
+  requestedWgpuMappedStageTimingStride,
+  requestedWgpuMappedDrainCoalescing,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
+  requestedWgpuUboMetrics,
+  requestedWgpuUniformFast,
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
+
+test("mapped staging slot count is strict and defaults to three", () => {
+  assert.equal(requestedWgpuMappedStagingSlotCount(""), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=3"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=4"), 4);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=04"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=6"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=garbage"), 3);
+});
+
+test("mapped staging timing stride is strict and preserves exact timing by default", () => {
+  assert.equal(requestedWgpuMappedStageTimingStride(""), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=1"), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=64"), 64);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=064"), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=0"), 1);
+});
+
+test("only upload-isolation probes intentionally suppress visible output", () => {
+  for (const mode of ["inline-upload", "worker-upload", "null-drain"]) {
+    assert.equal(isIntentionalBlankWgpuProbe(mode), true, mode);
+  }
+
+  for (const mode of ["off", "canary", "", null, "unknown"]) {
+    assert.equal(isIntentionalBlankWgpuProbe(mode), false, String(mode));
+  }
+});
+
+test("blank-probe notice requires the hardware WGPU path", () => {
+  for (const mode of ["inline-upload", "worker-upload", "null-drain"]) {
+    assert.equal(
+      shouldShowIntentionalBlankWgpuNotice(`?video=wgpu&wgpurenderprobe=${mode}`),
+      true,
+      mode
+    );
+  }
+
+  for (const search of [
+    "?video=wgpu",
+    "?video=wgpu&wgpurenderprobe=canary",
+    "?video=software&wgpurenderprobe=null-drain",
+    "?wgpurenderprobe=null-drain"
+  ]) {
+    assert.equal(shouldShowIntentionalBlankWgpuNotice(search), false, search);
+  }
+});
+
+test("detailed UBO telemetry is independent and default-off", () => {
+  assert.equal(requestedWgpuUboMetrics(""), false);
+  assert.equal(requestedWgpuUboMetrics("?metrics=1"), false);
+  assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=0&metrics=1"), false);
+  assert.equal(requestedWgpuUboMetrics("?wgpuubometrics=1&metrics=0"), true);
+});
+
+test("guarded uniform comparison fast path is explicit and default-off", () => {
+  assert.equal(requestedWgpuUniformFast(""), false);
+  assert.equal(requestedWgpuUniformFast("?metrics=1"), false);
+  assert.equal(requestedWgpuUniformFast("?wgpuuniformfast=1"), true);
+  assert.equal(requestedWgpuUniformFast("?wgpuuniformfast=0"), false);
+});
 
 test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () => {
   const metrics = createWgpuReplayOpMetrics();
@@ -69,6 +142,25 @@ test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () =>
 
   metrics.reset();
   assert.ok(metrics.snapshot().histogram.every((value) => value === 0));
+});
+
+test("WGPU replay timing samples without losing exact opcode counts", () => {
+  let clock = 0;
+  const metrics = createWgpuReplayOpMetrics({
+    replayTimingSamplePeriod: 4,
+    now: () => ++clock,
+  });
+  for (let index = 0; index < 8; index += 1) {
+    const startedAt = metrics.beginReplay(6);
+    metrics.finishReplay(6, startedAt);
+  }
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.replayTimingMode, "per-op-periodic-sample");
+  assert.equal(snapshot.replayTimingSamplePeriod, 4);
+  assert.equal(snapshot.histogram[6], 8);
+  assert.equal(snapshot.replayTimingSampleCounts[6], 3);
+  assert.equal(snapshot.replayCpuSampleTotalMs[6], 3);
+  assert.equal(snapshot.replayCpuTotalMs[6], 8);
 });
 
 test("WGPU replay diagnostics are opt-in", () => {
@@ -161,6 +253,37 @@ test("classifier distinguishes draws, zero EFB, nonzero EFB, and present complet
   assert.equal(snapshot.stages.firstNonzeroEfb.presentSequence, 871);
   assert.equal(snapshot.stages.firstNonzeroEfb.readbackOrdinal, 2);
   assert.equal(snapshot.stages.presentSubmission.completedCount, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedCount, 0);
+});
+
+test("a rejected present fails classification even after EFB mutation", () => {
+  const classifier = createWgpuReplayClassifier({ now: incrementingClock() });
+  classifier.recordRealDraw({ framebufferId: 14, pipelineId: 7, efb: true });
+  classifier.recordEfbReadback({
+    framebufferId: 14,
+    nonzeroBytes: 4,
+    nonzeroColorBytes: 3,
+    maxByte: 255,
+    presentSequence: 1,
+  });
+  classifier.recordPresentCommand({ recordIndex: 22 });
+  classifier.recordPresentRejected({ recordIndex: 22, reason: "no-command-encoder" });
+
+  let snapshot = classifier.snapshot();
+  assert.equal(snapshot.classifier.code, "PRESENT_SUBMISSION_REJECTED");
+  assert.equal(snapshot.stages.presentSubmission.status, "fail");
+  assert.equal(snapshot.stages.presentSubmission.rejectedCount, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["no-command-encoder"], 1);
+  assert.equal(snapshot.stages.presentSubmission.lastRejectedRecordIndex, 22);
+
+  classifier.recordPresentRejected({ recordIndex: 23, reason: "unexpected" });
+  classifier.recordPresentRejected({ recordIndex: 24, reason: "submit-error" });
+  classifier.recordPresentRejected({ recordIndex: 25, reason: "replay-fatal" });
+  snapshot = classifier.snapshot();
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons.unknown, 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["submit-error"], 1);
+  assert.equal(snapshot.stages.presentSubmission.rejectedReasons["replay-fatal"], 1);
+  assert.equal(snapshot.stages.presentSubmission.lastRejectedReason, "replay-fatal");
 });
 
 test("legacy deep replay probes are default-off with an explicit rollback", () => {
@@ -483,10 +606,11 @@ test("classifier correlates load epoch, EFB, XFB, and backbuffer mutation", () =
 });
 
 test("host-to-worker plumbing keeps the classifier query-gated and reportable", async () => {
-  const [host, adapter, worker] = await Promise.all([
+  const [host, adapter, worker, runtime] = await Promise.all([
     readFile(new URL("../src/core-host.js", import.meta.url), "utf8"),
     readFile(new URL("../src/upstream-worker-adapter.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8")
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/wgpu-renderer-runtime.js", import.meta.url), "utf8")
   ]);
 
   assert.match(host, /requestedWgpuReplayDiagnostics\(window\.location\.search\)/);
@@ -498,6 +622,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     /requestedWgpuReplayPump\(\s*window\.location\.search,\s*this\.videoBackend === "WebGPU-Real"\s*\)/
   );
   assert.match(host, /requestedWgpuAtomicPassReplay\(window\.location\.search\)/);
+  assert.match(host, /requestedWgpuProducerProfile\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuStateCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuUboCache\(window\.location\.search\)/);
   assert.match(host, /requestedWgpuGeometryPack\(window\.location\.search\)/);
@@ -509,20 +634,29 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(adapter, /wgpuLoadEpochFence: this\.wgpuLoadEpochFence/);
   assert.match(adapter, /wgpuReplayPump: this\.wgpuReplayPump/);
   assert.match(adapter, /wgpuAtomicPassReplay: this\.wgpuAtomicPassReplay/);
+  assert.match(adapter, /wgpuProducerProfile: this\.wgpuProducerProfile/);
   assert.match(adapter, /wgpuStateCache: this\.wgpuStateCache/);
   assert.match(adapter, /wgpuUboCache: this\.wgpuUboCache/);
+  assert.match(adapter, /wgpuUboMetrics: this\.wgpuUboMetrics/);
   assert.match(adapter, /wgpuGeometryPack: this\.wgpuGeometryPack/);
   assert.match(adapter, /wgpuReplayBudgetMs: this\.wgpuReplayBudgetMs/);
   assert.match(adapter, /wgpuPowerPreference: this\.wgpuPowerPreference/);
   assert.match(adapter, /detachedBitmapDrawnCount: this\.detachedOglFramesDrawn/);
   assert.match(worker, /scope: "core-load",\s+generation: wgpuReplayClassifierGeneration/);
   assert.match(worker, /wgpuDeepReplayDiagnostics = Boolean\(requestedWgpuDeepReplayDiagnostics\)/);
+  assert.match(worker, /typeof module\._SetWgpuDeepDiagnosticsEnabled === "function"/);
+  assert.match(
+    worker,
+    /setWgpuDeepDiagnosticsEnabled\?\.\(wgpuDeepReplayDiagnostics \? 1 : 0\)/
+  );
   assert.match(worker, /wgpuDetachedPresenter: payload\.wgpuDetachedPresenter/);
   assert.match(worker, /wgpuDetachedPresenter = Boolean\(requestedWgpuDetachedPresenter\)/);
   assert.match(worker, /wgpuLoadEpochFence: payload\.wgpuLoadEpochFence/);
   assert.match(worker, /wgpuReplayPump: payload\.wgpuReplayPump/);
+  assert.match(worker, /wgpuProducerProfile: payload\.wgpuProducerProfile/);
   assert.match(worker, /wgpuStateCache: payload\.wgpuStateCache/);
   assert.match(worker, /wgpuUboCache: payload\.wgpuUboCache/);
+  assert.match(worker, /wgpuUboMetrics: payload\.wgpuUboMetrics/);
   assert.match(worker, /wgpuGeometryPack: payload\.wgpuGeometryPack/);
   assert.match(worker, /wgpuReplayBudgetMs: payload\.wgpuReplayBudgetMs/);
   assert.match(worker, /wgpuPowerPreference: payload\.wgpuPowerPreference/);
@@ -539,18 +673,15 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     worker,
     /wgpuReplayOps: wgpuReplayOpMetrics\.snapshot\(\{ enabled: causalMetricsEnabled \}\)/
   );
-  assert.match(worker, /const replayOpStartedAt = causalMetricsEnabled \? performance\.now\(\) : 0/);
-  assert.match(
-    worker,
-    /wgpuReplayOpMetrics\.recordReplay\(op, performance\.now\(\) - replayOpStartedAt\)/
-  );
+  assert.match(worker, /wgpuReplayOpMetrics\.beginReplay\(op\)/);
+  assert.match(worker, /wgpuReplayOpMetrics\.finishReplay\(op, replayOpStartedAt\)/);
   assert.match(worker, /wgpuReplayOpMetrics\.recordUploadCopy\(/);
   assert.match(worker, /wgpuReplayOpMetrics\.recordQueueUpload\(/);
   assert.match(worker,
     /let replayLimit = wgpuReplayBudgetMs > 0[\s\S]*?: wgpuAtomicPassReplay[\s\S]*?selectAtomicReplayLimit/);
   assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
   assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);
-  assert.match(worker, /Atomics\.load\(ring\.headerI32, 3\)/);
+  assert.match(runtime, /Atomics\.load\(this\.ring\.headerI32, 3\)/);
   assert.match(worker, /type: "detachedWgpuFrame"/);
   assert.match(worker, /scheduleDetachedWgpuBitmap\(q\)/);
   assert.match(worker, /while \(read !== replayLimit\)/);
@@ -595,12 +726,60 @@ test("geometry upload packing is default-off with an explicit boolean override",
   assert.equal(requestedWgpuGeometryPack("?wgpugeompack=0", true), false);
 });
 
+test("geometry upload ranging is default-off with an explicit boolean override", () => {
+  assert.equal(requestedWgpuGeometryRange(""), false);
+  assert.equal(requestedWgpuGeometryRange("", true), true);
+  assert.equal(requestedWgpuGeometryRange("?wgpugeomrange=1"), true);
+  assert.equal(requestedWgpuGeometryRange("?wgpugeomrange=0", true), false);
+});
+
 test("WGPU upload arena accepts only the independent 64 MiB screening arm", () => {
   assert.equal(requestedWgpuUploadArenaMiB(""), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=32"), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=64"), 64);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=064"), 32);
   assert.equal(requestedWgpuUploadArenaMiB("?wgpuuploadmb=128"), 32);
+});
+
+test("mapped upload transport is opt-in and queue remains the reference", () => {
+  assert.equal(requestedWgpuUploadTransport(""), "queue");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=queue"), "queue");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=mapped"), "mapped");
+  assert.equal(requestedWgpuUploadTransport("?wgpuuploadtransport=MAPped"), "queue");
+});
+
+test("mapped staging allocation fast path is opt-in", () => {
+  assert.equal(requestedWgpuMappedStageFast(""), false);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=0"), false);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=1"), true);
+  assert.equal(requestedWgpuMappedStageFast("?wgpustagefast=true"), false);
+});
+
+test("mapped upload drain coalescing is opt-in", () => {
+  assert.equal(requestedWgpuMappedDrainCoalescing(""), false);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=0"), false);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=1"), true);
+  assert.equal(requestedWgpuMappedDrainCoalescing("?wgpudraincoalesce=true"), false);
+});
+
+test("producer phase profiling is default-off and accepts only an explicit one", () => {
+  assert.equal(requestedWgpuProducerProfile(""), false);
+  assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=0"), false);
+  assert.equal(requestedWgpuProducerProfile("?wgpuprodprofile=1"), true);
+});
+
+test("draw detail profiling is default-off and independent", () => {
+  assert.equal(requestedWgpuDrawProfile(""), false);
+  assert.equal(requestedWgpuDrawProfile("?wgpudrawprofile=0"), false);
+  assert.equal(requestedWgpuDrawProfile("?wgpudrawprofile=1"), true);
+  assert.equal(requestedWgpuDrawProfile("?wgpuprodprofile=1"), false);
+});
+
+test("renderer worker probes are explicit diagnostic modes", () => {
+  assert.equal(requestedWgpuRendererWorkerProbe(""), "off");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=canary"), "canary");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=worker-upload"), "worker-upload");
+  assert.equal(requestedWgpuRendererWorkerProbe("?wgpurenderprobe=playable"), "off");
 });
 
 test("WGPU replay budget accepts only literal 4 ms and 6 ms screening arms", () => {

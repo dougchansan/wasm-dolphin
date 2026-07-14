@@ -24,15 +24,17 @@ software rasterization is `fastsw=0`.
 
 The true WebGPU hardware renderer is selected with `video=wgpu`. It remains
 experimental and is not the recommended path. On the current validation
-machine it now reaches the direct-loaded Kirby-versus-Link battle, presents a
-changing game image, and produces nonzero XFB/backbuffer readbacks. The first
-one-draw post-load EFB pass correctly restores the save's all-zero EFB; it is
-not the first gameplay draw and should not be forced to mutate that data. The
-path is still far from full speed. A clean fixed-work screen measured roughly
-49-52% throughput with diagnostics and exposed 594k-820k buffer-upload calls
-plus three upload-timeout/pass-abort events. Results remain GPU- and
-machine-dependent. Wii and broader GameCube compatibility are not the current
-focus.
+machine it applies the direct-loaded Kirby-versus-Link save and produces a
+changing canvas plus nonzero XFB/backbuffer readbacks; battle-image identity is
+headed/operator validation. A generation-qualified capture now proves a
+bounded post-load command prefix:
+25,481 records paired with zero drops, mismatches, unresolved dependencies, or
+open transactions. The path is still far from full speed. Current direct-save
+muted comparison screens are roughly 47-53% game speed and 20-21 presentation
+FPS; headed audible validations measured 39-50% game speed. Command replay and
+buffer-upload pressure are both large, while hardware presentation cost is not
+yet independently classified. Results remain GPU- and machine-dependent. Wii
+and broader GameCube compatibility are not the current focus.
 
 | Area | Current status | Confidence |
 | --- | --- | --- |
@@ -44,6 +46,7 @@ focus.
 | General compatibility | Unverified | Low |
 
 Record machine-specific evidence in
+[the hardware WebGPU audit](performance-audit-2026-07-13.md),
 [the latest Melee evidence package](perf-results/melee-performance-evidence-2026-07-10.md)
 and [software-raster phase result](perf-results/melee-software-raster-phases-2026-07-10.md)
 and [final optimization evidence](perf-results/melee-final-optimization-evidence-2026-07-10.md)

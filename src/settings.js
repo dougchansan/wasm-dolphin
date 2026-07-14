@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 const CHOICE_SETS = Object.freeze({
   core: new Set(["native", "upstream"]),
-  video: new Set(["software", "ogl", "null"]),
+  video: new Set(["software", "wgpu", "ogl", "null"]),
   cpu: new Set(["auto", "single", "dual"]),
   speed: new Set(["0.5", "0.75", "1", "1.25", "1.5", "unlimited"]),
   present: new Set(["full", "0.75", "half"]),
@@ -77,6 +77,11 @@ export function readSettingsFromSearch(search) {
 export function buildSettingsHref(href, settings) {
   const url = new URL(href);
   const nextSettings = normalizeSettings(settings);
+
+  // Renderer probes replace the selected visible executor with diagnostic
+  // sinks. Applying settings must return to the visible renderer, including
+  // the experimental true-hardware `video=wgpu` option.
+  url.searchParams.delete("wgpurenderprobe");
 
   writeSetting(url.searchParams, "core", nextSettings.core, DEFAULT_SETTINGS.core);
   writeSetting(url.searchParams, "video", nextSettings.video, DEFAULT_SETTINGS.video);

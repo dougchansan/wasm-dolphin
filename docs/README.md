@@ -1,5 +1,19 @@
 # Documentation
 
+- [Hardware-WGPU renderer worker and upload package plan](wgpu-renderer-worker-plan.md) - seven staged implementation items, ownership/lifecycle invariants, bounded package design, validation gates, and rollback.
+- [Hardware-WGPU realtime follow-up (2026-07-14)](perf-results/melee-wgpu-realtime-followup-2026-07-14.md) - fixed-battle results, unreproduced 99.716% observation, rejected experiments, and next architecture.
+- [Machine-readable realtime follow-up evidence](perf-results/melee-wgpu-realtime-followup-2026-07-14.json) - exact run URLs, core/cache identities, artifact hashes, fixed-work results, and post-run correctness evidence.
+- [Hardware WebGPU performance audit (2026-07-13)](performance-audit-2026-07-13.md) - applied-save semantic proof, reproducible candidate, current bottleneck classification, rejected refactors, and next optimization plan.
+- [Hardware-WGPU no-lag screening closure (2026-07-13)](perf-results/melee-wgpu-no-lag-screening-2026-07-13.md) - item 1–9 proofs, balanced screens, audible fairness evidence, and the no-promotion release decision.
+- [Machine-readable no-lag screening closure](perf-results/melee-wgpu-no-lag-screening-2026-07-13.json) - exact identities, effects, artifact hashes, and retained defaults.
+- [Machine-readable applied-save and replay evidence](perf-results/melee-wgpu-applied-save-and-replay-2026-07-13.json) - content hashes, run statistics, comparison decisions, and evidence limitations.
+- [WGPU visible upload closure](perf-results/melee-wgpu-visible-upload-closure-2026-07-12.md) - corrected queue/mapped fairness failure, dense-UBO queue no-go, and the immutable pass-package next gate.
+- [WGPU pass-package projection](perf-results/melee-wgpu-pass-package-projection-2026-07-12.md) - passive direct-battle publication accounting, unresolved native ownership, observer-control limits, and the semantic-digest gate before runtime work.
+- [WGPU native ownership trace](perf-results/melee-wgpu-native-ownership-trace-2026-07-12.md) - zero-drop pending/active/outside attribution, upload ownership, observer limits, and the semantic-digest handoff.
+- [WGPU semantic replay evidence](wgpu-semantic-replay-evidence.md) - default-off runtime ownership/legacy correlation, trusted startup reset attestation, independent WDS2 decoding, and current parity limits.
+
+- [WGPU guarded uniform-comparison screen](perf-results/melee-wgpu-uniform-fast-2026-07-12.md) - default-off correctness evidence, unresolved throughput screen, and upload/replay backlog diagnosis.
+
 - [Current status](current-status.md) — supported scope, recommended path, and
   confidence levels.
 - [Causal performance telemetry](causal-telemetry.md) — versioned core,
@@ -41,8 +55,52 @@
   role timing, packing screen, and cache no-go.
 - [WGPU queue-relief results](perf-results/melee-wgpu-queue-relief-2026-07-11.md) —
   rejected asynchronous-relief smokes and second-GPU limitation.
+- [WGPU mapped-staging smoke](perf-results/melee-wgpu-mapped-staging-2026-07-11.md) —
+  corrected single-arm mechanism evidence and the invalidated prior A/B.
+- [WGPU dense-UBO screen](perf-results/melee-wgpu-dense-ubo-2026-07-12.md) —
+  record reduction, alignment repair, and audio-inconclusive balanced evidence.
+- [WGPU second-GPU availability](perf-results/melee-wgpu-second-gpu-2026-07-12.md) —
+  forced-low-power adapter attempt and explicit single-GPU limitation.
+- [WGPU AudioWorklet screen](perf-results/melee-wgpu-audio-worklet-2026-07-12.md) —
+  SHA-verified headed A/B, underrun evidence, and default-off decision.
 - [WGPU queue-pressure design record](wgpu-queue-pressure-relief.md) —
   removed experiment, safety invariants, and next architecture.
+- [WGPU staging-slot results](perf-results/melee-wgpu-staging-slots-2026-07-12.md) —
+  valid equal-memory A/B and rejection of additional remap slots.
+- [WGPU renderer-worker canary](perf-results/melee-wgpu-renderer-worker-canary-2026-07-12.md) —
+  nested-worker, shared-memory, and headless WebGPU feasibility evidence.
+- [WGPU upload-isolation screen](perf-results/melee-wgpu-upload-isolation-2026-07-12.md) —
+  renderer-worker rejection, null-drain ceiling, and the intentional-blank probe boundary.
+- [WGPU producer phase profile](perf-results/melee-wgpu-producer-profile-2026-07-12.md) —
+  validated profiler overhead, visible WGPU confirmation, and the 22.2-million-per-second
+  idle FIFO-tail call pattern.
+- [WGPU draw-resource profile](perf-results/melee-wgpu-draw-profile-2026-07-12.md) —
+  default-off TLS remediation, stability-gated overhead proof, visible smoke,
+  and sampled draw-resource phase ranking.
+- [WGPU deep-diagnostic gate](perf-results/melee-wgpu-deep-diagnostic-gate-2026-07-12.md) —
+  reproducible header repair, balanced fixed-work screen, console-volume reduction,
+  rollback smoke, and visible GPU-completion evidence.
+- [WGPU detailed-UBO telemetry overhead](perf-results/melee-wgpu-ubo-metrics-overhead-2026-07-12.md) —
+  explicit diagnostic flag, two-block positive screening signal, visible validation,
+  and remaining GPU-completion tails.
+- [WGPU UBO change attribution](perf-results/melee-wgpu-ubo-change-attribution-2026-07-13.md) —
+  physical VS/PS/GS byte churn and mapped-capacity waits by upload role.
+- [WGPU idle FIFO-tail gate screen](perf-results/melee-wgpu-tail-gate-2026-07-12.md) —
+  order-balanced activation evidence and rejection after state-proven no-op
+  elision produced no fixed-work throughput gain.
+- [WGPU diagnostic-log suppression screen](perf-results/melee-wgpu-diagnostic-quiet-2026-07-12.md) —
+  exact filter activation evidence and rejection after only one known-safe
+  record was suppressed per enabled run.
+- [WGPU transaction-staging results](perf-results/melee-wgpu-transaction-staging-2026-07-12.md) —
+  valid batching A/B, critical-path regression, and no-merge decision.
+- [WGPU batched queue-staging smoke](perf-results/melee-wgpu-batched-queue-staging-2026-07-12.md) —
+  synchronous queue-write stall, audio failure, and activation rejection.
+- [WGPU dirty-range projection](perf-results/melee-wgpu-dirty-range-projection-2026-07-12.md) —
+  two headed fixed-battle captures, global coalescing rejection, and the
+  geometry-only 99.2% projected copy-reduction candidate.
+- [WGPU geometry-range screen](perf-results/melee-wgpu-geometry-range-2026-07-12.md) —
+  bounded implementation, repeated headed pairs, and rejection after a 98.7%
+  record reduction produced no fixed-work speed gain.
 - [Final next-program evidence](perf-results/melee-next-program-2026-07-10.md) —
   CMPR parity/A-B, correlated slices, atomic WGPU smoke, state-cache A-B, and
   deterministic 32×32 input-marker results.
@@ -78,6 +136,17 @@
 - [Core roadmap](core-roadmap.md) — longer-term core work.
 - [OGL performance plan](ogl-performance-plan.md) — diagnostic OGL research.
 - [Upstream WASM probe](upstream-wasm-probe.md) — upstream integration notes.
+
+- [WGPU mapped-drain coalescing](perf-results/melee-wgpu-mapped-drain-coalescing-2026-07-13.md) —
+  rejected bounded drain deferral with direct-save fixed-work evidence.
+- [WGPU CPU-mode screen](perf-results/melee-wgpu-cpu-mode-2026-07-13.md) —
+  fixed-work rejection of `cpu=single`; hardware WGPU retains `cpu=dual`.
+- [WGPU upload-diagnostic cold-path screen](perf-results/melee-wgpu-upload-diagnostic-coldpath-2026-07-13.md) —
+  repeated visible-output regression and full rollback of the candidate.
+- [WGPU staging record-merge screen](perf-results/melee-wgpu-record-merge-2026-07-13.md) —
+  correct wrapper-free ordering, but only about 50 ms saved per fixed-work run.
+- [WGPU remap-completion wake screen](perf-results/melee-wgpu-remap-wake-2026-07-13.md) —
+  rejected immediate wakeups that doubled submissions and increased waits.
 
 Historical session notes under `patches/dolphin-wasm/` are research records,
 not the canonical user-facing reference. Prefer the documents above for the

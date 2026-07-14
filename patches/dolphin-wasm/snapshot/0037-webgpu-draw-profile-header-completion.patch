@@ -1,0 +1,43 @@
+diff --git a/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h b/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h
+index c84d50e..dcb88b2 100644
+--- a/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h
++++ b/Source/Core/VideoCommon/WasmWebGpuDrawProfile.h
+@@ -165,4 +165,38 @@ public:
+     while (previous_max < duration_ns &&
+            !counters.sampled_max_ns.compare_exchange_weak(previous_max, duration_ns,
+                                                           std::memory_order_relaxed))
+     {
++    }
++  }
++
++  ScopedSample(const ScopedSample&) = delete;
++  ScopedSample& operator=(const ScopedSample&) = delete;
++
++  void Pause()
++  {
++    if (!m_sampled || !m_active)
++      return;
++    const auto duration =
++        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - m_start).count();
++    m_elapsed_ns += static_cast<std::uint64_t>(duration);
++    m_active = false;
++  }
++
++  void Resume()
++  {
++    if (!m_sampled || m_active)
++      return;
++    m_start = Clock::now();
++    m_active = true;
++  }
++
++private:
++  using Clock = std::chrono::steady_clock;
++
++  Phase m_phase;
++  Clock::time_point m_start{};
++  std::uint64_t m_elapsed_ns = 0;
++  bool m_sampled = false;
++  bool m_active = false;
++};
++}  // namespace DolphinWeb::WebGpuDrawProfile

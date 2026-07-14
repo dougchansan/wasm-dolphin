@@ -7,6 +7,157 @@
 // JS/C++ buffer.
 
 export const WGPU_GEOMETRY_PACKET_MAX_OFFSET = 0xffffffff;
+export const WGPU_GEOMETRY_COARSE_RANGE_MAX_BYTES = 16 * 1024 * 1024;
+export const WGPU_GEOMETRY_COARSE_RANGE_MAX_GAP = 64;
+
+export const WGPU_GEOMETRY_COARSE_RANGE_REASON = Object.freeze({
+  EXPLICIT_BOUNDARY: "explicit-boundary",
+  BUFFER_CHANGED: "buffer-changed",
+  GENERATION_CHANGED: "generation-changed",
+  PASS_CHANGED: "pass-changed",
+  TRANSACTION_CHANGED: "transaction-changed",
+  GAP_EXCEEDS_LIMIT: "gap-exceeds-limit",
+  RANGE_EXCEEDS_CAP: "range-exceeds-cap",
+  PADDING_NOT_AUTHORIZED: "padding-not-authorized",
+  PADDING_MISMATCH: "padding-mismatch",
+  INVALID_OPTIONS: "invalid-options",
+  INVALID_SPAN: "invalid-span",
+  INVALID_IDENTITY: "invalid-identity",
+  ZERO_LENGTH_SPAN: "zero-length-span",
+  MISALIGNED_SPAN: "misaligned-span",
+  DESTINATION_REGRESSION: "destination-regression",
+  OVERLAPPING_SPAN: "overlapping-span",
+  UNSAFE_INTEGER_OVERFLOW: "unsafe-integer-overflow",
+  LOGICAL_SPAN_EXCEEDS_CAP: "logical-span-exceeds-cap",
+});
+
+export function planWgpuGeometryCoarseRanges({
+  spans,
+  maxGapBytes = WGPU_GEOMETRY_COARSE_RANGE_MAX_GAP,
+  maxRangeBytes = WGPU_GEOMETRY_COARSE_RANGE_MAX_BYTES,
+  alignment = 4,
+} = {}) {
+  if (!Array.isArray(spans) || !isNonnegativeInteger(maxGapBytes) ||
+      maxGapBytes > WGPU_GEOMETRY_COARSE_RANGE_MAX_GAP ||
+      !isPositiveInteger(maxRangeBytes) ||
+      maxRangeBytes > WGPU_GEOMETRY_COARSE_RANGE_MAX_BYTES ||
+      !isPositiveInteger(alignment)) {
+    return coarseRangeResult([], [], [{
+      spanIndex: null,
+      reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_OPTIONS,
+    }]);
+  }
+
+  const ranges = [];
+  const splits = [];
+  const fallbacks = [];
+  const acceptedSpans = [];
+  let current = null;
+
+  for (let spanIndex = 0; spanIndex < spans.length; spanIndex += 1) {
+    const span = spans[spanIndex];
+    const validationReason = validateCoarseRangeSpan(span, maxRangeBytes, alignment);
+    if (validationReason) {
+      fallbacks.push({ spanIndex, reason: validationReason });
+      current = null;
+      continue;
+    }
+
+    const length = span.bytes.byteLength;
+    const end = span.destinationOffset + length;
+    const previous = findPreviousCoarseSpan(acceptedSpans, span);
+    if (previous && span.destinationOffset < previous.destinationOffset) {
+      fallbacks.push({
+        spanIndex,
+        reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.DESTINATION_REGRESSION,
+      });
+      current = null;
+      continue;
+    }
+    if (previous && span.destinationOffset < previous.endOffset) {
+      fallbacks.push({
+        spanIndex,
+        reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.OVERLAPPING_SPAN,
+      });
+      current = null;
+      continue;
+    }
+    acceptedSpans.push({
+      buffer: span.buffer,
+      generation: span.generation,
+      passId: span.passId,
+      transactionId: span.transactionId,
+      destinationOffset: span.destinationOffset,
+      endOffset: end,
+    });
+
+    if (!current) {
+      current = newCoarseRange(span, spanIndex, end);
+      ranges.push(current);
+      continue;
+    }
+
+    let splitReason = null;
+    if (span.boundaryBefore === true) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.EXPLICIT_BOUNDARY;
+    } else if (span.buffer !== current.buffer) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.BUFFER_CHANGED;
+    } else if (span.generation !== current.generation) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.GENERATION_CHANGED;
+    } else if (span.passId !== current.passId) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.PASS_CHANGED;
+    } else if (span.transactionId !== current.transactionId) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.TRANSACTION_CHANGED;
+    } else if (span.destinationOffset - current.endOffset > maxGapBytes) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.GAP_EXCEEDS_LIMIT;
+    } else if (end - current.startOffset > maxRangeBytes) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.RANGE_EXCEEDS_CAP;
+    } else if (span.paddingBeforeBytes === undefined) {
+      splitReason = WGPU_GEOMETRY_COARSE_RANGE_REASON.PADDING_NOT_AUTHORIZED;
+    } else if (!isNonnegativeInteger(span.paddingBeforeBytes) ||
+               span.paddingBeforeBytes !== span.destinationOffset - current.endOffset) {
+      fallbacks.push({
+        spanIndex,
+        reason: WGPU_GEOMETRY_COARSE_RANGE_REASON.PADDING_MISMATCH,
+      });
+      current = null;
+      continue;
+    }
+
+    if (splitReason) {
+      splits.push({ beforeSpanIndex: spanIndex, reason: splitReason });
+      current = newCoarseRange(span, spanIndex, end);
+      ranges.push(current);
+      continue;
+    }
+
+    current.spanIndexes.push(spanIndex);
+    current.gapBytes += span.destinationOffset - current.endOffset;
+    current.endOffset = end;
+  }
+
+  return coarseRangeResult(ranges, splits, fallbacks);
+}
+
+export function packWgpuGeometryCoarseRanges(options = {}) {
+  const plan = planWgpuGeometryCoarseRanges(options);
+  if (!plan.ok) return { ...plan, packedRanges: [] };
+
+  const packedRanges = plan.ranges.map((range) => {
+    const bytes = new Uint8Array(range.byteLength);
+    for (const spanIndex of range.spanIndexes) {
+      const span = options.spans[spanIndex];
+      const source = new Uint8Array(
+        span.bytes.buffer,
+        span.bytes.byteOffset,
+        span.bytes.byteLength
+      );
+      bytes.set(source, span.destinationOffset - range.startOffset);
+    }
+    return Object.freeze({ ...range, bytes });
+  });
+  return { ...plan, packedRanges: Object.freeze(packedRanges) };
+}
 
 export function checkedAlignUp(
   value,
@@ -237,6 +388,86 @@ function copyBytes(value) {
   if (value == null) return new Uint8Array(0);
   if (!ArrayBuffer.isView(value)) return null;
   return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
+}
+
+function validateCoarseRangeSpan(span, maxRangeBytes, alignment) {
+  if (!span || !isNonnegativeInteger(span.generation) ||
+      !ArrayBuffer.isView(span.bytes) ||
+      !isNonnegativeInteger(span.destinationOffset) ||
+      (span.boundaryBefore !== undefined && typeof span.boundaryBefore !== "boolean")) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_SPAN;
+  }
+  if (!isValidCoarseRangeIdentity(span.buffer) ||
+      !isValidCoarseRangeIdentity(span.passId) ||
+      !isValidCoarseRangeIdentity(span.transactionId)) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.INVALID_IDENTITY;
+  }
+  const length = span.bytes.byteLength;
+  if (length === 0) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.ZERO_LENGTH_SPAN;
+  }
+  if (span.destinationOffset % alignment !== 0 || length % alignment !== 0) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.MISALIGNED_SPAN;
+  }
+  if (length > maxRangeBytes) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.LOGICAL_SPAN_EXCEEDS_CAP;
+  }
+  if (length > Number.MAX_SAFE_INTEGER - span.destinationOffset ||
+      span.destinationOffset + length > WGPU_GEOMETRY_PACKET_MAX_OFFSET) {
+    return WGPU_GEOMETRY_COARSE_RANGE_REASON.UNSAFE_INTEGER_OVERFLOW;
+  }
+  return null;
+}
+
+function newCoarseRange(span, spanIndex, endOffset) {
+  return {
+    buffer: span.buffer,
+    generation: span.generation,
+    passId: span.passId,
+    transactionId: span.transactionId,
+    startOffset: span.destinationOffset,
+    endOffset,
+    spanIndexes: [spanIndex],
+    gapBytes: 0,
+  };
+}
+
+function coarseRangeResult(ranges, splits, fallbacks) {
+  const frozenRanges = ranges.map((range) => Object.freeze({
+    buffer: range.buffer,
+    generation: range.generation,
+    passId: range.passId,
+    transactionId: range.transactionId,
+    startOffset: range.startOffset,
+    endOffset: range.endOffset,
+    byteLength: range.endOffset - range.startOffset,
+    spanIndexes: Object.freeze([...range.spanIndexes]),
+    gapBytes: range.gapBytes,
+  }));
+  return Object.freeze({
+    ok: fallbacks.length === 0,
+    ranges: Object.freeze(frozenRanges),
+    splits: Object.freeze(splits.map((split) => Object.freeze({ ...split }))),
+    fallbacks: Object.freeze(fallbacks.map((fallback) => Object.freeze({ ...fallback }))),
+  });
+}
+
+function findPreviousCoarseSpan(acceptedSpans, span) {
+  for (let index = acceptedSpans.length - 1; index >= 0; index -= 1) {
+    const previous = acceptedSpans[index];
+    if (previous.buffer === span.buffer &&
+        previous.generation === span.generation &&
+        previous.passId === span.passId &&
+        previous.transactionId === span.transactionId) {
+      return previous;
+    }
+  }
+  return null;
+}
+
+function isValidCoarseRangeIdentity(value) {
+  return value !== null && value !== undefined &&
+    (typeof value !== "number" || Number.isFinite(value));
 }
 
 function isNonnegativeInteger(value) {

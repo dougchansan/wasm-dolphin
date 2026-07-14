@@ -70,11 +70,34 @@ export class UpstreamWorkerAdapter {
     wgpuReplayBudgetMs = 0,
     wgpuPowerPreference = "high-performance",
     wgpuAtomicPassReplay = true,
+    wgpuDiagnosticQuiet = false,
+    wgpuProducerProfile = false,
+    wgpuDrawProfile = false,
+    wgpuTailGate = false,
     wgpuStateCache = false,
     wgpuUboCache = false,
+    wgpuUboMetrics = false,
+    wgpuUniformFast = false,
+    wgpuUboPack = false,
+    wgpuSparseUbo = false,
     wgpuGeometryPack = false,
+    wgpuGeometryRange = false,
     wgpuUploadArenaMiB = 32,
+    wgpuUploadTransport = "queue",
+    wgpuMappedStagingSlotCount = 3,
+    wgpuMappedStageFast = false,
+    wgpuMappedStageTimingStride = 1,
+    wgpuMappedDrainCoalescing = false,
+    wgpuRendererWorkerProbe = "off",
+    wgpuVisualCadence = false,
     gpuCompletionDiagnostics = false,
+    wgpuDirtyRangeProjection = false,
+    wgpuPassPackageProjection = false,
+    wgpuUploadRunProjection = false,
+    wgpuUboComputeProjection = false,
+    wgpuUboComputeReconstruction = false,
+    wgpuOwnershipTrace = false,
+    wgpuSemanticRuntime = false,
     inputLatencyDiagnostics = false,
     inputReadbackDiagnostics = false,
     inputPhotonDiagnostics = false,
@@ -139,11 +162,36 @@ export class UpstreamWorkerAdapter {
       ? "low-power"
       : "high-performance";
     this.wgpuAtomicPassReplay = Boolean(wgpuAtomicPassReplay);
+    this.wgpuDiagnosticQuiet = Boolean(wgpuDiagnosticQuiet);
+    this.wgpuProducerProfile = this.collectMetrics && Boolean(wgpuProducerProfile);
+    this.wgpuDrawProfile = Boolean(wgpuDrawProfile);
+    this.wgpuTailGate = Boolean(wgpuTailGate);
     this.wgpuStateCache = Boolean(wgpuStateCache);
     this.wgpuUboCache = Boolean(wgpuUboCache);
+    this.wgpuUboMetrics = Boolean(wgpuUboMetrics);
+    this.wgpuUniformFast = Boolean(wgpuUniformFast);
+    this.wgpuUboPack = Boolean(wgpuUboPack);
+    this.wgpuSparseUbo = Boolean(wgpuSparseUbo);
     this.wgpuGeometryPack = Boolean(wgpuGeometryPack);
+    this.wgpuGeometryRange = this.wgpuGeometryPack && Boolean(wgpuGeometryRange);
     this.wgpuUploadArenaMiB = Number(wgpuUploadArenaMiB) === 64 ? 64 : 32;
+    this.wgpuUploadTransport = wgpuUploadTransport === "mapped" ? "mapped" : "queue";
+    this.wgpuMappedStagingSlotCount = Number(wgpuMappedStagingSlotCount) === 4 ? 4 : 3;
+    this.wgpuMappedStageFast = Boolean(wgpuMappedStageFast);
+    this.wgpuMappedStageTimingStride = Number(wgpuMappedStageTimingStride) === 64 ? 64 : 1;
+    this.wgpuMappedDrainCoalescing = Boolean(wgpuMappedDrainCoalescing);
+    this.wgpuRendererWorkerProbe = new Set([
+      "canary", "inline-upload", "worker-upload", "null-drain"
+    ]).has(wgpuRendererWorkerProbe) ? wgpuRendererWorkerProbe : "off";
+    this.wgpuVisualCadence = Boolean(wgpuVisualCadence);
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
+    this.wgpuDirtyRangeProjection = Boolean(wgpuDirtyRangeProjection);
+    this.wgpuPassPackageProjection = Boolean(wgpuPassPackageProjection);
+    this.wgpuUploadRunProjection = Boolean(wgpuUploadRunProjection);
+    this.wgpuUboComputeProjection = Boolean(wgpuUboComputeProjection);
+    this.wgpuUboComputeReconstruction = Boolean(wgpuUboComputeReconstruction);
+    this.wgpuOwnershipTrace = Boolean(wgpuOwnershipTrace);
+    this.wgpuSemanticRuntime = Boolean(wgpuSemanticRuntime);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
     this.inputReadbackDiagnostics = Boolean(inputReadbackDiagnostics);
     this.inputPhotonDiagnostics = Boolean(inputPhotonDiagnostics);
@@ -192,6 +240,7 @@ export class UpstreamWorkerAdapter {
     this.visualChangeFps = 0;
     this.visualFrameHash = 0;
     this.visualSampleSource = "none";
+    this.visualCadenceTelemetry = null;
     this.oglGlError = 0;
     this.coreTicks = 0;
     this.coreTicksPerSecond = 486000000;
@@ -304,11 +353,34 @@ export class UpstreamWorkerAdapter {
       wgpuReplayBudgetMs: this.wgpuReplayBudgetMs,
       wgpuPowerPreference: this.wgpuPowerPreference,
       wgpuAtomicPassReplay: this.wgpuAtomicPassReplay,
+      wgpuDiagnosticQuiet: this.wgpuDiagnosticQuiet,
+      wgpuProducerProfile: this.wgpuProducerProfile,
+      wgpuDrawProfile: this.wgpuDrawProfile,
+      wgpuTailGate: this.wgpuTailGate,
       wgpuStateCache: this.wgpuStateCache,
       wgpuUboCache: this.wgpuUboCache,
+      wgpuUboMetrics: this.wgpuUboMetrics,
+      wgpuUniformFast: this.wgpuUniformFast,
+      wgpuUboPack: this.wgpuUboPack,
+      wgpuSparseUbo: this.wgpuSparseUbo,
       wgpuGeometryPack: this.wgpuGeometryPack,
+      wgpuGeometryRange: this.wgpuGeometryRange,
       wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,
+      wgpuUploadTransport: this.wgpuUploadTransport,
+      wgpuMappedStagingSlotCount: this.wgpuMappedStagingSlotCount,
+      wgpuMappedStageFast: this.wgpuMappedStageFast,
+      wgpuMappedStageTimingStride: this.wgpuMappedStageTimingStride,
+      wgpuMappedDrainCoalescing: this.wgpuMappedDrainCoalescing,
+      wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
+      wgpuVisualCadence: this.wgpuVisualCadence,
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
+      wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
+      wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+      wgpuUploadRunProjection: this.wgpuUploadRunProjection,
+      wgpuUboComputeProjection: this.wgpuUboComputeProjection,
+      wgpuUboComputeReconstruction: this.wgpuUboComputeReconstruction,
+      wgpuOwnershipTrace: this.wgpuOwnershipTrace,
+      wgpuSemanticRuntime: this.wgpuSemanticRuntime,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,
       inputReadbackDiagnostics: this.inputReadbackDiagnostics,
       inputPhotonDiagnostics: this.inputPhotonDiagnostics,
@@ -527,6 +599,22 @@ export class UpstreamWorkerAdapter {
     }
 
     this.post("setAudioMuted", { muted: Boolean(muted) });
+  }
+
+  async configureAudioWorklet({ enabled, muted, sab }) {
+    if (!this.loaded) return { active: false, reason: "core-not-loaded" };
+    const response = await this.request("configureAudioWorklet", {
+      enabled: Boolean(enabled),
+      muted: Boolean(muted),
+      sab: sab ?? null,
+    });
+    if (enabled && !response.active) {
+      this.onStatus(`AudioWorklet producer unavailable; using legacy audio: ${response.reason || "unknown"}`);
+    }
+    return {
+      active: Boolean(response.active),
+      reason: String(response.reason || ""),
+    };
   }
 
   start() {
@@ -936,6 +1024,10 @@ export class UpstreamWorkerAdapter {
     }
     if (typeof response.visualSampleSource === "string") {
       this.visualSampleSource = response.visualSampleSource;
+    }
+    if (response.visualCadenceTelemetry &&
+        typeof response.visualCadenceTelemetry === "object") {
+      this.visualCadenceTelemetry = { ...response.visualCadenceTelemetry };
     }
     if (Number.isFinite(response.oglGlError)) {
       this.oglGlError = response.oglGlError;

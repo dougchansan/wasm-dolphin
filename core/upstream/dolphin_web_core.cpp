@@ -54,6 +54,7 @@
 extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
 extern "C" std::uint32_t DolphinWeb_SetCachedInterpreterDisableMask(std::uint32_t mask);
 extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
+extern "C" void NotifyWebGpuOwnershipTraceLoadRequested();
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -598,6 +599,10 @@ void EnsureRuntime()
                                    std::memory_order_relaxed);
     s_last_loaded_ppc_pc.store(system.GetPPCState().pc, std::memory_order_relaxed);
     s_last_loaded_checkpoint_generation.fetch_add(1, std::memory_order_release);
+    // Publish the semantic epoch only after State::Load has applied and the
+    // checkpoint is observable. The GPU wake below then guarantees that the
+    // first producer command in the new epoch belongs to the restored state.
+    NotifyWebGpuOwnershipTraceLoadRequested();
     // §27b disambiguator: which pthread runs the after-load callback
     // (= the LoadAsFromCore context)? Compare to the long-lived CPU
     // pthread tid ([s27-GPB]) and GPU pthread tid ([s27-gate]). A

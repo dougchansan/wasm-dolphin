@@ -13,6 +13,12 @@ import { join, relative, resolve, sep } from "node:path";
 export const SOURCE_LOCK_PATH = "provenance/dolphin-source.lock.json";
 export const CORE_ABI_PATH = "provenance/dolphin-core-abi-v1.json";
 export const VENDOR_SNAPSHOT_PATH = "provenance/dolphin-vendor-snapshot-v1.json";
+export const REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS = Object.freeze([
+  "_SetWebGpuOwnershipTraceEnabled",
+  "_AcknowledgeWebGpuOwnershipTraceCapture",
+  "_GetWebGpuOwnershipTracePtr",
+  "_GetWebGpuOwnershipTraceCapacity",
+]);
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -972,7 +978,7 @@ function inspectRuntimeMethods(root, glueSource) {
   return result;
 }
 
-function inspectWorkerProtocol(root) {
+export function inspectWorkerProtocol(root) {
   const worker = readFileSync(resolve(root, "src/upstream-discio-worker.js"), "utf8");
   const adapter = readFileSync(resolve(root, "src/upstream-worker-adapter.js"), "utf8");
   const protocol = readFileSync(resolve(root, "src/upstream-worker-protocol.js"), "utf8");
@@ -1050,6 +1056,12 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
   );
   const sourceOnlyExports = manifest.sourceOnlyExportsPendingRebuild ?? [];
   invariant(Array.isArray(sourceOnlyExports), "Pending source-only exports must be an array");
+  for (const name of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    invariant(
+      actualExports.includes(name) || sourceOnlyExports.includes(name),
+      `Required Module export ${name} is neither built nor declared pending rebuild`
+    );
+  }
   const activePatchText = lock.patches
     .filter((entry) => entry.cwd === ".")
     .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))
@@ -1061,12 +1073,18 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     invariant(/^_[A-Za-z0-9_]+$/.test(name), `Invalid pending source-only export ${name}`);
     invariant(!actualExports.includes(name), `Pending source-only export is already in the core artifact: ${name}`);
     const symbol = name.slice(1);
-    const keepalive = new RegExp(`EMSCRIPTEN_KEEPALIVE[\\s\\S]{0,120}\\b${symbol}\\s*\\(`)
-      .test(contractSourceText);
+    const keepalivePattern = new RegExp(
+      `EMSCRIPTEN_KEEPALIVE[\\s\\S]{0,120}\\b${symbol}\\s*\\(`
+    );
+    const keepalive = keepalivePattern.test(contractSourceText) ||
+      keepalivePattern.test(activePatchText);
     invariant(activePatchText.includes(`'${name}'`) || keepalive,
       `Pending source-only export is neither in the patch export list nor kept alive: ${name}`);
-    invariant(new RegExp(`\\b${symbol}\\s*\\(`).test(contractSourceText),
-      `Pending source-only export is absent from the ABI contract sources: ${name}`);
+    invariant(
+      new RegExp(`\\b${symbol}\\s*\\(`).test(contractSourceText) ||
+        new RegExp(`\\b${symbol}\\s*\\(`).test(activePatchText),
+      `Pending source-only export is absent from the ABI contract sources and patch set: ${name}`
+    );
   }
   const actualMemory = inspectMemoryContract(root);
   invariant(

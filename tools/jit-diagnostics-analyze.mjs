@@ -3,6 +3,40 @@ import { pathToFileURL } from "node:url";
 
 const CORRELATED_SLICE_DOMINANCE_THRESHOLD = 0.8;
 
+export function parseFallbackMapStats(value) {
+  const text = String(value || "");
+  const match = /\bfbmap:hit\/empty\/collision\/found\/missing:(\d+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)/.exec(text);
+  if (!match) {
+    return /\bfbmap:off\b/.test(text)
+      ? { status: "off", enabled: false }
+      : { status: "unavailable", enabled: null };
+  }
+
+  const hit = Number(match[1]);
+  const emptyMiss = Number(match[2]);
+  const collisionMiss = Number(match[3]);
+  const slowFound = Number(match[4]);
+  const slowMissing = Number(match[5]);
+  const dispatchCount = hit + emptyMiss + collisionMiss;
+  const slowLookupCount = slowFound + slowMissing;
+  const directMissCount = emptyMiss + collisionMiss;
+  return {
+    status: "enabled",
+    enabled: true,
+    hit,
+    emptyMiss,
+    collisionMiss,
+    slowFound,
+    slowMissing,
+    dispatchCount,
+    slowLookupCount,
+    collisionRate: dispatchCount ? collisionMiss / dispatchCount : 0,
+    slowLookupRate: dispatchCount ? slowLookupCount / dispatchCount : 0,
+    slowFoundRate: slowLookupCount ? slowFound / slowLookupCount : 0,
+    internallyConsistent: directMissCount === slowLookupCount,
+  };
+}
+
 export function parseJitHelperStats(helper) {
   const text = String(helper || "");
   const runloop = /\brunloop:(\d+)slices\/avg(\d+)us\/max(\d+)us\/runOnlyMax(\d+)us\/advMax(\d+)us\/execMax(\d+)us/.exec(text);
@@ -16,6 +50,7 @@ export function parseJitHelperStats(helper) {
     worstSlice: parseCorrelatedSliceTuple(text),
     worstDvdCompletion: parseDvdCompletionProfile(text),
     throttleSites: parseThrottleSiteProfiles(text),
+    fallbackMap: parseFallbackMapStats(text),
     runloop: runloop ? {
       sliceCount: Number(runloop[1]),
       averageUs: Number(runloop[2]),

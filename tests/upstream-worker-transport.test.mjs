@@ -66,7 +66,7 @@ test("adapter accounts for legacy acknowledgements and preserved one-way errors"
 });
 
 test("adapter forwards WebGPU runtime options in the load payload", async (t) => {
-  const originalWindow = globalThis.window;
+const originalWindow = globalThis.window;
   globalThis.window = { location: { href: "http://127.0.0.1:8080/" } };
   t.after(() => {
     if (originalWindow === undefined) {
@@ -78,10 +78,16 @@ test("adapter forwards WebGPU runtime options in the load payload", async (t) =>
 
   let posted = null;
   const adapter = new UpstreamWorkerAdapter({
+    collectMetrics: true,
     wgpuReplayBudgetMs: 6,
     wgpuPowerPreference: "low-power",
+    wgpuSparseUbo: true,
     wgpuGeometryPack: true,
-    wgpuUploadArenaMiB: 64
+    wgpuGeometryRange: true,
+    wgpuUploadArenaMiB: 64,
+    wgpuRendererWorkerProbe: "canary",
+    wgpuProducerProfile: true,
+    wgpuTailGate: true
   });
   adapter.worker = {
     postMessage(message, transfer) {
@@ -97,17 +103,31 @@ test("adapter forwards WebGPU runtime options in the load payload", async (t) =>
     {
       wgpuReplayBudgetMs: posted.message.payload.wgpuReplayBudgetMs,
       wgpuPowerPreference: posted.message.payload.wgpuPowerPreference,
+      wgpuSparseUbo: posted.message.payload.wgpuSparseUbo,
       wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
-      wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB
+      wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
+      wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB,
+      wgpuRendererWorkerProbe: posted.message.payload.wgpuRendererWorkerProbe,
+      wgpuProducerProfile: posted.message.payload.wgpuProducerProfile,
+      wgpuTailGate: posted.message.payload.wgpuTailGate
     },
     {
       wgpuReplayBudgetMs: 6,
       wgpuPowerPreference: "low-power",
+      wgpuSparseUbo: true,
       wgpuGeometryPack: true,
-      wgpuUploadArenaMiB: 64
+      wgpuGeometryRange: true,
+      wgpuUploadArenaMiB: 64,
+      wgpuRendererWorkerProbe: "canary",
+      wgpuProducerProfile: true,
+      wgpuTailGate: true
     }
   );
   assert.deepEqual(posted.transfer, []);
+});
+
+test("adapter keeps sparse UBO copy-forward default-off", () => {
+  assert.equal(new UpstreamWorkerAdapter().wgpuSparseUbo, false);
 });
 
 test("candidate preflight rollback records requested and active core before canvas transfer", async (t) => {
@@ -164,4 +184,37 @@ test("candidate preflight rollback records requested and active core before canv
     fallbackBeforeCanvasTransfer: true
   });
   assert.equal(posted.message.payload.xfbFastPaths, 3);
+});
+
+test("geometry ranging remains disabled unless packed geometry is enabled", () => {
+  const disabled = new UpstreamWorkerAdapter({
+    wgpuGeometryPack: false,
+    wgpuGeometryRange: true
+  });
+  assert.equal(disabled.wgpuGeometryPack, false);
+  assert.equal(disabled.wgpuGeometryRange, false);
+
+  const enabled = new UpstreamWorkerAdapter({
+    wgpuGeometryPack: true,
+    wgpuGeometryRange: true
+  });
+  assert.equal(enabled.wgpuGeometryRange, true);
+});
+
+test("producer profiling requires both its URL request and metrics collection", () => {
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: false,
+    wgpuProducerProfile: true,
+  }).wgpuProducerProfile, false);
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: true,
+    wgpuProducerProfile: true,
+  }).wgpuProducerProfile, true);
+});
+
+test("draw profiling preserves its raw request for worker-side fail-closed validation", () => {
+  assert.equal(new UpstreamWorkerAdapter({
+    collectMetrics: false,
+    wgpuDrawProfile: true,
+  }).wgpuDrawProfile, true);
 });

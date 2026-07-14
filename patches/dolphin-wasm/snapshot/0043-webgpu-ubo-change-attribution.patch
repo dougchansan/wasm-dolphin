@@ -1,0 +1,303 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index d14faf81ae..1fbda3fdb4 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -73,6 +73,15 @@ std::atomic<u64> s_ubo_packet_payload_bytes{0};
+ std::atomic<u64> s_ubo_packet_aligned_bytes{0};
+ std::atomic<u64> s_ubo_prepare_cpu_calls[3]{};
+ std::atomic<u64> s_ubo_prepare_cpu_ns[3]{};
++std::atomic<u64> s_ubo_change_upload_calls[3]{};
++std::atomic<u64> s_ubo_change_full_bytes[3]{};
++std::atomic<u64> s_ubo_changed_bytes[3]{};
++std::atomic<u64> s_ubo_change_baseline_full_count[3]{};
++std::atomic<u64> s_ubo_change_baseline_full_bytes[3]{};
++std::atomic<u64> s_ubo_dirty_16_bytes[3]{};
++std::atomic<u64> s_ubo_dirty_16_ranges[3]{};
++std::atomic<u64> s_ubo_dirty_256_bytes[3]{};
++std::atomic<u64> s_ubo_dirty_256_ranges[3]{};
+ std::atomic<u64> s_uniform_fast_skipped_comparisons[3]{};
+ std::atomic<u64> s_uniform_fast_kept_comparisons[3]{};
+ std::atomic<u64> s_uniform_fast_changed_comparisons[3]{};
+@@ -215,6 +224,124 @@ void RecordUboPrepareCpu(u32 class_index, double start_ms)
+   s_ubo_prepare_cpu_ns[class_index].fetch_add(elapsed_ns, std::memory_order_relaxed);
+ }
+ 
++struct UboChangeAnalysis
++{
++  bool comparable = false;
++  u32 changed_bytes = 0;
++  u32 dirty_16_bytes = 0;
++  u32 dirty_16_ranges = 0;
++  u32 dirty_256_bytes = 0;
++  u32 dirty_256_ranges = 0;
++};
++
++constexpr UboChangeAnalysis AnalyzeUboChange(const u8* current, const u8* previous, u32 size,
++                                             bool shadow_valid)
++{
++  UboChangeAnalysis result{};
++  if (!shadow_valid || current == nullptr || previous == nullptr || size == 0)
++    return result;
++
++  result.comparable = true;
++  bool in_dirty_16_range = false;
++  bool in_dirty_256_range = false;
++  bool dirty_256_block = false;
++  for (u32 block_start = 0; block_start < size; block_start += 16)
++  {
++    const u32 block_end = std::min(block_start + 16, size);
++    bool dirty_16_block = false;
++    for (u32 offset = block_start; offset < block_end; ++offset)
++    {
++      if (current[offset] == previous[offset])
++        continue;
++      ++result.changed_bytes;
++      dirty_16_block = true;
++    }
++
++    if (dirty_16_block)
++    {
++      result.dirty_16_bytes += block_end - block_start;
++      if (!in_dirty_16_range)
++        ++result.dirty_16_ranges;
++      in_dirty_16_range = true;
++      dirty_256_block = true;
++    }
++    else
++    {
++      in_dirty_16_range = false;
++    }
++
++    const u32 region_start = (block_start / 256) * 256;
++    const u32 region_end = std::min(region_start + 256, size);
++    if (block_end != region_end)
++      continue;
++    if (dirty_256_block)
++    {
++      result.dirty_256_bytes += region_end - region_start;
++      if (!in_dirty_256_range)
++        ++result.dirty_256_ranges;
++      in_dirty_256_range = true;
++    }
++    else
++    {
++      in_dirty_256_range = false;
++    }
++    dirty_256_block = false;
++  }
++  return result;
++}
++
++consteval bool ValidateUboChangeAnalyzer()
++{
++  std::array<u8, 4112> before{};
++  auto after = before;
++  if (AnalyzeUboChange(after.data(), before.data(), after.size(), false).comparable)
++    return false;
++  const UboChangeAnalysis equal =
++      AnalyzeUboChange(after.data(), before.data(), after.size(), true);
++  if (!equal.comparable || equal.changed_bytes != 0 || equal.dirty_16_bytes != 0 ||
++      equal.dirty_256_bytes != 0)
++    return false;
++
++  after[15] = 1;
++  after[16] = 1;
++  after[17] = 1;
++  after[255] = 1;
++  after[256] = 1;
++  after[4111] = 1;
++  const UboChangeAnalysis boundaries =
++      AnalyzeUboChange(after.data(), before.data(), after.size(), true);
++  return boundaries.changed_bytes == 6 && boundaries.dirty_16_bytes == 80 &&
++         boundaries.dirty_16_ranges == 3 && boundaries.dirty_256_bytes == 528 &&
++         boundaries.dirty_256_ranges == 2;
++}
++
++static_assert(ValidateUboChangeAnalyzer());
++
++void RecordUboPayloadChange(u32 class_index, const UboChangeAnalysis& analysis, u32 size)
++{
++  if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
++    return;
++
++  s_ubo_change_upload_calls[class_index].fetch_add(1, std::memory_order_relaxed);
++  s_ubo_change_full_bytes[class_index].fetch_add(size, std::memory_order_relaxed);
++  if (!analysis.comparable)
++  {
++    s_ubo_change_baseline_full_count[class_index].fetch_add(1, std::memory_order_relaxed);
++    s_ubo_change_baseline_full_bytes[class_index].fetch_add(size, std::memory_order_relaxed);
++    return;
++  }
++  s_ubo_changed_bytes[class_index].fetch_add(analysis.changed_bytes,
++                                             std::memory_order_relaxed);
++  s_ubo_dirty_16_bytes[class_index].fetch_add(analysis.dirty_16_bytes,
++                                              std::memory_order_relaxed);
++  s_ubo_dirty_16_ranges[class_index].fetch_add(analysis.dirty_16_ranges,
++                                               std::memory_order_relaxed);
++  s_ubo_dirty_256_bytes[class_index].fetch_add(analysis.dirty_256_bytes,
++                                               std::memory_order_relaxed);
++  s_ubo_dirty_256_ranges[class_index].fetch_add(analysis.dirty_256_ranges,
++                                                std::memory_order_relaxed);
++}
++
+ void RecordUboPacketOpportunity(u32 change_mask, const std::array<u32, 3>& payload_sizes)
+ {
+   if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
+@@ -298,6 +425,38 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* GetWebGpuStateCacheStats()
+       << " ucpuns:" << s_ubo_prepare_cpu_ns[0].load(std::memory_order_relaxed) << ","
+       << s_ubo_prepare_cpu_ns[1].load(std::memory_order_relaxed) << ","
+       << s_ubo_prepare_cpu_ns[2].load(std::memory_order_relaxed)
++      << " ubodiff:1,"
++      << (s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ? 1 : 0) << ","
++      << s_ubo_cache_epoch.load(std::memory_order_relaxed) << ",3"
++      << " uchgcall:" << s_ubo_change_upload_calls[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_upload_calls[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_upload_calls[2].load(std::memory_order_relaxed)
++      << " uchgfull:" << s_ubo_change_full_bytes[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_full_bytes[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_full_bytes[2].load(std::memory_order_relaxed)
++      << " uchgbyte:" << s_ubo_changed_bytes[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_changed_bytes[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_changed_bytes[2].load(std::memory_order_relaxed)
++      << " ubaseline:"
++      << s_ubo_change_baseline_full_count[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_baseline_full_count[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_baseline_full_count[2].load(std::memory_order_relaxed)
++      << " ubasebyte:"
++      << s_ubo_change_baseline_full_bytes[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_baseline_full_bytes[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_change_baseline_full_bytes[2].load(std::memory_order_relaxed)
++      << " u16byte:" << s_ubo_dirty_16_bytes[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_16_bytes[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_16_bytes[2].load(std::memory_order_relaxed)
++      << " u16range:" << s_ubo_dirty_16_ranges[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_16_ranges[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_16_ranges[2].load(std::memory_order_relaxed)
++      << " u256byte:" << s_ubo_dirty_256_bytes[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_256_bytes[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_256_bytes[2].load(std::memory_order_relaxed)
++      << " u256range:" << s_ubo_dirty_256_ranges[0].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_256_ranges[1].load(std::memory_order_relaxed) << ","
++      << s_ubo_dirty_256_ranges[2].load(std::memory_order_relaxed)
+       << " wguniformfast:"
+       << ((s_ubo_control_mode.load(std::memory_order_relaxed) & 4u) ? 1 : 0)
+       << " ufskip:" << s_uniform_fast_skipped_comparisons[0].load(std::memory_order_relaxed)
+@@ -1318,6 +1477,8 @@ bool WebGPUGfx::PrepareDrawResources()
+   const bool uniform_fast_enabled = (ubo_control_mode & 4u) != 0;
+   const bool dense_ubo_enabled = ShouldUseDenseUboPackets(
+       s_ubo_packet_enabled.load(std::memory_order_relaxed), ubo_cache_enabled);
++  const bool ubo_change_metrics_enabled =
++      s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed);
+   u32 ubo_change_mask = 0;
+   std::array<u32, 3> ubo_payload_sizes{};
+   uniform_profile.Pause();
+@@ -1372,6 +1533,22 @@ bool WebGPUGfx::PrepareDrawResources()
+ 
+     if (ubo_change_mask != 0)
+     {
++      std::array<UboChangeAnalysis, 3> change_analyses{};
++      if (ubo_change_metrics_enabled)
++      {
++        if (dense_vs_changed)
++          change_analyses[0] = AnalyzeUboChange(
++              reinterpret_cast<const u8*>(&dense_vsm.constants), m_vs_shadow.data(),
++              sizeof(dense_vsm.constants), m_vs_shadow_valid);
++        if (dense_ps_changed)
++          change_analyses[1] = AnalyzeUboChange(
++              reinterpret_cast<const u8*>(&dense_psm.constants), m_ps_shadow.data(),
++              sizeof(dense_psm.constants), m_ps_shadow_valid);
++        if (dense_gs_changed)
++          change_analyses[2] = AnalyzeUboChange(
++              reinterpret_cast<const u8*>(&dense_gsm.constants), m_gs_shadow.data(),
++              sizeof(dense_gsm.constants), m_gs_shadow_valid);
++      }
+       const std::array<DenseUboClass, 3> classes = {
+           DenseUboClass{&dense_vsm.constants, static_cast<u32>(sizeof(dense_vsm.constants))},
+           DenseUboClass{&dense_psm.constants, static_cast<u32>(sizeof(dense_psm.constants))},
+@@ -1401,6 +1578,7 @@ bool WebGPUGfx::PrepareDrawResources()
+         m_vs_off = plan.destination_offsets[0];
+         m_vs_publication_serial = publication_serial;
+         dense_vsm.dirty = false;
++        RecordUboPayloadChange(0, change_analyses[0], sizeof(dense_vsm.constants));
+         std::memcpy(m_vs_shadow.data(), &dense_vsm.constants, sizeof(dense_vsm.constants));
+         m_vs_shadow_valid = true;
+         RecordUboPrepareCpu(0, cpu_start_ms);
+@@ -1410,6 +1588,7 @@ bool WebGPUGfx::PrepareDrawResources()
+         m_ps_off = plan.destination_offsets[1];
+         m_ps_publication_serial = publication_serial;
+         dense_psm.dirty = false;
++        RecordUboPayloadChange(1, change_analyses[1], sizeof(dense_psm.constants));
+         std::memcpy(m_ps_shadow.data(), &dense_psm.constants, sizeof(dense_psm.constants));
+         m_ps_shadow_valid = true;
+         RecordUboPrepareCpu(1, cpu_start_ms);
+@@ -1419,6 +1598,7 @@ bool WebGPUGfx::PrepareDrawResources()
+         m_gs_off = plan.destination_offsets[2];
+         m_gs_publication_serial = publication_serial;
+         dense_gsm.dirty = false;
++        RecordUboPayloadChange(2, change_analyses[2], sizeof(dense_gsm.constants));
+         std::memcpy(m_gs_shadow.data(), &dense_gsm.constants, sizeof(dense_gsm.constants));
+         m_gs_shadow_valid = true;
+         RecordUboPrepareCpu(2, cpu_start_ms);
+@@ -1525,12 +1705,20 @@ bool WebGPUGfx::PrepareDrawResources()
+     ubo_payload_sizes[0] = sizeof(vsm.constants);
+     const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
+                                     emscripten_get_now() : 0.0;
++    const UboChangeAnalysis change_analysis =
++        ubo_change_metrics_enabled ?
++            AnalyzeUboChange(reinterpret_cast<const u8*>(&vsm.constants), m_vs_shadow.data(),
++                             sizeof(vsm.constants), m_vs_shadow_valid) :
++            UboChangeAnalysis{};
++    const u64 publication_serial_before = m_ubo_publication_serial;
+     m_vs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
+                    AllocUboSlice(&vsm.constants, sizeof(vsm.constants), BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(0, cpu_start_ms);
+     if (ubo_cache_enabled && m_vs_off == kUboOffNone)
+       return false;
++    if (m_vs_off != kUboOffNone && m_ubo_publication_serial != publication_serial_before)
++      RecordUboPayloadChange(0, change_analysis, sizeof(vsm.constants));
+     m_vs_publication_serial =
+         m_vs_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     vsm.dirty = false;
+@@ -1577,12 +1765,20 @@ bool WebGPUGfx::PrepareDrawResources()
+     ubo_payload_sizes[1] = sizeof(psm.constants);
+     const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
+                                     emscripten_get_now() : 0.0;
++    const UboChangeAnalysis change_analysis =
++        ubo_change_metrics_enabled ?
++            AnalyzeUboChange(reinterpret_cast<const u8*>(&psm.constants), m_ps_shadow.data(),
++                             sizeof(psm.constants), m_ps_shadow_valid) :
++            UboChangeAnalysis{};
++    const u64 publication_serial_before = m_ubo_publication_serial;
+     m_ps_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
+                    AllocUboSlice(&psm.constants, sizeof(psm.constants), BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(1, cpu_start_ms);
+     if (ubo_cache_enabled && m_ps_off == kUboOffNone)
+       return false;
++    if (m_ps_off != kUboOffNone && m_ubo_publication_serial != publication_serial_before)
++      RecordUboPayloadChange(1, change_analysis, sizeof(psm.constants));
+     m_ps_publication_serial =
+         m_ps_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     psm.dirty = false;
+@@ -1656,12 +1852,20 @@ bool WebGPUGfx::PrepareDrawResources()
+     ubo_payload_sizes[2] = sizeof(gsm.constants);
+     const double cpu_start_ms = s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed) ?
+                                     emscripten_get_now() : 0.0;
++    const UboChangeAnalysis change_analysis =
++        ubo_change_metrics_enabled ?
++            AnalyzeUboChange(reinterpret_cast<const u8*>(&gsm.constants), m_gs_shadow.data(),
++                             sizeof(gsm.constants), m_gs_shadow_valid) :
++            UboChangeAnalysis{};
++    const u64 publication_serial_before = m_ubo_publication_serial;
+     m_gs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
+                    AllocUboSlice(&gsm.constants, sizeof(gsm.constants), BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(2, cpu_start_ms);
+     if (ubo_cache_enabled && m_gs_off == kUboOffNone)
+       return false;
++    if (m_gs_off != kUboOffNone && m_ubo_publication_serial != publication_serial_before)
++      RecordUboPayloadChange(2, change_analysis, sizeof(gsm.constants));
+     m_gs_publication_serial =
+         m_gs_off == kUboOffNone ? 0 : m_last_ubo_slice_serial;
+     gsm.dirty = false;

@@ -1,4 +1,12 @@
 import { createWgpuUploadAttribution } from "./wgpu-upload-attribution.js";
+import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { createWgpuOwnershipTrace } from "./wgpu-ownership-trace.js";
+import {
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_SCHEMA,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_PRODUCER_PROFILE_SCHEMA,
+} from "./wgpu-pass-state-cache.js";
 
 export const CAUSAL_TELEMETRY_SCHEMA_VERSION = 3;
 
@@ -180,19 +188,118 @@ export function createCausalTelemetry(overrides = {}) {
         producerBindGroupRecordsSuppressed: [0, 0, 0],
         producerVertexBufferRecordsSuppressed: 0,
         producerIndexBufferRecordsSuppressed: 0,
+        producerProfile: {
+          schema: WGPU_PRODUCER_PROFILE_SCHEMA,
+          requested: false,
+          available: false,
+          version: 1,
+          enabled: false,
+          epoch: 0,
+          phaseCount: WGPU_PRODUCER_PROFILE_PHASE_ORDER.length,
+          phaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+          periods: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+          calls: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+          samples: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleMaxNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+          estimatedTotalNs: new Array(WGPU_PRODUCER_PROFILE_PHASE_ORDER.length).fill(0),
+        },
+        drawProfile: {
+          schema: WGPU_DRAW_PROFILE_SCHEMA,
+          requested: false,
+          available: false,
+          version: 1,
+          enabled: false,
+          epoch: 0,
+          phaseCount: WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+          phaseOrder: [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+          periods: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          calls: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          samples: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          sampleMaxNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+          estimatedTotalNs: new Array(WGPU_DRAW_PROFILE_PHASE_ORDER.length).fill(0),
+        },
         producerUploadArenaRequestedBytes: 0,
         producerUploadArenaConfiguredBytes: 0,
         producerUploadArenaFallbackCount: 0,
         producerUploadArenaLateRejectCount: 0,
         producerUploadArenaWrapCount: 0,
         producerUploadArenaInflightHighWaterBytes: 0,
+        producerRingWaitCount: 0,
+        producerRingWaitTotalUs: 0,
+        producerRingWaitMaxUs: 0,
+        producerUploadWaitCount: 0,
+        producerUploadWaitTotalUs: 0,
+        producerUploadWaitMaxUs: 0,
+        rendererWorkerProbe: {
+          requested: "off",
+          active: false,
+          passed: false,
+          schema: "",
+          adapterMs: 0,
+          deviceMs: 0,
+          gpuCompletionMs: 0,
+          mapMs: 0,
+          totalMs: 0,
+          error: "",
+          executorLocation: "",
+          blankOutput: false,
+          sharedHeap: false,
+          protocolVersion: 0,
+          claimedOwner: 0,
+          claimCount: 0,
+          conflictCount: 0,
+          handoffAckCount: 0,
+          observedRecordCount: 0,
+          consumedRecordCount: 0,
+          skippedRecordCount: 0,
+          invalidRecordCount: 0,
+          unknownOpcodeCount: 0,
+          opHistogram: new Array(25).fill(0),
+          streamDigest: "",
+          uploadRecordCount: 0,
+          releasedUploadCount: 0,
+          totalUploadBytes: 0,
+          invalidUploadSpanCount: 0,
+          uploadReleaseMismatchCount: 0,
+          submissionCount: 0,
+          gpuCompletionCount: 0,
+          gpuCompletionP95Ms: 0,
+          fatalCount: 0,
+          fatalScope: "",
+          consumerState: 0,
+          consumerError: 0,
+          backlog: 0,
+          quiesced: false,
+        },
         producerUboChangeMaskHistogram: [0, 0, 0, 0, 0, 0, 0, 0],
+        producerUboPackEnabled: false,
         producerUboPacketEligibleCount: 0,
         producerUboPacketTheoreticalCallsRemoved: 0,
         producerUboPacketPayloadBytes: 0,
         producerUboPacketAlignedBytes: 0,
         producerUboPrepareCpuCalls: [0, 0, 0],
         producerUboPrepareCpuNs: [0, 0, 0],
+        producerUboChangeClassOrder: ["vs", "ps", "gs"],
+        producerUboChangeSchemaVersion: 0,
+        producerUboChangeAvailable: false,
+        producerUboChangeEnabled: false,
+        producerUboChangeEpoch: 0,
+        producerUboChangeUploadCalls: [0, 0, 0],
+        producerUboChangeFullBytes: [0, 0, 0],
+        producerUboChangedBytes: [0, 0, 0],
+        producerUboChangeBaselineFullCount: [0, 0, 0],
+        producerUboChangeBaselineFullBytes: [0, 0, 0],
+        producerUboDirty16Bytes: [0, 0, 0],
+        producerUboDirty16Ranges: [0, 0, 0],
+        producerUboDirty256Bytes: [0, 0, 0],
+        producerUboDirty256Ranges: [0, 0, 0],
+        producerUniformFastEnabled: false,
+        producerUniformFastClassOrder: ["vs", "ps", "gs"],
+        producerUniformFastSkippedComparisons: [0, 0, 0],
+        producerUniformFastKeptComparisons: [0, 0, 0],
+        producerUniformFastChangedComparisons: [0, 0, 0],
         queueSubmissionCount: 0,
         uploadArenaRingHandoffBytes: 0,
         uploadArenaRingHandoffExpectedBytes: 0,
@@ -207,12 +314,21 @@ export function createCausalTelemetry(overrides = {}) {
         uploadTimeoutCountBeforeVerifiedLoad: 0,
         uploadTimeoutCountAfterVerifiedLoad: 0,
         uploadAttribution: createWgpuUploadAttribution().snapshot({ enabled: false }),
+        passPackageProjection: createWgpuPassPackageProjection().snapshot({
+          requested: false,
+          active: false,
+        }),
+        ownershipTrace: createWgpuOwnershipTrace().snapshot(),
       },
       workerTraffic: {
         mainToWorker: emptyTrafficDirection(),
         workerToMain: emptyTrafficDirection(),
       },
       audio: {
+        requestedTransport: "legacy",
+        activeTransport: "legacy",
+        transportFallbackReason: "",
+        workletRing: null,
         workerMixCount: 0,
         workerRequestedFrames: 0,
         workerReturnedFrames: 0,
@@ -590,6 +706,16 @@ export function flattenCausalTelemetry(value) {
   );
   const uploadPassAssociation = uploadAttribution.passAssociation;
   const queueWrite = uploadAttribution.queueWrite;
+  const mappedStageTiming = uploadAttribution.mappedStageTiming;
+  const capacityWait = uploadAttribution.capacityWait;
+  const passPackageProjection = deepMerge(
+    createWgpuPassPackageProjection().snapshot({ requested: false, active: false }),
+    telemetry.webgpu.passPackageProjection ?? {}
+  );
+  const ownershipTrace = deepMerge(
+    createWgpuOwnershipTrace().snapshot(),
+    telemetry.webgpu.ownershipTrace ?? {}
+  );
   const flattened = {
     causalTelemetrySchemaVersion: telemetry.schemaVersion,
     causalCoreTicks: telemetry.core.ticks,
@@ -699,6 +825,100 @@ export function flattenCausalTelemetry(value) {
     causalWgpuStageBudgetYieldCount: telemetry.webgpu.stageBudgetYieldCount,
     causalWgpuStageCopyDeadlineOverrunMaxMs:
       telemetry.webgpu.stageCopyDeadlineOverrunMaxMs,
+    causalWgpuMappedStagingSlotCount:
+      telemetry.webgpu.mappedStaging?.slotCount ?? 0,
+    causalWgpuMappedStagingSlotSize:
+      telemetry.webgpu.mappedStaging?.slotSize ?? 0,
+    causalWgpuMappedStagingCapacityMissesNoMappedSlots:
+      telemetry.webgpu.mappedStaging?.capacityMissesNoMappedSlots ?? 0,
+    causalWgpuMappedStagingCapacityMissesMappedSlotsFull:
+      telemetry.webgpu.mappedStaging?.capacityMissesMappedSlotsFull ?? 0,
+    causalWgpuMappedStagingSealedSlotCountTotal:
+      telemetry.webgpu.mappedStaging?.sealedSlotCountTotal ?? 0,
+    causalWgpuMappedStagingSealedBytesTotal:
+      telemetry.webgpu.mappedStaging?.sealedBytesTotal ?? 0,
+    causalWgpuMappedStagingSealedBytesMax:
+      telemetry.webgpu.mappedStaging?.sealedBytesMax ?? 0,
+    causalWgpuMappedStagingSealedRecordsTotal:
+      telemetry.webgpu.mappedStaging?.sealedRecordsTotal ?? 0,
+    causalWgpuMappedStagingSealedRecordsMax:
+      telemetry.webgpu.mappedStaging?.sealedRecordsMax ?? 0,
+    causalWgpuMappedStagingRemapLatencyTotalMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyTotalMs ?? 0,
+    causalWgpuMappedStagingRemapLatencyMaxMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyMaxMs ?? 0,
+    causalWgpuMappedStagingRemapLatencyBucketBoundsMs:
+      telemetry.webgpu.mappedStaging?.remapLatencyBucketBoundsMs ?? [],
+    causalWgpuMappedStagingRemapLatencyHistogram:
+      telemetry.webgpu.mappedStaging?.remapLatencyHistogram ?? [],
+    causalWgpuSparseUboSchema: telemetry.webgpu.uboSparse?.schema ?? null,
+    causalWgpuSparseUboInstanceId: telemetry.webgpu.uboSparse?.instanceId ?? 0,
+    causalWgpuSparseUboRequested: telemetry.webgpu.uboSparse?.requested ?? false,
+    causalWgpuSparseUboActive: telemetry.webgpu.uboSparse?.active ?? false,
+    causalWgpuSparseUboCoverageThreshold:
+      telemetry.webgpu.uboSparse?.coverageThreshold ?? 0,
+    causalWgpuSparseUboMaxSparseRanges:
+      telemetry.webgpu.uboSparse?.maxSparseRanges ?? 0,
+    causalWgpuSparseUboClassOrder: telemetry.webgpu.uboSparse?.classOrder ?? [],
+    causalWgpuSparseUboClassSizes: telemetry.webgpu.uboSparse?.classSizes ?? [],
+    causalWgpuSparseUboEligibleCalls: telemetry.webgpu.uboSparse?.eligibleCalls ?? 0,
+    causalWgpuSparseUboBaselineCalls: telemetry.webgpu.uboSparse?.baselineCalls ?? 0,
+    causalWgpuSparseUboSparseCalls: telemetry.webgpu.uboSparse?.sparseCalls ?? 0,
+    causalWgpuSparseUboEqualCalls: telemetry.webgpu.uboSparse?.equalCalls ?? 0,
+    causalWgpuSparseUboFullFallbackCalls:
+      telemetry.webgpu.uboSparse?.fullFallbackCalls ?? 0,
+    causalWgpuSparseUboCapacityMisses:
+      telemetry.webgpu.uboSparse?.capacityMisses ?? 0,
+    causalWgpuSparseUboFullBytes: telemetry.webgpu.uboSparse?.fullBytes ?? 0,
+    causalWgpuSparseUboStagedBytes: telemetry.webgpu.uboSparse?.stagedBytes ?? 0,
+    causalWgpuSparseUboAvoidedStagedBytes:
+      telemetry.webgpu.uboSparse?.avoidedStagedBytes ?? 0,
+    causalWgpuSparseUboCopyForwardBytes:
+      telemetry.webgpu.uboSparse?.copyForwardBytes ?? 0,
+    causalWgpuSparseUboOverlayRanges:
+      telemetry.webgpu.uboSparse?.overlayRanges ?? 0,
+    causalWgpuSparseUboOverlayBytes:
+      telemetry.webgpu.uboSparse?.overlayBytes ?? 0,
+    causalWgpuSparseUboPredictedGpuCopyBytes:
+      telemetry.webgpu.uboSparse?.predictedGpuCopyBytes ?? 0,
+    causalWgpuSparseUboInvalidations:
+      telemetry.webgpu.uboSparse?.invalidations ?? 0,
+    causalWgpuSparseUboInvalidationReasons:
+      telemetry.webgpu.uboSparse?.invalidationReasons ?? {},
+    causalWgpuSparseUboCallsByClass:
+      telemetry.webgpu.uboSparse?.callsByClass ?? [],
+    causalWgpuSparseUboSparseCallsByClass:
+      telemetry.webgpu.uboSparse?.sparseCallsByClass ?? [],
+    causalWgpuSparseUboStagedBytesByClass:
+      telemetry.webgpu.uboSparse?.stagedBytesByClass ?? [],
+    causalWgpuMappedDrainCoalescingEnabled:
+      telemetry.webgpu.mappedDrainCoalescingEnabled ?? false,
+    causalWgpuMappedDrainDeferred:
+      telemetry.webgpu.mappedDrainCoalescing?.state?.deferred ?? false,
+    causalWgpuMappedDrainDeferredBoundaries:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.deferredBoundaries ?? 0,
+    causalWgpuMappedDrainFlushDecisions:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.flushDecisions ?? 0,
+    causalWgpuMappedDrainTimerFired:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.timerFired ?? 0,
+    causalWgpuMappedDrainTimerStale:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.timerStale ?? 0,
+    causalWgpuMappedDrainActualSubmissions:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualSubmissions ?? 0,
+    causalWgpuMappedDrainActualSubmissionAgeMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualSubmissionAgeMaxMs ?? 0,
+    causalWgpuMappedDrainActualDeadlineOverrunMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.actualDeadlineOverrunMaxMs ?? 0,
+    causalWgpuMappedDrainDeadlineOverrunMaxMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.deadlineOverrunMaxMs ?? 0,
+    causalWgpuMappedDrainMaxPendingBytes:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingBytes ?? 0,
+    causalWgpuMappedDrainMaxPendingRecords:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingRecords ?? 0,
+    causalWgpuMappedDrainMaxPendingAgeMs:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.maxPendingAgeMs ?? 0,
+    causalWgpuMappedDrainFlushReasons:
+      telemetry.webgpu.mappedDrainCoalescing?.telemetry?.flushReasons ?? {},
     causalWgpuErrorCount: telemetry.webgpu.errorCount,
     causalWgpuProducerStateCacheEnabled: telemetry.webgpu.producerStateCacheEnabled,
     causalWgpuProducerPipelineRecordsSuppressed:
@@ -709,6 +929,58 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerVertexBufferRecordsSuppressed,
     causalWgpuProducerIndexBufferRecordsSuppressed:
       telemetry.webgpu.producerIndexBufferRecordsSuppressed,
+    causalWgpuProducerProfileSchema:
+      telemetry.webgpu.producerProfile?.schema ?? WGPU_PRODUCER_PROFILE_SCHEMA,
+    causalWgpuProducerProfileRequested:
+      telemetry.webgpu.producerProfile?.requested ?? false,
+    causalWgpuProducerProfileAvailable:
+      telemetry.webgpu.producerProfile?.available ?? false,
+    causalWgpuProducerProfileEnabled:
+      telemetry.webgpu.producerProfile?.enabled ?? false,
+    causalWgpuProducerProfileEpoch:
+      telemetry.webgpu.producerProfile?.epoch ?? 0,
+    causalWgpuProducerProfilePhaseCount:
+      telemetry.webgpu.producerProfile?.phaseCount ?? WGPU_PRODUCER_PROFILE_PHASE_ORDER.length,
+    causalWgpuProducerProfilePhaseOrder:
+      telemetry.webgpu.producerProfile?.phaseOrder ?? [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    causalWgpuProducerProfilePeriods:
+      telemetry.webgpu.producerProfile?.periods ?? [],
+    causalWgpuProducerProfileCalls:
+      telemetry.webgpu.producerProfile?.calls ?? [],
+    causalWgpuProducerProfileSamples:
+      telemetry.webgpu.producerProfile?.samples ?? [],
+    causalWgpuProducerProfileSampleTotalNs:
+      telemetry.webgpu.producerProfile?.sampleTotalNs ?? [],
+    causalWgpuProducerProfileSampleMaxNs:
+      telemetry.webgpu.producerProfile?.sampleMaxNs ?? [],
+    causalWgpuProducerProfileEstimatedTotalNs:
+      telemetry.webgpu.producerProfile?.estimatedTotalNs ?? [],
+    causalWgpuDrawProfileSchema:
+      telemetry.webgpu.drawProfile?.schema ?? WGPU_DRAW_PROFILE_SCHEMA,
+    causalWgpuDrawProfileRequested:
+      telemetry.webgpu.drawProfile?.requested ?? false,
+    causalWgpuDrawProfileAvailable:
+      telemetry.webgpu.drawProfile?.available ?? false,
+    causalWgpuDrawProfileEnabled:
+      telemetry.webgpu.drawProfile?.enabled ?? false,
+    causalWgpuDrawProfileEpoch:
+      telemetry.webgpu.drawProfile?.epoch ?? 0,
+    causalWgpuDrawProfilePhaseCount:
+      telemetry.webgpu.drawProfile?.phaseCount ?? WGPU_DRAW_PROFILE_PHASE_ORDER.length,
+    causalWgpuDrawProfilePhaseOrder:
+      telemetry.webgpu.drawProfile?.phaseOrder ?? [...WGPU_DRAW_PROFILE_PHASE_ORDER],
+    causalWgpuDrawProfilePeriods:
+      telemetry.webgpu.drawProfile?.periods ?? [],
+    causalWgpuDrawProfileCalls:
+      telemetry.webgpu.drawProfile?.calls ?? [],
+    causalWgpuDrawProfileSamples:
+      telemetry.webgpu.drawProfile?.samples ?? [],
+    causalWgpuDrawProfileSampleTotalNs:
+      telemetry.webgpu.drawProfile?.sampleTotalNs ?? [],
+    causalWgpuDrawProfileSampleMaxNs:
+      telemetry.webgpu.drawProfile?.sampleMaxNs ?? [],
+    causalWgpuDrawProfileEstimatedTotalNs:
+      telemetry.webgpu.drawProfile?.estimatedTotalNs ?? [],
     causalWgpuUploadArenaRequestedBytes:
       telemetry.webgpu.producerUploadArenaRequestedBytes,
     causalWgpuUploadArenaConfiguredBytes:
@@ -721,8 +993,61 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUploadArenaWrapCount,
     causalWgpuUploadArenaInflightHighWaterBytes:
       telemetry.webgpu.producerUploadArenaInflightHighWaterBytes,
+    causalWgpuProducerRingWaitCount: telemetry.webgpu.producerRingWaitCount,
+    causalWgpuProducerRingWaitTotalUs: telemetry.webgpu.producerRingWaitTotalUs,
+    causalWgpuProducerRingWaitMaxUs: telemetry.webgpu.producerRingWaitMaxUs,
+    causalWgpuProducerUploadWaitCount: telemetry.webgpu.producerUploadWaitCount,
+    causalWgpuProducerUploadWaitTotalUs: telemetry.webgpu.producerUploadWaitTotalUs,
+    causalWgpuProducerUploadWaitMaxUs: telemetry.webgpu.producerUploadWaitMaxUs,
+    causalWgpuRendererWorkerProbeRequested:
+      telemetry.webgpu.rendererWorkerProbe?.requested ?? "off",
+    causalWgpuRendererWorkerProbeActive:
+      telemetry.webgpu.rendererWorkerProbe?.active ?? false,
+    causalWgpuRendererWorkerProbePassed:
+      telemetry.webgpu.rendererWorkerProbe?.passed ?? false,
+    causalWgpuRendererWorkerProbeSchema:
+      telemetry.webgpu.rendererWorkerProbe?.schema ?? "",
+    causalWgpuRendererWorkerProbeTotalMs:
+      telemetry.webgpu.rendererWorkerProbe?.totalMs ?? 0,
+    causalWgpuRendererWorkerProbeError:
+      telemetry.webgpu.rendererWorkerProbe?.error ?? "",
+    causalWgpuRendererWorkerProbeExecutor:
+      telemetry.webgpu.rendererWorkerProbe?.executorLocation ?? "",
+    causalWgpuRendererWorkerProbeBlankOutput:
+      telemetry.webgpu.rendererWorkerProbe?.blankOutput ?? false,
+    causalWgpuRendererWorkerProbeProtocolVersion:
+      telemetry.webgpu.rendererWorkerProbe?.protocolVersion ?? 0,
+    causalWgpuRendererWorkerProbeClaimedOwner:
+      telemetry.webgpu.rendererWorkerProbe?.claimedOwner ?? 0,
+    causalWgpuRendererWorkerProbeClaimCount:
+      telemetry.webgpu.rendererWorkerProbe?.claimCount ?? 0,
+    causalWgpuRendererWorkerProbeConflictCount:
+      telemetry.webgpu.rendererWorkerProbe?.conflictCount ?? 0,
+    causalWgpuRendererWorkerProbeObservedRecords:
+      telemetry.webgpu.rendererWorkerProbe?.observedRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeConsumedRecords:
+      telemetry.webgpu.rendererWorkerProbe?.consumedRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeUploadRecords:
+      telemetry.webgpu.rendererWorkerProbe?.uploadRecordCount ?? 0,
+    causalWgpuRendererWorkerProbeReleasedUploads:
+      telemetry.webgpu.rendererWorkerProbe?.releasedUploadCount ?? 0,
+    causalWgpuRendererWorkerProbeUploadBytes:
+      telemetry.webgpu.rendererWorkerProbe?.totalUploadBytes ?? 0,
+    causalWgpuRendererWorkerProbeSubmissions:
+      telemetry.webgpu.rendererWorkerProbe?.submissionCount ?? 0,
+    causalWgpuRendererWorkerProbeGpuCompletions:
+      telemetry.webgpu.rendererWorkerProbe?.gpuCompletionCount ?? 0,
+    causalWgpuRendererWorkerProbeBacklog:
+      telemetry.webgpu.rendererWorkerProbe?.backlog ?? 0,
+    causalWgpuRendererWorkerProbeQuiesced:
+      telemetry.webgpu.rendererWorkerProbe?.quiesced ?? false,
+    causalWgpuRendererWorkerProbeFatalCount:
+      telemetry.webgpu.rendererWorkerProbe?.fatalCount ?? 0,
+    causalWgpuRendererWorkerProbeStreamDigest:
+      telemetry.webgpu.rendererWorkerProbe?.streamDigest ?? "",
     causalWgpuProducerUboChangeMaskHistogram:
       telemetry.webgpu.producerUboChangeMaskHistogram,
+    causalWgpuProducerUboPackEnabled: telemetry.webgpu.producerUboPackEnabled,
     causalWgpuProducerUboPacketEligibleCount:
       telemetry.webgpu.producerUboPacketEligibleCount,
     causalWgpuProducerUboPacketTheoreticalCallsRemoved:
@@ -733,6 +1058,30 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.producerUboPacketAlignedBytes,
     causalWgpuProducerUboPrepareCpuCalls: telemetry.webgpu.producerUboPrepareCpuCalls,
     causalWgpuProducerUboPrepareCpuNs: telemetry.webgpu.producerUboPrepareCpuNs,
+    causalWgpuProducerUboChangeClassOrder: telemetry.webgpu.producerUboChangeClassOrder,
+    causalWgpuProducerUboChangeSchemaVersion:
+      telemetry.webgpu.producerUboChangeSchemaVersion,
+    causalWgpuProducerUboChangeAvailable: telemetry.webgpu.producerUboChangeAvailable,
+    causalWgpuProducerUboChangeEnabled: telemetry.webgpu.producerUboChangeEnabled,
+    causalWgpuProducerUboChangeEpoch: telemetry.webgpu.producerUboChangeEpoch,
+    causalWgpuProducerUboChangeUploadCalls: telemetry.webgpu.producerUboChangeUploadCalls,
+    causalWgpuProducerUboChangeFullBytes: telemetry.webgpu.producerUboChangeFullBytes,
+    causalWgpuProducerUboChangedBytes: telemetry.webgpu.producerUboChangedBytes,
+    causalWgpuProducerUboChangeBaselineFullCount:
+      telemetry.webgpu.producerUboChangeBaselineFullCount,
+    causalWgpuProducerUboChangeBaselineFullBytes:
+      telemetry.webgpu.producerUboChangeBaselineFullBytes,
+    causalWgpuProducerUboDirty16Bytes: telemetry.webgpu.producerUboDirty16Bytes,
+    causalWgpuProducerUboDirty16Ranges: telemetry.webgpu.producerUboDirty16Ranges,
+    causalWgpuProducerUboDirty256Bytes: telemetry.webgpu.producerUboDirty256Bytes,
+    causalWgpuProducerUboDirty256Ranges: telemetry.webgpu.producerUboDirty256Ranges,
+    causalWgpuProducerUniformFastEnabled: telemetry.webgpu.producerUniformFastEnabled,
+    causalWgpuProducerUniformFastSkippedComparisons:
+      telemetry.webgpu.producerUniformFastSkippedComparisons,
+    causalWgpuProducerUniformFastKeptComparisons:
+      telemetry.webgpu.producerUniformFastKeptComparisons,
+    causalWgpuProducerUniformFastChangedComparisons:
+      telemetry.webgpu.producerUniformFastChangedComparisons,
     causalWgpuQueueSubmissionCount: telemetry.webgpu.queueSubmissionCount,
     causalWgpuUploadArenaRingHandoffBytes:
       telemetry.webgpu.uploadArenaRingHandoffBytes,
@@ -773,6 +1122,101 @@ export function flattenCausalTelemetry(value) {
     causalWgpuQueueWriteSlowEvents: queueWrite.slowEvents,
     causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
     causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
+    causalWgpuMappedStageTimingSchema: mappedStageTiming.schema,
+    causalWgpuMappedStageTimingMode: mappedStageTiming.mode,
+    causalWgpuMappedStageTimingStride: mappedStageTiming.stride,
+    causalWgpuMappedStageTimingEligibleCalls: mappedStageTiming.eligibleCalls,
+    causalWgpuMappedStageTimingSampleCount: mappedStageTiming.sampleCount,
+    causalWgpuMappedStageTimingSampleBytes: mappedStageTiming.sampleBytes,
+    causalWgpuMappedStageTimingSampleTotalMs: mappedStageTiming.sampleTotalMs,
+    causalWgpuMappedStageTimingSampleMaxMs: mappedStageTiming.sampleMaxMs,
+    causalWgpuMappedStageTimingEligibleCallsByRole:
+      mappedStageTiming.eligibleCallsByRole,
+    causalWgpuMappedStageTimingSampleCountsByRole:
+      mappedStageTiming.sampleCountsByRole,
+    causalWgpuMappedStageTimingSampleBytesByRole:
+      mappedStageTiming.sampleBytesByRole,
+    causalWgpuMappedStageTimingSampleTotalMsByRole:
+      mappedStageTiming.sampleTotalMsByRole,
+    causalWgpuMappedStageTimingSampleMaxMsByRole:
+      mappedStageTiming.sampleMaxMsByRole,
+    causalWgpuMappedCapacityWaitAttempts: capacityWait.totalAttempts,
+    causalWgpuMappedCapacityWaitEpisodes: capacityWait.totalEpisodes,
+    causalWgpuMappedCapacityWaitCompletedEpisodes: capacityWait.completedEpisodes,
+    causalWgpuMappedCapacityWaitTotalMs: capacityWait.totalMs,
+    causalWgpuMappedCapacityWaitMaxMs: capacityWait.maxMs,
+    causalWgpuMappedCapacityWaitActive: capacityWait.active,
+    causalWgpuMappedCapacityWaitActiveRole: capacityWait.activeRole,
+    causalWgpuMappedCapacityWaitAttemptsByRole: capacityWait.attemptsByRole,
+    causalWgpuMappedCapacityWaitEpisodesByRole: capacityWait.episodesByRole,
+    causalWgpuMappedCapacityWaitCompletedByRole: capacityWait.completedByRole,
+    causalWgpuMappedCapacityWaitTotalMsByRole: capacityWait.totalMsByRole,
+    causalWgpuMappedCapacityWaitMaxMsByRole: capacityWait.maxMsByRole,
+    causalWgpuPassPackageProjectionSchema: passPackageProjection.schema,
+    causalWgpuPassPackageProjectionRequested: passPackageProjection.requested,
+    causalWgpuPassPackageProjectionActive: passPackageProjection.active,
+    causalWgpuPassPackageRuntimeEligible: passPackageProjection.runtimeEligible,
+    causalWgpuPassPackageLegacyRecords: passPackageProjection.legacy.records,
+    causalWgpuPassPackageLegacyPublications: passPackageProjection.legacy.publications,
+    causalWgpuPassPackageProjectedRecords: passPackageProjection.projected.records,
+    causalWgpuPassPackageProjectedPublications: passPackageProjection.projected.publications,
+    causalWgpuPassPackageProjectedRecordReduction:
+      passPackageProjection.projected.recordReduction,
+    causalWgpuPassPackageProjectedPublicationReduction:
+      passPackageProjection.projected.publicationReduction,
+    causalWgpuPassPackageSpeculativePublications:
+      passPackageProjection.speculativeFullEnvelope.publications,
+    causalWgpuPassPackageSpeculativePublicationReductionEstimate:
+      passPackageProjection.speculativeFullEnvelope.publicationReductionEstimate,
+    causalWgpuPassPackageCompletePasses: passPackageProjection.projected.completePassPackages,
+    causalWgpuPassPackageOutsideSegments: passPackageProjection.projected.outsideSegments,
+    causalWgpuPassPackageUploadRecords: passPackageProjection.records.uploads,
+    causalWgpuPassPackageUploadBytes: passPackageProjection.records.uploadBytes,
+    causalWgpuPassPackageResourceRecords: passPackageProjection.records.resources,
+    causalWgpuPassPackageUnsupportedRecords: passPackageProjection.records.unsupported,
+    causalWgpuPassPackageMalformedRecords: passPackageProjection.records.malformed,
+    causalWgpuPassPackageNestedPasses: passPackageProjection.records.nestedPasses,
+    causalWgpuPassPackageStateOutsidePass: passPackageProjection.records.stateOutsidePass,
+    causalWgpuPassPackagePendingPrePassUploads:
+      passPackageProjection.ownership.pendingPrePassUploads,
+    causalWgpuPassPackageUnresolvedPrePassUploads:
+      passPackageProjection.ownership.unresolvedPrePassUploads,
+    causalWgpuPassPackagePendingOutsideResources:
+      passPackageProjection.ownership.pendingOutsideResources,
+    causalWgpuPassPackageUnresolvedOutsideResources:
+      passPackageProjection.ownership.unresolvedOutsideResources,
+    causalWgpuPassPackageOpHistogram: passPackageProjection.opHistogram,
+    causalWgpuOwnershipTraceSchema: ownershipTrace.schema,
+    causalWgpuOwnershipTraceRequested: ownershipTrace.requested,
+    causalWgpuOwnershipTraceActive: ownershipTrace.active,
+    causalWgpuOwnershipTraceSetterAvailable: ownershipTrace.setterAvailable,
+    causalWgpuOwnershipTraceSetterInvoked: ownershipTrace.setterInvoked,
+    causalWgpuOwnershipTraceRegistered: ownershipTrace.registered,
+    causalWgpuOwnershipTraceEpoch: ownershipTrace.epoch,
+    causalWgpuOwnershipTraceBacklog: ownershipTrace.backlog,
+    causalWgpuOwnershipTraceNativeDropped: ownershipTrace.nativeDropped,
+    causalWgpuOwnershipTraceObservedRecords: ownershipTrace.observedRecords,
+    causalWgpuOwnershipTraceDrainedBatches: ownershipTrace.drainedBatches,
+    causalWgpuOwnershipTraceEpochChanges: ownershipTrace.epochChangeCount,
+    causalWgpuOwnershipTraceRecordEpochMismatches:
+      ownershipTrace.recordEpochMismatchCount,
+    causalWgpuOwnershipTraceOrderingViolations:
+      ownershipTrace.monotonicOrderingViolationCount,
+    causalWgpuOwnershipTraceMalformedHeaders: ownershipTrace.malformedHeaderCount,
+    causalWgpuOwnershipTraceMalformedDescriptors:
+      ownershipTrace.malformedDescriptorCount,
+    causalWgpuOwnershipTraceEventHistogram: ownershipTrace.eventHistogram,
+    causalWgpuOwnershipTraceOpcodeHistogram: ownershipTrace.opcodeHistogram,
+    causalWgpuOwnershipTraceCommandAttributionHistogram:
+      ownershipTrace.commandAttributionHistogram,
+    causalWgpuOwnershipTraceCommandPublicationHistogram:
+      ownershipTrace.commandPublicationHistogram,
+    causalWgpuOwnershipTraceUploadBytesByAttribution:
+      ownershipTrace.uploadBytesByAttribution,
+    causalWgpuOwnershipTraceMaximumTransactionId:
+      ownershipTrace.maximumTransactionId,
+    causalWgpuOwnershipTraceZeroTransactionCommands:
+      ownershipTrace.zeroTransactionCommandCount,
     causalWgpuUploadCompletedPassCount: uploadPassAssociation.completedPassCount,
     causalWgpuUploadAbortedPassCount: uploadPassAssociation.abortedPassCount,
     causalWgpuUploadIncompletePassCount: uploadPassAssociation.incompletePassCount,
@@ -795,6 +1239,20 @@ export function flattenCausalTelemetry(value) {
     causalAudioWorkerMixLastMs: telemetry.audio.workerMixLastMs,
     causalAudioWorkerMixTotalMs: telemetry.audio.workerMixTotalMs,
     causalAudioWorkerMixMaxMs: telemetry.audio.workerMixMaxMs,
+    causalAudioRequestedTransport: telemetry.audio.requestedTransport,
+    causalAudioActiveTransport: telemetry.audio.activeTransport,
+    causalAudioTransportFallbackReason: telemetry.audio.transportFallbackReason,
+    causalAudioWorkletFillFrames: telemetry.audio.workletRing?.fillFrames ?? 0,
+    causalAudioWorkletUnderrunFrames: telemetry.audio.workletRing?.underrunFrames ?? 0,
+    causalAudioWorkletUnderrunEvents: telemetry.audio.workletRing?.underrunEvents ?? 0,
+    causalAudioWorkletWrittenFrames: telemetry.audio.workletRing?.writtenFrames ?? 0,
+    causalAudioWorkletConsumedFrames: telemetry.audio.workletRing?.consumedFrames ?? 0,
+    causalAudioWorkletProducerRefills: telemetry.audio.workletRing?.producerRefills ?? 0,
+    causalAudioWorkletProducerEmptyMixes: telemetry.audio.workletRing?.producerEmptyMixes ?? 0,
+    causalAudioWorkletProducerTimerGapMaxMs:
+      telemetry.audio.workletRing?.producerTimerGapMaxMs ?? 0,
+    causalAudioWorkletProducerFillHighWater:
+      telemetry.audio.workletRing?.producerFillHighWater ?? 0,
     causalAudioPumpCount: telemetry.audio.pumpCount,
     causalAudioPumpPendingSkipCount: telemetry.audio.pumpPendingSkipCount,
     causalAudioPumpMissCount: telemetry.audio.pumpMissCount,

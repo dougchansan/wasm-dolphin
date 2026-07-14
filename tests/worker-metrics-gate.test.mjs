@@ -17,6 +17,9 @@ test("worker honors metrics=0 without disabling correctness and liveness signals
     /api\.setSoftwareRasterProfileEnabled\?\.\(\s*collectMetrics && videoBackend === "Software Renderer" \? 1 : 0\s*\)/,
   );
   assert.match(source, /frameReuseTelemetryPayload\(frameReuseTelemetry, tickRepaintCount\)/);
+  assert.match(source, /runtimeConfig: wgpuRuntimeConfigPayload\(\)/);
+  assert.match(source, /metricsEnabled: causalMetricsEnabled/);
+  assert.match(source, /timing: \{\s*enabled: causalMetricsEnabled,/s);
 
   // These measurements remain active because presentation/JIT safety and
   // fixed-scene validation depend on them even when detailed metrics are off.

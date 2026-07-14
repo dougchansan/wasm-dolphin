@@ -1,0 +1,44 @@
+diff --git a/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp b/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
+--- a/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
++++ b/Source/Core/Core/PowerPC/JitCommon/JitCache.cpp
+@@ -626,7 +626,7 @@ size_t JitBaseBlockCache::FastLookupIndexForAddress(u32 address, u32 feature_fla
+     return (static_cast<size_t>(feature_flags) << 30) | (address >> 2);
+   }
+   else
+   {
+-    return (address >> 2) & FAST_BLOCK_MAP_FALLBACK_MASK;
++    return (static_cast<size_t>(address) >> 2) & FAST_BLOCK_MAP_FALLBACK_MASK;
+   }
+ }
+diff --git a/Source/Core/Core/PowerPC/JitCommon/JitCache.h b/Source/Core/Core/PowerPC/JitCommon/JitCache.h
+--- a/Source/Core/Core/PowerPC/JitCommon/JitCache.h
++++ b/Source/Core/Core/PowerPC/JitCommon/JitCache.h
+@@ -18,7 +18,16 @@
+ #include "Common/CommonTypes.h"
+ #include "Common/RangeSet.h"
+ #include "Core/HW/Memmap.h"
+ #include "Core/PowerPC/Gekko.h"
+ #include "Core/PowerPC/PPCAnalyst.h"
+ 
++#ifndef DOLPHIN_WEB_FALLBACK_MAP_BITS
++#define DOLPHIN_WEB_FALLBACK_MAP_BITS 16
++#endif
++
++static_assert(DOLPHIN_WEB_FALLBACK_MAP_BITS == 16 ||
++                  DOLPHIN_WEB_FALLBACK_MAP_BITS == 18 ||
++                  DOLPHIN_WEB_FALLBACK_MAP_BITS == 20,
++              "DOLPHIN_WEB_FALLBACK_MAP_BITS must be 16, 18, or 20");
++
+ class JitBase;
+@@ -194,8 +203,9 @@ public:
+   // The size of the fast map is determined like this:
+   // ((4 GiB guest memory space) / (4-byte alignment) * sizeof(JitBlock*)) << (3 feature flag bits)
+   static constexpr u64 FAST_BLOCK_MAP_SIZE = 0x10'0000'0000;
+-  static constexpr u32 FAST_BLOCK_MAP_FALLBACK_ELEMENTS = 0x10000;
+-  static constexpr u32 FAST_BLOCK_MAP_FALLBACK_MASK = FAST_BLOCK_MAP_FALLBACK_ELEMENTS - 1;
++  static constexpr size_t FAST_BLOCK_MAP_FALLBACK_ELEMENTS =
++      size_t{1} << DOLPHIN_WEB_FALLBACK_MAP_BITS;
++  static constexpr size_t FAST_BLOCK_MAP_FALLBACK_MASK = FAST_BLOCK_MAP_FALLBACK_ELEMENTS - 1;
+ 
+   explicit JitBaseBlockCache(JitBase& jit);
+   virtual ~JitBaseBlockCache();

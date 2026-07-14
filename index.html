@@ -31,6 +31,7 @@
             <div class="crt-bezel">
               <div class="screen-viewport">
                 <canvas id="screen" width="640" height="480" aria-label="Emulator screen"></canvas>
+                <div class="blank-probe-notice" id="blankProbeNotice" role="status" hidden></div>
                 <div class="screen-osd" id="screenHud">
                   <span><strong id="hudFps">0</strong> present</span>
                   <span><strong id="hudVisualFps">0</strong> visual</span>
@@ -129,6 +130,7 @@
                 <span>Renderer</span>
                 <select id="settingVideo">
                   <option value="software">Software</option>
+                  <option value="wgpu">WebGPU hardware (experimental)</option>
                   <option value="ogl">OpenGL GPU</option>
                   <option value="null">Null video</option>
                 </select>

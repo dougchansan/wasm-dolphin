@@ -37,6 +37,7 @@
       "wgpuclassify": "1",
       "wgpupump": "1",
       "wgpustatecache": "0",
+      "wgpuubometrics": "1",
       "wgpuubocache": "0"
     }
   },
@@ -62,6 +63,7 @@
       "wgpuclassify": "1",
       "wgpupump": "1",
       "wgpustatecache": "0",
+      "wgpuubometrics": "1",
       "wgpuubocache": "1"
     }
   }

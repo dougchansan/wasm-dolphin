@@ -6,7 +6,7 @@ const vendorRoot = new URL("../vendor/dolphin/Source/Core/", import.meta.url);
 
 test("correlated timing retains coherent VI throttle and DVD completion ownership", async () => {
   const [profile, cachedInterpreter, coreTiming, dvdThread, videoInterface, basePatch, phasePatch,
-    validationTemplate, validationHarness] =
+    validationTemplate, validationHarness, perfGate] =
     await Promise.all([
       readFile(new URL("Core/WasmTimingProfile.h", vendorRoot), "utf8"),
       readFile(new URL("Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp", vendorRoot), "utf8"),
@@ -36,6 +36,10 @@ test("correlated timing retains coherent VI throttle and DVD completion ownershi
       ),
       readFile(
         new URL("../tools/menu-progress-validate.mjs", import.meta.url),
+        "utf8"
+      ),
+      readFile(
+        new URL("../tools/perf-regression-gate.mjs", import.meta.url),
         "utf8"
       )
     ]);
@@ -104,6 +108,7 @@ test("correlated timing retains coherent VI throttle and DVD completion ownershi
     validationHarness,
     /if \(process\.env\.PPCPROF\) url\.searchParams\.set\("ppcprof", process\.env\.PPCPROF\)/
   );
+  assert.match(perfGate, /"audiotransport", "ppcprof", "wgpustatecache"/);
 
   for (const path of [
     "Source/Core/Core/WasmTimingProfile.h",

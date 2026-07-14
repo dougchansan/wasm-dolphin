@@ -1,0 +1,177 @@
+// Copyright 2026 Dolphin Emulator Project (wasm-dolphin fork)
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const readSource = (path) => readFile(new URL(path, import.meta.url), "utf8");
+
+test("mapped staging slot count is explicit and flows through validation", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStagingSlotCount\(\s*window\.location\.search\s*\)/);
+  assert.match(host, /wgpuMappedStagingSlotCount: this\.wgpuMappedStagingSlotCount/);
+  assert.match(adapter, /this\.wgpuMappedStagingSlotCount = Number\(wgpuMappedStagingSlotCount\) === 4 \? 4 : 3/);
+  assert.match(adapter, /wgpuMappedStagingSlotCount: this\.wgpuMappedStagingSlotCount/);
+  assert.match(worker, /wgpuMappedStagingSlotCount: payload\.wgpuMappedStagingSlotCount/);
+  assert.match(worker, /slotCount: wgpuMappedStagingSlotCount/);
+  assert.match(worker, /enabled: wgpuUploadTransport === "mapped"/);
+  assert.match(worker, /recordStore: wgpuMappedStageFastEnabled \? "flat" : "objects"/);
+  assert.match(gate, /"wgpustagingslots"/);
+  assert.match(gate, /WGPU mapped staging slot-count mismatch/);
+  assert.match(harness, /\["WGPUSTAGINGSLOTS", "wgpustagingslots"\]/);
+});
+
+test("mapped staging timing stride is explicit, sampled, and benchmark-visible", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStageTimingStride\(\s*window\.location\.search\s*\)/);
+  assert.match(host, /wgpuMappedStageTimingStride: this\.wgpuMappedStageTimingStride/);
+  assert.match(adapter, /Number\(wgpuMappedStageTimingStride\) === 64 \? 64 : 1/);
+  assert.match(adapter, /wgpuMappedStageTimingStride: this\.wgpuMappedStageTimingStride/);
+  assert.match(worker, /Number\(payload\.wgpuMappedStageTimingStride\) === 64/);
+  assert.match(worker, /mappedStageTimingStride: wgpuMappedStageTimingStride/);
+  assert.match(worker, /beginMappedStageTiming\(uploadRole\)/);
+  assert.match(worker, /beginMappedStageTiming\(\s*WGPU_UPLOAD_ROLE\.TEXTURE_ADJACENT/);
+  assert.match(worker, /wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null/);
+  assert.match(gate, /WGPU mapped staging timing mismatch/);
+  assert.match(harness, /\["WGPUMAPPEDTIMING", "wgpumappedtiming"\]/);
+});
+
+test("upload transport flows from URL parsing through the worker load payload", async () => {
+  const [host, adapter, worker] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+  ]);
+  assert.match(host, /requestedWgpuUploadTransport\(window\.location\.search\)/);
+  assert.match(host, /wgpuUploadTransport: this\.wgpuUploadTransport/);
+  assert.match(adapter, /wgpuUploadTransport === "mapped" \? "mapped" : "queue"/);
+  assert.match(adapter, /wgpuUploadTransport: this\.wgpuUploadTransport/);
+  assert.match(worker, /wgpuUploadTransport: payload\.wgpuUploadTransport/);
+  assert.match(worker, /requestedWgpuUploadTransport === "mapped" \? "mapped" : "queue"/);
+});
+
+test("mapped staging fast path is opt-in and flows through the worker load payload", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStageFast\(window\.location\.search\)/);
+  assert.match(host, /wgpuMappedStageFast: this\.wgpuMappedStageFast/);
+  assert.match(adapter, /this\.wgpuMappedStageFast = Boolean\(wgpuMappedStageFast\)/);
+  assert.match(adapter, /wgpuMappedStageFast: this\.wgpuMappedStageFast/);
+  assert.match(worker, /wgpuMappedStageFast: payload\.wgpuMappedStageFast/);
+  assert.match(
+    worker,
+    /wgpuMappedStageFastEnabled =[\s\S]*?wgpuUploadTransport === "mapped" && Boolean\(requestedWgpuMappedStageFast\)/
+  );
+  assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageBufferFast\(/);
+  assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageTextureFast\(/);
+  assert.match(worker, /flatRecords: wgpuMappedStageFastEnabled/);
+  assert.match(worker, /if \(sparse\?\.handled\) return sparse;[\s\S]*?stageBufferFast/);
+  assert.match(gate, /"wgpustagefast"/);
+  assert.match(gate, /mappedStaging\?\.recordStore/);
+  assert.match(gate, /record store mismatch: requested=flat/);
+  assert.match(harness, /\["WGPUSTAGEFAST", "wgpustagefast"\]/);
+});
+
+test("mapped drain coalescing is opt-in, bounded, and generation-fenced", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedDrainCoalescing\(/);
+  assert.match(host, /wgpuMappedDrainCoalescing: this\.wgpuMappedDrainCoalescing/);
+  assert.match(adapter, /this\.wgpuMappedDrainCoalescing = Boolean\(wgpuMappedDrainCoalescing\)/);
+  assert.match(worker, /wgpuMappedDrainCoalescing: payload\.wgpuMappedDrainCoalescing/);
+  assert.match(worker, /wgpuUploadTransport === "mapped" && Boolean\(requestedWgpuMappedDrainCoalescing\)/);
+  assert.match(worker, /pendingBytes: mappedSnapshot\?\.pendingBytes \?\? 0/);
+  assert.match(worker, /pendingRecords: mappedSnapshot\?\.pendingUploads \?\? 0/);
+  assert.match(worker, /pendingAgeMs: mappedSnapshot\?\.oldestPendingAgeMs \?\? 0/);
+  assert.match(worker, /scheduleWgpuMappedDrainDeadline\(mappedDrainDecision\)/);
+  assert.match(worker, /generation: wgpuMappedStagingGeneration/);
+  assert.match(worker, /submitPendingWgpuMappedUploads\("coalescing-deadline"\)/);
+  assert.match(worker, /WGPU_MAPPED_DRAIN_FORCE_REASONS\.FINALIZATION/);
+  assert.match(worker, /case "validationFinalizeWgpuMappedDrain"/);
+  assert.match(worker, /await finalizeWgpuMappedDrain/);
+  assert.match(worker, /Promise\.all\(pendingRemaps\)/);
+  assert.match(worker, /WGPU mapped drain finalization did not quiesce/);
+  assert.match(
+    gate,
+    /"validationFinalizeWgpuMappedDrain"[\s\S]*?postRunFinalizedTelemetry = \{[\s\S]*?causalTelemetry: finalized\.causalTelemetry/
+  );
+  assert.match(gate, /mappedDrainFinalization\?\.quiesced/);
+  assert.match(gate, /params: Object\.fromEntries\(url\.searchParams\.entries\(\)\)/);
+  assert.match(gate, /was enabled but never deferred work/);
+  assert.match(gate, /was enabled but never submitted mapped work/);
+  assert.match(gate, /mappedDrainFinalization/);
+  assert.match(gate, /retained uploads beyond 8 ms/);
+  assert.match(worker, /WGPU_MAPPED_DRAIN_FORCE_REASONS\.DESTROY/);
+  assert.match(
+    worker,
+    /case WGPU_CMD_OP_DESTROY:[\s\S]*?submitEnc\("destroy"\)[\s\S]*?m\.delete\(id\)/
+  );
+  assert.match(gate, /WGPU mapped drain coalescing mismatch/);
+  assert.match(harness, /\["WGPUDRAINCOALESCE", "wgpudraincoalesce"\]/);
+});
+
+test("mapped uploads are copied into a bounded pool and queue writes stay isolated", async () => {
+  const worker = await readSource("../src/upstream-discio-worker.js");
+  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_COUNT = 3/);
+  assert.match(worker, /WGPU_MAPPED_STAGING_SLOT_BYTES = 16 \* 1024 \* 1024/);
+  assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageBuffer\(\{/);
+  assert.match(worker, /if \(wgpuUploadTransport === "mapped"\) \{[\s\S]*?\.stageTexture\(\{/);
+  assert.match(worker, /\} else \{[\s\S]*?q\.writeBuffer\(/);
+  assert.match(worker, /\} else \{[\s\S]*?q\.writeTexture\(/);
+  assert.match(worker, /mappedStagingCopyCount/);
+  assert.match(worker, /mappedStagingCapacityWaitCount/);
+  assert.match(worker, /mappedStagingRemapFailureCount/);
+});
+
+test("submission orders upload before render and capacity never falls back", async () => {
+  const worker = await readSource("../src/upstream-discio-worker.js");
+  assert.match(
+    worker,
+    /q\.submit\(\[\s*\.\.\.\(mappedBatch\?\.ordinary \? \[mappedBatch\.ordinary\.commandBuffer\] : \[\]\),\s*\.\.\.\(mappedBatch\?\.compute \? \[mappedBatch\.compute\.commandBuffer\] : \[\]\),\s*renderCommandBuffer,\s*\]\)/
+  );
+  assert.match(
+    worker,
+    /queue\.submit\(\[\s*\.\.\.\(batch \? \[batch\.commandBuffer\] : \[\]\),\s*\.\.\.\(computeBatch \? \[computeBatch\.commandBuffer\] : \[\]\),\s*\]\)/
+  );
+  assert.match(
+    worker,
+    /if \(mappedCapacityHold\) \{[\s\S]*?if \(pass\) \{[\s\S]*?markWgpuReplayFatal/
+  );
+  assert.match(
+    worker,
+    /The current upload record is deliberately still owned by the ring/
+  );
+  assert.match(worker, /rejectMappedBatch\(mappedBatch, e\)/);
+  assert.match(worker, /wgpuMappedStagingPool\?\.invalidate\("WebGPU device lost"\)/);
+});
+
+test("performance validation fails closed when the mapped arm executes queue transport", async () => {
+  const gate = await readSource("../tools/perf-regression-gate.mjs");
+  assert.match(gate, /"wgpuuploadtransport"/);
+  assert.match(gate, /WGPU upload transport mismatch: requested=/);
+  assert.match(gate, /observedWgpu\?\.uploadTransport/);
+  assert.match(gate, /evaluateWgpuRuntimeConfigEvidence/);
+});

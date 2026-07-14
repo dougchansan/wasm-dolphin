@@ -4,10 +4,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "../tools/dolphin-provenance.mjs";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 
 import {
   FIXED_MELEE_BATTLE_FIXTURE,
+  WGPU_PRODUCER_PROFILE_PHASE_ORDER,
+  WGPU_DRAW_PROFILE_PHASE_ORDER,
   assertBattleCheckpoint,
   assertRunProvenance,
   assertServedArtifactIdentity,
@@ -15,8 +18,24 @@ import {
   buildReplacementBlock,
   classifyGateOutcome,
   collectRunMetadata,
+  evaluateCandidateCoreBundle,
+  evaluatePrebuiltJitCacheEvidence,
   evaluateMetricsModeEvidence,
+  evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
+  evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuRuntimeConfigEvidence,
+  evaluateWgpuSemanticQualificationEvidence,
+  evaluateWgpuDiagnosticLogFilterEvidence,
+  evaluateWgpuOutputContractEvidence,
+  evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuDrawProfileEvidence,
+  evaluateWgpuSparseUboEvidence,
+  evaluateWgpuUboComputeProjectionEvidence,
+  evaluateWgpuTailGateEvidence,
+  evaluateWgpuRendererWorkerProbeEvidence,
+  evaluateWgpuUploadProbeWorkloadEquivalence,
+  validateWgpuUploadProbeFinalization,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
@@ -24,10 +43,14 @@ import {
   findFatalRuntimeEvidence,
   fixedWorkPollDelayMs,
   parseProfileMetrics,
+  parseWgpuProducerProfileStats,
+  parseWgpuDrawProfileStats,
+  parseWgpuTailGateStats,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   recordsToCsv,
   resolveCoreArtifactPath,
+  selectedCoreServedPaths,
   selectNextFixedWorkBenchmarkAction,
   summarizeComparison,
   summarizeJitMetrics,
@@ -37,9 +60,66 @@ import {
   serializePostLoadInputScript,
   summarizeFixedEmulatedWork,
   summarizeCausalFairness,
+  summarizePostLoadInputDelivery,
   validateLockedBuildProvenance,
+  validateComparisonConfig,
   verifyFileFixture,
 } from "../tools/perf-artifacts.mjs";
+
+test("draw detail evidence fails closed and validates independent off/on arms", () => {
+  const offSample = {
+    helper: drawProfileWire({ enabled: 0, epoch: 0, multiplier: 0 }),
+    causalWgpuDrawProfileRequested: false,
+    causalWgpuDrawProfileAvailable: true,
+  };
+  assert.deepEqual(evaluateWgpuDrawProfileEvidence({
+    requested: "0", metrics: "1", video: "wgpu", samples: [offSample],
+  }).failures, []);
+
+  const onSamples = [1, 2].map((multiplier) => ({
+    helper: drawProfileWire({ enabled: 1, epoch: 1, multiplier }),
+    causalWgpuDrawProfileRequested: true,
+    causalWgpuDrawProfileAvailable: true,
+  }));
+  const valid = evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: onSamples,
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.deepEqual(valid.phaseOrder, WGPU_DRAW_PROFILE_PHASE_ORDER);
+  assert.ok(valid.deltas.calls.every((value) => value > 0));
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "0", video: "wgpu", samples: onSamples,
+  }).failures.join("\n"), /requires metrics=1/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "software", samples: onSamples,
+  }).failures.join("\n"), /requires video=wgpu/);
+  assert.equal(parseWgpuDrawProfileStats(onSamples[0].helper).wgpuDrawProfileEnabled, true);
+  const wrongPeriods = structuredClone(onSamples);
+  wrongPeriods[1].helper = wrongPeriods[1].helper.replace(
+    "wgdrd:64,64,256,64,64,64,256",
+    "wgdrd:32,64,256,64,64,64,256"
+  );
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: wrongPeriods,
+  }).failures.join("\n"), /periods mismatch/);
+  const maxExceedsTotal = structuredClone(onSamples);
+  maxExceedsTotal[1].helper = maxExceedsTotal[1].helper.replace(
+    /wgdrm:\d+/, "wgdrm:999999"
+  );
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: maxExceedsTotal,
+  }).failures.join("\n"), /max exceeds sampled total/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "1", metrics: "1", video: "wgpu", samples: [onSamples[0], onSamples[0]],
+  }).failures.join("\n"), /timed-window delta is not positive/);
+  assert.match(evaluateWgpuDrawProfileEvidence({
+    requested: "0", metrics: "1", video: "wgpu", samples: [{
+      helper: drawProfileWire({ enabled: 0, epoch: 0, multiplier: 1 }),
+      causalWgpuDrawProfileRequested: false,
+      causalWgpuDrawProfileAvailable: true,
+    }],
+  }).failures.join("\n"), /disabled counters are nonzero/);
+});
 
 test("causal fairness uses timed counter deltas and enforces marker parity", () => {
   const sample = (audio, marker, webgpu = {}, gpuCompletion = {}) => ({
@@ -81,9 +161,45 @@ test("causal fairness uses timed counter deltas and enforces marker parity", () 
   assert.equal(result.audio.deltas.workerMixCount, 10);
   assert.equal(result.audio.deltas.workerEmptyMixCount, 0);
   assert.equal(result.audio.deltas.underrunCount, 0);
+  assert.equal(result.audio.counterWindow.baseline.underrunCount, 2);
+  assert.equal(result.audio.counterWindow.final.underrunCount, 2);
+  assert.equal(result.audio.counterWindow.excludedBeforeTimedBaseline.underrunCount, 2);
   assert.equal(result.audio.extrema.pumpGapMaxMs, 8);
   assert.equal(result.inputMarker.parityPassed, true);
   assert.deepEqual(result.failures, []);
+});
+
+test("post-load input delivery keeps marker serialization separate from lateness failures", () => {
+  const onTime = {
+    afterBaselineSample: true,
+    latenessMs: 12,
+    markerBarrier: { available: true, completed: true, waitedMs: 24 },
+  };
+  assert.deepEqual(
+    summarizePostLoadInputDelivery([onTime], { expectedCount: 1, maxLatenessMs: 100 }).failures,
+    []
+  );
+
+  const delayed = summarizePostLoadInputDelivery([
+    { ...onTime, latenessMs: 335 },
+    {
+      afterBaselineSample: true,
+      latenessMs: 137,
+      markerBarrier: { available: true, completed: false, waitedMs: 2500 },
+    },
+  ], { expectedCount: 2, maxLatenessMs: 100 });
+  assert.equal(delayed.lateEventCount, 2);
+  assert.equal(delayed.maxObservedLatenessMs, 335);
+  assert.equal(delayed.markerBarrierTimeoutCount, 1);
+  assert.match(delayed.failures.join("\n"), /lateness exceeded 100ms/);
+  assert.match(delayed.failures.join("\n"), /completion barrier timed out/);
+
+  const unavailable = summarizePostLoadInputDelivery([
+    { afterBaselineSample: false, latenessMs: 0, markerBarrier: { available: false } },
+  ], { expectedCount: 2 });
+  assert.match(unavailable.failures.join("\n"), /delivered 1\/2/);
+  assert.match(unavailable.failures.join("\n"), /before the timed baseline/);
+  assert.match(unavailable.failures.join("\n"), /barrier unavailable/);
 });
 
 test("causal fairness reports audio, marker, and GPU decision failures", () => {
@@ -166,6 +282,10 @@ test("perf gate names presentation underruns explicitly and retains its compatib
   assert.match(source, /presentationUnderrun: maxRegex\(helperText, \/underrun:/);
   assert.match(source, /Deprecated alias retained[\s\S]*?underrun: maxRegex\(helperText/);
   assert.match(source, /failures\.push\(\.\.\.causalFairness\.failures\)/);
+  assert.match(source, /"wgpuprodprofile"/);
+  assert.match(source, /parseWgpuProducerProfileStats\(sample\.helper\)/);
+  assert.match(source, /evaluateWgpuProducerProfileEvidence/);
+  assert.match(source, /wgpuProducerProfileDeltaEstimatedTotalNs/);
 });
 
 test("run metadata resolves the core selected by coreid", () => {
@@ -182,6 +302,845 @@ test("run metadata resolves the core selected by coreid", () => {
     () => resolveCoreArtifactPath("repo", "http://127.0.0.1/?coreid=not-a-hash"),
     /SHA-256/
   );
+});
+
+test("served core paths follow the selected content-addressed candidate", () => {
+  const hash = "a".repeat(64);
+  const root = path.join("repo");
+  assert.deepEqual(
+    selectedCoreServedPaths(root, path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm")),
+    {
+      js: "cores/dolphin/dolphin-core-upstream.js",
+      wasm: "cores/dolphin/dolphin-core-upstream.wasm",
+      prebuilt: "cores/dolphin/prebuilt-jit-cache.bin",
+    }
+  );
+  assert.deepEqual(
+    selectedCoreServedPaths(
+      root,
+      path.join(root, "build", "core-candidates", hash, "dolphin-core-upstream.wasm")
+    ),
+    {
+      js: `build/core-candidates/${hash}/dolphin-core-upstream.js`,
+      wasm: `build/core-candidates/${hash}/dolphin-core-upstream.wasm`,
+      prebuilt: `build/core-candidates/${hash}/prebuilt-jit-cache.bin`,
+    }
+  );
+});
+
+test("core selection evidence fails closed on artifact, runtime, or fallback mismatches", () => {
+  const hash = "a".repeat(64);
+  const valid = evaluateCoreSelectionEvidence({
+    url: `http://127.0.0.1/?coreid=sha256:${hash}`,
+    artifactSha256: hash,
+    diagnostics: {
+      coreSelection: {
+        requestedCoreSha256: hash,
+        activeCoreSha256: hash,
+        fallbackReason: null,
+      },
+    },
+  });
+  assert.deepEqual(valid.failures, []);
+
+  const invalid = evaluateCoreSelectionEvidence({
+    url: `http://127.0.0.1/?coreid=sha256:${hash}`,
+    artifactSha256: "b".repeat(64),
+    diagnostics: {
+      coreSelection: {
+        requestedCoreSha256: hash,
+        activeCoreSha256: "c".repeat(64),
+        fallbackReason: "candidate-preflight-failed",
+      },
+    },
+  });
+  assert.equal(invalid.failures.length, 3);
+  assert.match(invalid.failures.join("\n"), /core artifact SHA-256 mismatch/);
+  assert.match(invalid.failures.join("\n"), /runtime active/);
+  assert.match(invalid.failures.join("\n"), /unexpectedly fell back/);
+});
+
+test("candidate bundle evidence binds every packaged file to the selected WASM", () => {
+  const hash = "a".repeat(64);
+  const files = {
+    "dolphin-core-upstream.wasm": hash,
+    "dolphin-core-upstream.build.json": "b".repeat(64),
+    "dolphin-core-abi-v1.json": "c".repeat(64),
+  };
+  const manifest = {
+    schemaVersion: 1,
+    coreId: `sha256:${hash}`,
+    buildInfoSha256: files["dolphin-core-upstream.build.json"],
+    files: Object.entries(files).map(([name, sha256]) => ({ name, sha256 })),
+  };
+  assert.deepEqual(evaluateCandidateCoreBundle({ manifest, expectedSha256: hash, files }).failures, []);
+  const invalid = evaluateCandidateCoreBundle({
+    manifest,
+    expectedSha256: "d".repeat(64),
+    files: { ...files, "dolphin-core-abi-v1.json": "e".repeat(64) },
+  });
+  assert.equal(invalid.verified, false);
+  assert.match(invalid.failures.join("\n"), /coreId|hash mismatch|WASM hash/);
+});
+
+test("selected prebuilt cache evidence is bound to the selected WASM and manifest entry", () => {
+  const hash = "a".repeat(64);
+  const sha256 = "b".repeat(64);
+  const evidence = {
+    path: `build/core-candidates/${hash}/prebuilt-jit-cache.bin`,
+    bytes: 1234,
+    sha256,
+    fingerprint: `dolphin-core-sha256-v1:${hash}`,
+    entryKeySchema: "wasm-block-sha256-v1",
+    entryCount: 8192,
+    entriesVerified: true,
+  };
+  const manifestEntry = {
+    name: "prebuilt-jit-cache.bin",
+    sha256,
+    bytes: 1234,
+    fingerprint: evidence.fingerprint,
+    entryKeySchema: evidence.entryKeySchema,
+    entryCount: 8192,
+    entriesVerified: true,
+  };
+  assert.deepEqual(evaluatePrebuiltJitCacheEvidence({
+    evidence,
+    expectedSha256: hash,
+    manifestEntry,
+  }).failures, []);
+
+  const invalid = evaluatePrebuiltJitCacheEvidence({
+    evidence: { ...evidence, fingerprint: `dolphin-core-sha256-v1:${"c".repeat(64)}` },
+    expectedSha256: hash,
+    manifestEntry: { ...manifestEntry, entryCount: 1 },
+  });
+  assert.equal(invalid.verified, false);
+  assert.match(invalid.failures.join("\n"), /fingerprint|entry count/);
+  assert.match(evaluatePrebuiltJitCacheEvidence({
+    evidence,
+    expectedSha256: hash,
+    requireManifestEntry: true,
+  }).failures.join("\n"), /manifest entry is missing/);
+});
+
+test("geometry range evidence requires both activation and the producer ABI", () => {
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({}).failures, []);
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({
+    requested: "0",
+    telemetry: { geometryRangeEnabled: false, producerGeometryRangeAvailable: false },
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: { geometryRangeEnabled: true, producerGeometryRangeAvailable: true },
+  }).failures, []);
+  assert.match(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: { geometryRangeEnabled: true, producerGeometryRangeAvailable: false },
+  }).failures[0], /producerAvailable=0/);
+  assert.match(evaluateWgpuGeometryRangeEvidence({
+    requested: "1",
+    telemetry: null,
+  }).failures[0], /active=unavailable/);
+});
+
+test("metrics-off WGPU evidence requires a matching static runtime config", () => {
+  const params = {
+    metrics: "0",
+    wgpuuploadtransport: "mapped",
+    wgpuubocache: "1",
+    wgpuubometrics: "0",
+    wgpuuniformfast: "0",
+    wgpuubopack: "0",
+    wgpustagefast: "0",
+    wgpustagingslots: "3",
+    wgpumappedtiming: "1",
+    wgpugeompack: "0",
+    wgpugeomrange: "0",
+    wgputailgate: "0",
+  };
+  const runtimeConfig = {
+    schema: "wasm-dolphin.wgpu-runtime-config.v1",
+    metricsEnabled: false,
+    uploadTransport: "mapped",
+    uboCacheEnabled: true,
+    producerUboCacheMetricsEnabled: false,
+    producerUniformFastEnabled: false,
+    uboPackEnabled: false,
+    producerUboCacheAvailable: true,
+    producerUboPackAvailable: true,
+    mappedStagingFastPath: false,
+    mappedStaging: {
+      enabled: true,
+      slotCount: 3,
+      recordStore: "objects",
+      timing: { enabled: false, stride: 1 },
+    },
+    geometryPackEnabled: false,
+    geometryRangeEnabled: false,
+    producerGeometryRangeAvailable: true,
+    tailGate: {
+      schema: "wasm-dolphin.wgpu-tail-gate.v1",
+      schemaVersion: 1,
+      requested: false,
+      available: true,
+      enabled: false,
+    },
+  };
+  const valid = evaluateWgpuRuntimeConfigEvidence({
+    required: true,
+    params,
+    runtimeConfig,
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.match(evaluateWgpuRuntimeConfigEvidence({
+    required: true,
+    params,
+    runtimeConfig: null,
+  }).failures.join("\n"), /schema mismatch|upload transport mismatch/);
+  for (const [field, value, pattern] of [
+    ["uploadTransport", "queue", /upload transport mismatch/],
+    ["uboCacheEnabled", false, /UBO cache mismatch/],
+    ["producerUboCacheAvailable", false, /producer setter is unavailable/],
+    ["geometryRangeEnabled", true, /geometry range mismatch/],
+  ]) {
+    assert.match(evaluateWgpuRuntimeConfigEvidence({
+      required: true,
+      params,
+      runtimeConfig: { ...runtimeConfig, [field]: value },
+    }).failures.join("\n"), pattern);
+  }
+});
+
+test("WGPU semantic qualification requires complete post-load evidence", () => {
+  const validTelemetry = {
+    semanticRuntime: {
+      requested: true,
+      active: true,
+      failed: false,
+      evidenceValid: true,
+      captureComplete: true,
+      loadedCheckpointGeneration: 3,
+      loadEpochCount: 1,
+      currentEpochCommittedEventCount: 128,
+      minimumCommittedEventCount: 128,
+      qualificationReady: true,
+    },
+  };
+  assert.deepEqual(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 3,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuSemanticQualificationEvidence({
+    requested: "0",
+  }).failures, []);
+
+  for (const [label, update, expected] of [
+    ["capture", { captureComplete: false }, /capture did not complete/],
+    ["validity", { evidenceValid: false }, /evidence is invalid/],
+    ["load epoch", { loadEpochCount: 0 }, /observed no load epoch/],
+    ["current epoch", { currentEpochCommittedEventCount: 127 }, /below its committed-event minimum/],
+    ["qualification", { qualificationReady: false }, /qualification is not ready/],
+  ]) {
+    const result = evaluateWgpuSemanticQualificationEvidence({
+      requested: "1",
+      telemetry: {
+        semanticRuntime: { ...validTelemetry.semanticRuntime, ...update },
+      },
+      loadedCheckpointGeneration: 3,
+    });
+    assert.match(result.failures.join("\n"), expected, label);
+  }
+
+  assert.match(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 0,
+  }).failures.join("\n"), /no loaded core checkpoint/);
+  assert.match(evaluateWgpuSemanticQualificationEvidence({
+    requested: "1",
+    telemetry: validTelemetry,
+    loadedCheckpointGeneration: 4,
+  }).failures.join("\n"), /checkpoint generation mismatch/);
+});
+
+test("renderer worker canary evidence requires the nested-worker schema", () => {
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({}).failures, []);
+  const telemetry = {
+    rendererWorkerProbe: {
+      requested: "canary",
+      active: true,
+      passed: true,
+      schema: "wasm-dolphin.wgpu-renderer-worker-canary.v1",
+    },
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "canary",
+    telemetry,
+  }).failures, []);
+  assert.match(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "canary",
+    telemetry: { rendererWorkerProbe: { requested: "canary", active: false } },
+  }).failures.join("\n"), /active=0|schema mismatch/);
+});
+
+test("WGPU output contracts distinguish intentional blank probes from visible canvas runs", () => {
+  const blankDiagnostics = {
+    activePresenterBackend: "wgpu-upload-probe",
+    outputContract: {
+      schema: "wasm-dolphin.wgpu-output-contract.v1",
+      disposition: "intentional-blank-probe",
+      expectsVisibleCanvas: false,
+      activePresenterBackend: "wgpu-upload-probe",
+      probeMode: "inline-upload",
+    },
+  };
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "inline-upload",
+    diagnostics: blankDiagnostics,
+  }).failures, []);
+
+  const visibleDiagnostics = {
+    activePresenterBackend: "webgpu",
+    outputContract: {
+      schema: "wasm-dolphin.wgpu-output-contract.v1",
+      disposition: "visible-canvas",
+      expectsVisibleCanvas: true,
+      activePresenterBackend: "webgpu",
+      probeMode: null,
+    },
+  };
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "off",
+    diagnostics: visibleDiagnostics,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "canary",
+    diagnostics: visibleDiagnostics,
+  }).failures, []);
+
+  assert.match(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "off",
+    diagnostics: blankDiagnostics,
+  }).failures.join("\n"), /disposition mismatch|expectsVisibleCanvas mismatch|backend mismatch/);
+  assert.match(evaluateWgpuOutputContractEvidence({
+    video: "wgpu",
+    requestedProbe: "inline-upload",
+    diagnostics: null,
+  }).failures.join("\n"), /schema mismatch/);
+  assert.deepEqual(evaluateWgpuOutputContractEvidence({
+    video: "software",
+    diagnostics: null,
+  }).failures, []);
+});
+
+test("quiet WGPU diagnostic logging requires explicit activation evidence", () => {
+  const diagnostics = {
+    diagnosticLogFilter: {
+      schema: "wasm-dolphin.wgpu-diagnostic-log-filter.v1",
+      enabled: true,
+      droppedCount: 12,
+      droppedByTag: { "s28ah-ps": 12 },
+    },
+  };
+  assert.deepEqual(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "1",
+    diagnostics,
+  }).failures, []);
+  assert.deepEqual(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "0",
+    diagnostics: null,
+  }).failures, []);
+  assert.match(evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: "1",
+    diagnostics: { diagnosticLogFilter: { enabled: false } },
+  }).failures.join("\n"), /schema mismatch|not active|invalid|unavailable/);
+});
+
+test("WGPU producer profile parser retains raw and period-derived phase totals", () => {
+  const periods = Array.from({ length: 12 }, (_, index) => index + 1);
+  const calls = Array.from({ length: 12 }, (_, index) => (index + 1) * 10);
+  const samples = Array.from({ length: 12 }, (_, index) => index + 1);
+  const totals = Array.from({ length: 12 }, (_, index) => (index + 1) * 100);
+  const maxima = Array.from({ length: 12 }, (_, index) => (index + 1) * 7);
+  const parsed = parseWgpuProducerProfileStats(producerProfileWire({
+    periods, calls, samples, totals, maxima,
+  }));
+  assert.equal(parsed.wgpuProducerProfileSchemaVersion, 1);
+  assert.equal(parsed.wgpuProducerProfileEnabled, true);
+  assert.equal(parsed.wgpuProducerProfileEpoch, 9);
+  assert.equal(parsed.wgpuProducerProfilePhaseCount, 12);
+  assert.deepEqual(parsed.wgpuProducerProfilePhaseOrder, WGPU_PRODUCER_PROFILE_PHASE_ORDER);
+  assert.deepEqual(parsed.wgpuProducerProfileEstimatedTotalNs,
+    totals.map((value, index) => value * periods[index]));
+  assert.equal(parseWgpuProducerProfileStats("wgprod:1,1,9,12 wgprd:1,2"), null);
+});
+
+test("WGPU producer profile evidence is fail-closed and monotonic across the timed window", () => {
+  const makeSample = (multiplier, overrides = {}) => {
+    const periods = overrides.periods ?? Array(12).fill(8);
+    const calls = overrides.calls ?? Array(12).fill(100 * multiplier);
+    const samples = overrides.samples ?? Array(12).fill(10 * multiplier);
+    const totals = overrides.totals ?? Array(12).fill(1_000 * multiplier);
+    const maxima = overrides.maxima ?? Array(12).fill(100 * multiplier);
+    return {
+      helper: producerProfileWire({
+        enabled: overrides.enabled ?? 1,
+        epoch: overrides.epoch ?? 9,
+        phaseCount: overrides.phaseCount ?? 12,
+        periods,
+        calls,
+        samples,
+        totals,
+        maxima,
+      }),
+      causalWgpuProducerProfileRequested: true,
+      causalWgpuProducerProfileAvailable: true,
+    };
+  };
+  const valid = evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [makeSample(1), makeSample(2)],
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.equal(valid.activated, true);
+  assert.deepEqual(valid.deltas.calls, Array(12).fill(100));
+  assert.deepEqual(valid.deltas.estimatedTotalNs, Array(12).fill(8_000));
+
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "0", samples: [makeSample(1)],
+  }).failures.join("\n"), /requires metrics=1/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(1), makeSample(2, { epoch: 10 })],
+  }).failures.join("\n"), /epoch changed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(1), makeSample(2, { periods: Array(12).fill(0) })],
+  }).failures.join("\n"), /periods is invalid|periods changed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [makeSample(2), makeSample(1)],
+  }).failures.join("\n"), /calls regressed|samples regressed|sampleTotalNs regressed|maxNs regressed|sampleMaxNs regressed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [makeSample(1, { calls: Array(12).fill(1), samples: Array(12).fill(2) })],
+  }).failures.join("\n"), /samples exceed calls/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1", metrics: "1", samples: [{ helper: "missing" }],
+  }).failures.join("\n"), /missing or malformed/);
+  assert.match(evaluateWgpuProducerProfileEvidence({
+    requested: "1",
+    metrics: "1",
+    samples: [{
+      causalWgpuProducerProfileSchema: "wasm-dolphin.wgpu-producer-profile.v1",
+      causalWgpuProducerProfileRequested: true,
+      causalWgpuProducerProfileAvailable: true,
+      causalWgpuProducerProfileEnabled: true,
+      causalWgpuProducerProfileEpoch: 9,
+      causalWgpuProducerProfilePhaseCount: 12,
+      causalWgpuProducerProfilePhaseOrder: [...WGPU_PRODUCER_PROFILE_PHASE_ORDER],
+    }],
+  }).failures.join("\n"), /periods is invalid|calls is invalid/);
+});
+
+test("WGPU tail-gate parser and evidence fail closed for both experiment arms", () => {
+  const wire = (enabled, epoch, payload, flush, refresh, clean, dirty) =>
+    `wgtail:1,${enabled},${epoch},256,${payload},${flush},${refresh},${clean},${dirty}`;
+  assert.deepEqual(parseWgpuTailGateStats(wire(1, 7, 100, 5, 3, 92, 0)), {
+    wgpuTailGateSchema: "wasm-dolphin.wgpu-tail-gate.v1",
+    wgpuTailGateSchemaVersion: 1,
+    wgpuTailGateEnabled: true,
+    wgpuTailGateEpoch: 7,
+    wgpuTailGatePeriod: 256,
+    wgpuTailGatePayloadSamples: 100,
+    wgpuTailGateFlushNeededSamples: 5,
+    wgpuTailGateRefreshNeededSamples: 3,
+    wgpuTailGateBothCleanSamples: 92,
+    wgpuTailGateDirtyAtSkip: 0,
+  });
+  assert.equal(parseWgpuTailGateStats("wgtail:2,1,7,256,1,0,0,1,0"), null);
+  assert.equal(parseWgpuTailGateStats("wgtail:1,1,7,256,1,0,0,1"), null);
+
+  const enabled = evaluateWgpuTailGateEvidence({
+    requested: "1",
+    samples: [
+      { helper: wire(1, 7, 100, 5, 3, 92, 0) },
+      { helper: wire(1, 7, 200, 10, 6, 184, 0) },
+    ],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.activated, true);
+  assert.equal(enabled.period, 256);
+  assert.deepEqual(enabled.deltas, {
+    payloadSamples: 100,
+    flushNeededSamples: 5,
+    refreshNeededSamples: 3,
+    bothCleanSamples: 92,
+    dirtyAtSkip: 0,
+  });
+
+  const disabled = evaluateWgpuTailGateEvidence({
+    requested: "0",
+    samples: [
+      {
+        causalWgpuTailGateSchema: "wasm-dolphin.wgpu-tail-gate.v1",
+        causalWgpuTailGateSchemaVersion: 1,
+        causalWgpuTailGateRequested: false,
+        causalWgpuTailGateAvailable: true,
+        causalWgpuTailGateEnabled: false,
+        causalWgpuTailGateEpoch: 0,
+        causalWgpuTailGatePeriod: 256,
+        causalWgpuTailGatePayloadSamples: 0,
+        causalWgpuTailGateFlushNeededSamples: 0,
+        causalWgpuTailGateRefreshNeededSamples: 0,
+        causalWgpuTailGateBothCleanSamples: 0,
+        causalWgpuTailGateDirtyAtSkip: 0,
+      },
+    ],
+  });
+  assert.deepEqual(disabled.failures, []);
+  assert.equal(disabled.final.enabled, false);
+
+  for (const [label, result, pattern] of [
+    ["enabled mismatch", evaluateWgpuTailGateEvidence({
+      requested: "0", samples: [{ helper: wire(1, 7, 10, 1, 1, 8, 0) }],
+    }), /enabled mismatch/],
+    ["disabled counters", evaluateWgpuTailGateEvidence({
+      requested: "0", samples: [{ helper: wire(0, 0, 10, 1, 1, 8, 0) }],
+    }), /counters must remain zero/],
+    ["epoch drift", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [
+        { helper: wire(1, 7, 10, 1, 1, 8, 0) },
+        { helper: wire(1, 8, 20, 2, 2, 16, 0) },
+      ],
+    }), /epoch changed/],
+    ["period", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: "wgtail:1,1,7,64,10,1,1,8,0" }],
+    }), /expected 256/],
+    ["no payload samples", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 0, 0, 0, 0, 0) }],
+    }), /payloadSamples must be positive/],
+    ["no clean samples", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 10, 5, 5, 0, 0) }],
+    }), /bothCleanSamples must be positive/],
+    ["dirty skip", evaluateWgpuTailGateEvidence({
+      requested: "1", samples: [{ helper: wire(1, 7, 10, 1, 1, 8, 1) }],
+    }), /dirtyAtSkip=1/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
+});
+
+test("sparse UBO evidence gates fixed-window deltas and rejects lifetime-only claims", () => {
+  const snapshot = ({ scale = 1, active = true, instanceId = active ? 7 : 0,
+    stagedBytes = 100 * scale } = {}) => ({
+    schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+    instanceId,
+    requested: active,
+    active,
+    coverageThreshold: 0.5,
+    maxSparseRanges: 0,
+    classOrder: ["vs", "ps", "gs"],
+    classSizes: [4112, 1536, 64],
+    shadowValid: active ? [true, true, true] : [false, false, false],
+    eligibleCalls: active ? 10 * scale : 0,
+    baselineCalls: active ? scale : 0,
+    sparseCalls: active ? 7 * scale : 0,
+    equalCalls: active ? scale : 0,
+    fullFallbackCalls: active ? scale : 0,
+    capacityMisses: 0,
+    fullBytes: active ? 1000 * scale : 0,
+    stagedBytes: active ? stagedBytes : 0,
+    avoidedStagedBytes: active ? 1000 * scale - stagedBytes : 0,
+    copyForwardBytes: active ? 800 * scale : 0,
+    overlayRanges: active ? 20 * scale : 0,
+    overlayBytes: active ? stagedBytes : 0,
+    predictedGpuCopyBytes: active ? 1200 * scale : 0,
+    invalidations: 0,
+    invalidationReasons: {},
+    callsByClass: active ? [4 * scale, 3 * scale, 3 * scale] : [0, 0, 0],
+    sparseCallsByClass: active ? [3 * scale, 2 * scale, 2 * scale] : [0, 0, 0],
+    stagedBytesByClass: active
+      ? [Math.floor(stagedBytes * 0.4), Math.floor(stagedBytes * 0.3),
+          stagedBytes - Math.floor(stagedBytes * 0.7)]
+      : [0, 0, 0],
+  });
+  const sample = (uboSparse) => ({ causalTelemetry: { webgpu: { uboSparse } } });
+
+  const enabled = evaluateWgpuSparseUboEvidence({
+    requested: "1",
+    samples: [sample(snapshot({ scale: 1 })), sample(snapshot({ scale: 2 }))],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.activated, true);
+  assert.equal(enabled.deltas.eligibleCalls, 10);
+  assert.equal(enabled.deltas.sparseCalls, 7);
+  assert.equal(enabled.deltas.fullBytes, 1000);
+  assert.equal(enabled.deltas.stagedBytes, 100);
+
+  assert.deepEqual(evaluateWgpuSparseUboEvidence({
+    requested: "0", samples: [sample(snapshot({ active: false }))],
+  }).failures, []);
+
+  for (const [label, result, pattern] of [
+    ["missing", evaluateWgpuSparseUboEvidence({
+      requested: "1", samples: [{}],
+    }), /missing or malformed|at least two/],
+    ["one sample", evaluateWgpuSparseUboEvidence({
+      requested: "1", samples: [sample(snapshot())],
+    }), /at least two timed samples/],
+    ["instance reset", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [sample(snapshot()), sample(snapshot({ scale: 2, instanceId: 8 }))],
+    }), /instance changed/],
+    ["no measured saving", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot({ scale: 1, stagedBytes: 1000 })),
+        sample(snapshot({ scale: 2, stagedBytes: 2000 })),
+      ],
+    }), /did not reduce mapped bytes in the timed window/],
+    ["bad accounting", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample({ ...snapshot({ scale: 2 }), eligibleCalls: 99 }),
+      ],
+    }), /call accounting is inconsistent|per-class calls are inconsistent/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
+});
+
+test("UBO compute projection evidence requires passive, conserved byte and command savings", () => {
+  const snapshot = ({ scale = 1, active = true, malformed = 0,
+    projectedBytes = 25_600 * scale } = {}) => {
+    const eligibleCalls = active ? 100 * scale : 0;
+    const eligibleBytes = active ? 100_000 * scale : 0;
+    const packageWork = active ? 25_000 * scale : 0;
+    const packagePadding = active ? projectedBytes - packageWork : 0;
+    const packages = active ? 5 * scale : 0;
+    return {
+      schema: "wasm-dolphin.wgpu-ubo-compute-projection.v1",
+      requested: active,
+      active,
+      enabled: active,
+      projectionOnly: true,
+      replayBehaviorChanged: false,
+      runtimeEligible: false,
+      eligible: { calls: eligibleCalls, bytes: eligibleBytes },
+      bytes: {
+        payload: active ? 20_000 * scale : 0,
+        descriptors: active ? 5_000 * scale : 0,
+        packageWork,
+        packagePadding,
+        projected: active ? projectedBytes : 0,
+        avoided: active ? eligibleBytes - projectedBytes : 0,
+      },
+      commands: {
+        legacyCopy: eligibleCalls,
+        projectedCopy: packages,
+        avoidedCopy: eligibleCalls - packages,
+        dispatches: packages,
+        packages,
+      },
+      records: {
+        total: eligibleCalls,
+        full: active ? 3 * scale : 0,
+        delta: active ? 50 * scale : 0,
+        equal: active ? 40 * scale : 0,
+        rawFull: active ? 7 * scale : 0,
+        utilityRaw: active ? 5 * scale : 0,
+        unknownClassRaw: active ? 2 * scale : 0,
+        ranges: active ? 60 * scale : 0,
+        reconstructedBytes: eligibleBytes,
+      },
+      packages: { records: eligibleCalls },
+      malformed,
+      unclassifiedResourceIdentity: 0,
+    };
+  };
+  const sample = (uboComputeProjection) => ({
+    causalTelemetry: { webgpu: { uboComputeProjection } },
+  });
+
+  const enabled = evaluateWgpuUboComputeProjectionEvidence({
+    requested: "1",
+    samples: [sample(snapshot()), sample(snapshot({ scale: 2 }))],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.deltas.eligibleBytes, 100_000);
+  assert.equal(enabled.deltas.projectedBytes, 25_600);
+  assert.equal(enabled.deltas.projectedGpuCommands, 10);
+  assert.equal(enabled.deltas.avoidedGpuCommands, 90);
+
+  assert.deepEqual(evaluateWgpuUboComputeProjectionEvidence({
+    requested: "0",
+    samples: [sample(snapshot({ active: false }))],
+  }).failures, []);
+
+  for (const [label, result, pattern] of [
+    ["missing", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1", samples: [{}],
+    }), /missing or malformed|at least two/],
+    ["malformed", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [sample(snapshot()), sample(snapshot({ scale: 2, malformed: 1 }))],
+    }), /malformed or unclassified/],
+    ["no byte saving", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample(snapshot({ scale: 2, projectedBytes: 125_600 })),
+      ],
+    }), /did not reduce timed package bytes/],
+    ["no command saving", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample({
+          ...snapshot({ scale: 2 }),
+          commands: {
+            legacyCopy: 200,
+            projectedCopy: 100,
+            avoidedCopy: 100,
+            dispatches: 100,
+            packages: 100,
+          },
+        }),
+      ],
+    }), /did not reduce total timed GPU commands/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
+});
+
+test("upload-probe evidence requires exclusive ownership and quiescent conserved work", () => {
+  const opHistogram = new Array(25).fill(0);
+  opHistogram[5] = 2;
+  opHistogram[6] = 3;
+  opHistogram[7] = 1;
+  opHistogram[8] = 2;
+  opHistogram[12] = 4;
+  opHistogram[19] = 4;
+  opHistogram[22] = 2;
+  opHistogram[23] = 2;
+  const probe = {
+    requested: "worker-upload",
+    active: true,
+    passed: true,
+    schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
+    executorLocation: "worker",
+    blankOutput: true,
+    sharedHeap: true,
+    protocolVersion: 3,
+    claimedOwner: 2,
+    claimCount: 1,
+    conflictCount: 0,
+    handoffAckCount: 1,
+    observedRecordCount: 20,
+    consumedRecordCount: 20,
+    opHistogram,
+    uploadRecordCount: 5,
+    releasedUploadCount: 5,
+    totalUploadBytes: 4096,
+    invalidRecordCount: 0,
+    unknownOpcodeCount: 0,
+    invalidUploadSpanCount: 0,
+    uploadReleaseMismatchCount: 0,
+    missingResourceCount: 0,
+    quiesced: true,
+    backlog: 0,
+    fatalCount: 0,
+    consumerState: 1,
+    consumerError: 0,
+    streamDigest: "deadbeef",
+    submitDigests: ["11111111", "22222222"],
+    submissionCount: 2,
+    gpuCompletionCount: 2,
+    staging: { failed: false },
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "worker-upload",
+    telemetry: { rendererWorkerProbe: probe },
+  }).failures, []);
+  const invalid = evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "worker-upload",
+    telemetry: { rendererWorkerProbe: {
+      ...probe,
+      conflictCount: 1,
+      consumedRecordCount: 19,
+      releasedUploadCount: 4,
+      backlog: 1,
+      quiesced: false,
+    } },
+  }).failures.join("\n");
+  assert.match(invalid, /ownership claim is unique/);
+  assert.match(invalid, /every observed record was consumed/);
+  assert.match(invalid, /every upload record was released once/);
+  assert.match(invalid, /finalized at quiescence/);
+
+  const nullProbe = {
+    ...probe,
+    requested: "null-drain",
+    executorLocation: "null",
+    claimedOwner: 3,
+    submissionCount: 0,
+    gpuCompletionCount: 0,
+    staging: null,
+  };
+  assert.deepEqual(evaluateWgpuRendererWorkerProbeEvidence({
+    requested: "null-drain",
+    telemetry: { rendererWorkerProbe: nullProbe },
+  }).failures, []);
+});
+
+test("upload-probe finalization binds forced causal telemetry to the quiesced snapshot", () => {
+  const snapshot = {
+    requested: "inline-upload",
+    schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
+    executorLocation: "inline",
+    observedRecordCount: 20,
+    consumedRecordCount: 20,
+    totalUploadBytes: 4096,
+    streamDigest: "deadbeef",
+    quiesced: true,
+    passed: true,
+  };
+  const valid = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: {
+      snapshot,
+      causalTelemetry: {
+        schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        webgpu: { rendererWorkerProbe: { ...snapshot } },
+      },
+    },
+  });
+  assert.deepEqual(valid.failures, []);
+
+  const missing = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: { snapshot },
+  });
+  assert.match(missing.failures.join("\n"), /schema|both be present/);
+
+  const disagreement = validateWgpuUploadProbeFinalization({
+    requested: "inline-upload",
+    finalized: {
+      snapshot,
+      causalTelemetry: {
+        schemaVersion: CAUSAL_TELEMETRY_SCHEMA_VERSION,
+        webgpu: { rendererWorkerProbe: { ...snapshot, streamDigest: "bad0cafe" } },
+      },
+    },
+  });
+  assert.match(disagreement.failures.join("\n"), /streamDigest/);
 });
 
 test("profile parser separates core, XFB, publish, and JS presentation costs", () => {
@@ -688,6 +1647,32 @@ test("locked build provenance rejects valid-looking source, toolchain, and JS mu
   const pendingResult = validateLockedBuildProvenance(pendingRebuild);
   assert.equal(pendingResult.verified, false);
   assert.ok(pendingResult.failures.some((failure) => failure.includes("sourceOnlyExportsPendingRebuild")));
+
+  for (const requiredExport of REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS) {
+    const missingExport = structuredClone(provenance);
+    missingExport.locked.abiManifest.moduleExports =
+      missingExport.locked.abiManifest.moduleExports.filter((name) => name !== requiredExport);
+    const missingResult = validateLockedBuildProvenance(missingExport);
+    assert.equal(missingResult.verified, false);
+    assert.ok(
+      missingResult.failures.some((failure) => failure.includes(requiredExport)),
+      `${requiredExport} must be named in the qualification failure`
+    );
+  }
+});
+
+test("content-addressed candidate bundle may supply its generated ABI manifest", () => {
+  const provenance = validLockedBuildProvenance();
+  provenance.evidenceFiles.abiManifest.trackedAtHead = false;
+  provenance.evidenceFiles.abiManifest.matchesHead = false;
+  provenance.evidenceFiles.abiManifest.candidateBundleMember = true;
+  provenance.candidateBundle = { verified: true };
+  assert.deepEqual(validateLockedBuildProvenance(provenance), { verified: true, failures: [] });
+
+  provenance.candidateBundle.verified = false;
+  const invalid = validateLockedBuildProvenance(provenance);
+  assert.equal(invalid.verified, false);
+  assert.ok(invalid.failures.some((failure) => failure.includes("abiManifest.trackedAtHead")));
 });
 
 test("qualification requires clean git, exact video/presenter identity, and locked evidence", () => {
@@ -1000,6 +1985,251 @@ test("screening block effects are sign-normalized but never promotable", () => {
   assert.ok(lowerReport.medianEffectPercent > 0);
 });
 
+test("tail-gate screening is a bounded null-drain A/B with semantic-work gates", async () => {
+  const config = JSON.parse(await readFile(
+    "tools/perf-configs/wgpu-tail-gate-screening.json", "utf8"
+  ));
+  const tasklist = buildComparisonTasklist(config);
+  assert.equal(config.mode, "screening");
+  assert.equal(config.blockCount, 2);
+  assert.equal(config.minimumEffectPercent, 1);
+  assert.equal(
+    config.primaryMetric,
+    "fixedEmulatedWork.throughputGameSpeedPercent"
+  );
+  assert.deepEqual(tasklist.blocks.map((block) => block.order), [
+    ["A", "B", "B", "A"],
+    ["B", "A", "A", "B"],
+  ]);
+  assert.equal(config.armA.params.wgpurenderprobe, "null-drain");
+  assert.equal(config.armB.params.wgpurenderprobe, "null-drain");
+  assert.equal(config.armA.params.wgputailgate, "0");
+  assert.equal(config.armB.params.wgputailgate, "1");
+  assert.deepEqual(
+    config.overheadGate.semanticWork.map((rule) => rule.path),
+    ["fixedEmulatedWork.actualCoreTickDelta", "fixedEmulatedWork.actualFrameDelta"]
+  );
+});
+
+test("diagnostic-quiet screening changes only the explicit log filter arm", async () => {
+  const config = JSON.parse(await readFile(
+    "tools/perf-configs/wgpu-diagnostic-quiet-screening.json", "utf8"
+  ));
+  const tasklist = buildComparisonTasklist(config);
+  assert.equal(config.primaryMetric, "fixedEmulatedWork.throughputGameSpeedPercent");
+  assert.equal(config.minimumEffectPercent, 1);
+  assert.deepEqual(tasklist.blocks.map((block) => block.order), [
+    ["A", "B", "B", "A"],
+    ["B", "A", "A", "B"],
+  ]);
+  assert.equal(config.armA.params.wgpudiagquiet, "0");
+  assert.equal(config.armB.params.wgpudiagquiet, "1");
+  assert.equal(config.armA.params.wgputailgate, "0");
+  assert.equal(config.armB.params.wgputailgate, "0");
+  const withoutQuiet = ({ wgpudiagquiet, ...params }) => params;
+  assert.deepEqual(withoutQuiet(config.armA.params), withoutQuiet(config.armB.params));
+});
+
+test("draw-detail overhead screening pins hardware null-drain and changes only its toggle", async () => {
+  const config = JSON.parse(await readFile(
+    new URL("../tools/perf-configs/wgpu-draw-profile-overhead.json", import.meta.url),
+    "utf8"
+  ));
+  const validated = validateComparisonConfig(config);
+  assert.equal(validated.overheadGate.maximumRegressionPercent, 2);
+  assert.equal(validated.stabilityGate.maximumWithinArmSpreadPercent, 10);
+  const paramsA = { ...config.armA.params };
+  const paramsB = { ...config.armB.params };
+  assert.equal(paramsA.wgpudrawprofile, "0");
+  assert.equal(paramsB.wgpudrawprofile, "1");
+  delete paramsA.wgpudrawprofile;
+  delete paramsB.wgpudrawprofile;
+  assert.deepEqual(paramsB, paramsA);
+  assert.equal(paramsA.video, "wgpu");
+  assert.equal(paramsA.presenter, "webgpu");
+  assert.equal(paramsA.wgpurenderprobe, "null-drain");
+  assert.equal(paramsA.wgpuprodprofile, "1");
+  assert.equal(paramsA.wgpuuploadtransport, "mapped");
+  assert.equal(paramsA.wasmjit, "0");
+});
+
+test("comparison stability gate rejects unstable arms and retains per-arm evidence", () => {
+  const config = comparisonConfig({
+    stabilityGate: { maximumWithinArmSpreadPercent: 10 },
+  });
+  const unstable = summarizeComparison(config, makeRuns(config, [
+    { a: [68.10, 46.85], b: [60, 61] },
+    { a: [60, 61], b: [64, 65] },
+  ]));
+  assert.equal(unstable.blocks[0].valid, false);
+  const unstableArmA = unstable.blocks[0].withinArmStability.A;
+  assert.equal(unstableArmA.min, 46.85);
+  assert.equal(unstableArmA.max, 68.10);
+  assert.equal(unstableArmA.mean, 57.474999999999994);
+  assert.ok(Math.abs(
+    unstableArmA.spreadPercent - 36.97259678120921
+  ) < 1e-12);
+  assert.equal(unstable.blocks[0].withinArmStability.B.spreadPercent, 1.6528925619834711);
+  assert.match(
+    unstable.blocks[0].invalidReasons.join("\n"),
+    /arm A within-arm spread 36\.973% exceeds maximum 10%/
+  );
+  assert.equal(unstable.invalidBlockCount, 1);
+  assert.equal(unstable.outcome, "INFRASTRUCTURE_INCONCLUSIVE");
+
+  const stable = summarizeComparison(config, makeRuns(config, [
+    { a: [68.10, 64], b: [70, 67] },
+    { a: [65, 68], b: [69, 72] },
+  ]));
+  assert.equal(stable.validBlockCount, 2);
+  assert.equal(stable.invalidBlockCount, 0);
+  assert.ok(stable.blocks.every((block) =>
+    block.withinArmStability.A.spreadPercent <= 10 &&
+    block.withinArmStability.B.spreadPercent <= 10
+  ));
+});
+
+test("comparison stability gate validation is optional and fail-closed", () => {
+  assert.equal(validateComparisonConfig(comparisonConfig()).stabilityGate, null);
+  assert.throws(
+    () => validateComparisonConfig(comparisonConfig({ stabilityGate: [] })),
+    /stabilityGate must be an object/
+  );
+  assert.throws(
+    () => validateComparisonConfig(comparisonConfig({
+      stabilityGate: { maximumWithinArmSpreadPercent: -1 },
+    })),
+    /maximumWithinArmSpreadPercent must be non-negative/
+  );
+});
+
+test("comparison runner consumes bounded replacements before final invalid-rate classification", async () => {
+  const source = await readFile("tools/perf-regression-gate.mjs", "utf8");
+  assert.match(source,
+    /\["NEEDS_MORE_BLOCKS", "INCOMPLETE", "INFRASTRUCTURE_INCONCLUSIVE"\][\s\S]*?\.includes\(current\.outcome\)/);
+  assert.doesNotMatch(source,
+    /if \(current\.outcome === "INFRASTRUCTURE_INCONCLUSIVE"\) break;/);
+  assert.match(source, /buildReplacementBlock\(config, block, replacementNumber\)/);
+  assert.match(source, /"wgputailgate"/);
+  assert.match(source, /wgpuTailGateDeltaPayloadSamples/);
+  assert.match(source, /wgpuTailGateFinalAvailable/);
+  assert.match(source, /wgpuTailGateFinalDirtyAtSkip/);
+});
+
+test("overhead screening enforces a strict regression ceiling and semantic work", () => {
+  const config = comparisonConfig({
+    mode: "screening",
+    blockCount: 2,
+    overheadGate: {
+      maximumRegressionPercent: 2,
+      semanticWork: [
+        { path: "fixedEmulatedWork.actualCoreTickDelta", maximumDifferencePercent: 5 },
+        { path: "fixedEmulatedWork.actualFrameDelta", maximumDifferencePercent: 5 },
+      ],
+    },
+  });
+  const runs = makeRuns(config, [
+    { a: [100, 100], b: [99, 99] },
+    { a: [100, 100], b: [99, 99] },
+  ]);
+  for (const run of runs) {
+    run.fixedEmulatedWork = {
+      actualCoreTickDelta: 486_000_000,
+      actualFrameDelta: 60,
+    };
+  }
+  let report = summarizeComparison(config, runs);
+  assert.equal(report.overheadGatePassed, true);
+  assert.equal(report.validBlockCount, 2);
+  assert.ok(report.blocks.every((block) => block.overheadRegressionPercent === 1));
+
+  const regression = structuredClone(runs);
+  for (const run of regression.filter((entry) => entry.arm === "B")) {
+    run.metrics.gameSpeed.mean = 98;
+  }
+  report = summarizeComparison(config, regression);
+  assert.equal(report.overheadGatePassed, false);
+  assert.match(report.blocks[0].invalidReasons.join("\n"), /must be <2%/);
+
+  const semanticMismatch = structuredClone(runs);
+  for (const run of semanticMismatch.filter((entry) => entry.arm === "B")) {
+    run.fixedEmulatedWork.actualFrameDelta = 70;
+  }
+  report = summarizeComparison(config, semanticMismatch);
+  assert.equal(report.overheadGatePassed, false);
+  assert.match(report.blocks[0].invalidReasons.join("\n"), /semantic work.*actualFrameDelta/);
+});
+
+test("comparison rejects upload-probe runs with incomparable fixed workloads", () => {
+  const config = comparisonConfig({ mode: "screening", blockCount: 2 });
+  const runs = makeRuns(config, [
+    { a: [100, 100], b: [110, 110] },
+    { a: [101, 101], b: [111, 111] },
+  ]);
+  const workload = {
+    coreSha256: "a".repeat(64),
+    saveStateSha256: "b".repeat(64),
+    checkpointTicks: 1000,
+    checkpointPpcPc: 2000,
+    actualCoreTickDelta: 486_000_000,
+    actualFrameDelta: 480,
+    observedRecordCount: 1_000_000,
+    totalUploadBytes: 500_000_000,
+    submissionCount: 480,
+    opHistogram: new Array(25).fill(1000),
+    submitDigests: ["11111111", "22222222"],
+  };
+  for (const run of runs) run.uploadProbeWorkload = { ...workload };
+  assert.deepEqual(evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)), []);
+  runs[1].uploadProbeWorkload = {
+    ...workload,
+    submitDigests: ["11111111", "different-later-boundary"],
+  };
+  assert.deepEqual(evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)), []);
+  runs[1].uploadProbeWorkload = { ...workload };
+  assert.equal(summarizeComparison(config, runs).outcome, "SCREENING_SIGNAL");
+
+  const semanticMismatch = [...workload.opHistogram];
+  semanticMismatch[20] *= 1.01;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: semanticMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 20 per frame/
+  );
+
+  const lowRateBase = [...workload.opHistogram];
+  lowRateBase[8] = 2;
+  for (const run of runs) run.uploadProbeWorkload = { ...workload, opHistogram: lowRateBase };
+  const lowRateMismatch = [...lowRateBase];
+  lowRateMismatch[8] = 3;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: lowRateMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 8 per frame/
+  );
+  const blitMismatch = [...workload.opHistogram];
+  blitMismatch[24] = 1;
+  runs[1].uploadProbeWorkload = { ...workload, opHistogram: blitMismatch };
+  assert.match(
+    evaluateWgpuUploadProbeWorkloadEquivalence(runs.slice(0, 4)).join("\n"),
+    /opcode 24 per frame/
+  );
+  for (const run of runs) run.uploadProbeWorkload = { ...workload };
+
+  runs[1].uploadProbeWorkload = {
+    ...workload,
+    totalUploadBytes: workload.totalUploadBytes * 1.01,
+    submitDigests: ["bad0cafe", "22222222"],
+  };
+  const report = summarizeComparison(config, runs);
+  assert.equal(report.blocks[0].valid, false);
+  assert.match(
+    report.blocks[0].invalidReasons.join("\n"),
+    /totalUploadBytes per frame|initial submit structure/
+  );
+  assert.notEqual(report.outcome, "SCREENING_SIGNAL");
+});
+
 test("confirmation extends beyond five blocks until exact permutation evidence resolves", () => {
   const passing = comparisonConfig({ mode: "confirmation", blockCount: 5 });
   const fiveBlockReport = summarizeComparison(
@@ -1130,6 +2360,7 @@ function validLockedBuildProvenance() {
     abiVersion: 1,
     coreId: `sha256:${hashes.wasm}`,
     upstreamCommit,
+    moduleExports: [...REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS],
     artifacts: [
       {
         path: "cores/dolphin/dolphin-core-upstream.js",
@@ -1292,6 +2523,42 @@ function comparisonConfig(overrides = {}) {
     armB: { name: "candidate", params: { fastsw: 2 } },
     ...overrides,
   };
+}
+
+function producerProfileWire({
+  enabled = 1,
+  epoch = 9,
+  phaseCount = 12,
+  periods,
+  calls,
+  samples,
+  totals,
+  maxima,
+}) {
+  return [
+    `wgprod:1,${enabled},${epoch},${phaseCount}`,
+    `wgprd:${periods.join(",")}`,
+    `wgprc:${calls.join(",")}`,
+    `wgprs:${samples.join(",")}`,
+    `wgprt:${totals.join(",")}`,
+    `wgprm:${maxima.join(",")}`,
+  ].join(" ");
+}
+
+function drawProfileWire({ enabled, epoch, multiplier }) {
+  const periods = [64, 64, 256, 64, 64, 64, 256];
+  const calls = periods.map((period) => period * multiplier);
+  const samples = periods.map(() => multiplier);
+  const totals = periods.map((_, index) => (index + 1) * 100 * multiplier);
+  const maxima = periods.map((_, index) => (index + 1) * 10 * multiplier);
+  return [
+    `wgdraw:1,${enabled},${epoch},7`,
+    `wgdrd:${periods.join(",")}`,
+    `wgdrc:${calls.join(",")}`,
+    `wgdrs:${samples.join(",")}`,
+    `wgdrt:${totals.join(",")}`,
+    `wgdrm:${maxima.join(",")}`,
+  ].join(" ");
 }
 
 function makeRuns(config, valuesByBlock) {

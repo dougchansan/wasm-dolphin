@@ -1,0 +1,48 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.h
+@@ -10,3 +10,4 @@ namespace WebGPU
+ bool IsGeometryUploadPackEnabled();
+ u64 GetGeometryUploadPackEpoch();
++void InvalidateGeometryUploadPack();
+ 
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -95,7 +95,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuGeometryPackEnabled(int enabled)
+   // Re-applying the setting around reset/save-load is an invalidation event.
+   // The vertex manager observes this epoch and starts a fresh buffer id rather
+   // than reusing destination bytes that an old command suffix may reference.
+-  s_geometry_upload_pack_epoch.fetch_add(1, std::memory_order_release);
++  InvalidateGeometryUploadPack();
+ }
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE void SetWebGpuUploadArenaMiB(int mib, int metrics_enabled)
+@@ -113,6 +113,11 @@ u64 GetGeometryUploadPackEpoch()
+   return s_geometry_upload_pack_epoch.load(std::memory_order_acquire);
+ }
+ 
++void InvalidateGeometryUploadPack()
++{
++  s_geometry_upload_pack_epoch.fetch_add(1, std::memory_order_release);
++}
++
+ void RecordUboPrepareCpu(u32 class_index, double start_ms)
+ {
+   if (!s_ubo_cache_metrics_enabled.load(std::memory_order_relaxed))
+@@ -1022,6 +1027,7 @@ void WebGPUGfx::AbortRecordedPass()
+ {
+   m_cmd_stream.AbortPass();
+   m_pass_open = false;
++  InvalidateGeometryUploadPack();
+   if (m_ubo_cache_active)
+     InvalidateUboSlices();
+   ResetRecordedPassState();
+@@ -1041,6 +1047,7 @@ bool WebGPUGfx::EndPassIfOpen()
+     return true;
+   }
+   m_cmd_stream.AbortPass();
++  InvalidateGeometryUploadPack();
+   if (m_ubo_cache_active)
+     InvalidateUboSlices();
+   return false;

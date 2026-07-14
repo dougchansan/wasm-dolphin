@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "9be317dd703326653a33c9e36abd15f1bc8f94f72ef77d7b0e4c8e0af33154b9",
+  "patchSeriesSha256": "574d798703fd4e6b32ea95d206d560cc7ba5b276ab9edf364216b59c45117015",
   "patches": [
     {
       "order": 1,
@@ -229,6 +229,198 @@
     },
     {
       "order": 26,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0026-webgpu-geometry-lifecycle-invalidation.patch",
+      "size": 1977,
+      "sha256": "a4eaa3b1630be470bac18913b3f593a857ff49330e6e393d4d04ac9fb5025af4"
+    },
+    {
+      "order": 27,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0027-webgpu-ring-protocol-v3.patch",
+      "size": 11668,
+      "sha256": "a8772add7f3588af0eed6f856817a77542fb630a3eb91df2df69ceeb63cb2a92"
+    },
+    {
+      "order": 28,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0028-webgpu-command-stream-geometry-smokes.patch",
+      "size": 10666,
+      "sha256": "c86f4258aca408f2ccd9ba5269c20e1b5c99dcec9292c0b100130abbda8e96e2"
+    },
+    {
+      "order": 29,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0029-webgpu-dense-ubo-packets.patch",
+      "size": 26015,
+      "sha256": "7cad97c580f0ebbe47d388e1bcaafe08cf2a1595f9bcc33f3ede81b35378324b"
+    },
+    {
+      "order": 30,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0030-webgpu-vertex-manager-geometry-smokes.patch",
+      "size": 26496,
+      "sha256": "7f3a30386cf08796fa55df0f7c9c752d3c91c846a172db49c8326341b40c4919"
+    },
+    {
+      "order": 31,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0031-webgpu-geometry-range.patch",
+      "size": 34703,
+      "sha256": "a1110546a59ab827533ff3ae00d13dceebfdc0186f8f88520d88a7a1b12ed2c5"
+    },
+    {
+      "order": 32,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0032-webgpu-producer-wait-metrics.patch",
+      "size": 6464,
+      "sha256": "45b2b25f793c5ae2285c2c33db39fd4e450ea1a71ce136ed556f68585cdbba1f"
+    },
+    {
+      "order": 33,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0033-webgpu-producer-phase-profile.patch",
+      "size": 21744,
+      "sha256": "fd1806c4265a19e33285eb53e8aeb42fd04bd577d45c9083b17b4a8c6ea81bca"
+    },
+    {
+      "order": 34,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0034-wgpu-idle-fifo-tail-elision.patch",
+      "size": 12750,
+      "sha256": "38896e79a7cad3c58a93b1b5700f765d1e46cdd3230e6f13c59ac01a1ce0af46"
+    },
+    {
+      "order": 35,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0035-webgpu-draw-resource-detail-profile.patch",
+      "size": 24267,
+      "sha256": "8911bc0ba61ad4a85c2d8984f147f70cc1444b1aadac7f004e7bb2486362423c"
+    },
+    {
+      "order": 36,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0036-webgpu-deep-diagnostic-gate.patch",
+      "size": 13469,
+      "sha256": "8cbf05653d59f71076544172f0f72c0316e53c2aebab89c3a5e1e8d94b75de23"
+    },
+    {
+      "order": 37,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0037-webgpu-draw-profile-header-completion.patch",
+      "size": 1275,
+      "sha256": "4789b15b3f6902c965dc0ac5c3c070d08a9700eeaa42aadb2da4364a0c6f5516"
+    },
+    {
+      "order": 38,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0038-webgpu-guarded-uniform-compare.patch",
+      "size": 13531,
+      "sha256": "aa523a9bc6d8ac05b0383ae5c5d001dd370fc8c2f8b9be5c60a2aebfb3d26ae2"
+    },
+    {
+      "order": 39,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0039-webgpu-native-ownership-trace.patch",
+      "size": 29230,
+      "sha256": "fee0cb0b7e897dbb3a3682acd871df58f53d76c0e87860be35357cf03c9640a8"
+    },
+    {
+      "order": 40,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0040-webgpu-applied-load-boundary.patch",
+      "size": 1083,
+      "sha256": "e8e1a87cd0e65e5cef319527764b1344ff3b3b99480b7be9bf55f96e8788575d"
+    },
+    {
+      "order": 41,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0041-cached-interpreter-hot-counter-compileout.patch",
+      "size": 15420,
+      "sha256": "5e5c80801492b7ddbb80e23650c9dbd9a9e4e257d0690104aeafde63aad5f38c"
+    },
+    {
+      "order": 42,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0042-cached-interpreter-frequency-ordered-dispatch.patch",
+      "size": 3816,
+      "sha256": "0e2c9c06db64ba5f081a8738dd7c67e8d1973673263184617c99b6b626f35b03"
+    },
+    {
+      "order": 43,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0043-webgpu-ubo-change-attribution.patch",
+      "size": 15138,
+      "sha256": "5d1a2b92b6563445ce429f7030a170a4225d17de2c89170dd462370632115c8f"
+    },
+    {
+      "order": 44,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0046-persistent-jit-cache-sha256-identity.patch",
+      "size": 5655,
+      "sha256": "f00205fcb64c9f4bb62b9d70fc1b9ef2bf6b76c98b81eff973f324d7e83dd7d1"
+    },
+    {
+      "order": 45,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0047-cached-interpreter-fast-branch-inline.patch",
+      "size": 1285,
+      "sha256": "aa633c424d7cbd344d5692455c11d2fd3e8fc9bd556a328a126e340c9556fc6b"
+    },
+    {
+      "order": 46,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0048-jit-fallback-map-diagnostics.patch",
+      "size": 6352,
+      "sha256": "f670a6125821d5d5921fc3fcc5bfafe172276ea90ad365657fe94b8ad4c77aa7"
+    },
+    {
+      "order": 47,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0049-jit-fallback-map-sizing.patch",
+      "size": 1998,
+      "sha256": "3224d9c00e3966e11a4452cefe028dec4772ab5f74f03955e480522ac2a0b13a"
+    },
+    {
+      "order": 48,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0050-cached-interpreter-direct-wasm-block-dispatch.patch",
+      "size": 2236,
+      "sha256": "2bfc32f09a5462c91c17316b235a367f00963a1db6a1116b5751887b987d92f7"
+    },
+    {
+      "order": 49,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0051-tag-webgpu-ubo-ring-resource.patch",
+      "size": 3362,
+      "sha256": "88a857108ad607ee1f0eb04f7eed6d4fcacf8801d1aa948fd7f987d6195d8e8a"
+    },
+    {
+      "order": 50,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -236,7 +428,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 27,
+      "order": 51,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

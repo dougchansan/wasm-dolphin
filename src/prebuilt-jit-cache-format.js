@@ -3,13 +3,15 @@
 // Binary layout (little-endian throughout):
 //
 //   [8 bytes]  magic           "DOLPCACH" (0x44 0x4f 0x4c 0x50 0x43 0x41 0x43 0x48)
-//   [4 bytes]  version         u32 (= 1)
+//   [4 bytes]  version         u32 (= 2)
 //   [4 bytes]  fingerprintLen  u32
 //   [N bytes]  fingerprint     UTF-8 bytes (matches buildFingerprint stored in IDB)
+//   [4 bytes]  keySchemaLen    u32
+//   [N bytes]  entryKeySchema  UTF-8 bytes (currently wasm-block-sha256-v1)
 //   [4 bytes]  entryCount      u32
 //   For each entry (sequential, no padding):
 //     [4 bytes]  hashLen       u32
-//     [hashLen]  hash          UTF-8 hex string (FNV-1a result, same key as IDB)
+//     [hashLen]  hash          UTF-8 canonical SHA-256 key (same key as IDB)
 //     [4 bytes]  dataLen       u32
 //     [dataLen]  data          raw WASM bytes (same payload as IDB modules store)
 //
@@ -26,21 +28,30 @@
 export const PREBUILT_CACHE_MAGIC = new Uint8Array([
   0x44, 0x4f, 0x4c, 0x50, 0x43, 0x41, 0x43, 0x48
 ]);
-export const PREBUILT_CACHE_VERSION = 1;
+import { JIT_CACHE_ENTRY_KEY_SCHEMA } from "./jit-cache-identity.js";
+
+export const PREBUILT_CACHE_VERSION = 2;
 
 // Encode a {fingerprint, entries: Map<hashHex, Uint8Array>} to a Uint8Array
 // suitable for writing to disk / serving as a static asset.
-export function encodePrebuiltCache({ fingerprint, entries }) {
+export function encodePrebuiltCache({ fingerprint, entryKeySchema, entries }) {
   const fpBytes = new TextEncoder().encode(fingerprint || "");
+  if (entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+    throw new Error(`prebuilt-jit-cache: unsupported entry key schema ${entryKeySchema || "<missing>"}`);
+  }
+  const schemaBytes = new TextEncoder().encode(entryKeySchema);
   const entryList = [];
   let bodySize = 0;
   for (const [hash, data] of entries) {
+    if (!String(hash).startsWith(`${entryKeySchema}:`)) {
+      throw new Error(`prebuilt-jit-cache: entry key does not match ${entryKeySchema}`);
+    }
     const hashBytes = new TextEncoder().encode(hash);
     const dataBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     entryList.push({ hashBytes, dataBytes });
     bodySize += 4 + hashBytes.byteLength + 4 + dataBytes.byteLength;
   }
-  const headerSize = 8 + 4 + 4 + fpBytes.byteLength + 4;
+  const headerSize = 8 + 4 + 4 + fpBytes.byteLength + 4 + schemaBytes.byteLength + 4;
   const out = new Uint8Array(headerSize + bodySize);
   const view = new DataView(out.buffer);
   let off = 0;
@@ -48,6 +59,8 @@ export function encodePrebuiltCache({ fingerprint, entries }) {
   view.setUint32(off, PREBUILT_CACHE_VERSION, true); off += 4;
   view.setUint32(off, fpBytes.byteLength, true); off += 4;
   out.set(fpBytes, off); off += fpBytes.byteLength;
+  view.setUint32(off, schemaBytes.byteLength, true); off += 4;
+  out.set(schemaBytes, off); off += schemaBytes.byteLength;
   view.setUint32(off, entryList.length, true); off += 4;
   for (const { hashBytes, dataBytes } of entryList) {
     view.setUint32(off, hashBytes.byteLength, true); off += 4;
@@ -73,27 +86,51 @@ export function decodePrebuiltCache(buffer) {
     }
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const requireBytes = (count) => {
+    if (!Number.isSafeInteger(count) || count < 0 || off + count > bytes.byteLength) {
+      throw new Error("prebuilt-jit-cache: truncated payload");
+    }
+  };
+  const readU32 = () => {
+    requireBytes(4);
+    const value = view.getUint32(off, true);
+    off += 4;
+    return value;
+  };
   let off = 8;
-  const version = view.getUint32(off, true); off += 4;
+  const version = readU32();
   if (version !== PREBUILT_CACHE_VERSION) {
     throw new Error(`prebuilt-jit-cache: unsupported version ${version}`);
   }
-  const fpLen = view.getUint32(off, true); off += 4;
+  const fpLen = readU32();
+  requireBytes(fpLen);
   const fingerprint = new TextDecoder().decode(
     bytes.subarray(off, off + fpLen)
   );
   off += fpLen;
-  const entryCount = view.getUint32(off, true); off += 4;
+  const schemaLen = readU32();
+  requireBytes(schemaLen);
+  const entryKeySchema = new TextDecoder().decode(bytes.subarray(off, off + schemaLen));
+  off += schemaLen;
+  if (entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+    throw new Error(`prebuilt-jit-cache: unsupported entry key schema ${entryKeySchema || "<missing>"}`);
+  }
+  const entryCount = readU32();
   const entries = [];
   for (let i = 0; i < entryCount; i++) {
-    const hashLen = view.getUint32(off, true); off += 4;
+    const hashLen = readU32();
+    requireBytes(hashLen);
     const hash = new TextDecoder().decode(bytes.subarray(off, off + hashLen));
     off += hashLen;
-    const dataLen = view.getUint32(off, true); off += 4;
+    const dataLen = readU32();
+    requireBytes(dataLen);
     // Copy so the decoded payload survives any later buffer reuse.
     const data = bytes.slice(off, off + dataLen);
     off += dataLen;
     entries.push({ hash, bytes: data });
   }
-  return { fingerprint, entries };
+  if (off !== bytes.byteLength) {
+    throw new Error("prebuilt-jit-cache: trailing payload bytes");
+  }
+  return { fingerprint, entryKeySchema, entries };
 }

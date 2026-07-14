@@ -83,6 +83,36 @@ test("WGPU UBO validator rejects zero-color presentation readback", async (t) =>
   assert.ok(result.issues.some((issue) => issue.runId === run.runId && issue.code === "RGB_READBACK_ZERO"));
 });
 
+test("WGPU UBO validator accepts causal hardware cadence without the legacy classifier", async (t) => {
+  const fixture = await makeFixture(t);
+  for (const run of fixture.tasks) {
+    await editJson(path.join(fixture.root, run.runId, "manifest.json"), (manifest) => {
+      delete manifest.renderer.wgpuReplayClassifier;
+    });
+    await editJson(path.join(fixture.root, run.runId, "summary.json"), (summary) => {
+      summary.final.causalTelemetry.webgpu.visualCadence = {
+        schema: "wasm-dolphin.wgpu-visual-cadence.v1",
+        enabled: true,
+        source: "wgpu-downsample-readback",
+        completedSampleCount: 120,
+        changedSampleCount: 100,
+        latestHash: 0x1234abcd,
+        encodeErrorCount: 0,
+        mapErrorCount: 0,
+      };
+      summary.final.causalTelemetry.webgpu.uploadAttribution = {
+        passAssociation: {
+          abortedPassCount: 0,
+          incompletePassCount: 0,
+          currentPassOpen: false,
+        },
+      };
+    });
+  }
+  const result = await validateWgpuUboScreening({ outDir: fixture.root, configPath });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+});
+
 test("WGPU UBO validator rejects incomplete timed samples", async (t) => {
   const fixture = await makeFixture(t);
   const run = fixture.tasks[0];
@@ -299,6 +329,13 @@ function makeCausalTelemetry(enabled, lookups, hits) {
       batchOversizeCount: 0,
       uploadTimeoutCount: 0,
       heldUploadStageLimitCount: 0,
+      uploadAttribution: {
+        passAssociation: {
+          abortedPassCount: 0,
+          incompletePassCount: 0,
+          currentPassOpen: false,
+        },
+      },
       producerUboCacheAvailable: true,
       producerUboCacheEnabled: enabled,
       producerUboCacheMetricsEnabled: true,
@@ -317,4 +354,10 @@ function helperStats(enabled, lookups, hits) {
     `wgbabort:0 wgboversize:0 wguploadto:0 wgubo:${enabled ? 1 : 0} wgubometrics:1 ` +
     `ulook:${lookups.join(",")} uhit:${hits.join(",")} uexp:0,0,0 ` +
     `usupcall:${hits.join(",")} usupbyte:${enabled ? "100,200,300" : "0,0,0"}`;
+}
+
+async function editJson(filePath, mutate) {
+  const value = JSON.parse(await readFile(filePath, "utf8"));
+  mutate(value);
+  await writeFile(filePath, JSON.stringify(value));
 }

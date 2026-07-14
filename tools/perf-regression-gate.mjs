@@ -20,22 +20,47 @@ import {
   collectRunMetadata,
   classifyGateOutcome,
   describeFile,
+  evaluateAudioClaimQualification,
+  evaluateCandidateCoreBundle,
+  evaluatePrebuiltJitCacheEvidence,
   evaluateMetricsModeEvidence,
+  evaluateCoreSelectionEvidence,
+  evaluateJitCacheReadiness,
   evaluateSoftwareRasterInstrumentationEvidence,
+  evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuRuntimeConfigEvidence,
+  evaluateWgpuSemanticQualificationEvidence,
+  evaluateWgpuDiagnosticLogFilterEvidence,
+  evaluateWgpuOutputContractEvidence,
+  evaluateWgpuProducerProfileEvidence,
+  evaluateWgpuDrawProfileEvidence,
+  evaluateWgpuSparseUboEvidence,
+  evaluateWgpuUboComputeProjectionEvidence,
+  evaluateWgpuTailGateEvidence,
+  evaluateWgpuRendererWorkerProbeEvidence,
+  validateWgpuUploadProbeFinalization,
+  evaluateWgpuDirtyRangeProjection,
   evaluateQualificationProvenance,
   evaluateRunValidity,
   expectedBattleCheckpointForParams,
   extractLocalModuleSpecifiers,
   findFatalRuntimeEvidence,
   fixedWorkPollDelayMs,
+  flattenWgpuDirtyRangeProjection,
   parseBattleCheckpoint,
   parsePostLoadInputScript,
   parseProfileMetrics,
+  parseWgpuProducerProfileStats,
+  parseWgpuDrawProfileStats,
+  normalizePerfAudioMode,
   recordsToCsv,
+  resolveCoreArtifactPath,
+  selectedCoreServedPaths,
   selectNextFixedWorkBenchmarkAction,
   selectNextPostLoadBenchmarkAction,
   serializePostLoadInputScript,
   summarizeCausalFairness,
+  summarizePostLoadInputDelivery,
   summarizeFixedEmulatedWork,
   summarizeComparison,
   summarizeJitMetrics,
@@ -44,10 +69,17 @@ import {
   validateLockedBuildProvenance,
   verifyFileFixture,
 } from "./perf-artifacts.mjs";
+import { buildPerfScenarioUrl } from "./benchmark-url.mjs";
+import {
+  launchWithWindowsCpuAffinity,
+  parseWindowsCpuAffinityMask,
+} from "./windows-process-affinity.mjs";
+import { describePrebuiltJitCache } from "./prebuilt-jit-cache-provenance.mjs";
 
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
 const FIXED_WORK_POLL_INTERVAL_MS = 100;
+const INPUT_MARKER_POLL_INTERVAL_MS = 10;
 
 await main().catch((error) => {
   console.error(`[perf-gate] ${error.stack || error.message}`);
@@ -77,6 +109,14 @@ async function main() {
     { durationSeconds }
   );
   const postLoadInputScriptCanonical = serializePostLoadInputScript(postLoadInputScript);
+  const inputMaxLatenessMs = numberEnv("PERF_INPUT_MAX_LATENESS_MS", 100);
+  const inputMarkerTimeoutMs = numberEnv("PERF_INPUT_MARKER_TIMEOUT_MS", 2500);
+  const jitCacheReadyTimeoutMs = numberEnv("PERF_JIT_CACHE_READY_TIMEOUT_MS", 120_000);
+  if (inputMaxLatenessMs < 0 || inputMarkerTimeoutMs <= 0 || jitCacheReadyTimeoutMs <= 0) {
+    throw new Error(
+      "Input lateness must be non-negative; marker and JIT-cache readiness timeouts must be positive"
+    );
+  }
   const settleSeconds = numberEnv("SETTLE_SECONDS", 2);
   const tolerance = cli.tolerance ?? numberEnv("PERF_DROP_TOLERANCE", 0.05);
   const strict = cli.strict || process.env.PERF_STRICT === "1";
@@ -84,8 +124,10 @@ async function main() {
   const requireBaseline = cli.requireBaseline || process.env.PERF_REQUIRE_BASELINE === "1";
   const baselinePath = cli.baseline || process.env.PERF_BASELINE || "";
   const headed = process.env.PERF_PROBE_HEADED === "1";
+  const audioMode = normalizePerfAudioMode(process.env.PERF_AUDIO_MODE);
+  const browserCpuAffinity = parseWindowsCpuAffinityMask(process.env.PERF_CPU_AFFINITY_MASK);
   const continueInvalidCheckpoint = process.env.PERF_CONTINUE_INVALID_CHECKPOINT === "1";
-  const corePath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.wasm");
+  const corePath = resolveCoreArtifactPath(root, baseUrl);
 
   if (requireBaseline && !baselinePath) {
     throw new Error("PERF_BASELINE or --baseline is required in regression-guard mode");
@@ -112,8 +154,8 @@ async function main() {
 
   try {
     await verifyServedFixture(new URL(saveStateUrl, baseUrl), saveFixture.sha256);
-    const servedApplication = await verifyServedApplication(baseUrl, coreArtifact);
-    const buildProvenance = await collectBuildProvenance(coreArtifact);
+    const servedApplication = await verifyServedApplication(baseUrl, coreArtifact, corePath);
+    const buildProvenance = await collectBuildProvenance(coreArtifact, corePath);
     const context = {
       baseUrl,
       buildProvenance,
@@ -123,6 +165,11 @@ async function main() {
       corePath,
       durationSeconds,
       headed,
+      audioMode,
+      browserCpuAffinity,
+      inputMarkerTimeoutMs,
+      jitCacheReadyTimeoutMs,
+      inputMaxLatenessMs,
       outDir,
       postLoadInputScript,
       postLoadInputScriptCanonical,
@@ -157,6 +204,9 @@ async function main() {
     const comparisonFailures = [];
     const comparisonWarnings = [];
     if (comparisonConfig) {
+      if (comparisonConfig.overheadGate && comparison.overheadGatePassed !== true) {
+        comparisonFailures.push("Comparison failed the configured overhead or semantic-work gate");
+      }
       if (comparison.outcome === "INFRASTRUCTURE_INCONCLUSIVE") {
         comparisonFailures.push("Comparison stopped because the invalid-block limit was exceeded");
       } else if (["NEEDS_MORE_BLOCKS", "INCONCLUSIVE", "INCOMPLETE"].includes(comparison.outcome)) {
@@ -171,6 +221,9 @@ async function main() {
       ...execution.results.flatMap((result) => result.warnings || []),
       ...comparisonWarnings,
       ...(headed ? [] : ["Runs were headless and cannot qualify performance or audio/compositor claims"]),
+      ...(audioMode === "muted"
+        ? ["PERF_AUDIO_MODE=muted; audible audio claims are ineligible"]
+        : []),
     ];
     const qualificationEligible = execution.results.length > 0 && execution.results.every(
       (result) => result.qualification?.eligible === true
@@ -182,6 +235,14 @@ async function main() {
       statisticalGatePassed: Boolean(comparisonConfig && comparison.statisticalGatePassed),
       targetPassed: targetFailures.length === 0,
     });
+    const audioClaimQualification = evaluateAudioClaimQualification({
+      audioMode,
+      headed,
+      qualificationEligible,
+    });
+    comparison.audioMode = audioMode;
+    comparison.audioClaimsEligible = audioClaimQualification.eligible;
+    comparison.audioClaimQualification = audioClaimQualification;
     if (comparisonConfig) {
       comparison.qualificationEligible = qualificationEligible;
       comparison.promotable = gateOutcome.promotable;
@@ -193,6 +254,9 @@ async function main() {
       verdict: gateOutcome.verdict,
       qualificationPassed: gateOutcome.qualificationPassed,
       qualificationEligible,
+      audioMode,
+      audioClaimsEligible: audioClaimQualification.eligible,
+      audioClaimQualification,
       generatedAt: new Date().toISOString(),
       scene: FIXED_MELEE_BATTLE_FIXTURE.sceneLabel,
       baseUrl,
@@ -201,6 +265,14 @@ async function main() {
       sampleMs,
       settleSeconds,
       headed,
+      browserCpuAffinity: {
+        requestedMask: browserCpuAffinity.requestedMask,
+        enabled: browserCpuAffinity.enabled,
+        runs: execution.results.map((result) => ({
+          name: result.name,
+          ...result.browserCpuAffinity,
+        })),
+      },
       tolerance,
       strict,
       targetMode,
@@ -254,7 +326,8 @@ async function runComparison(configValue, context) {
   ) {
     if (validBlockCount >= tasklist.initialValidBlocks) {
       const current = summarizeComparison(config, results);
-      if (current.outcome !== "NEEDS_MORE_BLOCKS" && current.outcome !== "INCOMPLETE") break;
+      if (!["NEEDS_MORE_BLOCKS", "INCOMPLETE", "INFRASTRUCTURE_INCONCLUSIVE"]
+          .includes(current.outcome)) break;
     }
     const block = tasklist.blocks[nextBlockIndex++];
     block.status = "running";
@@ -291,8 +364,6 @@ async function runComparison(configValue, context) {
       }
     }
     await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
-    const current = summarizeComparison(config, results);
-    if (current.outcome === "INFRASTRUCTURE_INCONCLUSIVE") break;
   }
 
   const comparison = summarizeComparison(config, results);
@@ -302,6 +373,49 @@ async function runComparison(configValue, context) {
   tasklist.finishedAt = new Date().toISOString();
   await writeFile(tasklistPath, JSON.stringify(tasklist, null, 2));
   return { results, comparison, tasklistPath };
+}
+
+function withAudioClaimQualification(qualification, context) {
+  return {
+    ...qualification,
+    audioClaims: evaluateAudioClaimQualification({
+      audioMode: context.audioMode,
+      headed: context.headed,
+      qualificationEligible: qualification.eligible,
+    }),
+  };
+}
+
+async function applyHarnessAudioMode(page, audioMode) {
+  const application = await page.evaluate(async (requestedMode) => {
+    const audio = window.__audio;
+    if (!audio || typeof audio.setMuted !== "function") {
+      return {
+        requestedMode,
+        applied: false,
+        muted: null,
+        reason: "audio-controller-unavailable",
+      };
+    }
+    await audio.setMuted(requestedMode === "muted");
+    return {
+      requestedMode,
+      applied: true,
+      muted: Boolean(audio.muted),
+      available: Boolean(audio.available),
+      contextState: audio.context?.state || null,
+    };
+  }, audioMode);
+  if (!application.applied) {
+    throw new Error(`Failed to apply PERF_AUDIO_MODE=${audioMode}: ${application.reason}`);
+  }
+  const expectedMuted = audioMode === "muted";
+  if (application.muted !== expectedMuted) {
+    throw new Error(
+      `PERF_AUDIO_MODE=${audioMode} activation mismatch: muted=${application.muted}`
+    );
+  }
+  return application;
 }
 
 async function runScenario(scenario, context) {
@@ -319,21 +433,58 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
+  let postTimedReplayQuiescence = null;
+  let postRunFinalizedTelemetry = null;
+  let postRunCorrectness = null;
+  let finalScreenshotSemantics = "post-timed-window";
+  let inputMarkerReadiness = {
+    required: context.postLoadInputScript.length > 0,
+    ready: context.postLoadInputScript.length === 0,
+    waitedMs: 0,
+  };
+  let audioModeApplication = {
+    requestedMode: context.audioMode,
+    applied: false,
+    muted: null,
+  };
+  const { url, uploadProbeMode } = buildPerfScenarioUrl(
+    context.baseUrl,
+    scenario.params
+  );
+  scenario = {
+    ...scenario,
+    params: Object.fromEntries(url.searchParams.entries()),
+  };
+  const jitCacheReadinessRequired =
+    scenario.params.wasmjit !== "0" && scenario.params.nojitcache !== "1";
+  let jitCacheReadiness = {
+    required: jitCacheReadinessRequired,
+    ready: !jitCacheReadinessRequired,
+    reason: jitCacheReadinessRequired ? "not-observed" : "disabled-by-scenario",
+  };
+  const fixedWorkPollIntervalMs = uploadProbeMode ? 10 : FIXED_WORK_POLL_INTERVAL_MS;
   let fixedEmulatedWork = {
     enabled: context.targetCoreSeconds != null,
     targetCoreSeconds: context.targetCoreSeconds,
     wallTimeCapSeconds: context.durationSeconds,
-    pollIntervalMs: context.targetCoreSeconds != null ? FIXED_WORK_POLL_INTERVAL_MS : null,
+    pollIntervalMs: context.targetCoreSeconds != null ? fixedWorkPollIntervalMs : null,
     reachedTarget: false,
   };
-  const url = new URL(context.baseUrl);
-  for (const [key, value] of Object.entries(scenario.params)) url.searchParams.set(key, value);
   url.searchParams.set("probe", `${scenario.name}-${Date.now()}`);
 
   try {
-    browserLaunch = await launchBrowser(context.chromium, context.headed);
+    browserLaunch = await launchBrowser(
+      context.chromium,
+      context.headed,
+      context.browserCpuAffinity
+    );
     browser = browserLaunch.browser;
-    page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page = browserLaunch.persistentProfileDir
+      ? await browser.newPage()
+      : await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    if (browserLaunch.persistentProfileDir) {
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
     const recordConsole = (scope, message) => {
       const line = `[${scope}${message.type()}] ${message.text()}`;
       consoleLines.push(line);
@@ -354,7 +505,9 @@ async function runScenario(scenario, context) {
         consoleErrors.push(line);
       });
     });
-    const browserVersion = browser.version();
+    const browserVersion = typeof browser.version === "function"
+      ? browser.version()
+      : browser.browser?.()?.version?.() || null;
     manifest = await collectRunMetadata({
       root,
       url: url.href,
@@ -386,19 +539,33 @@ async function runScenario(scenario, context) {
     manifest.browser.actualChannel = browserLaunch.actualChannel;
     manifest.browser.executablePath = browserLaunch.executablePath;
     manifest.browser.launchSource = browserLaunch.source;
+    manifest.browser.launchArgs = browserLaunch.args;
+    manifest.browser.cpuAffinity = browserLaunch.cpuAffinity;
     manifest.benchmark.inputScriptMode = context.postLoadInputScript.length
       ? "post-load-only"
       : "none";
+    manifest.benchmark.audioMode = context.audioMode;
+    manifest.benchmark.audioModeApplication = audioModeApplication;
     manifest.benchmark.inputScriptEventCount = context.postLoadInputScript.length;
     manifest.benchmark.inputScriptScheduleOrigin = context.postLoadInputScript.length
       ? "after-first-timed-sample"
       : null;
+    manifest.benchmark.inputMaxLatenessMs = context.inputMaxLatenessMs;
+    manifest.benchmark.inputMarkerTimeoutMs = context.inputMarkerTimeoutMs;
+    manifest.benchmark.jitCacheReadyTimeoutMs = context.jitCacheReadyTimeoutMs;
+    manifest.benchmark.inputMarkerDispatchPolicy = context.postLoadInputScript.length
+      ? "one-in-flight-through-marker-completion"
+      : null;
     manifest.benchmark.timingStartsAfterVerifiedLoad = true;
     manifest.benchmark.settleSeconds = context.settleSeconds;
     manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
-    manifest.benchmark.cacheState = scenario.experiment?.cacheState || "cold-ephemeral";
+    manifest.benchmark.cacheState = scenario.experiment?.cacheState || (
+      browserLaunch.persistentProfileDir ? "persistent-reuse" : "cold-ephemeral"
+    );
     manifest.benchmark.continueInvalidCheckpoint = context.continueInvalidCheckpoint;
-    manifest.browser.profileId = `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
+    manifest.browser.profileId = browserLaunch.persistentProfileDir
+      ? `persistent:${browserLaunch.persistentProfileDir}`
+      : `${manifest.benchmark.cacheState}:${scenario.experiment?.runId || scenario.name}:${manifest.startedAt}`;
     manifest.buildProvenance = structuredClone(context.buildProvenance.buildProvenance);
     manifest.buildProvenance.evidenceBundle = await packageBuildProvenance(
       scenarioDir,
@@ -427,15 +594,30 @@ async function runScenario(scenario, context) {
     await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
     manifest.browser.userAgent = await page.evaluate(() => navigator.userAgent);
     manifest.browser.webgpuAdapter = await readWebGpuAdapter(page);
-    manifest.qualification = evaluateQualificationProvenance(manifest);
+    manifest.qualification = withAudioClaimQualification(
+      evaluateQualificationProvenance(manifest),
+      context
+    );
     await page.setInputFiles("#romInput", context.romPath);
     await page.click("#screen");
     await waitForMount(page, scenarioDir);
+    audioModeApplication = await applyHarnessAudioMode(page, context.audioMode);
+    manifest.benchmark.audioModeApplication = audioModeApplication;
     const readiness = await waitForCoreReady(page);
     const pauseResponse = await pauseForBattleCheckpoint(page);
+    const replayQuiescence = await finalizeWgpuReplay(page, {
+      required: expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real",
+    });
     const attemptedAt = new Date().toISOString();
     const response = await loadStateFileWithTimeout(page, context.saveStateUrl);
-    saveStateLoad = { attemptedAt, readiness, pauseResponse, response, loaded: Boolean(response?.loaded) };
+    saveStateLoad = {
+      attemptedAt,
+      readiness,
+      pauseResponse,
+      replayQuiescence,
+      response,
+      loaded: Boolean(response?.loaded),
+    };
     if (!saveStateLoad.loaded) {
       throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
     }
@@ -464,20 +646,107 @@ async function runScenario(scenario, context) {
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
     await page.waitForTimeout(context.settleSeconds * 1000);
+    const fixedWorkEnabled = context.targetCoreSeconds != null;
+    if (context.postLoadInputScript.length > 0) {
+      inputMarkerReadiness = await waitForInputMarkerReady(page, {
+        pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
+        timeoutMs: context.inputMarkerTimeoutMs,
+      });
+      if (!inputMarkerReadiness.ready) {
+        throw new Error(
+          `Input marker telemetry was not ready before the timed window after ` +
+          `${inputMarkerReadiness.waitedMs} ms`
+        );
+      }
+    }
+    let fixedSceneMeasurementBoundary = null;
+    let probeMeasurementBoundary = null;
+    if (fixedWorkEnabled || uploadProbeMode) {
+      fixedSceneMeasurementBoundary = await establishFixedSceneMeasurementBoundary(
+        page,
+        context.saveStateUrl,
+        expectedBattleCheckpointForParams(scenario.params),
+        {
+          jitCacheReadinessRequired,
+          jitCacheReadyTimeoutMs: context.jitCacheReadyTimeoutMs,
+          wgpuReplayRequired:
+            expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real",
+        }
+      );
+      jitCacheReadiness = fixedSceneMeasurementBoundary.jitCacheReadiness;
+      manifest.benchmark.jitCacheReadiness = jitCacheReadiness;
+      manifest.benchmark.fixedSceneMeasurementBoundary = {
+        reloadedSaveState: true,
+        checkpoint: fixedSceneMeasurementBoundary.checkpoint,
+        progress: fixedSceneMeasurementBoundary.progress,
+        signature: fixedSceneMeasurementBoundary.signature,
+        replayQuiescence: fixedSceneMeasurementBoundary.replayQuiescence,
+      };
+    }
+    if (uploadProbeMode) {
+      const begun = await requestWorkerRpc(
+        page,
+        "validationBeginWgpuRendererProbeMeasurement",
+        { timeoutMs: 10_000 },
+        20_000
+      );
+      const boundarySnapshot = begun?.snapshot;
+      if (!boundarySnapshot?.passed || boundarySnapshot.observedRecordCount !== 0 ||
+          boundarySnapshot.consumedRecordCount !== 0 || boundarySnapshot.backlog !== 0) {
+        throw new Error(`Upload probe measurement boundary is invalid: ${JSON.stringify(boundarySnapshot)}`);
+      }
+      begun.observedAtMs = await page.evaluate(() => performance.now());
+      probeMeasurementBoundary = begun;
+      manifest.benchmark.rendererWorkerProbeMeasurementBoundary = {
+        schema: boundarySnapshot.schema,
+        initialRead: boundarySnapshot.initialRead,
+        initialUploadRead: boundarySnapshot.initialUploadRead,
+        coreTicks: begun.coreTicks,
+        frame: begun.frame,
+        reloadedSaveState: true,
+        checkpoint: fixedSceneMeasurementBoundary.checkpoint,
+      };
+    }
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
+    manifest.benchmark.inputMarkerReadiness = inputMarkerReadiness;
     manifest.benchmark.timingStartedAt = new Date().toISOString();
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
+    if (fixedSceneMeasurementBoundary) {
+      const resumed = await resumeAfterBattleCheckpoint(page);
+      fixedSceneMeasurementBoundary.progress.observedAtMs = Number(resumed.transitionAtMs);
+      fixedSceneMeasurementBoundary.resumed = resumed;
+      manifest.benchmark.fixedSceneMeasurementBoundary.resumed = {
+        coreTicks: Number(resumed.coreTicks),
+        frame: Number(resumed.frame),
+        transitionAtMs: Number(resumed.transitionAtMs),
+        observedAtMs: Number(resumed.observedAtMs),
+      };
+    }
     const startedAt = Date.now();
     const wallTimeCapMs = context.durationSeconds * 1000;
-    const fixedWorkEnabled = context.targetCoreSeconds != null;
     const totalSamples = fixedWorkEnabled
       ? Math.floor(wallTimeCapMs / context.sampleMs)
       : Math.ceil(wallTimeCapMs / context.sampleMs);
     let sampleIndex = 0;
     let inputIndex = 0;
-    let fixedWorkBaseline = null;
+    let fixedWorkBaseline = fixedWorkEnabled && fixedSceneMeasurementBoundary
+      ? fixedWorkObservation(fixedSceneMeasurementBoundary.progress)
+      : null;
+    if (fixedWorkBaseline) {
+      manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
+      fixedEmulatedWork = summarizeFixedEmulatedWork({
+        targetCoreSeconds: context.targetCoreSeconds,
+        coreTicksPerSecond:
+          Number(fixedSceneMeasurementBoundary.progress.coreTicksPerSecond) || 0,
+        baseline: fixedWorkBaseline,
+        observation: fixedWorkBaseline,
+        wallTimeCapSeconds: context.durationSeconds,
+        pollIntervalMs: fixedWorkPollIntervalMs,
+      });
+      manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+    }
     const collectTimedSample = async (elapsedSeconds) => {
       const sample = deriveCoreRates(
         await readSample(page, elapsedSeconds),
@@ -487,7 +756,12 @@ async function runScenario(scenario, context) {
       const record = {
         ...sample,
         ...parseProfileMetrics(sample.helper, sample.profile),
-        ...flattenCausalTelemetry(sample.causalTelemetry)
+        ...(parseWgpuProducerProfileStats(sample.helper) ?? {}),
+        ...(parseWgpuDrawProfileStats(sample.helper) ?? {}),
+        ...flattenCausalTelemetry(sample.causalTelemetry),
+        ...flattenWgpuDirtyRangeProjection(
+          sample.causalTelemetry?.webgpu?.dirtyRangeProjection
+        )
       };
       samples.push(record);
       return record;
@@ -510,7 +784,8 @@ async function runScenario(scenario, context) {
           baseline: fixedWorkBaseline,
           coreTicksPerSecond: fixedEmulatedWork.coreTicksPerSecond,
           deadlineMs: deadline,
-          pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+          pollIntervalMs: fixedWorkPollIntervalMs,
+          liveWorkerProgress: fixedWorkEnabled,
           targetCoreSeconds: context.targetCoreSeconds,
           wallTimeCapSeconds: context.durationSeconds,
         });
@@ -536,9 +811,14 @@ async function runScenario(scenario, context) {
 
       if (action.type === "input") {
         const dispatchStartedSeconds = elapsedSeconds;
+        const markerBaseline = await readInputMarkerBarrierState(page);
         if (action.event.action === "down") await page.keyboard.down(action.event.key);
         else await page.keyboard.up(action.event.key);
         const deliveredSeconds = (Date.now() - startedAt) / 1000;
+        const markerBarrier = await waitForInputMarkerCompletion(page, markerBaseline, {
+          pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
+          timeoutMs: context.inputMarkerTimeoutMs,
+        });
         inputEvents.push({
           action: action.event.action,
           key: action.event.key,
@@ -548,6 +828,7 @@ async function runScenario(scenario, context) {
           deliveredSeconds,
           latenessMs: Math.max(0, deliveredSeconds * 1000 - action.atMs),
           afterBaselineSample: samples.length > 0,
+          markerBarrier,
         });
         inputIndex += 1;
         continue;
@@ -555,20 +836,8 @@ async function runScenario(scenario, context) {
 
       const sample = await collectTimedSample(elapsedSeconds);
       if (sampleIndex === 0) {
-        manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
-        if (fixedWorkEnabled) {
-          const coreTicksPerSecond = Number(sample.coreTicksPerSecond) ||
-            Number(saveStateLoad.response?.coreTicksPerSecond) || 0;
-          fixedWorkBaseline = fixedWorkObservation(sample);
-          fixedEmulatedWork = summarizeFixedEmulatedWork({
-            targetCoreSeconds: context.targetCoreSeconds,
-            coreTicksPerSecond,
-            baseline: fixedWorkBaseline,
-            observation: fixedWorkBaseline,
-            wallTimeCapSeconds: context.durationSeconds,
-            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
-          });
-          manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
+        if (!manifest.benchmark.timingBaselineEstablishedAt) {
+          manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
         }
         if (!context.continueInvalidCheckpoint) assertRunProvenance(manifest);
       } else if (fixedWorkEnabled) {
@@ -580,7 +849,7 @@ async function runScenario(scenario, context) {
             baseline: fixedWorkBaseline,
             observation: fixedWorkObservation(sample),
             wallTimeCapSeconds: context.durationSeconds,
-            pollIntervalMs: FIXED_WORK_POLL_INTERVAL_MS,
+            pollIntervalMs: fixedWorkPollIntervalMs,
           });
         manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
       }
@@ -596,8 +865,132 @@ async function runScenario(scenario, context) {
         break;
       }
     }
+    const timedWindowEndedAt = new Date().toISOString();
+    const timedFinalSample = samples.at(-1) || null;
+    const mappedDrainFinalizationMode =
+      String(scenario.params?.wgpudraincoalesce ?? "0") === "1" ||
+      String(scenario.params?.wgpuubocomputeprojection ?? "0") === "1" ||
+      String(scenario.params?.wgpuubocompute ?? "0") === "1";
+    const hardwareWgpuRun =
+      expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real";
+    const postRunFinalizationRequired =
+      uploadProbeMode || mappedDrainFinalizationMode || hardwareWgpuRun;
+    let postRunPause = null;
+    if (postRunFinalizationRequired) {
+      postRunPause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
+      if (!postRunPause?.paused || postRunPause?.coreStateName !== "Paused") {
+        throw new Error(
+          `WGPU core did not pause for post-run finalization: ${JSON.stringify(postRunPause)}`
+        );
+      }
+    }
+    if (uploadProbeMode || mappedDrainFinalizationMode) {
+      const finalized = await requestWorkerRpc(
+        page,
+        uploadProbeMode
+          ? "validationFinalizeWgpuRendererProbe"
+          : "validationFinalizeWgpuMappedDrain",
+        { timeoutMs: 10_000 },
+        20_000
+      );
+      if (!finalized?.causalTelemetry) {
+        throw new Error("WGPU finalization did not return causal telemetry");
+      }
+      if (mappedDrainFinalizationMode && !finalized?.mappedDrainFinalization?.quiesced) {
+        throw new Error("WGPU mapped drain finalization did not return quiescent evidence");
+      }
+      postRunFinalizedTelemetry = {
+        causalTelemetry: finalized.causalTelemetry,
+        flattened: {
+          ...flattenCausalTelemetry(finalized.causalTelemetry),
+          ...flattenWgpuDirtyRangeProjection(
+            finalized.causalTelemetry?.webgpu?.dirtyRangeProjection
+          ),
+        },
+      };
+      if (uploadProbeMode) {
+        const snapshot = finalized?.snapshot;
+        if (!snapshot?.quiesced || !snapshot?.passed) {
+          throw new Error(`Upload probe did not finalize cleanly: ${JSON.stringify(snapshot)}`);
+        }
+        const finalizationEvidence = validateWgpuUploadProbeFinalization({
+          requested: scenario.params.wgpurenderprobe,
+          finalized,
+        });
+        if (!finalizationEvidence.valid) {
+          throw new Error(
+            `Upload probe finalization telemetry is invalid: ${finalizationEvidence.failures.join("; ")}`
+          );
+        }
+        manifest.benchmark.rendererWorkerProbeFinalization = {
+          paused: true,
+          quiesced: true,
+          schema: snapshot.schema,
+          observedRecordCount: snapshot.observedRecordCount,
+          totalUploadBytes: snapshot.totalUploadBytes,
+          streamDigest: snapshot.streamDigest,
+        };
+      } else {
+        manifest.benchmark.mappedDrainFinalization = {
+          paused: true,
+          quiesced: true,
+          deferred: Boolean(
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.state?.deferred
+          ),
+          pendingUploads:
+            finalized.causalTelemetry.webgpu?.mappedStaging?.pendingUploads ?? null,
+          activeBatches: finalized.mappedDrainFinalization.activeBatches,
+          remappingSlots: finalized.mappedDrainFinalization.remappingSlots,
+          activeCapacityWait: finalized.mappedDrainFinalization.activeCapacityWait,
+          deferredBoundaries:
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.telemetry
+              ?.deferredBoundaries ?? null,
+          actualSubmissions:
+            finalized.causalTelemetry.webgpu?.mappedDrainCoalescing?.telemetry
+              ?.actualSubmissions ?? null,
+        };
+      }
+    }
     manifest.benchmark.inputScriptDeliveredEventCount = inputEvents.length;
+    if (hardwareWgpuRun) {
+      const replayQuiescence = await finalizeWgpuReplay(page, {
+        required: true,
+      });
+      postTimedReplayQuiescence = {
+        timedMetricsFrozen: true,
+        paused: true,
+        ...replayQuiescence,
+      };
+      manifest.benchmark.postTimedReplayQuiescence = postTimedReplayQuiescence;
+      finalScreenshotSemantics = "post-timed-replay-quiescence";
+    }
+    const compositorSettledAtMs = hardwareWgpuRun
+      ? await waitForAnimationFrames(page, 2)
+      : null;
+    postRunCorrectness = {
+      schema: "wasm-dolphin.post-run-correctness.v1",
+      separatedFromTimedWindow: true,
+      timedWindowEndedAt,
+      timedSampleCount: samples.length,
+      timedFinalObservedAtMs: timedFinalSample?.observedAtMs ?? null,
+      timedFinalCoreTicks: timedFinalSample?.coreTicks ?? null,
+      pause: postRunPause,
+      replayQuiescence: postTimedReplayQuiescence,
+      compositorAnimationFrames: hardwareWgpuRun ? 2 : 0,
+      compositorSettledAtMs,
+      finalizedTelemetry: postRunFinalizedTelemetry,
+    };
+    manifest.benchmark.postRunCorrectness = postRunCorrectness;
+    manifest.benchmark.finalScreenshotSemantics = finalScreenshotSemantics;
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
+    postRunCorrectness.screenshot = {
+      file: "final.png",
+      captured: finalScreenshotCaptured,
+      capturedAt: new Date().toISOString(),
+    };
+    if (hardwareWgpuRun && !finalScreenshotCaptured) {
+      throw new Error("Hardware WGPU post-run correctness screenshot was not captured");
+    }
     await page.waitForTimeout(100);
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
@@ -614,7 +1007,11 @@ async function runScenario(scenario, context) {
       }
     }
     if (browser) {
-      const pages = browser.contexts().flatMap((browserContext) => browserContext.pages());
+      const pages = typeof browser.contexts === "function"
+        ? browser.contexts().flatMap((browserContext) => browserContext.pages())
+        : typeof browser.pages === "function"
+          ? browser.pages()
+          : page ? [page] : [];
       if (pages[0]) await saveScreenshot(pages[0], scenarioDir, "error.png");
     }
   } finally {
@@ -634,15 +1031,48 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...softwareRasterInstrumentation.failures);
+  const wgpuProducerProfile = evaluateWgpuProducerProfileEvidence({
+    requested: scenario.params.wgpuprodprofile,
+    metrics: scenario.params.metrics,
+    samples,
+  });
+  invalidReasons.push(...wgpuProducerProfile.failures);
+  const wgpuDrawProfile = evaluateWgpuDrawProfileEvidence({
+    requested: scenario.params.wgpudrawprofile,
+    metrics: scenario.params.metrics,
+    video: scenario.params.video,
+    samples,
+  });
+  invalidReasons.push(...wgpuDrawProfile.failures);
+  const metricsEnabled = String(scenario.params.metrics) === "1";
+  const requestedTailGate = scenario.params.wgputailgate;
+  const wgpuTailGate = metricsEnabled
+    ? evaluateWgpuTailGateEvidence({ requested: requestedTailGate, samples })
+    : evaluateMetricsOffWgpuTailGate({
+        requested: requestedTailGate,
+        runtimeConfig: renderer?.runtimeConfig,
+      });
+  invalidReasons.push(...wgpuTailGate.failures);
+  invalidReasons.push(...evaluateCoreSelectionEvidence({
+    url: url.href,
+    artifactSha256: context.coreArtifact?.sha256,
+    diagnostics: renderer,
+  }).failures);
+  invalidReasons.push(...evaluateWgpuOutputContractEvidence({
+    video: scenario.params.video,
+    requestedProbe: scenario.params.wgpurenderprobe,
+    diagnostics: renderer,
+  }).failures);
+  invalidReasons.push(...evaluateWgpuDiagnosticLogFilterEvidence({
+    requested: scenario.params.wgpudiagquiet,
+    diagnostics: renderer,
+  }).failures);
   if (!saveStateLoad?.loaded) invalidReasons.push("fixed battle save did not load before timing");
-  if (inputEvents.length !== context.postLoadInputScript.length) {
-    invalidReasons.push(
-      `post-load input delivered ${inputEvents.length}/${context.postLoadInputScript.length} events`
-    );
-  }
-  if (inputEvents.some((event) => !event.afterBaselineSample)) {
-    invalidReasons.push("post-load input was delivered before the timed baseline sample");
-  }
+  const postLoadInputDelivery = summarizePostLoadInputDelivery(inputEvents, {
+    expectedCount: context.postLoadInputScript.length,
+    maxLatenessMs: context.inputMaxLatenessMs,
+  });
+  invalidReasons.push(...postLoadInputDelivery.failures);
   if (fixedEmulatedWork.enabled && fixedEmulatedWork.deltasValid !== true) {
     invalidReasons.push("fixed emulated work did not produce valid non-negative tick/frame/time deltas");
   }
@@ -667,24 +1097,79 @@ async function runScenario(scenario, context) {
     consoleLines,
     consoleErrors,
     invalidReasons,
-    { expectedInputEvents: context.postLoadInputScript.length }
+    { expectedInputEvents: context.postLoadInputScript.length, renderer }
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
+  summary.metrics.wgpuProducerProfile = wgpuProducerProfile;
+  summary.metrics.wgpuDrawProfile = wgpuDrawProfile;
+  summary.metrics.wgpuTailGate = wgpuTailGate;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
+  summary.postTimedReplayQuiescence = postTimedReplayQuiescence;
+  summary.postRunCorrectness = postRunCorrectness;
+  summary.finalScreenshotSemantics = finalScreenshotSemantics;
+  summary.fixedSceneMeasurementBoundary =
+    manifest?.benchmark?.fixedSceneMeasurementBoundary ?? null;
+  if (uploadProbeMode) {
+    const probe =
+      postRunFinalizedTelemetry?.causalTelemetry?.webgpu?.rendererWorkerProbe ??
+      summary.final?.causalTelemetry?.webgpu?.rendererWorkerProbe;
+    summary.uploadProbeWorkload = {
+      requested: scenario.params.wgpurenderprobe,
+      coreSha256: context.coreArtifact?.sha256 ?? null,
+      saveStateSha256: context.saveFixture?.sha256 ?? null,
+      checkpointTicks:
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.loadedCheckpointTicks ??
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.coreTicks ?? null,
+      checkpointPpcPc:
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.loadedCheckpointPpcPc ??
+        manifest.benchmark?.rendererWorkerProbeMeasurementBoundary?.checkpoint?.ppcPc ?? null,
+      actualCoreTickDelta: fixedEmulatedWork.actualCoreTickDelta,
+      actualFrameDelta: fixedEmulatedWork.actualFrameDelta,
+      observedRecordCount: probe?.observedRecordCount ?? null,
+      totalUploadBytes: probe?.totalUploadBytes ?? null,
+      submissionCount: probe?.submissionCount ?? null,
+      opHistogram: Array.isArray(probe?.opHistogram) ? [...probe.opHistogram] : null,
+      submitDigests: Array.isArray(probe?.submitDigests) ? [...probe.submitDigests] : null,
+      streamDigest: probe?.streamDigest ?? null,
+    };
+  }
   summary.postLoadInput = {
     mode: context.postLoadInputScript.length ? "post-load-only" : "none",
     scheduledEventCount: context.postLoadInputScript.length,
     deliveredEventCount: inputEvents.length,
+    markerReadiness: inputMarkerReadiness,
     events: inputEvents,
+    delivery: postLoadInputDelivery,
   };
+  summary.jitCacheReadiness = jitCacheReadiness;
+  summary.audioMode = context.audioMode;
+  summary.browserCpuAffinity = browserLaunch?.cpuAffinity || {
+    enabled: context.browserCpuAffinity.enabled,
+    requested: context.browserCpuAffinity.enabled
+      ? { processId: process.pid, mask: context.browserCpuAffinity.requestedMask }
+      : null,
+    snapshot: null,
+    applied: null,
+    restored: null,
+  };
+  summary.audioModeApplication = audioModeApplication;
+  summary.audioClaimQualification = evaluateAudioClaimQualification({
+    audioMode: context.audioMode,
+    headed: context.headed,
+    qualificationEligible: false,
+  });
+  summary.audioClaimsEligible = false;
   if (manifest) {
     manifest.finishedAt = new Date().toISOString();
     manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
     if (renderer) manifest.renderer = renderer;
     manifest.fixture.saveStateLoaded = Boolean(saveStateLoad?.loaded);
     manifest.fixture.loadResult = saveStateLoad;
-    manifest.qualification = evaluateQualificationProvenance(manifest);
+    manifest.qualification = withAudioClaimQualification(
+      evaluateQualificationProvenance(manifest),
+      context
+    );
     try {
       assertRunProvenance(manifest);
     } catch (error) {
@@ -698,17 +1183,28 @@ async function runScenario(scenario, context) {
       summaryFile: "summary.json",
       samplesFile: "samples.json",
       eventsFile: "events.jsonl",
+      inputEventsFile: "input-events.json",
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
+      screenshotSemantics: finalScreenshotSemantics,
       fixedEmulatedWork,
+      jitCacheReadiness,
+      audioMode: context.audioMode,
+      audioClaimsEligible: manifest.qualification.audioClaims.eligible,
     };
     summary.qualification = manifest.qualification;
+    summary.audioClaimsEligible = manifest.qualification.audioClaims.eligible;
+    summary.audioClaimQualification = manifest.qualification.audioClaims;
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
   }
   await Promise.all([
     writeFile(path.join(scenarioDir, "console.log"), consoleLines.join("\n")),
     writeFile(path.join(scenarioDir, "samples.json"), JSON.stringify(samples, null, 2)),
     writeFile(path.join(scenarioDir, "samples.csv"), recordsToCsv(samples)),
+    writeFile(path.join(scenarioDir, "input-events.json"), JSON.stringify({
+      markerReadiness: inputMarkerReadiness,
+      events: inputEvents,
+    }, null, 2)),
     writeFile(
       path.join(scenarioDir, "events.jsonl"),
       runEventsJsonl(manifest, saveStateLoad, inputEvents, samples)
@@ -716,6 +1212,33 @@ async function runScenario(scenario, context) {
     writeFile(path.join(scenarioDir, "summary.json"), JSON.stringify(summary, null, 2)),
   ]);
   return summary;
+}
+
+function evaluateMetricsOffWgpuTailGate({ requested, runtimeConfig } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedEnabled = String(requested) === "1";
+  const tailGate = runtimeConfig?.tailGate;
+  const failures = [];
+  if (expectedEnabled) {
+    failures.push("wgputailgate=1 requires metrics=1");
+  }
+  if (tailGate?.requested !== expectedEnabled || tailGate?.enabled !== expectedEnabled) {
+    failures.push(
+      `WGPU tail gate runtime mismatch: requested=${expectedEnabled ? 1 : 0} ` +
+      `capturedRequested=${tailGate?.requested == null
+        ? "unavailable"
+        : tailGate.requested ? 1 : 0} ` +
+      `active=${tailGate?.enabled == null ? "unavailable" : tailGate.enabled ? 1 : 0}`
+    );
+  }
+  return {
+    required: true,
+    expectedEnabled,
+    activated: tailGate?.enabled === true,
+    schema: tailGate?.schema ?? null,
+    runtimeConfig: tailGate ?? null,
+    failures,
+  };
 }
 
 function summarizeScenario(
@@ -726,16 +1249,31 @@ function summarizeScenario(
   consoleLines,
   consoleErrors,
   invalidReasons,
-  { expectedInputEvents = 0 } = {}
+  { expectedInputEvents = 0, renderer = null } = {}
 ) {
   const timedWindow = samples;
   const windows = summarizeTimedMetricWindows(samples, scenario.assertAfterSeconds);
   const steadyStateWindow = windows.steadyStateWindow;
   const final = samples.at(-1) || {};
+  const runtimeConfigEvidence = evaluateWgpuRuntimeConfigEvidence({
+    required: scenario.params?.video === "wgpu",
+    runtimeConfig: renderer?.runtimeConfig,
+    params: scenario.params,
+  });
+  const observedWgpu = final.causalTelemetry?.webgpu ?? runtimeConfigEvidence.runtimeConfig;
   const helperText = timedWindow.map((sample) => sample.helper || "").join(" | ");
   const fullTimedWindow = windows.fullTimedWindow.metrics;
   const steadyState = steadyStateWindow.metrics;
   const causalFairness = summarizeCausalFairness(timedWindow, { expectedInputEvents });
+  const dirtyRangeProjection = evaluateWgpuDirtyRangeProjection(timedWindow);
+  const sparseUbo = evaluateWgpuSparseUboEvidence({
+    requested: scenario.params?.wgpuubosparse,
+    samples: timedWindow,
+  });
+  const uboComputeProjection = evaluateWgpuUboComputeProjectionEvidence({
+    requested: scenario.params?.wgpuubocomputeprojection,
+    samples: timedWindow,
+  });
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -759,10 +1297,15 @@ function summarizeScenario(
     underrun: maxRegex(helperText, /underrun:(\d+)/g),
     drop: maxRegex(helperText, /drop:(\d+)/g),
     causalFairness,
+    wgpuDirtyRangeProjection: dirtyRangeProjection,
+    wgpuSparseUbo: sparseUbo,
+    wgpuUboComputeProjection: uboComputeProjection,
+    wgpuOwnershipTrace: final.causalTelemetry?.webgpu?.ownershipTrace ?? null,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
   const failures = [];
+  failures.push(...runtimeConfigEvidence.failures);
   const warnings = [];
   const targetFailures = [];
   const targetIssue = (message) => {
@@ -771,7 +1314,27 @@ function summarizeScenario(
   };
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
+  failures.push(...sparseUbo.failures);
+  failures.push(...uboComputeProjection.failures);
   failures.push(...causalFairness.failures);
+  const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
+  if (requestedDirtyRanges != null) {
+    const expectedActive = String(requestedDirtyRanges) === "1";
+    const snapshot = final.causalTelemetry?.webgpu?.dirtyRangeProjection;
+    if (
+      snapshot?.requested !== expectedActive ||
+      snapshot?.active !== expectedActive ||
+      snapshot?.enabled !== expectedActive
+    ) {
+      failures.push(
+        `WGPU dirty-range projection mismatch: requested=${expectedActive ? 1 : 0} ` +
+        `capturedRequested=${snapshot?.requested == null ? "unavailable" : snapshot.requested ? 1 : 0} ` +
+        `active=${snapshot?.active == null ? "unavailable" : snapshot.active ? 1 : 0} ` +
+        `enabled=${snapshot?.enabled == null ? "unavailable" : snapshot.enabled ? 1 : 0}`
+      );
+    }
+    if (expectedActive) failures.push(...dirtyRangeProjection.failures);
+  }
   if (metrics.minPresentFps < scenario.thresholds.minPresentFps) {
     targetIssue(`min present FPS ${metrics.minPresentFps} < ${scenario.thresholds.minPresentFps}`);
   }
@@ -789,6 +1352,272 @@ function summarizeScenario(
   }
   if (scenario.thresholds.requireNoGlError && metrics.maxGlError !== "0x0") {
     invalidReasons.push(`GL error ${metrics.maxGlError}`);
+  }
+  const requestedUploadTransport = scenario.params?.wgpuuploadtransport;
+  if (requestedUploadTransport) {
+    const activeUploadTransport = observedWgpu?.uploadTransport;
+    if (activeUploadTransport !== requestedUploadTransport) {
+      failures.push(
+        `WGPU upload transport mismatch: requested=${requestedUploadTransport} ` +
+        `active=${activeUploadTransport ?? "unavailable"}`
+      );
+    }
+  }
+  const requestedUboPack = scenario.params?.wgpuubopack;
+  if (requestedUboPack != null) {
+    const expectedUboPack = String(requestedUboPack) === "1";
+    const activeUboPack = observedWgpu?.uboPackEnabled;
+    if (activeUboPack !== expectedUboPack) {
+      failures.push(
+        `WGPU UBO pack mismatch: requested=${expectedUboPack ? 1 : 0} ` +
+        `active=${activeUboPack == null ? "unavailable" : activeUboPack ? 1 : 0}`
+      );
+    }
+  }
+  const requestedUboMetrics = scenario.params?.wgpuubometrics;
+  if (requestedUboMetrics != null) {
+    const expectedUboMetrics = String(requestedUboMetrics) === "1";
+    const activeUboMetrics = observedWgpu?.producerUboCacheMetricsEnabled;
+    if (activeUboMetrics !== expectedUboMetrics) {
+      failures.push(
+        `WGPU UBO metrics mismatch: requested=${expectedUboMetrics ? 1 : 0} ` +
+        `active=${activeUboMetrics == null ? "unavailable" : activeUboMetrics ? 1 : 0}`
+      );
+    }
+    if (expectedUboMetrics &&
+        observedWgpu?.producerUboChangeAvailable !== true) {
+      failures.push("WGPU UBO change-attribution schema is unavailable or malformed");
+    }
+  }
+  const requestedUniformFast = scenario.params?.wgpuuniformfast;
+  if (requestedUniformFast != null) {
+    const expectedUniformFast = String(requestedUniformFast) === "1";
+    const activeUniformFast = observedWgpu?.producerUniformFastEnabled;
+    if (activeUniformFast !== expectedUniformFast) {
+      failures.push(
+        `WGPU uniform fast mismatch: requested=${expectedUniformFast ? 1 : 0} ` +
+        `active=${activeUniformFast == null ? "unavailable" : activeUniformFast ? 1 : 0}`
+      );
+    }
+  }
+  const requestedMappedStageFast = scenario.params?.wgpustagefast;
+  const requestedMappedStageTiming = scenario.params?.wgpumappedtiming;
+  const requestedMappedStagingSlots = scenario.params?.wgpustagingslots;
+  if (requestedMappedStagingSlots != null) {
+    const expectedMappedStagingSlots = String(requestedMappedStagingSlots) === "4" ? 4 : 3;
+    const activeMappedStagingSlots = observedWgpu?.mappedStaging?.slotCount;
+    if (activeMappedStagingSlots !== expectedMappedStagingSlots) {
+      failures.push(
+        `WGPU mapped staging slot-count mismatch: requested=${expectedMappedStagingSlots} ` +
+        `active=${activeMappedStagingSlots ?? "unavailable"}`
+      );
+    }
+  }
+  if (requestedMappedStageFast != null) {
+    const expectedMappedStageFast = String(requestedMappedStageFast) === "1";
+    const activeMappedStageFast = observedWgpu?.mappedStagingFastPath;
+    if (activeMappedStageFast !== expectedMappedStageFast) {
+      failures.push(
+        `WGPU mapped staging fast-path mismatch: requested=${expectedMappedStageFast ? 1 : 0} ` +
+        `active=${activeMappedStageFast == null ? "unavailable" : activeMappedStageFast ? 1 : 0}`
+      );
+    }
+    const recordStore = observedWgpu?.mappedStaging?.recordStore;
+    if (expectedMappedStageFast && recordStore !== "flat") {
+      failures.push(
+        `WGPU mapped staging record store mismatch: requested=flat ` +
+        `active=${recordStore ?? "unavailable"}`
+      );
+    }
+  }
+  if (requestedMappedStageTiming != null) {
+    const expectedMappedStageTiming = String(requestedMappedStageTiming) === "64" ? 64 : 1;
+    const activeMappedStageTiming =
+      observedWgpu?.uploadAttribution?.mappedStageTiming?.stride;
+    if (activeMappedStageTiming !== expectedMappedStageTiming) {
+      failures.push(
+        `WGPU mapped staging timing mismatch: requested=${expectedMappedStageTiming} ` +
+        `active=${activeMappedStageTiming ?? "unavailable"}`
+      );
+    }
+  }
+  const requestedMappedDrainCoalescing = scenario.params?.wgpudraincoalesce;
+  if (requestedMappedDrainCoalescing != null) {
+    const expectedMappedDrainCoalescing = String(requestedMappedDrainCoalescing) === "1";
+    const activeMappedDrainCoalescing =
+      final.causalTelemetry?.webgpu?.mappedDrainCoalescingEnabled;
+    if (activeMappedDrainCoalescing !== expectedMappedDrainCoalescing) {
+      failures.push(
+        `WGPU mapped drain coalescing mismatch: requested=${expectedMappedDrainCoalescing ? 1 : 0} ` +
+        `active=${activeMappedDrainCoalescing == null ? "unavailable" : activeMappedDrainCoalescing ? 1 : 0}`
+      );
+    }
+    if (expectedMappedDrainCoalescing) {
+      const coalescing = final.causalTelemetry?.webgpu?.mappedDrainCoalescing;
+      const staging = final.causalTelemetry?.webgpu?.mappedStaging;
+      if (coalescing?.state?.deferred !== false) {
+        failures.push("WGPU mapped drain coalescing ended with a deferred batch");
+      }
+      if ((staging?.pendingUploads ?? -1) !== 0) {
+        failures.push("WGPU mapped staging ended with pending uploads");
+      }
+      if ((coalescing?.telemetry?.generationMismatches ?? -1) !== 0) {
+        failures.push("WGPU mapped drain coalescing observed a generation mismatch");
+      }
+      if ((coalescing?.telemetry?.timerStale ?? -1) !== 0) {
+        failures.push("WGPU mapped drain coalescing observed a stale timer callback");
+      }
+      if ((coalescing?.telemetry?.actualDeadlineOverrunMaxMs ?? Number.POSITIVE_INFINITY) > 4) {
+        failures.push("WGPU mapped drain coalescing exceeded its 4 ms submit deadline tolerance");
+      }
+      if ((coalescing?.telemetry?.actualSubmissionAgeMaxMs ?? Number.POSITIVE_INFINITY) > 8) {
+        failures.push("WGPU mapped drain coalescing retained uploads beyond 8 ms");
+      }
+      if ((coalescing?.telemetry?.deferredBoundaries ?? 0) === 0) {
+        failures.push("WGPU mapped drain coalescing was enabled but never deferred work");
+      }
+      if ((coalescing?.telemetry?.actualSubmissions ?? 0) === 0) {
+        failures.push("WGPU mapped drain coalescing was enabled but never submitted mapped work");
+      }
+    }
+  }
+  const requestedPackageProjection = scenario.params?.wgpupackageprojection;
+  if (requestedPackageProjection != null) {
+    const expectedPackageProjection = String(requestedPackageProjection) === "1";
+    const projection = final.causalTelemetry?.webgpu?.passPackageProjection;
+    const activePackageProjection = projection?.active;
+    if (activePackageProjection !== expectedPackageProjection) {
+      failures.push(
+        `WGPU pass-package projection mismatch: requested=${expectedPackageProjection ? 1 : 0} ` +
+        `active=${activePackageProjection == null ? "unavailable" : activePackageProjection ? 1 : 0}`
+      );
+    }
+    if (expectedPackageProjection && projection?.runtimeEligible !== false) {
+      failures.push("WGPU passive pass-package projection must remain runtimeEligible=false");
+    }
+    if (expectedPackageProjection && activePackageProjection === true) {
+      const projectionHazards = [
+        ["unsupported", projection?.records?.unsupported],
+        ["malformed", projection?.records?.malformed],
+        ["nested passes", projection?.records?.nestedPasses],
+        ["state outside pass", projection?.records?.stateOutsidePass],
+        ["incomplete passes", projection?.boundaries?.incompletePasses],
+      ];
+      if (!(Number(projection?.legacy?.records) > 0)) {
+        failures.push("WGPU pass-package projection observed zero records");
+      }
+      if (!(Number(projection?.projected?.completePassPackages) > 0)) {
+        failures.push("WGPU pass-package projection observed zero complete passes");
+      }
+      for (const [label, value] of projectionHazards) {
+        if (!Number.isFinite(Number(value)) || Number(value) !== 0) {
+          failures.push(
+            `WGPU pass-package projection ${label} must be zero; got ${value ?? "unavailable"}`
+          );
+        }
+      }
+    }
+  }
+  const requestedOwnershipTrace = scenario.params?.wgpuownershiptrace;
+  if (requestedOwnershipTrace != null) {
+    const expectedOwnershipTrace = String(requestedOwnershipTrace) === "1";
+    const trace = final.causalTelemetry?.webgpu?.ownershipTrace;
+    if (
+      trace?.requested !== expectedOwnershipTrace ||
+      trace?.active !== expectedOwnershipTrace ||
+      trace?.enabled !== expectedOwnershipTrace
+    ) {
+      failures.push(
+        `WGPU ownership trace mismatch: requested=${expectedOwnershipTrace ? 1 : 0} ` +
+        `capturedRequested=${trace?.requested == null ? "unavailable" : trace.requested ? 1 : 0} ` +
+        `active=${trace?.active == null ? "unavailable" : trace.active ? 1 : 0}`
+      );
+    }
+    if (expectedOwnershipTrace) {
+      if (trace?.setterAvailable !== true || trace?.setterInvoked !== true) {
+        failures.push("WGPU ownership trace native setter evidence unavailable");
+      }
+      if (trace?.registered !== true) {
+        failures.push("WGPU ownership trace ring was not registered");
+      }
+      if (!(Number(trace?.observedRecords) > 0)) {
+        failures.push("WGPU ownership trace observed zero records");
+      }
+      for (const [label, value] of [
+        ["native dropped", trace?.nativeDropped],
+        ["record epoch mismatches", trace?.recordEpochMismatchCount],
+        ["ordering violations", trace?.monotonicOrderingViolationCount],
+        ["malformed headers", trace?.malformedHeaderCount],
+        ["malformed descriptors", trace?.malformedDescriptorCount],
+      ]) {
+        if (!Number.isFinite(Number(value)) || Number(value) !== 0) {
+          failures.push(`WGPU ownership trace ${label}=${value ?? "unavailable"}`);
+        }
+      }
+      const eventHistogram = trace?.eventHistogram;
+      const attributionHistogram = trace?.commandAttributionHistogram;
+      const publicationHistogram = trace?.commandPublicationHistogram;
+      if (!Array.isArray(eventHistogram) || eventHistogram.length < 11) {
+        failures.push("WGPU ownership trace event histogram unavailable");
+      } else {
+        for (const [label, index] of [
+          ["epoch", 1],
+          ["command", 2],
+          ["commit", 3],
+          ["load requested", 7],
+          ["pending reserved", 9],
+          ["pass begin", 10],
+        ]) {
+          if (!(Number(eventHistogram[index]) > 0)) {
+            failures.push(`WGPU ownership trace observed zero ${label} events`);
+          }
+        }
+      }
+      if (!Array.isArray(attributionHistogram) || attributionHistogram.length !== 4) {
+        failures.push("WGPU ownership trace attribution histogram unavailable");
+      }
+      if (!Array.isArray(publicationHistogram) || publicationHistogram.length !== 4) {
+        failures.push("WGPU ownership trace publication histogram unavailable");
+      }
+      const commandEvents = Number(eventHistogram?.[2]);
+      const attributedCommands = Array.isArray(attributionHistogram)
+        ? attributionHistogram.reduce((sum, value) => sum + Number(value || 0), 0)
+        : Number.NaN;
+      const publishedCommands = Array.isArray(publicationHistogram)
+        ? publicationHistogram.reduce((sum, value) => sum + Number(value || 0), 0)
+        : Number.NaN;
+      if (!Number.isFinite(commandEvents) || attributedCommands !== commandEvents) {
+        failures.push("WGPU ownership trace attribution counts do not conserve commands");
+      }
+      if (!Number.isFinite(commandEvents) || publishedCommands !== commandEvents) {
+        failures.push("WGPU ownership trace publication counts do not conserve commands");
+      }
+    }
+  }
+  failures.push(...evaluateWgpuGeometryRangeEvidence({
+    requested: scenario.params?.wgpugeomrange,
+    telemetry: observedWgpu,
+  }).failures);
+  failures.push(...evaluateWgpuSemanticQualificationEvidence({
+    requested: scenario.params?.wgpusemantic,
+    telemetry: final.causalTelemetry?.webgpu,
+    loadedCheckpointGeneration:
+      final.causalTelemetry?.core?.loadedCheckpointGeneration,
+  }).failures);
+  failures.push(...evaluateWgpuRendererWorkerProbeEvidence({
+    requested: scenario.params?.wgpurenderprobe,
+    telemetry: final.causalTelemetry?.webgpu,
+  }).failures);
+  const requestedAudioTransport = scenario.params?.audiotransport;
+  if (requestedAudioTransport) {
+    const activeAudioTransport = final.causalTelemetry?.audio?.activeTransport;
+    if (activeAudioTransport !== requestedAudioTransport) {
+      failures.push(
+        `audio transport mismatch: requested=${requestedAudioTransport} ` +
+        `active=${activeAudioTransport ?? "unavailable"} ` +
+        `fallback=${final.causalTelemetry?.audio?.transportFallbackReason || "none"}`
+      );
+    }
   }
   if (!String(final.mountNote || "").includes("Dolphin")) invalidReasons.push("Dolphin did not mount");
   if (consoleLines.some((line) => /\[probe-error\]/i.test(line)) && !invalidReasons.length) {
@@ -844,10 +1673,13 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "wgpustatecache", "wgpuubocache", "wgpugeompack", "wgpuuploadmb", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuuploadrunprojection", "wgpuubocomputeprojection", "wgpuubocompute", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagingslots", "wgpustagefast", "wgpumappedtiming", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
+  const blankUploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    softwareParams.wgpurenderprobe
+  );
   const all = [
     {
       name: "software-stable",
@@ -855,11 +1687,11 @@ function selectedScenarios() {
       assertAfterSeconds: numberEnv("ASSERT_AFTER_SECONDS", 5),
       params: softwareParams,
       thresholds: {
-        minPresentFps: numberEnv("SOFTWARE_MIN_PRESENT_FPS", 50),
+        minPresentFps: blankUploadProbe ? 0 : numberEnv("SOFTWARE_MIN_PRESENT_FPS", 50),
         minCoreFps: numberEnv("SOFTWARE_MIN_CORE_FPS", 55),
         minGameSpeed: numberEnv("SOFTWARE_MIN_GAME_SPEED", 95),
         maxGapMs: numberEnv("SOFTWARE_MAX_GAP_MS", 90),
-        requireVisibleChange: true,
+        requireVisibleChange: !blankUploadProbe,
         requireNoGlError: false,
       },
     },
@@ -940,6 +1772,135 @@ async function pauseForBattleCheckpoint(page) {
   return response;
 }
 
+async function establishFixedSceneMeasurementBoundary(
+  page,
+  saveStateUrl,
+  expectedCheckpoint,
+  {
+    jitCacheReadinessRequired = false,
+    jitCacheReadyTimeoutMs = 120_000,
+    wgpuReplayRequired = false,
+  } = {}
+) {
+  let pause = null;
+  let jitCacheReadiness = { required: false, ready: true, reason: "disabled-by-scenario" };
+  let pausedJitCacheReadiness = null;
+  let jitCacheFenceAttempts = 0;
+  if (jitCacheReadinessRequired) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      jitCacheFenceAttempts = attempt;
+      jitCacheReadiness = await waitForStableJitCacheReadiness(page, {
+        timeoutMs: jitCacheReadyTimeoutMs,
+      });
+      pause = await pauseForBattleCheckpoint(page);
+      pausedJitCacheReadiness = await requestWorkerRpc(
+        page,
+        "validationReadJitCacheReadiness",
+        {},
+        workerRpcTimeoutMs()
+      );
+      const pausedEvaluation = evaluateJitCacheReadiness(pausedJitCacheReadiness);
+      const countersStable =
+        jitCacheReadinessSignature(pausedJitCacheReadiness) ===
+        jitCacheReadinessSignature(jitCacheReadiness.final);
+      if (pausedEvaluation.ready && countersStable) break;
+      if (attempt === 3) {
+        throw new Error(
+          "JIT cache changed between the running-worker barrier and pause: " +
+          JSON.stringify({ before: jitCacheReadiness.final, after: pausedJitCacheReadiness })
+        );
+      }
+      await resumeAfterBattleCheckpoint(page);
+      pause = null;
+    }
+  } else {
+    pause = await pauseForBattleCheckpoint(page);
+  }
+  const replayQuiescence = await finalizeWgpuReplay(page, {
+    required: wgpuReplayRequired,
+  });
+  const reload = await loadStateFileWithTimeout(page, saveStateUrl);
+  if (!reload?.loaded) {
+    throw new Error(
+      `Fixed-scene measurement save reload failed: ${reload?.error || JSON.stringify(reload)}`
+    );
+  }
+  const checkpoint = assertBattleCheckpoint(
+    parseBattleCheckpoint(reload),
+    expectedCheckpoint
+  );
+  if (Number(checkpoint.coreTicks) !== Number(expectedCheckpoint.coreTicks)) {
+    throw new Error(
+      `Fixed-scene measurement requires canonical tick ${expectedCheckpoint.coreTicks}, ` +
+      `got ${checkpoint.coreTicks}`
+    );
+  }
+  const progress = await requestWorkerRpc(page, "validationReadCoreProgress", {}, 5000);
+
+  const requiredFinite = [
+    "coreTicks",
+    "coreTicksPerSecond",
+    "frame",
+    "ppcPc",
+    "loadedCheckpointGeneration",
+    "loadedCheckpointTicks",
+    "loadedCheckpointPpcPc",
+  ];
+  const invalid = requiredFinite.filter((field) => !Number.isFinite(Number(progress?.[field])));
+  if (invalid.length > 0 || Number(progress.coreTicksPerSecond) <= 0) {
+    throw new Error(
+      `Fixed-scene worker progress is incomplete: ${invalid.join(", ") || "coreTicksPerSecond"}`
+    );
+  }
+  const mismatches = [];
+  if (Number(progress.coreTicks) !== Number(checkpoint.coreTicks)) {
+    mismatches.push(`coreTicks ${progress.coreTicks} != ${checkpoint.coreTicks}`);
+  }
+  if (Number(progress.ppcPc) !== Number(checkpoint.ppcPc)) {
+    mismatches.push(`ppcPc ${progress.ppcPc} != ${checkpoint.ppcPc}`);
+  }
+  if (Number(progress.loadedCheckpointTicks) !== Number(checkpoint.coreTicks)) {
+    mismatches.push(
+      `loadedCheckpointTicks ${progress.loadedCheckpointTicks} != ${checkpoint.coreTicks}`
+    );
+  }
+  if (Number(progress.loadedCheckpointPpcPc) !== Number(checkpoint.ppcPc)) {
+    mismatches.push(
+      `loadedCheckpointPpcPc ${progress.loadedCheckpointPpcPc} != ${checkpoint.ppcPc}`
+    );
+  }
+  if (
+    Number(progress.loadedCheckpointGeneration) !==
+    Number(checkpoint.loadedCheckpointGeneration)
+  ) {
+    mismatches.push(
+      `loadedCheckpointGeneration ${progress.loadedCheckpointGeneration} != ` +
+      `${checkpoint.loadedCheckpointGeneration}`
+    );
+  }
+  if (mismatches.length > 0) {
+    throw new Error(`Fixed-scene measurement boundary drifted while paused: ${mismatches.join("; ")}`);
+  }
+
+  return {
+    pause,
+    jitCacheReadiness,
+    pausedJitCacheReadiness,
+    jitCacheFenceAttempts,
+    replayQuiescence,
+    reload,
+    checkpoint,
+    progress,
+    signature: {
+      coreTicks: checkpoint.coreTicks,
+      ppcPc: checkpoint.ppcPc,
+      xfbHash: checkpoint.xfbHash,
+      width: checkpoint.width,
+      height: checkpoint.height,
+    },
+  };
+}
+
 async function resumeAfterBattleCheckpoint(page) {
   const response = await page.evaluate(async ({ timeoutMs }) => {
     const host = window.__host;
@@ -961,6 +1922,30 @@ async function resumeAfterBattleCheckpoint(page) {
   if (response?.coreStateName !== "Running") {
     throw new Error(`Core did not resume after battle checkpoint: ${JSON.stringify(response)}`);
   }
+  return response;
+}
+
+async function finalizeWgpuReplay(page, { required = false } = {}) {
+  const timeoutMs = Math.max(workerRpcTimeoutMs(), 30_000);
+  const response = await requestWorkerRpc(
+    page,
+    "validationFinalizeWgpuReplay",
+    { timeoutMs, requireRing: required },
+    timeoutMs + 1000
+  );
+  const replayQuiescence = response?.replayQuiescence;
+  if (
+    !replayQuiescence?.quiesced ||
+    replayQuiescence.backlog !== 0 ||
+    replayQuiescence.readIndex !== replayQuiescence.publishedReadIndex ||
+    replayQuiescence.coreStateName !== "Paused" ||
+    (required && !replayQuiescence.registered)
+  ) {
+    throw new Error(
+      `WGPU replay did not quiesce: ${JSON.stringify(replayQuiescence)}`
+    );
+  }
+  return replayQuiescence;
 }
 
 async function readRendererDiagnostics(page) {
@@ -975,7 +1960,7 @@ async function readRendererDiagnostics(page) {
   };
 }
 
-async function requestWorkerRpc(page, type, payload = {}) {
+async function requestWorkerRpc(page, type, payload = {}, timeoutMs = workerRpcTimeoutMs()) {
   return page.evaluate(async ({ type, payload, timeoutMs }) => {
     const adapter = window.__host?.adapter;
     if (!adapter?.request) throw new Error(`Active adapter does not expose worker RPC ${type}`);
@@ -989,7 +1974,59 @@ async function requestWorkerRpc(page, type, payload = {}) {
         (error) => { clearTimeout(timer); reject(error); }
       );
     });
-  }, { type, payload, timeoutMs: workerRpcTimeoutMs() });
+  }, { type, payload, timeoutMs });
+}
+
+async function waitForStableJitCacheReadiness(page, { timeoutMs, pollIntervalMs = 250 }) {
+  const startedAt = Date.now();
+  const snapshots = [];
+  let previousSignature = null;
+  let stableReadySamples = 0;
+  while (Date.now() - startedAt <= timeoutMs) {
+    const snapshot = await requestWorkerRpc(
+      page,
+      "validationReadJitCacheReadiness",
+      {},
+      Math.min(workerRpcTimeoutMs(), timeoutMs)
+    );
+    const evaluation = evaluateJitCacheReadiness(snapshot);
+    const signature = jitCacheReadinessSignature(snapshot);
+    snapshots.push({ ...snapshot, evaluation });
+    if (snapshots.length > 8) snapshots.shift();
+    if (evaluation.ready && signature === previousSignature) {
+      stableReadySamples += 1;
+    } else {
+      stableReadySamples = evaluation.ready ? 1 : 0;
+    }
+    if (stableReadySamples >= 2) {
+      return {
+        required: true,
+        ready: true,
+        waitedMs: Date.now() - startedAt,
+        stableReadySamples,
+        final: snapshot,
+        snapshots,
+      };
+    }
+    previousSignature = signature;
+    await page.waitForTimeout(pollIntervalMs);
+  }
+  const final = snapshots.at(-1) || null;
+  throw new Error(
+    `JIT cache did not reach stable readiness within ${timeoutMs} ms: ${JSON.stringify(final)}`
+  );
+}
+
+function jitCacheReadinessSignature(snapshot) {
+  return JSON.stringify({
+    cacheSize: Number(snapshot?.cacheSize),
+    newCompileCount: Number(snapshot?.newCompileCount),
+    idbWriteCount: Number(snapshot?.idbWriteCount),
+    lazyFillAddedEntries: Number(snapshot?.lazyFillAddedEntries),
+    pthreadBarrierGeneration: Number(snapshot?.pthreadBarrierGeneration),
+    pthreadBarrierAcked: Number(snapshot?.pthreadBarrierAcked),
+    pthreadRequiredBarrierAcked: Number(snapshot?.pthreadRequiredBarrierAcked),
+  });
 }
 
 async function loadStateFileWithTimeout(page, saveUrl) {
@@ -1017,9 +2054,12 @@ function workerRpcTimeoutMs() {
 function withExpectedRendererIdentity(diagnostics, params = {}) {
   const expectedVideoBackend = expectedDolphinVideoBackend(params.video);
   const expectedRequestedPresenterBackend = normalizePresenterIdentity(params.presenter);
-  const expectedActivePresenterBackend = expectedVideoBackend === "OGL"
-    ? "ogl"
-    : expectedRequestedPresenterBackend;
+  const uploadProbe = ["inline-upload", "worker-upload", "null-drain"].includes(
+    params.wgpurenderprobe
+  );
+  const expectedActivePresenterBackend = uploadProbe
+    ? "wgpu-upload-probe"
+    : expectedVideoBackend === "OGL" ? "ogl" : expectedRequestedPresenterBackend;
   return {
     ...diagnostics,
     expectedVideoBackend,
@@ -1136,7 +2176,79 @@ function fixedWorkObservation(value) {
   };
 }
 
-async function readFixedWorkProgress(page) {
+async function readInputMarkerBarrierState(page) {
+  return page.evaluate(() => {
+    const info = window.__lastFrameInfo || {};
+    const telemetry = info.causalTelemetry || window.__causalTelemetry || null;
+    const marker = telemetry?.input?.marker || null;
+    return {
+      available: marker?.enabled === true,
+      appliedCount: Number(marker?.appliedCount) || 0,
+      completedCount: Number(marker?.markerCompletedCount) || 0,
+      supersededCount: Number(marker?.supersededCount) || 0,
+      generationMismatchCount: Number(marker?.generationMismatchCount) || 0,
+      generationUnavailableCount: Number(marker?.generationUnavailableCount) || 0,
+    };
+  });
+}
+
+async function waitForInputMarkerReady(page, { pollIntervalMs, timeoutMs }) {
+  const startedAt = Date.now();
+  let final = await readInputMarkerBarrierState(page);
+  while (final.available !== true && Date.now() - startedAt < timeoutMs) {
+    await page.waitForTimeout(pollIntervalMs);
+    final = await readInputMarkerBarrierState(page);
+  }
+  return {
+    required: true,
+    ready: final.available === true,
+    waitedMs: Date.now() - startedAt,
+    final,
+  };
+}
+
+async function waitForInputMarkerCompletion(page, baseline, { pollIntervalMs, timeoutMs }) {
+  if (baseline?.available !== true) {
+    return { available: false, completed: false, waitedMs: 0, baseline, final: baseline };
+  }
+  const startedAt = Date.now();
+  let final = baseline;
+  while (Date.now() - startedAt < timeoutMs) {
+    await page.waitForTimeout(pollIntervalMs);
+    final = await readInputMarkerBarrierState(page);
+    if (
+      final.available === true &&
+      final.appliedCount > baseline.appliedCount &&
+      final.completedCount > baseline.completedCount
+    ) {
+      return {
+        available: true,
+        completed: true,
+        waitedMs: Date.now() - startedAt,
+        baseline,
+        final,
+      };
+    }
+  }
+  return {
+    available: true,
+    completed: false,
+    waitedMs: Date.now() - startedAt,
+    timeoutMs,
+    baseline,
+    final,
+  };
+}
+
+async function readFixedWorkProgress(page, { liveWorkerProgress = false } = {}) {
+  if (liveWorkerProgress) {
+    const progress = await requestWorkerRpc(page, "validationReadCoreProgress", {}, 5000);
+    return {
+      coreTicks: Number(progress?.coreTicks) || 0,
+      frame: Number(progress?.frame) || 0,
+      observedAtMs: Number(progress?.observedAtMs),
+    };
+  }
   return page.evaluate(() => {
     const info = window.__lastFrameInfo || {};
     return {
@@ -1152,6 +2264,7 @@ async function waitForFixedEmulatedWorkProgress(page, {
   coreTicksPerSecond,
   deadlineMs,
   pollIntervalMs,
+  liveWorkerProgress = false,
   targetCoreSeconds,
   wallTimeCapSeconds,
 }) {
@@ -1162,7 +2275,7 @@ async function waitForFixedEmulatedWorkProgress(page, {
       pollIntervalMs,
     });
     if (delayMs > 0) await page.waitForTimeout(delayMs);
-    const observation = await readFixedWorkProgress(page);
+    const observation = await readFixedWorkProgress(page, { liveWorkerProgress });
     const summary = summarizeFixedEmulatedWork({
       targetCoreSeconds,
       coreTicksPerSecond,
@@ -1222,47 +2335,93 @@ async function readWebGpuAdapter(page) {
   });
 }
 
-async function launchBrowser(chromium, headed) {
+async function launchBrowser(chromium, headed, cpuAffinity) {
+  // Persistent profiles are opt-in and caller-owned. Closing the context
+  // releases Chrome after each run but deliberately leaves origin storage on disk.
+  const requestedPersistentProfile = process.env.PERF_PERSIST_DIR?.trim();
+  const persistentProfileDir = requestedPersistentProfile
+    ? path.resolve(requestedPersistentProfile)
+    : null;
+  if (persistentProfileDir) await mkdir(persistentProfileDir, { recursive: true });
+  const disableBackgroundThrottling =
+    process.env.PERF_DISABLE_BACKGROUND_THROTTLING === "1";
   const args = [
     "--autoplay-policy=no-user-gesture-required",
     "--enable-webgl",
     "--enable-unsafe-webgpu",
-    "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
   ];
+  if (disableBackgroundThrottling) {
+    args.push(
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows"
+    );
+  } else {
+    args.push("--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling");
+  }
   if (process.env.PERF_PROBE_AGGRESSIVE_GPU === "1") {
     args.push("--ignore-gpu-blocklist", "--use-angle=d3d11");
   }
-  const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
-  const configuredExecutable = process.env.BROWSER_EXECUTABLE
-    ? path.resolve(process.env.BROWSER_EXECUTABLE)
-    : findInstalledBrowserExecutable(requestedChannel);
-  if (configuredExecutable) {
-    try {
-      const browser = await chromium.launch({
-        executablePath: configuredExecutable,
-        headless: !headed,
-        args,
-      });
-      return {
-        browser,
-        requestedChannel,
-        actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
-        executablePath: configuredExecutable,
-        source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
-      };
-    } catch (error) {
-      console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
+  const webGpuPowerOverride = process.env.PERF_WEBGPU_POWER_OVERRIDE?.trim();
+  const supportedPowerOverrides = new Set([
+    "default-low-power",
+    "default-high-performance",
+    "force-low-power",
+    "force-high-performance",
+  ]);
+  if (webGpuPowerOverride) {
+    if (!supportedPowerOverrides.has(webGpuPowerOverride)) {
+      throw new Error(
+        `Invalid PERF_WEBGPU_POWER_OVERRIDE "${webGpuPowerOverride}". ` +
+        `Use ${[...supportedPowerOverrides].join(", ")}.`
+      );
     }
+    args.push(`--use-webgpu-power-preference=${webGpuPowerOverride}`);
   }
-  const executablePath = path.resolve(chromium.executablePath());
-  const browser = await chromium.launch({ executablePath, headless: !headed, args });
-  return {
-    browser,
-    requestedChannel,
-    actualChannel: "bundled-chromium",
-    executablePath,
-    source: "playwright-bundled",
-  };
+  const launched = await launchWithWindowsCpuAffinity(async () => {
+    const requestedChannel = process.env.BROWSER_CHANNEL || "chrome";
+    const configuredExecutable = process.env.BROWSER_EXECUTABLE
+      ? path.resolve(process.env.BROWSER_EXECUTABLE)
+      : findInstalledBrowserExecutable(requestedChannel);
+    if (configuredExecutable) {
+      try {
+        const launchOptions = {
+          executablePath: configuredExecutable,
+          headless: !headed,
+          args,
+        };
+        const browser = persistentProfileDir
+          ? await chromium.launchPersistentContext(persistentProfileDir, launchOptions)
+          : await chromium.launch(launchOptions);
+        return {
+          browser,
+          requestedChannel,
+          actualChannel: process.env.BROWSER_EXECUTABLE ? "custom-executable" : requestedChannel,
+          executablePath: configuredExecutable,
+          args: [...args],
+          source: process.env.BROWSER_EXECUTABLE ? "configured-executable" : "installed-executable",
+          persistentProfileDir,
+        };
+      } catch (error) {
+        console.warn(`Unable to launch ${configuredExecutable}; falling back to bundled Chromium: ${error.message}`);
+      }
+    }
+    const executablePath = path.resolve(chromium.executablePath());
+    const launchOptions = { executablePath, headless: !headed, args };
+    const browser = persistentProfileDir
+      ? await chromium.launchPersistentContext(persistentProfileDir, launchOptions)
+      : await chromium.launch(launchOptions);
+    return {
+      browser,
+      requestedChannel,
+      actualChannel: "bundled-chromium",
+      executablePath,
+      args: [...args],
+      source: "playwright-bundled",
+      persistentProfileDir,
+    };
+  }, cpuAffinity);
+  return { ...launched.value, cpuAffinity: launched.cpuAffinity };
 }
 
 function findInstalledBrowserExecutable(channel) {
@@ -1334,14 +2493,18 @@ async function verifyServedFixture(url, expectedSha256) {
   }
 }
 
-async function verifyServedApplication(baseUrl, coreArtifact) {
+async function verifyServedApplication(baseUrl, coreArtifact, corePath) {
+  const selectedCore = selectedCoreServedPaths(root, corePath);
   const roots = [
     "index.html",
     "src/app.js",
     "src/upstream-discio-worker.js",
     "cores/dolphin/dolphin-core-upstream.js",
   ];
-  const optionalRuntimeAssets = ["cores/dolphin/prebuilt-jit-cache.bin"];
+  for (const selectedPath of [selectedCore.js, selectedCore.wasm]) {
+    if (!roots.includes(selectedPath)) roots.push(selectedPath);
+  }
+  const optionalRuntimeAssets = [selectedCore.prebuilt];
   for (const asset of optionalRuntimeAssets) {
     if (existsSync(path.join(root, ...asset.split("/")))) roots.push(asset);
   }
@@ -1350,7 +2513,7 @@ async function verifyServedApplication(baseUrl, coreArtifact) {
   const servedArtifacts = {};
   for (const relativePath of paths) {
     const localPath = path.join(root, ...relativePath.split("/"));
-    expectedArtifacts[relativePath] = relativePath === "cores/dolphin/dolphin-core-upstream.wasm"
+    expectedArtifacts[relativePath] = relativePath === selectedCore.wasm
       ? coreArtifact
       : await describeFile(localPath, { hash: true });
     const url = new URL(relativePath, baseUrl);
@@ -1364,6 +2527,26 @@ async function verifyServedApplication(baseUrl, coreArtifact) {
     };
   }
   const identity = assertServedArtifactIdentity(expectedArtifacts, servedArtifacts);
+  let prebuiltJitCache = {
+    present: false,
+    path: selectedCore.prebuilt,
+    verified: true,
+  };
+  if (paths.includes(selectedCore.prebuilt)) {
+    const blob = await readFile(path.join(root, ...selectedCore.prebuilt.split("/")));
+    const evidence = {
+      path: selectedCore.prebuilt,
+      ...describePrebuiltJitCache(blob),
+    };
+    const validation = evaluatePrebuiltJitCacheEvidence({
+      evidence,
+      expectedSha256: coreArtifact.sha256,
+    });
+    if (!validation.verified) {
+      throw new Error(`Selected prebuilt JIT cache identity failed: ${validation.failures.join("; ")}`);
+    }
+    prebuiltJitCache = { present: true, ...evidence, verified: true };
+  }
   const manifestText = JSON.stringify(
     Object.fromEntries(paths.map((relativePath) => [relativePath, {
       bytes: expectedArtifacts[relativePath].bytes,
@@ -1378,6 +2561,7 @@ async function verifyServedApplication(baseUrl, coreArtifact) {
     baseUrl,
     roots,
     dependencyCount: paths.length,
+    prebuiltJitCache,
     manifestSha256: createHash("sha256").update(manifestText).digest("hex"),
     isolationHeaders: {
       coop: rootResponse.headers.get("cross-origin-opener-policy"),
@@ -1425,27 +2609,33 @@ function normalizeServedPath(value) {
   return normalized;
 }
 
-async function collectBuildProvenance(coreArtifact) {
-  const buildInfoRelative = [
+async function collectBuildProvenance(coreArtifact, corePath) {
+  const normalizedCorePath = path.relative(root, corePath).replaceAll("\\", "/");
+  const candidateMatch = /^build\/core-candidates\/([0-9a-f]{64})\/dolphin-core-upstream\.wasm$/i.exec(
+    normalizedCorePath
+  );
+  const candidatePrefix = candidateMatch ? `build/core-candidates/${candidateMatch[1].toLowerCase()}` : null;
+  const buildInfoRelative = candidatePrefix ? `${candidatePrefix}/dolphin-core-upstream.build.json` : [
     "cores/dolphin/dolphin-core-upstream.build.json",
     "cores/dolphin/build-info.json",
   ].find((candidate) => existsSync(path.join(root, ...candidate.split("/")))) ||
     "cores/dolphin/dolphin-core-upstream.build.json";
   const evidenceSpecs = {
     buildInfo: { relativePath: buildInfoRelative, committed: false },
-    sourceLock: { relativePath: "provenance/dolphin-source.lock.json", committed: true },
-    abiManifest: { relativePath: "provenance/dolphin-core-abi-v1.json", committed: true },
-    toolchainLock: { relativePath: "provenance/wasm-toolchain.lock.json", committed: true },
-    vendorSnapshot: { relativePath: "provenance/dolphin-vendor-snapshot-v1.json", committed: true },
-    nagaCargoLock: { relativePath: "tools/naga-spirv-wgsl/Cargo.lock", committed: true, json: false },
+    sourceLock: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-source.lock.json` : "provenance/dolphin-source.lock.json", headPath: "provenance/dolphin-source.lock.json", committed: true },
+    abiManifest: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-core-abi-v1.json` : "provenance/dolphin-core-abi-v1.json", headPath: candidatePrefix ? null : "provenance/dolphin-core-abi-v1.json", committed: true, candidateBundleMember: Boolean(candidatePrefix) },
+    toolchainLock: { relativePath: candidatePrefix ? `${candidatePrefix}/wasm-toolchain.lock.json` : "provenance/wasm-toolchain.lock.json", headPath: "provenance/wasm-toolchain.lock.json", committed: true },
+    vendorSnapshot: { relativePath: candidatePrefix ? `${candidatePrefix}/dolphin-vendor-snapshot-v1.json` : "provenance/dolphin-vendor-snapshot-v1.json", headPath: "provenance/dolphin-vendor-snapshot-v1.json", committed: true },
+    nagaCargoLock: { relativePath: candidatePrefix ? `${candidatePrefix}/Cargo.lock` : "tools/naga-spirv-wgsl/Cargo.lock", headPath: "tools/naga-spirv-wgsl/Cargo.lock", committed: true, json: false },
   };
   const loadedEntries = await Promise.all(
     Object.entries(evidenceSpecs).map(async ([key, spec]) => [key, await loadBuildEvidence(spec)])
   );
   const loaded = Object.fromEntries(loadedEntries);
-  const jsPath = path.join(root, "cores", "dolphin", "dolphin-core-upstream.js");
+  const jsPath = candidatePrefix ? path.join(root, candidatePrefix, "dolphin-core-upstream.js") :
+    path.join(root, "cores", "dolphin", "dolphin-core-upstream.js");
   const actualArtifacts = {
-    js: await describeBuildArtifact(jsPath, "lf-normalized"),
+    js: { ...(await describeBuildArtifact(jsPath, "lf-normalized")), path: "cores/dolphin/dolphin-core-upstream.js" },
     wasm: {
       path: "cores/dolphin/dolphin-core-upstream.wasm",
       size: coreArtifact.bytes,
@@ -1503,6 +2693,48 @@ async function collectBuildProvenance(coreArtifact) {
     untrustedEnvironmentOverrides,
     verification: null,
   };
+  if (candidatePrefix) {
+    const candidateManifestPath = `${candidatePrefix}/manifest.json`;
+    const candidateManifest = await loadBuildEvidence({ relativePath: candidateManifestPath, committed: false });
+    const bundleFiles = {};
+    for (const entry of candidateManifest.value?.files || []) {
+      const candidateFile = path.join(root, candidatePrefix, String(entry?.name || ""));
+      bundleFiles[entry.name] = existsSync(candidateFile)
+        ? (await describeFile(candidateFile)).sha256
+        : null;
+    }
+    const prebuiltPath = path.join(root, candidatePrefix, "prebuilt-jit-cache.bin");
+    const prebuiltEntry = candidateManifest.value?.files?.find(
+      (entry) => entry?.name === "prebuilt-jit-cache.bin"
+    );
+    const prebuiltEvidence = existsSync(prebuiltPath)
+      ? {
+          path: `${candidatePrefix}/prebuilt-jit-cache.bin`,
+          ...describePrebuiltJitCache(await readFile(prebuiltPath)),
+        }
+      : null;
+    const prebuiltValidation = prebuiltEvidence || prebuiltEntry
+      ? evaluatePrebuiltJitCacheEvidence({
+          evidence: prebuiltEvidence,
+          expectedSha256: coreArtifact.sha256,
+          manifestEntry: prebuiltEntry,
+          requireManifestEntry: true,
+        })
+      : { verified: true, evidence: null, failures: [] };
+    const bundleValidation = evaluateCandidateCoreBundle({
+      manifest: candidateManifest.value,
+      expectedSha256: coreArtifact.sha256,
+      files: bundleFiles,
+    });
+    const candidateFailures = [...bundleValidation.failures, ...prebuiltValidation.failures];
+    buildProvenance.candidateBundle = {
+      path: candidateManifestPath,
+      ...bundleValidation,
+      verified: candidateFailures.length === 0,
+      failures: candidateFailures,
+      prebuiltJitCache: prebuiltValidation,
+    };
+  }
   buildProvenance.verification = validateLockedBuildProvenance(buildProvenance);
   return {
     buildProvenance,
@@ -1516,7 +2748,7 @@ async function collectBuildProvenance(coreArtifact) {
   };
 }
 
-async function loadBuildEvidence({ relativePath, committed, json = true }) {
+async function loadBuildEvidence({ relativePath, headPath = relativePath, committed, json = true, candidateBundleMember = false }) {
   const absolutePath = path.join(root, ...relativePath.split("/"));
   if (!existsSync(absolutePath)) {
     return {
@@ -1545,11 +2777,11 @@ async function loadBuildEvidence({ relativePath, committed, json = true }) {
   }
   const rawBuffer = Buffer.from(raw);
   const normalizedBuffer = Buffer.from(raw.replace(/\r\n/g, "\n"));
-  const head = spawnSync("git", ["show", `HEAD:${relativePath}`], {
+  const head = headPath ? spawnSync("git", ["show", `HEAD:${headPath}`], {
     cwd: root,
     encoding: "buffer",
     windowsHide: true,
-  });
+  }) : { status: 1, stdout: Buffer.alloc(0) };
   const headNormalized = head.status === 0
     ? Buffer.from(head.stdout.toString("utf8").replace(/\r\n/g, "\n"))
     : null;
@@ -1566,6 +2798,7 @@ async function loadBuildEvidence({ relativePath, committed, json = true }) {
       trackedAtHead: head.status === 0,
       matchesHead: Boolean(headNormalized && sha256Buffer(headNormalized) === normalizedSha256),
       committedRequired: committed,
+      candidateBundleMember,
     },
   };
 }
@@ -1617,6 +2850,28 @@ async function packageBuildProvenance(scenarioDir, rawEvidenceFiles) {
 
 function sha256Buffer(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function waitForAnimationFrames(page, count, timeoutMs = 5000) {
+  let timeoutHandle;
+  try {
+    return await Promise.race([
+      page.evaluate(async (frameCount) => {
+        for (let index = 0; index < frameCount; index += 1) {
+          await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+        }
+        return performance.now();
+      }, count),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Compositor settle timed out after ${timeoutMs} ms`)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
 
 async function saveScreenshot(page, scenarioDir, name) {
@@ -1682,9 +2937,15 @@ function comparisonCsv(comparison, results, config) {
     arm: run.arm,
     armName: run.armName,
     valid: run.valid,
+    audioMode: run.audioMode,
+    audioClaimsEligible: run.audioClaimsEligible,
     invalidReasons: run.invalidReasons,
     primaryMetric: config.primaryMetric,
     primaryValue: readPath(run, config.primaryMetric),
+    wgpuSparseUboEligibleDelta: run.metrics.wgpuSparseUbo?.deltas?.eligibleCalls,
+    wgpuSparseUboStagedBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.stagedBytes,
+    wgpuSparseUboAvoidedBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.avoidedStagedBytes,
   }));
   const blockRows = comparison.blocks.map((block) => ({
     recordType: "block",
@@ -1707,6 +2968,8 @@ function runSummaryCsv(results) {
     armName: run.armName,
     valid: run.valid,
     qualificationEligible: run.qualification?.eligible,
+    audioMode: run.audioMode,
+    audioClaimsEligible: run.audioClaimsEligible,
     invalidReasons: run.invalidReasons,
     fullGameSpeedMean: run.metrics.fullTimedWindow?.gameSpeed?.mean,
     fullCoreFpsMean: run.metrics.fullTimedWindow?.coreFps?.mean,
@@ -1724,6 +2987,62 @@ function runSummaryCsv(results) {
     fixedWorkThroughputGameSpeedPercent:
       run.metrics.fixedEmulatedWork?.throughputGameSpeedPercent,
     fixedWorkThroughputCoreFps: run.metrics.fixedEmulatedWork?.throughputCoreFps,
+    wgpuProducerProfileActivated: run.metrics.wgpuProducerProfile?.activated,
+    wgpuProducerProfileSchemaVersion: run.metrics.wgpuProducerProfile?.schemaVersion,
+    wgpuProducerProfileEpoch: run.metrics.wgpuProducerProfile?.epoch,
+    wgpuProducerProfilePhaseOrder: run.metrics.wgpuProducerProfile?.phaseOrder,
+    wgpuProducerProfilePeriods: run.metrics.wgpuProducerProfile?.periods,
+    wgpuProducerProfileDeltaCalls: run.metrics.wgpuProducerProfile?.deltas?.calls,
+    wgpuProducerProfileDeltaSamples: run.metrics.wgpuProducerProfile?.deltas?.samples,
+    wgpuProducerProfileDeltaSampleTotalNs:
+      run.metrics.wgpuProducerProfile?.deltas?.sampleTotalNs,
+    wgpuProducerProfileDeltaEstimatedTotalNs:
+      run.metrics.wgpuProducerProfile?.deltas?.estimatedTotalNs,
+    wgpuProducerProfileFinalSampleMaxNs:
+      run.metrics.wgpuProducerProfile?.final?.sampleMaxNs,
+    wgpuTailGateActivated: run.metrics.wgpuTailGate?.activated,
+    wgpuTailGateExpectedEnabled: run.metrics.wgpuTailGate?.expectedEnabled,
+    wgpuTailGateSchemaVersion: run.metrics.wgpuTailGate?.schemaVersion,
+    wgpuTailGateEpoch: run.metrics.wgpuTailGate?.epoch,
+    wgpuTailGatePeriod: run.metrics.wgpuTailGate?.period,
+    wgpuTailGateDeltaPayloadSamples: run.metrics.wgpuTailGate?.deltas?.payloadSamples,
+    wgpuTailGateDeltaFlushNeededSamples:
+      run.metrics.wgpuTailGate?.deltas?.flushNeededSamples,
+    wgpuTailGateDeltaRefreshNeededSamples:
+      run.metrics.wgpuTailGate?.deltas?.refreshNeededSamples,
+    wgpuTailGateDeltaBothCleanSamples: run.metrics.wgpuTailGate?.deltas?.bothCleanSamples,
+    wgpuTailGateDeltaDirtyAtSkip: run.metrics.wgpuTailGate?.deltas?.dirtyAtSkip,
+    wgpuTailGateFinalRequested: run.metrics.wgpuTailGate?.final?.requested,
+    wgpuTailGateFinalAvailable: run.metrics.wgpuTailGate?.final?.available,
+    wgpuTailGateFinalEnabled: run.metrics.wgpuTailGate?.final?.enabled,
+    wgpuTailGateFinalPayloadSamples: run.metrics.wgpuTailGate?.final?.payloadSamples,
+    wgpuTailGateFinalFlushNeededSamples:
+      run.metrics.wgpuTailGate?.final?.flushNeededSamples,
+    wgpuTailGateFinalRefreshNeededSamples:
+      run.metrics.wgpuTailGate?.final?.refreshNeededSamples,
+    wgpuTailGateFinalBothCleanSamples: run.metrics.wgpuTailGate?.final?.bothCleanSamples,
+    wgpuTailGateFinalDirtyAtSkip: run.metrics.wgpuTailGate?.final?.dirtyAtSkip,
+    wgpuSparseUboSchema: run.metrics.wgpuSparseUbo?.schema,
+    wgpuSparseUboExpectedActive: run.metrics.wgpuSparseUbo?.expectedActive,
+    wgpuSparseUboActivated: run.metrics.wgpuSparseUbo?.activated,
+    wgpuSparseUboSampleCount: run.metrics.wgpuSparseUbo?.sampleCount,
+    wgpuSparseUboEligibleDelta: run.metrics.wgpuSparseUbo?.deltas?.eligibleCalls,
+    wgpuSparseUboBaselineDelta: run.metrics.wgpuSparseUbo?.deltas?.baselineCalls,
+    wgpuSparseUboSparseDelta: run.metrics.wgpuSparseUbo?.deltas?.sparseCalls,
+    wgpuSparseUboEqualDelta: run.metrics.wgpuSparseUbo?.deltas?.equalCalls,
+    wgpuSparseUboFullFallbackDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.fullFallbackCalls,
+    wgpuSparseUboCapacityMissDelta: run.metrics.wgpuSparseUbo?.deltas?.capacityMisses,
+    wgpuSparseUboFullBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.fullBytes,
+    wgpuSparseUboStagedBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.stagedBytes,
+    wgpuSparseUboAvoidedBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.avoidedStagedBytes,
+    wgpuSparseUboCopyForwardBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.copyForwardBytes,
+    wgpuSparseUboOverlayRangesDelta: run.metrics.wgpuSparseUbo?.deltas?.overlayRanges,
+    wgpuSparseUboOverlayBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.overlayBytes,
+    wgpuSparseUboPredictedGpuCopyBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.predictedGpuCopyBytes,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,

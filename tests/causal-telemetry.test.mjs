@@ -42,6 +42,20 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.deepEqual(value.webgpu.producerBindGroupRecordsSuppressed, [0, 0, 0]);
   assert.equal(value.webgpu.commandDroppedCount, 0);
   assert.equal(value.webgpu.producerUploadArenaConfiguredBytes, 0);
+  assert.equal(value.webgpu.producerRingWaitCount, 0);
+  assert.equal(value.webgpu.producerRingWaitTotalUs, 0);
+  assert.equal(value.webgpu.producerRingWaitMaxUs, 0);
+  assert.equal(value.webgpu.producerUploadWaitCount, 0);
+  assert.equal(value.webgpu.producerUploadWaitTotalUs, 0);
+  assert.equal(value.webgpu.producerUploadWaitMaxUs, 0);
+  assert.equal(value.webgpu.producerUboChangeAvailable, false);
+  assert.deepEqual(value.webgpu.producerUboChangedBytes, [0, 0, 0]);
+  assert.equal(value.webgpu.producerProfile.requested, false);
+  assert.equal(value.webgpu.producerProfile.available, false);
+  assert.equal(value.webgpu.producerProfile.enabled, false);
+  assert.equal(value.webgpu.producerProfile.phaseCount, 12);
+  assert.equal(value.webgpu.producerProfile.phaseOrder[0], "ring_publish");
+  assert.deepEqual(value.webgpu.producerProfile.estimatedTotalNs, new Array(12).fill(0));
   assert.equal(value.webgpu.uploadArenaRingHandoffMismatch, false);
   assert.equal(value.webgpu.uploadTimeoutBoundaryVerified, false);
   assert.equal(
@@ -78,6 +92,100 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.input.marker.overhead.enabled, false);
   assert.equal(value.input.marker.overhead.softwareFrameCopyPaint.calls, 0);
   assert.equal(value.input.marker.overhead.padStatsPollParse.calls, 0);
+});
+
+test("flattens UBO change vectors and mapped upload timing roles", () => {
+  const readings = [10, 12.5];
+  const uploadAttribution = createWgpuUploadAttribution({
+    mappedStageTimingStride: 64,
+    now: () => readings.shift(),
+  });
+  const stageStartedAt = uploadAttribution.beginMappedStageTiming(
+    WGPU_UPLOAD_ROLE.UBO
+  );
+  uploadAttribution.finishMappedStageTiming(
+    WGPU_UPLOAD_ROLE.UBO, stageStartedAt, 1536
+  );
+  uploadAttribution.recordCapacityWaitAttempt(WGPU_UPLOAD_ROLE.UBO);
+  uploadAttribution.beginCapacityWait(WGPU_UPLOAD_ROLE.UBO);
+  uploadAttribution.recordCapacityWaitDuration(WGPU_UPLOAD_ROLE.UBO, 12.5);
+  const value = createCausalTelemetry({
+    webgpu: {
+      producerUboChangeSchemaVersion: 1,
+      producerUboChangeAvailable: true,
+      producerUboChangeEnabled: true,
+      producerUboChangeEpoch: 4,
+      producerUboChangeUploadCalls: [10, 20, 30],
+      producerUboChangeFullBytes: [1000, 2000, 3000],
+      producerUboChangedBytes: [100, 200, 300],
+      producerUboChangeBaselineFullCount: [1, 1, 1],
+      producerUboChangeBaselineFullBytes: [100, 200, 300],
+      producerUboDirty16Bytes: [160, 320, 480],
+      producerUboDirty16Ranges: [2, 3, 4],
+      producerUboDirty256Bytes: [256, 512, 768],
+      producerUboDirty256Ranges: [1, 2, 3],
+      uploadAttribution: uploadAttribution.snapshot(),
+    },
+  });
+
+  const flat = flattenCausalTelemetry(value);
+  assert.equal(flat.causalWgpuProducerUboChangeAvailable, true);
+  assert.deepEqual(flat.causalWgpuProducerUboChangedBytes, [100, 200, 300]);
+  assert.deepEqual(flat.causalWgpuProducerUboDirty256Bytes, [256, 512, 768]);
+  assert.equal(flat.causalWgpuMappedCapacityWaitEpisodes, 1);
+  assert.equal(flat.causalWgpuMappedCapacityWaitTotalMs, 12.5);
+  assert.equal(flat.causalWgpuMappedStageTimingStride, 64);
+  assert.equal(flat.causalWgpuMappedStageTimingEligibleCalls, 1);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleCount, 1);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleBytes, 1536);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleTotalMs, 2.5);
+  assert.equal(
+    flat.causalWgpuMappedStageTimingSampleCountsByRole[WGPU_UPLOAD_ROLE.UBO],
+    1
+  );
+  assert.equal(
+    flat.causalWgpuMappedCapacityWaitTotalMsByRole[WGPU_UPLOAD_ROLE.UBO],
+    12.5
+  );
+});
+
+test("flattens bounded mapped drain coalescing evidence", () => {
+  const value = createCausalTelemetry({
+    webgpu: {
+      mappedDrainCoalescingEnabled: true,
+      mappedDrainCoalescing: {
+        state: { deferred: true },
+        telemetry: {
+          deferredBoundaries: 9,
+          flushDecisions: 8,
+          timerFired: 2,
+          timerStale: 1,
+          actualSubmissions: 8,
+          actualSubmissionAgeMaxMs: 4.4,
+          actualDeadlineOverrunMaxMs: 0.4,
+          deadlineOverrunMaxMs: 0.7,
+          maxPendingBytes: 900_000,
+          maxPendingRecords: 600,
+          maxPendingAgeMs: 3.8,
+          flushReasons: { "second-boundary": 6, "timer-deadline": 2 },
+        },
+      },
+    },
+  });
+  const flat = flattenCausalTelemetry(value);
+  assert.equal(flat.causalWgpuMappedDrainCoalescingEnabled, true);
+  assert.equal(flat.causalWgpuMappedDrainDeferred, true);
+  assert.equal(flat.causalWgpuMappedDrainDeferredBoundaries, 9);
+  assert.equal(flat.causalWgpuMappedDrainTimerFired, 2);
+  assert.equal(flat.causalWgpuMappedDrainActualSubmissions, 8);
+  assert.equal(flat.causalWgpuMappedDrainActualSubmissionAgeMaxMs, 4.4);
+  assert.equal(flat.causalWgpuMappedDrainActualDeadlineOverrunMaxMs, 0.4);
+  assert.equal(flat.causalWgpuMappedDrainDeadlineOverrunMaxMs, 0.7);
+  assert.equal(flat.causalWgpuMappedDrainMaxPendingAgeMs, 3.8);
+  assert.deepEqual(flat.causalWgpuMappedDrainFlushReasons, {
+    "second-boundary": 6,
+    "timer-deadline": 2,
+  });
 });
 
 test("core profile text is promoted without changing the compatibility string", () => {
@@ -318,6 +426,58 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       },
     },
     webgpu: {
+      producerProfile: {
+        schema: "wasm-dolphin.wgpu-producer-profile.v1",
+        requested: true,
+        available: true,
+        version: 1,
+        enabled: true,
+        epoch: 9,
+        phaseCount: 12,
+        phaseOrder: [
+          "ring_publish", "upload_copy", "geometry_commit", "draw_resources",
+          "shader_translate_emit", "pipeline_serialize_emit", "bind_group_prepare",
+          "xfb_show_image", "backbuffer_present", "fifo_decode", "fifo_tail_flush",
+          "reserved",
+        ],
+        periods: new Array(12).fill(2),
+        calls: Array.from({ length: 12 }, (_, index) => index + 10),
+        samples: Array.from({ length: 12 }, (_, index) => index + 1),
+        sampleTotalNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 100),
+        sampleMaxNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 10),
+        estimatedTotalNs: Array.from({ length: 12 }, (_, index) => (index + 1) * 200),
+      },
+      producerRingWaitCount: 11,
+      producerRingWaitTotalUs: 12_000,
+      producerRingWaitMaxUs: 1_300,
+      producerUploadWaitCount: 14,
+      producerUploadWaitTotalUs: 15_000,
+      producerUploadWaitMaxUs: 1_600,
+      rendererWorkerProbe: {
+        requested: "worker-upload",
+        active: true,
+        passed: true,
+        schema: "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1",
+        totalMs: 12.5,
+        executorLocation: "worker",
+        blankOutput: true,
+        protocolVersion: 3,
+        claimedOwner: 2,
+        claimCount: 1,
+        conflictCount: 0,
+        observedRecordCount: 100,
+        consumedRecordCount: 100,
+        uploadRecordCount: 20,
+        releasedUploadCount: 20,
+        totalUploadBytes: 4096,
+        submissionCount: 4,
+        gpuCompletionCount: 4,
+        backlog: 0,
+        quiesced: true,
+        fatalCount: 0,
+        streamDigest: "deadbeef",
+        error: "",
+      },
       backlogLast: 3,
       backlogSampleP95: 12,
       backlogSampleAverage: 6.5,
@@ -333,6 +493,49 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
       replayPumpWakeDelayMaxMs: 2.5,
       stageBudgetYieldCount: 5,
       stageCopyDeadlineOverrunMaxMs: 0.4,
+      mappedStaging: {
+        slotCount: 6,
+        slotSize: 8 * 1024 * 1024,
+        capacityMissesNoMappedSlots: 9,
+        capacityMissesMappedSlotsFull: 2,
+        sealedSlotCountTotal: 123,
+        sealedBytesTotal: 456,
+        sealedBytesMax: 78,
+        sealedRecordsTotal: 90,
+        sealedRecordsMax: 12,
+        remapLatencyTotalMs: 34.5,
+        remapLatencyMaxMs: 8.5,
+        remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16],
+        remapLatencyHistogram: [0, 1, 2, 3, 4, 0],
+      },
+      uboSparse: {
+        schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+        instanceId: 7,
+        requested: true,
+        active: true,
+        coverageThreshold: 0.5,
+        maxSparseRanges: 0,
+        classOrder: ["vs", "ps", "gs"],
+        classSizes: [4112, 1536, 64],
+        eligibleCalls: 101,
+        baselineCalls: 3,
+        sparseCalls: 90,
+        equalCalls: 8,
+        fullFallbackCalls: 4,
+        capacityMisses: 2,
+        fullBytes: 100_000,
+        stagedBytes: 5_000,
+        avoidedStagedBytes: 95_000,
+        copyForwardBytes: 80_000,
+        overlayRanges: 120,
+        overlayBytes: 5_000,
+        predictedGpuCopyBytes: 90_000,
+        invalidations: 2,
+        invalidationReasons: { "save-state-load": 2 },
+        callsByClass: [40, 31, 30],
+        sparseCallsByClass: [35, 28, 27],
+        stagedBytesByClass: [2_000, 2_000, 1_000],
+      },
     },
     audio: {
       workerMixCount: 11,
@@ -468,6 +671,86 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuBacklogSampleAverage, 6.5);
   assert.equal(flat.causalWgpuBacklogAfter, 2);
   assert.equal(flat.causalWgpuBacklogNonzeroAgeMaxMs, 44);
+  assert.equal(flat.causalWgpuProducerRingWaitCount, 11);
+  assert.equal(flat.causalWgpuProducerRingWaitTotalUs, 12_000);
+  assert.equal(flat.causalWgpuProducerRingWaitMaxUs, 1_300);
+  assert.equal(flat.causalWgpuProducerUploadWaitCount, 14);
+  assert.equal(flat.causalWgpuProducerUploadWaitTotalUs, 15_000);
+  assert.equal(flat.causalWgpuProducerUploadWaitMaxUs, 1_600);
+  assert.equal(flat.causalWgpuProducerProfileSchema, "wasm-dolphin.wgpu-producer-profile.v1");
+  assert.equal(flat.causalWgpuProducerProfileRequested, true);
+  assert.equal(flat.causalWgpuProducerProfileAvailable, true);
+  assert.equal(flat.causalWgpuProducerProfileEnabled, true);
+  assert.equal(flat.causalWgpuProducerProfileEpoch, 9);
+  assert.equal(flat.causalWgpuProducerProfilePhaseCount, 12);
+  assert.equal(flat.causalWgpuProducerProfilePhaseOrder[0], "ring_publish");
+  assert.deepEqual(flat.causalWgpuProducerProfilePeriods, new Array(12).fill(2));
+  assert.deepEqual(flat.causalWgpuProducerProfileCalls,
+    Array.from({ length: 12 }, (_, index) => index + 10));
+  assert.deepEqual(flat.causalWgpuProducerProfileSamples,
+    Array.from({ length: 12 }, (_, index) => index + 1));
+  assert.equal(flat.causalWgpuProducerProfileSampleTotalNs[11], 1200);
+  assert.equal(flat.causalWgpuProducerProfileSampleMaxNs[11], 120);
+  assert.equal(flat.causalWgpuProducerProfileEstimatedTotalNs[11], 2400);
+  assert.equal(flat.causalWgpuRendererWorkerProbeRequested, "worker-upload");
+  assert.equal(flat.causalWgpuRendererWorkerProbeActive, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbePassed, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeSchema, "wasm-dolphin.wgpu-renderer-worker-upload-probe.v1");
+  assert.equal(flat.causalWgpuRendererWorkerProbeTotalMs, 12.5);
+  assert.equal(flat.causalWgpuRendererWorkerProbeExecutor, "worker");
+  assert.equal(flat.causalWgpuRendererWorkerProbeBlankOutput, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeProtocolVersion, 3);
+  assert.equal(flat.causalWgpuRendererWorkerProbeClaimedOwner, 2);
+  assert.equal(flat.causalWgpuRendererWorkerProbeObservedRecords, 100);
+  assert.equal(flat.causalWgpuRendererWorkerProbeConsumedRecords, 100);
+  assert.equal(flat.causalWgpuRendererWorkerProbeUploadRecords, 20);
+  assert.equal(flat.causalWgpuRendererWorkerProbeReleasedUploads, 20);
+  assert.equal(flat.causalWgpuRendererWorkerProbeUploadBytes, 4096);
+  assert.equal(flat.causalWgpuRendererWorkerProbeSubmissions, 4);
+  assert.equal(flat.causalWgpuRendererWorkerProbeGpuCompletions, 4);
+  assert.equal(flat.causalWgpuRendererWorkerProbeBacklog, 0);
+  assert.equal(flat.causalWgpuRendererWorkerProbeQuiesced, true);
+  assert.equal(flat.causalWgpuRendererWorkerProbeFatalCount, 0);
+  assert.equal(flat.causalWgpuRendererWorkerProbeStreamDigest, "deadbeef");
+  assert.equal(flat.causalWgpuMappedStagingSlotCount, 6);
+  assert.equal(flat.causalWgpuMappedStagingSlotSize, 8 * 1024 * 1024);
+  assert.equal(flat.causalWgpuMappedStagingCapacityMissesNoMappedSlots, 9);
+  assert.equal(flat.causalWgpuMappedStagingCapacityMissesMappedSlotsFull, 2);
+  assert.equal(flat.causalWgpuMappedStagingSealedSlotCountTotal, 123);
+  assert.equal(flat.causalWgpuMappedStagingSealedBytesTotal, 456);
+  assert.equal(flat.causalWgpuMappedStagingSealedBytesMax, 78);
+  assert.equal(flat.causalWgpuMappedStagingSealedRecordsTotal, 90);
+  assert.equal(flat.causalWgpuMappedStagingSealedRecordsMax, 12);
+  assert.equal(flat.causalWgpuMappedStagingRemapLatencyTotalMs, 34.5);
+  assert.equal(flat.causalWgpuMappedStagingRemapLatencyMaxMs, 8.5);
+  assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyBucketBoundsMs, [1, 2, 4, 8, 16]);
+  assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyHistogram, [0, 1, 2, 3, 4, 0]);
+  assert.equal(flat.causalWgpuSparseUboSchema, "wasm-dolphin.wgpu-sparse-ubo.v1");
+  assert.equal(flat.causalWgpuSparseUboInstanceId, 7);
+  assert.equal(flat.causalWgpuSparseUboRequested, true);
+  assert.equal(flat.causalWgpuSparseUboActive, true);
+  assert.equal(flat.causalWgpuSparseUboCoverageThreshold, 0.5);
+  assert.equal(flat.causalWgpuSparseUboMaxSparseRanges, 0);
+  assert.deepEqual(flat.causalWgpuSparseUboClassOrder, ["vs", "ps", "gs"]);
+  assert.deepEqual(flat.causalWgpuSparseUboClassSizes, [4112, 1536, 64]);
+  assert.equal(flat.causalWgpuSparseUboEligibleCalls, 101);
+  assert.equal(flat.causalWgpuSparseUboBaselineCalls, 3);
+  assert.equal(flat.causalWgpuSparseUboSparseCalls, 90);
+  assert.equal(flat.causalWgpuSparseUboEqualCalls, 8);
+  assert.equal(flat.causalWgpuSparseUboFullFallbackCalls, 4);
+  assert.equal(flat.causalWgpuSparseUboCapacityMisses, 2);
+  assert.equal(flat.causalWgpuSparseUboFullBytes, 100_000);
+  assert.equal(flat.causalWgpuSparseUboStagedBytes, 5_000);
+  assert.equal(flat.causalWgpuSparseUboAvoidedStagedBytes, 95_000);
+  assert.equal(flat.causalWgpuSparseUboCopyForwardBytes, 80_000);
+  assert.equal(flat.causalWgpuSparseUboOverlayRanges, 120);
+  assert.equal(flat.causalWgpuSparseUboOverlayBytes, 5_000);
+  assert.equal(flat.causalWgpuSparseUboPredictedGpuCopyBytes, 90_000);
+  assert.equal(flat.causalWgpuSparseUboInvalidations, 2);
+  assert.deepEqual(flat.causalWgpuSparseUboInvalidationReasons, { "save-state-load": 2 });
+  assert.deepEqual(flat.causalWgpuSparseUboCallsByClass, [40, 31, 30]);
+  assert.deepEqual(flat.causalWgpuSparseUboSparseCallsByClass, [35, 28, 27]);
+  assert.deepEqual(flat.causalWgpuSparseUboStagedBytesByClass, [2_000, 2_000, 1_000]);
   assert.equal(flat.causalWgpuReplayBudgetMs, 4);
   assert.equal(flat.causalWgpuReplayBudgetYieldCount, 7);
   assert.equal(flat.causalWgpuReplayBudgetAtomicOverrunMaxMs, 1.5);
@@ -594,7 +877,10 @@ test("rebuilt core exports CPU-thread checkpoint capture before renderer resync"
   const manifest = JSON.parse(
     await readFile(new URL("../provenance/dolphin-core-abi-v1.json", import.meta.url), "utf8")
   );
-  assert.deepEqual(manifest.sourceOnlyExportsPendingRebuild, []);
+  assert.ok(
+    !manifest.sourceOnlyExportsPendingRebuild.includes("_SetSoftwareRasterProfileEnabled"),
+    "the software raster profile export must not remain pending",
+  );
   assert.ok(manifest.moduleExports.includes("_SetSoftwareRasterProfileEnabled"));
   for (const name of [
     "_GetLastLoadedCheckpointGeneration",
