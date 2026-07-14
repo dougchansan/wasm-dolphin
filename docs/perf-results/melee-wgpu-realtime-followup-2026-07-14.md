@@ -94,6 +94,37 @@ product fix. The remaining architecture target is to move command replay off
 the core worker so the emulator and hundreds of thousands of small WebGPU
 queue writes no longer contend on one JavaScript execution thread.
 
+## Low-overhead sustained-speed control
+
+Disabling optional causal metrics while retaining correctness, fixed-work,
+ring-quiescence, and final GPU-completion checks produced three consecutive
+12-second results of `99.691%`, `99.632%`, and `99.515%` game speed on the
+cache CCD with one logical thread per physical core (`0x5555`). The visible
+final frames showed the expected Kirby-versus-Link battle rather than a blank,
+green, or diagnostic surface.
+
+A longer 60-second emulated work unit then completed in 60.236 wall seconds:
+
+| Measure | Result |
+| --- | ---: |
+| Fixed-work game speed | 99.683% |
+| Fixed-work core FPS | 59.749 |
+| Steady-state mean game speed | 100.210% |
+| Steady-state mean core FPS | 60.083 |
+| Steady-state presentation FPS | 44.596 |
+| New JIT compiles during the run | 1,197 |
+
+The long run remained realtime even while the fight reached 1,197 blocks not
+present in the 9,681-entry warm cache. It therefore establishes sustained
+emulation/core speed on this machine. It does **not** establish 60 distinct
+visible frames per second: the low-overhead arm deliberately left hardware
+visual-cadence readback disabled, and presentation samples remained below 60.
+The next gate is distinct-frame cadence and input-to-visible latency, not more
+short core-speed screens.
+
+Raw artifacts are under `.omx/wgpu-realtime-100/metrics-off/physical-even-*`
+and `.omx/wgpu-realtime-100/metrics-off/sustained-60s-physical-even-1`.
+
 ## What the measurements establish
 
 1. Disabling the JIT run counter produced no reproducible benefit. The final
