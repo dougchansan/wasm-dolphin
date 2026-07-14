@@ -25,6 +25,7 @@ the two-run visible mean to 75.41%. This is not 100% game speed.
 | JIT fallback map, visible | 79.479% (16 bit) | 79.480% (18 bit) | Renderer-masked; keep default-off |
 | Upload-run ingest, flat-store control | 79.499% off | 79.470% on | Throughput-neutral; reject behavior path |
 | Equal-only sparse UBO | 79.395% off | 79.933% on | +0.68%; within variance and almost no bytes avoided |
+| MessageChannel replay wake, A/B/B/A | 69.978% timer | 66.374% fast wake | -5.15%; rejected |
 
 Every listed run used the exact scene signature and reported zero WGPU replay
 errors and dropped commands. These are screening means, not confidence-bounded
@@ -144,6 +145,38 @@ packages across an explicit negotiated opcode/capability. Do not group outside
 records in JS by timing or adjacency; that would cross unproven ownership and
 rollback boundaries.
 
+## Replay MessageChannel wake screen
+
+A default-off `wgpufastpump=1` experiment replaced zero-delay replay timers
+with a bounded `MessageChannel` wake. The exact-scene manual A/B/B/A screen
+used the same candidate core, full-CCD affinity, mapped uploads, JIT settings,
+muted audio, and visible-output requirements in all four runs.
+
+| Metric | Timer control | MessageChannel | Change |
+| --- | ---: | ---: | ---: |
+| Fixed-work game speed | 69.978% | 66.374% | -5.15% relative |
+| Sampled full-window game speed | 69.669% | 66.231% | -4.93% |
+| Fixed-work core FPS | 41.965 | 39.830 | -5.09% |
+| Presentation FPS | 30.41 | 26.40 | -13.18% |
+| Mean replay backlog | 1,192 records | 624 records | -47.65% |
+| Replay backlog p95 | 2,890 records | 2,745 records | -5.00% |
+| Maximum nonzero-backlog age | 2,069.6 ms | 2,126.1 ms | +2.73% |
+| Mean replay wake delay | 3.023 ms | 0.352 ms | -88.37% |
+| Replay schedules | 4,877 | 9,954 | +104.10% |
+| Replay drains | 4,084 | 7,778 | +90.45% |
+| GPU-completion p95 | 7.192 ms | 6.870 ms | -4.48% |
+
+All four runs reached the exact checkpoint, completed the fixed-work target,
+showed changing Kirby-versus-Link output, and reported no WGPU errors, dropped
+commands, batch aborts, upload timeouts, or GPU-completion failures.
+They are screening evidence rather than release-qualified results: the reports
+were captured from a dirty source tree with stale source-contract provenance,
+and muted audio separately makes audible-audio claims ineligible. The wake path
+reduced scheduler delay, but racing the producer tail fragmented mapped uploads
+into many smaller batches. Staging-only submissions rose enough to lower both
+game speed and presentation cadence. The behavior change was therefore removed;
+it must not be described as a throughput optimization.
+
 ## Local raw artifacts
 
 - `.omx/build/perf-results/fastbranch-visible-abba-*`
@@ -159,5 +192,6 @@ rollback boundaries.
 - `.omx/wgpu-realtime-100/ubo-compute-1373f77f/`
 - `.omx/wgpu-realtime-100/jit-profile-1373f77f/`
 - `.omx/wgpu-realtime-100/pass-package-projection-1373f77f/`
+- `.omx/wgpu-realtime-100/fast-pump-1373f77f/`
 
 No result in this document establishes realtime, no-lag, or 100% game speed.

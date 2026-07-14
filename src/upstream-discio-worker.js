@@ -865,6 +865,7 @@ async function handleMessage(type, payload) {
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
         wgpuUploadRunProjection: payload.wgpuUploadRunProjection,
         wgpuUboComputeProjection: payload.wgpuUboComputeProjection,
+        wgpuUboComputeReconstruction: payload.wgpuUboComputeReconstruction,
         wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
         wgpuSemanticRuntime: payload.wgpuSemanticRuntime,
         oglSabEnabled: oglPixelSabView !== null
