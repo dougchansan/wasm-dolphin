@@ -52,6 +52,7 @@ for (const requiredPath of [
   "src/wgpu-semantic-parity-sink.js",
   "src/wgpu-semantic-runtime.js",
   "src/wgpu-semantic-v2-decoder.js",
+  "src/wgpu-sparse-ubo-copy-forward.js",
   "src/wgpu-ownership-trace.js",
   "src/wgpu-visual-cadence.js",
 ]) {

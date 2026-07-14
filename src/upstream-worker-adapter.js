@@ -79,6 +79,7 @@ export class UpstreamWorkerAdapter {
     wgpuUboMetrics = false,
     wgpuUniformFast = false,
     wgpuUboPack = false,
+    wgpuSparseUbo = false,
     wgpuGeometryPack = false,
     wgpuGeometryRange = false,
     wgpuUploadArenaMiB = 32,
@@ -165,6 +166,7 @@ export class UpstreamWorkerAdapter {
     this.wgpuUboMetrics = Boolean(wgpuUboMetrics);
     this.wgpuUniformFast = Boolean(wgpuUniformFast);
     this.wgpuUboPack = Boolean(wgpuUboPack);
+    this.wgpuSparseUbo = Boolean(wgpuSparseUbo);
     this.wgpuGeometryPack = Boolean(wgpuGeometryPack);
     this.wgpuGeometryRange = this.wgpuGeometryPack && Boolean(wgpuGeometryRange);
     this.wgpuUploadArenaMiB = Number(wgpuUploadArenaMiB) === 64 ? 64 : 32;
@@ -350,6 +352,7 @@ export class UpstreamWorkerAdapter {
       wgpuUboMetrics: this.wgpuUboMetrics,
       wgpuUniformFast: this.wgpuUniformFast,
       wgpuUboPack: this.wgpuUboPack,
+      wgpuSparseUbo: this.wgpuSparseUbo,
       wgpuGeometryPack: this.wgpuGeometryPack,
       wgpuGeometryRange: this.wgpuGeometryRange,
       wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,

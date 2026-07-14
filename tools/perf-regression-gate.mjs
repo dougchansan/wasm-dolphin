@@ -31,6 +31,7 @@ import {
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
+  evaluateWgpuSparseUboEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
@@ -1116,6 +1117,10 @@ function summarizeScenario(
   const steadyState = steadyStateWindow.metrics;
   const causalFairness = summarizeCausalFairness(timedWindow, { expectedInputEvents });
   const dirtyRangeProjection = evaluateWgpuDirtyRangeProjection(timedWindow);
+  const sparseUbo = evaluateWgpuSparseUboEvidence({
+    requested: scenario.params?.wgpuubosparse,
+    samples: timedWindow,
+  });
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -1140,6 +1145,7 @@ function summarizeScenario(
     drop: maxRegex(helperText, /drop:(\d+)/g),
     causalFairness,
     wgpuDirtyRangeProjection: dirtyRangeProjection,
+    wgpuSparseUbo: sparseUbo,
     wgpuOwnershipTrace: final.causalTelemetry?.webgpu?.ownershipTrace ?? null,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
@@ -1153,6 +1159,10 @@ function summarizeScenario(
   };
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
+  failures.push(...sparseUbo.failures);
+  if (sparseUbo.expectedActive && String(scenario.params?.wgpustagefast ?? "0") !== "0") {
+    failures.push("WGPU sparse UBO benchmarks require wgpustagefast=0 to isolate the mechanism");
+  }
   failures.push(...causalFairness.failures);
   const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
   if (requestedDirtyRanges != null) {
@@ -1483,7 +1493,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
@@ -2454,6 +2464,10 @@ function comparisonCsv(comparison, results, config) {
     invalidReasons: run.invalidReasons,
     primaryMetric: config.primaryMetric,
     primaryValue: readPath(run, config.primaryMetric),
+    wgpuSparseUboEligibleDelta: run.metrics.wgpuSparseUbo?.deltas?.eligibleCalls,
+    wgpuSparseUboStagedBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.stagedBytes,
+    wgpuSparseUboAvoidedBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.avoidedStagedBytes,
   }));
   const blockRows = comparison.blocks.map((block) => ({
     recordType: "block",
@@ -2530,6 +2544,27 @@ function runSummaryCsv(results) {
       run.metrics.wgpuTailGate?.final?.refreshNeededSamples,
     wgpuTailGateFinalBothCleanSamples: run.metrics.wgpuTailGate?.final?.bothCleanSamples,
     wgpuTailGateFinalDirtyAtSkip: run.metrics.wgpuTailGate?.final?.dirtyAtSkip,
+    wgpuSparseUboSchema: run.metrics.wgpuSparseUbo?.schema,
+    wgpuSparseUboExpectedActive: run.metrics.wgpuSparseUbo?.expectedActive,
+    wgpuSparseUboActivated: run.metrics.wgpuSparseUbo?.activated,
+    wgpuSparseUboSampleCount: run.metrics.wgpuSparseUbo?.sampleCount,
+    wgpuSparseUboEligibleDelta: run.metrics.wgpuSparseUbo?.deltas?.eligibleCalls,
+    wgpuSparseUboBaselineDelta: run.metrics.wgpuSparseUbo?.deltas?.baselineCalls,
+    wgpuSparseUboSparseDelta: run.metrics.wgpuSparseUbo?.deltas?.sparseCalls,
+    wgpuSparseUboEqualDelta: run.metrics.wgpuSparseUbo?.deltas?.equalCalls,
+    wgpuSparseUboFullFallbackDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.fullFallbackCalls,
+    wgpuSparseUboCapacityMissDelta: run.metrics.wgpuSparseUbo?.deltas?.capacityMisses,
+    wgpuSparseUboFullBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.fullBytes,
+    wgpuSparseUboStagedBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.stagedBytes,
+    wgpuSparseUboAvoidedBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.avoidedStagedBytes,
+    wgpuSparseUboCopyForwardBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.copyForwardBytes,
+    wgpuSparseUboOverlayRangesDelta: run.metrics.wgpuSparseUbo?.deltas?.overlayRanges,
+    wgpuSparseUboOverlayBytesDelta: run.metrics.wgpuSparseUbo?.deltas?.overlayBytes,
+    wgpuSparseUboPredictedGpuCopyBytesDelta:
+      run.metrics.wgpuSparseUbo?.deltas?.predictedGpuCopyBytes,
     manifestPath: run.manifestPath,
     summaryPath: run.summaryPath,
     samplesPath: run.samplesPath,

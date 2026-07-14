@@ -246,6 +246,14 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000],
     bufferUploads: 1,
     bufferUploadsCoalesced: 0,
+    bufferSnapshotUploads: 0,
+    bufferSnapshotSparseUploads: 0,
+    bufferSnapshotFullUploads: 0,
+    bufferSnapshotEqualUploads: 0,
+    bufferSnapshotCopyForwardBytes: 0,
+    bufferSnapshotOverlayRanges: 0,
+    bufferSnapshotOverlayBytes: 0,
+    bufferSnapshotAvoidedStagedBytes: 0,
     textureUploads: 0,
     copyCommandsEncoded: 1,
     logicalBytes: 8,
@@ -361,6 +369,127 @@ test("preserves global A-B-A record order across staging slots", () => {
   const copies = pool.seal().commandBuffer.copies;
   assert.equal(copies.length, 3, "A and C must not coalesce across B");
   assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 1, 0]);
+});
+
+test("compound snapshots reconstruct sequential UBO slices byte-identically", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 1, slotSize: 256 });
+  const shadow = fake.device.createBuffer({ size: 64, usage: 0x000c });
+  const destination = fake.device.createBuffer({ size: 192, usage: 0x0008 });
+  const baseline = Uint8Array.from({ length: 64 }, (_, index) => index);
+  const changed = baseline.slice();
+  changed.fill(0xee, 16, 32);
+
+  assert.deepEqual(pool.stageBufferSnapshot({
+    data: baseline,
+    destination,
+    destinationOffset: 0,
+    shadowBuffer: shadow,
+    ranges: [{ start: 0, end: 64 }],
+    copyForward: false,
+  }), { ok: true, slot: 0, offset: 0, logicalBytes: 64, stagedBytes: 64 });
+  assert.deepEqual(pool.stageBufferSnapshot({
+    data: changed,
+    destination,
+    destinationOffset: 64,
+    shadowBuffer: shadow,
+    ranges: [{ start: 16, end: 32 }],
+    copyForward: true,
+  }), { ok: true, slot: 0, offset: 64, logicalBytes: 64, stagedBytes: 16 });
+  assert.deepEqual(pool.stageBufferSnapshot({
+    data: changed,
+    destination,
+    destinationOffset: 128,
+    shadowBuffer: shadow,
+    ranges: [],
+    copyForward: true,
+  }), { ok: true, slot: 0, offset: 80, logicalBytes: 64, stagedBytes: 0 });
+
+  const copies = pool.seal().commandBuffer.copies;
+  assert.equal(copies.length, 6);
+  for (const copy of copies) {
+    assert.equal(copy[0], "buffer");
+    const [, source, sourceOffset, target, targetOffset, size] = copy;
+    new Uint8Array(target.storage, targetOffset, size).set(
+      new Uint8Array(source.storage, sourceOffset, size)
+    );
+  }
+  assert.deepEqual(
+    [...new Uint8Array(destination.storage, 0, 64)],
+    [...baseline]
+  );
+  assert.deepEqual(
+    [...new Uint8Array(destination.storage, 64, 64)],
+    [...changed]
+  );
+  assert.deepEqual(
+    [...new Uint8Array(destination.storage, 128, 64)],
+    [...changed]
+  );
+  assert.deepEqual([...new Uint8Array(shadow.storage)], [...changed]);
+  const snapshot = pool.snapshot();
+  assert.equal(snapshot.bufferSnapshotUploads, 3);
+  assert.equal(snapshot.bufferSnapshotSparseUploads, 2);
+  assert.equal(snapshot.bufferSnapshotFullUploads, 1);
+  assert.equal(snapshot.bufferSnapshotEqualUploads, 1);
+  assert.equal(snapshot.bufferSnapshotCopyForwardBytes, 128);
+  assert.equal(snapshot.bufferSnapshotOverlayBytes, 80);
+  assert.equal(snapshot.bufferSnapshotAvoidedStagedBytes, 112);
+});
+
+test("compound UBO ordering survives cross-slot staging and an interleaved upload", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 2, slotSize: 64 });
+  const shadow = fake.device.createBuffer({ size: 64, usage: 0x000c });
+  const destination = fake.device.createBuffer({ size: 128, usage: 0x0008 });
+  const unrelated = fake.device.createBuffer({ size: 4, usage: 0x0008 });
+  const baseline = new Uint8Array(64).fill(1);
+  const changed = baseline.slice();
+  changed.fill(2, 32, 48);
+
+  pool.stageBufferSnapshot({
+    data: baseline, destination, shadowBuffer: shadow,
+    ranges: [{ start: 0, end: 64 }], copyForward: false,
+  });
+  pool.stageBuffer({ data: Uint8Array.of(9, 8, 7, 6), destination: unrelated });
+  pool.stageBufferSnapshot({
+    data: changed, destination, destinationOffset: 64, shadowBuffer: shadow,
+    ranges: [{ start: 32, end: 48 }], copyForward: true,
+  });
+
+  const copies = pool.seal().commandBuffer.copies;
+  assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 0, 1, 2, 1, 1]);
+  for (const [, source, sourceOffset, target, targetOffset, size] of copies) {
+    new Uint8Array(target.storage, targetOffset, size).set(
+      new Uint8Array(source.storage, sourceOffset, size)
+    );
+  }
+  assert.deepEqual([...new Uint8Array(destination.storage, 0, 64)], [...baseline]);
+  assert.deepEqual([...new Uint8Array(destination.storage, 64, 64)], [...changed]);
+  assert.deepEqual([...new Uint8Array(shadow.storage)], [...changed]);
+  assert.deepEqual([...new Uint8Array(unrelated.storage)], [9, 8, 7, 6]);
+});
+
+test("compound snapshot capacity failure is atomic and retry-safe", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 1, slotSize: 16 });
+  const destination = fake.device.createBuffer({ size: 64, usage: 0x0008 });
+  const shadow = fake.device.createBuffer({ size: 32, usage: 0x000c });
+  pool.stageBuffer({ data: new Uint8Array(16), destination });
+  const before = pool.snapshot();
+  assert.deepEqual(pool.stageBufferSnapshot({
+    data: new Uint8Array(32),
+    destination,
+    destinationOffset: 32,
+    shadowBuffer: shadow,
+    ranges: [{ start: 0, end: 4 }],
+    copyForward: true,
+  }), { ok: false, reason: "no-capacity" });
+  const after = pool.snapshot();
+  assert.equal(after.pendingUploads, before.pendingUploads);
+  assert.equal(after.pendingBytes, before.pendingBytes);
+  assert.equal(after.bufferSnapshotUploads, 0);
+  assert.equal(pool.seal().commandBuffer.copies.length, 1);
 });
 
 test("submits upload before render and remaps slots only after acceptance", async () => {

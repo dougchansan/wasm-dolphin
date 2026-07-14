@@ -81,6 +81,7 @@ const originalWindow = globalThis.window;
     collectMetrics: true,
     wgpuReplayBudgetMs: 6,
     wgpuPowerPreference: "low-power",
+    wgpuSparseUbo: true,
     wgpuGeometryPack: true,
     wgpuGeometryRange: true,
     wgpuUploadArenaMiB: 64,
@@ -102,6 +103,7 @@ const originalWindow = globalThis.window;
     {
       wgpuReplayBudgetMs: posted.message.payload.wgpuReplayBudgetMs,
       wgpuPowerPreference: posted.message.payload.wgpuPowerPreference,
+      wgpuSparseUbo: posted.message.payload.wgpuSparseUbo,
       wgpuGeometryPack: posted.message.payload.wgpuGeometryPack,
       wgpuGeometryRange: posted.message.payload.wgpuGeometryRange,
       wgpuUploadArenaMiB: posted.message.payload.wgpuUploadArenaMiB,
@@ -112,6 +114,7 @@ const originalWindow = globalThis.window;
     {
       wgpuReplayBudgetMs: 6,
       wgpuPowerPreference: "low-power",
+      wgpuSparseUbo: true,
       wgpuGeometryPack: true,
       wgpuGeometryRange: true,
       wgpuUploadArenaMiB: 64,
@@ -121,6 +124,10 @@ const originalWindow = globalThis.window;
     }
   );
   assert.deepEqual(posted.transfer, []);
+});
+
+test("adapter keeps sparse UBO copy-forward default-off", () => {
+  assert.equal(new UpstreamWorkerAdapter().wgpuSparseUbo, false);
 });
 
 test("candidate preflight rollback records requested and active core before canvas transfer", async (t) => {

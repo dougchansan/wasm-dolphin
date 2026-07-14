@@ -49,6 +49,7 @@ import {
 } from "./input-latency-telemetry.js";
 import { requestedInputPhotonMarkerConfig } from "./input-visual-marker.js";
 import { requestedWgpuVisualCadence } from "./wgpu-visual-cadence.js";
+import { requestedWgpuSparseUbo } from "./wgpu-sparse-ubo-copy-forward.js";
 
 const DEMO_WIDTH = 320;
 const DEMO_HEIGHT = 240;
@@ -125,6 +126,7 @@ export class EmulatorHost {
     this.wgpuUboMetrics = requestedWgpuUboMetrics(window.location.search);
     this.wgpuUniformFast = requestedWgpuUniformFast(window.location.search);
     this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
+    this.wgpuSparseUbo = requestedWgpuSparseUbo(window.location.search);
     this.wgpuGeometryPack = requestedWgpuGeometryPack(window.location.search);
     this.wgpuGeometryRange =
       this.wgpuGeometryPack && requestedWgpuGeometryRange(window.location.search);
@@ -372,6 +374,7 @@ export class EmulatorHost {
             wgpuUboMetrics: this.wgpuUboMetrics,
             wgpuUniformFast: this.wgpuUniformFast,
             wgpuUboPack: this.wgpuUboPack,
+            wgpuSparseUbo: this.wgpuSparseUbo,
             wgpuGeometryPack: this.wgpuGeometryPack,
             wgpuGeometryRange: this.wgpuGeometryRange,
             wgpuUploadArenaMiB: this.wgpuUploadArenaMiB,

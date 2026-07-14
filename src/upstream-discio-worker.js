@@ -90,6 +90,7 @@ import {
   attemptRetainedWgpuUpload,
   createWgpuMappedStagingPool
 } from "./wgpu-mapped-staging-pool.js";
+import { createWgpuSparseUboCopyForward } from "./wgpu-sparse-ubo-copy-forward.js";
 import {
   WGPU_MAPPED_DRAIN_FORCE_REASONS,
   createWgpuMappedDrainCoalescer
@@ -216,6 +217,8 @@ let wgpuUboCacheEnabled = false;
 let wgpuUboMetricsEnabled = false;
 let wgpuUniformFastEnabled = false;
 let wgpuUboPackEnabled = false;
+let wgpuSparseUboEnabled = false;
+let wgpuSparseUbo = null;
 let wgpuGeometryPackEnabled = false;
 let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
@@ -794,6 +797,7 @@ async function handleMessage(type, payload) {
         wgpuUboMetrics: payload.wgpuUboMetrics,
         wgpuUniformFast: payload.wgpuUniformFast,
         wgpuUboPack: payload.wgpuUboPack,
+        wgpuSparseUbo: payload.wgpuSparseUbo,
         wgpuGeometryPack: payload.wgpuGeometryPack,
         wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
@@ -838,6 +842,7 @@ async function handleMessage(type, payload) {
       return framePayload();
     case "reset":
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.RESET);
+      wgpuSparseUbo?.reset("core-reset");
       workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
@@ -860,6 +865,7 @@ async function handleMessage(type, payload) {
       return { saved: Boolean(api?.saveState(payload.slot | 0)) };
     case "loadState": {
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
+      wgpuSparseUbo?.reset("slot-state-load");
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
@@ -941,6 +947,7 @@ async function handleMessage(type, payload) {
       return rendererDiagnosticsPayload();
     case "loadStateFile": {
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
+      wgpuSparseUbo?.reset("save-state-load");
       workletAudioProducer.transition();
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
@@ -1201,6 +1208,7 @@ async function loadCore({
   wgpuUboMetrics: requestedWgpuUboMetrics = false,
   wgpuUniformFast: requestedWgpuUniformFast = false,
   wgpuUboPack: requestedWgpuUboPack = false,
+  wgpuSparseUbo: requestedWgpuSparseUbo = false,
   wgpuGeometryPack: requestedWgpuGeometryPack = false,
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
@@ -1312,11 +1320,18 @@ async function loadCore({
   }
   wgpuUniformFastEnabled = Boolean(requestedWgpuUniformFast);
   wgpuUboPackEnabled = Boolean(requestedWgpuUboPack);
+  if (requestedWgpuSparseUbo && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubosparse=1 requires video=wgpu");
+  }
   wgpuGeometryPackEnabled = Boolean(requestedWgpuGeometryPack);
   wgpuGeometryRangeEnabled =
     wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
+  if (requestedWgpuSparseUbo && wgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuubosparse=1 requires wgpuuploadtransport=mapped");
+  }
+  wgpuSparseUboEnabled = Boolean(requestedWgpuSparseUbo);
   wgpuMappedStageFastEnabled =
     wgpuUploadTransport === "mapped" && Boolean(requestedWgpuMappedStageFast);
   wgpuMappedDrainCoalescingEnabled =
@@ -1339,6 +1354,8 @@ async function loadCore({
   wgpuVisualCadenceSequence = 0;
   wgpuMappedStagingPool?.invalidate("core reloaded");
   wgpuMappedStagingPool = null;
+  wgpuSparseUbo?.reset("core-reload");
+  wgpuSparseUbo = null;
   wgpuMappedRemapPromises = new Set();
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
@@ -2673,6 +2690,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
       visualCadence: wgpuVisualCadenceSnapshot(),
       mappedStaging: wgpuMappedStagingPool?.snapshot() ?? null,
       mappedDrainCoalescing: wgpuMappedDrainCoalescer.snapshot(),
+      uboSparse: wgpuSparseUboSnapshot(),
       backlogSampleP95: wgpuBacklogSampleP95(),
       replayPumpWakeDelayAverageMs: webGpuCausalStats.replayPumpWakeCount > 0
         ? webGpuCausalStats.replayPumpWakeDelayTotalMs /
@@ -6026,6 +6044,8 @@ function clearWgpuReplayStateAfterDeviceLoss() {
     );
   }
   wgpuMappedStagingPool?.invalidate("WebGPU device lost");
+  wgpuSparseUbo?.reset("device-loss");
+  wgpuSparseUbo = null;
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
   wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
@@ -6057,6 +6077,46 @@ function ensureWgpuMappedStagingPool(device) {
     });
   }
   return wgpuMappedStagingPool;
+}
+
+function ensureWgpuSparseUbo(device) {
+  if (!wgpuSparseUboEnabled) return null;
+  wgpuSparseUbo ??= createWgpuSparseUboCopyForward({ device });
+  return wgpuSparseUbo;
+}
+
+function wgpuSparseUboSnapshot() {
+  if (wgpuSparseUbo) {
+    return wgpuSparseUbo.snapshot({ requested: true, active: wgpuSparseUboEnabled });
+  }
+  return {
+    schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+    instanceId: 0,
+    requested: wgpuSparseUboEnabled,
+    active: false,
+    coverageThreshold: 0.5,
+    classOrder: ["vs", "ps", "gs"],
+    classSizes: [4112, 1536, 64],
+    shadowValid: [false, false, false],
+    eligibleCalls: 0,
+    baselineCalls: 0,
+    sparseCalls: 0,
+    equalCalls: 0,
+    fullFallbackCalls: 0,
+    capacityMisses: 0,
+    fullBytes: 0,
+    stagedBytes: 0,
+    avoidedStagedBytes: 0,
+    copyForwardBytes: 0,
+    overlayRanges: 0,
+    overlayBytes: 0,
+    predictedGpuCopyBytes: 0,
+    invalidations: 0,
+    invalidationReasons: {},
+    callsByClass: [0, 0, 0],
+    sparseCallsByClass: [0, 0, 0],
+    stagedBytesByClass: [0, 0, 0],
+  };
 }
 
 function cancelWgpuMappedDrainTimer(token = null) {
@@ -6653,6 +6713,7 @@ function markWgpuReplayFatal(scope, detail) {
   if (wgpuReplayFatal) return false;
   wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
   resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.FATAL);
+  wgpuSparseUbo?.reset(`fatal-${scope}`);
   if (wgpuMappedStagingPool?.snapshot().pendingUploads > 0) {
     wgpuMappedStagingPool.invalidate(`fatal ${scope}: ${detail || "unknown"}`);
   }
@@ -8269,7 +8330,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                 let retainedAccepted = false;
                 let stageAccepted;
                 let stageReason = null;
-                if (wgpuMappedStageFastEnabled) {
+                if (wgpuMappedStageFastEnabled && !wgpuSparseUboEnabled) {
                   stageReason = pool.stageBufferFast(
                     stagedUpload?.data ?? uploadSource,
                     buf,
@@ -8281,11 +8342,21 @@ function drainWebGpuCmdRing(source = "presentation") {
                     retainedAccepted = true;
                   }
                 } else {
-                  const stage = (data) => pool.stageBuffer({
-                    data,
-                    destination: buf,
-                    destinationOffset: u32[recWord + 2] & ~3,
-                  });
+                  const stage = (data) => {
+                    const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                      pool,
+                      data,
+                      destination: buf,
+                      destinationOffset: u32[recWord + 2] & ~3,
+                      role: uploadRole,
+                    });
+                    if (sparse?.handled) return sparse;
+                    return pool.stageBuffer({
+                      data,
+                      destination: buf,
+                      destinationOffset: u32[recWord + 2] & ~3,
+                    });
+                  };
                   const retainedAttempt = stagedUpload
                     ? attemptRetainedWgpuUpload({
                         stagedUploads: ring.stagedUploads,

@@ -28,6 +28,7 @@ import {
   evaluateWgpuOutputContractEvidence,
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
+  evaluateWgpuSparseUboEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
@@ -716,6 +717,86 @@ test("WGPU tail-gate parser and evidence fail closed for both experiment arms", 
     ["dirty skip", evaluateWgpuTailGateEvidence({
       requested: "1", samples: [{ helper: wire(1, 7, 10, 1, 1, 8, 1) }],
     }), /dirtyAtSkip=1/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
+});
+
+test("sparse UBO evidence gates fixed-window deltas and rejects lifetime-only claims", () => {
+  const snapshot = ({ scale = 1, active = true, instanceId = active ? 7 : 0,
+    stagedBytes = 100 * scale } = {}) => ({
+    schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+    instanceId,
+    requested: active,
+    active,
+    coverageThreshold: 0.5,
+    classOrder: ["vs", "ps", "gs"],
+    classSizes: [4112, 1536, 64],
+    shadowValid: active ? [true, true, true] : [false, false, false],
+    eligibleCalls: active ? 10 * scale : 0,
+    baselineCalls: active ? scale : 0,
+    sparseCalls: active ? 7 * scale : 0,
+    equalCalls: active ? scale : 0,
+    fullFallbackCalls: active ? scale : 0,
+    capacityMisses: 0,
+    fullBytes: active ? 1000 * scale : 0,
+    stagedBytes: active ? stagedBytes : 0,
+    avoidedStagedBytes: active ? 1000 * scale - stagedBytes : 0,
+    copyForwardBytes: active ? 800 * scale : 0,
+    overlayRanges: active ? 20 * scale : 0,
+    overlayBytes: active ? stagedBytes : 0,
+    predictedGpuCopyBytes: active ? 1200 * scale : 0,
+    invalidations: 0,
+    invalidationReasons: {},
+    callsByClass: active ? [4 * scale, 3 * scale, 3 * scale] : [0, 0, 0],
+    sparseCallsByClass: active ? [3 * scale, 2 * scale, 2 * scale] : [0, 0, 0],
+    stagedBytesByClass: active
+      ? [Math.floor(stagedBytes * 0.4), Math.floor(stagedBytes * 0.3),
+          stagedBytes - Math.floor(stagedBytes * 0.7)]
+      : [0, 0, 0],
+  });
+  const sample = (uboSparse) => ({ causalTelemetry: { webgpu: { uboSparse } } });
+
+  const enabled = evaluateWgpuSparseUboEvidence({
+    requested: "1",
+    samples: [sample(snapshot({ scale: 1 })), sample(snapshot({ scale: 2 }))],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.activated, true);
+  assert.equal(enabled.deltas.eligibleCalls, 10);
+  assert.equal(enabled.deltas.sparseCalls, 7);
+  assert.equal(enabled.deltas.fullBytes, 1000);
+  assert.equal(enabled.deltas.stagedBytes, 100);
+
+  assert.deepEqual(evaluateWgpuSparseUboEvidence({
+    requested: "0", samples: [sample(snapshot({ active: false }))],
+  }).failures, []);
+
+  for (const [label, result, pattern] of [
+    ["missing", evaluateWgpuSparseUboEvidence({
+      requested: "1", samples: [{}],
+    }), /missing or malformed|at least two/],
+    ["one sample", evaluateWgpuSparseUboEvidence({
+      requested: "1", samples: [sample(snapshot())],
+    }), /at least two timed samples/],
+    ["instance reset", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [sample(snapshot()), sample(snapshot({ scale: 2, instanceId: 8 }))],
+    }), /instance changed/],
+    ["no measured saving", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot({ scale: 1, stagedBytes: 1000 })),
+        sample(snapshot({ scale: 2, stagedBytes: 2000 })),
+      ],
+    }), /did not reduce mapped bytes in the timed window/],
+    ["bad accounting", evaluateWgpuSparseUboEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample({ ...snapshot({ scale: 2 }), eligibleCalls: 99 }),
+      ],
+    }), /call accounting is inconsistent|per-class calls are inconsistent/],
   ]) {
     assert.match(result.failures.join("\n"), pattern, label);
   }

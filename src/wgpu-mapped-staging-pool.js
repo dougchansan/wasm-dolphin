@@ -62,6 +62,14 @@ export function createWgpuMappedStagingPool({
   const metrics = {
     bufferUploads: 0,
     bufferUploadsCoalesced: 0,
+    bufferSnapshotUploads: 0,
+    bufferSnapshotSparseUploads: 0,
+    bufferSnapshotFullUploads: 0,
+    bufferSnapshotEqualUploads: 0,
+    bufferSnapshotCopyForwardBytes: 0,
+    bufferSnapshotOverlayRanges: 0,
+    bufferSnapshotOverlayBytes: 0,
+    bufferSnapshotAvoidedStagedBytes: 0,
     textureUploads: 0,
     copyCommandsEncoded: 0,
     logicalBytes: 0,
@@ -166,6 +174,105 @@ export function createWgpuMappedStagingPool({
       aspect,
       false
     );
+  }
+
+  function stageBufferSnapshot({
+    data,
+    destination,
+    destinationOffset = 0,
+    shadowBuffer,
+    ranges,
+    copyForward = false,
+  } = {}) {
+    const bytes = viewBytes(data, true);
+    if (!bytes || !destination || !shadowBuffer) {
+      throw new TypeError("buffer snapshot needs data, destination, and shadow buffer");
+    }
+    if (destination === shadowBuffer) {
+      throw new RangeError("buffer snapshot source and destination buffers must be distinct");
+    }
+    if (!isNonnegativeInteger(destinationOffset) || destinationOffset % COPY_ALIGNMENT !== 0 ||
+        bytes.byteLength === 0 || bytes.byteLength % COPY_ALIGNMENT !== 0 ||
+        !Array.isArray(ranges)) {
+      throw new RangeError("buffer snapshot layout must use positive four-byte alignment");
+    }
+
+    let stagedBytes = 0;
+    let previousEnd = 0;
+    const plannedRanges = [];
+    for (const range of ranges) {
+      const start = range?.start;
+      const end = range?.end;
+      if (!isNonnegativeInteger(start) || !isPositiveInteger(end) ||
+          start % COPY_ALIGNMENT !== 0 || end % COPY_ALIGNMENT !== 0 ||
+          start < previousEnd || end <= start || end > bytes.byteLength) {
+        throw new RangeError("buffer snapshot ranges must be ordered, disjoint, and four-byte aligned");
+      }
+      const size = end - start;
+      if (!Number.isSafeInteger(stagedBytes + size)) {
+        throw new RangeError("buffer snapshot staging size overflow");
+      }
+      plannedRanges.push({ start, end, size, packedOffset: stagedBytes });
+      stagedBytes += size;
+      previousEnd = end;
+    }
+    if (!copyForward &&
+        (plannedRanges.length !== 1 || plannedRanges[0].start !== 0 ||
+         plannedRanges[0].end !== bytes.byteLength)) {
+      throw new RangeError("a full snapshot must stage the complete source payload");
+    }
+
+    if (failed) return miss("pool-failed", false);
+    if (stagedBytes > slotSize) return miss("payload-too-large", true);
+    let slot = null;
+    let offset = 0;
+    for (const candidate of slots) {
+      if (candidate.state !== "mapped") continue;
+      const candidateOffset = alignUp(candidate.cursor, COPY_ALIGNMENT);
+      if (candidateOffset + stagedBytes > slotSize) continue;
+      slot = candidate;
+      offset = candidateOffset;
+      break;
+    }
+    if (!slot) return miss("no-capacity", false);
+
+    for (const range of plannedRanges) {
+      slot.mappedBytes.set(
+        bytes.subarray(range.start, range.end),
+        offset + range.packedOffset
+      );
+    }
+    slot.cursor = offset + stagedBytes;
+    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    const recordSequence = nextRecordSequence++;
+    slot.records.push({
+      kind: "buffer-snapshot",
+      sequenceStart: recordSequence,
+      sequenceEnd: recordSequence,
+      sourceOffset: offset,
+      size: bytes.byteLength,
+      destination,
+      destinationOffset,
+      shadowBuffer,
+      copyForward: Boolean(copyForward),
+      ranges: plannedRanges,
+    });
+    lastRecordSequenceStaged = recordSequence;
+
+    const copyCommands = (copyForward ? 1 : 0) + plannedRanges.length * 2;
+    metrics.bufferUploads += 1;
+    metrics.bufferSnapshotUploads += 1;
+    metrics.bufferSnapshotSparseUploads += copyForward ? 1 : 0;
+    metrics.bufferSnapshotFullUploads += copyForward ? 0 : 1;
+    metrics.bufferSnapshotEqualUploads += copyForward && plannedRanges.length === 0 ? 1 : 0;
+    metrics.bufferSnapshotCopyForwardBytes += copyForward ? bytes.byteLength : 0;
+    metrics.bufferSnapshotOverlayRanges += plannedRanges.length;
+    metrics.bufferSnapshotOverlayBytes += stagedBytes;
+    metrics.bufferSnapshotAvoidedStagedBytes += Math.max(0, bytes.byteLength - stagedBytes);
+    metrics.copyCommandsEncoded += copyCommands;
+    metrics.logicalBytes += bytes.byteLength;
+    metrics.stagedBytes += stagedBytes;
+    return success(slot, offset, bytes.byteLength, stagedBytes);
   }
 
   function stageTextureFast(
@@ -475,6 +582,7 @@ export function createWgpuMappedStagingPool({
   return Object.freeze({
     stageBuffer,
     stageBufferFast,
+    stageBufferSnapshot,
     stageTexture,
     stageTextureFast,
     seal,
@@ -533,6 +641,36 @@ function encodeRecord(encoder, sourceBuffer, record) {
       record.destinationOffset,
       record.size
     );
+    return;
+  }
+  if (record.kind === "buffer-snapshot") {
+    if (record.copyForward) {
+      encoder.copyBufferToBuffer(
+        record.shadowBuffer,
+        0,
+        record.destination,
+        record.destinationOffset,
+        record.size
+      );
+    }
+    for (const range of record.ranges) {
+      encoder.copyBufferToBuffer(
+        sourceBuffer,
+        record.sourceOffset + range.packedOffset,
+        record.destination,
+        record.destinationOffset + range.start,
+        range.size
+      );
+    }
+    for (const range of record.ranges) {
+      encoder.copyBufferToBuffer(
+        sourceBuffer,
+        record.sourceOffset + range.packedOffset,
+        record.shadowBuffer,
+        range.start,
+        range.size
+      );
+    }
     return;
   }
   const destination = { texture: record.destination };

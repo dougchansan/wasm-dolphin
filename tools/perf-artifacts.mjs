@@ -26,6 +26,7 @@ export {
 export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
 export const WGPU_DRAW_PROFILE_SCHEMA_VERSION = 1;
 export const WGPU_TAIL_GATE_SCHEMA_VERSION = 1;
+export const WGPU_SPARSE_UBO_SCHEMA = "wasm-dolphin.wgpu-sparse-ubo.v1";
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",
@@ -1927,6 +1928,139 @@ export function parseWgpuTailGateStats(text = "") {
     wgpuTailGateRefreshNeededSamples: parsed.refreshNeededSamples,
     wgpuTailGateBothCleanSamples: parsed.bothCleanSamples,
     wgpuTailGateDirtyAtSkip: parsed.dirtyAtSkip,
+  };
+}
+
+export function evaluateWgpuSparseUboEvidence({ requested, samples = [] } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive && String(requested) !== "0") {
+    failures.push(`wgpuubosparse=${requested} is unsupported`);
+  }
+  const observations = samples.map(
+    (sample) => sample?.causalTelemetry?.webgpu?.uboSparse ?? null
+  );
+  if (!observations.length) failures.push("WGPU sparse UBO has no timed samples");
+  const counters = [
+    "eligibleCalls", "baselineCalls", "sparseCalls", "equalCalls",
+    "fullFallbackCalls", "capacityMisses", "fullBytes", "stagedBytes",
+    "avoidedStagedBytes", "copyForwardBytes", "overlayRanges", "overlayBytes",
+    "predictedGpuCopyBytes", "invalidations",
+  ];
+  const vectorCounters = ["callsByClass", "sparseCallsByClass", "stagedBytesByClass"];
+  const valid = [];
+  let previous = null;
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation || typeof observation !== "object") {
+      failures.push(`WGPU sparse UBO sample ${index} is missing or malformed`);
+      continue;
+    }
+    valid.push(observation);
+    if (observation.schema !== WGPU_SPARSE_UBO_SCHEMA) {
+      failures.push(`WGPU sparse UBO sample ${index} schema mismatch`);
+    }
+    if (observation.requested !== expectedActive) {
+      failures.push(`WGPU sparse UBO sample ${index} requested state mismatch`);
+    }
+    if (observation.active !== expectedActive) {
+      failures.push(`WGPU sparse UBO sample ${index} active state mismatch`);
+    }
+    if (!Number.isSafeInteger(observation.instanceId) || observation.instanceId < 0 ||
+        (expectedActive && observation.instanceId === 0)) {
+      failures.push(`WGPU sparse UBO sample ${index} instanceId is invalid`);
+    }
+    if (observation.coverageThreshold !== 0.5) {
+      failures.push(`WGPU sparse UBO sample ${index} coverage threshold mismatch`);
+    }
+    if (JSON.stringify(observation.classOrder) !== JSON.stringify(["vs", "ps", "gs"]) ||
+        JSON.stringify(observation.classSizes) !== JSON.stringify([4112, 1536, 64])) {
+      failures.push(`WGPU sparse UBO sample ${index} class schema mismatch`);
+    }
+    for (const name of counters) {
+      if (!Number.isSafeInteger(observation[name]) || observation[name] < 0) {
+        failures.push(`WGPU sparse UBO sample ${index} ${name} is invalid`);
+      }
+    }
+    for (const name of vectorCounters) {
+      if (!Array.isArray(observation[name]) || observation[name].length !== 3 ||
+          observation[name].some((value) => !Number.isSafeInteger(value) || value < 0)) {
+        failures.push(`WGPU sparse UBO sample ${index} ${name} is invalid`);
+      }
+    }
+    if (observation.eligibleCalls !== observation.baselineCalls + observation.sparseCalls +
+        observation.equalCalls + observation.fullFallbackCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} call accounting is inconsistent`);
+    }
+    if (observation.avoidedStagedBytes !== observation.fullBytes - observation.stagedBytes ||
+        observation.overlayBytes !== observation.stagedBytes) {
+      failures.push(`WGPU sparse UBO sample ${index} byte accounting is inconsistent`);
+    }
+    if (Array.isArray(observation.callsByClass) &&
+        observation.callsByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.eligibleCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class calls are inconsistent`);
+    }
+    if (Array.isArray(observation.sparseCallsByClass) &&
+        observation.sparseCallsByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.sparseCalls) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class sparse calls are inconsistent`);
+    }
+    if (Array.isArray(observation.stagedBytesByClass) &&
+        observation.stagedBytesByClass.reduce((sum, value) => sum + value, 0) !==
+          observation.stagedBytes) {
+      failures.push(`WGPU sparse UBO sample ${index} per-class staged bytes are inconsistent`);
+    }
+    if (!expectedActive && counters.some((name) => observation[name] !== 0)) {
+      failures.push(`WGPU sparse UBO sample ${index} disabled counters must remain zero`);
+    }
+    if (previous) {
+      if (observation.instanceId !== previous.instanceId) {
+        failures.push(
+          `WGPU sparse UBO instance changed ${previous.instanceId}->${observation.instanceId}`
+        );
+      }
+      for (const name of counters) {
+        if (observation[name] < previous[name]) {
+          failures.push(`WGPU sparse UBO sample ${index} ${name} regressed`);
+        }
+      }
+    }
+    previous = observation;
+  }
+
+  const initial = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  let deltas = null;
+  if (expectedActive) {
+    if (valid.length < 2) {
+      failures.push("WGPU sparse UBO needs at least two timed samples");
+    } else {
+      deltas = Object.fromEntries(counters.map(
+        (name) => [name, final[name] - initial[name]]
+      ));
+      if (deltas.eligibleCalls <= 0) {
+        failures.push("WGPU sparse UBO handled no eligible uploads in the timed window");
+      }
+      if (deltas.sparseCalls <= 0) {
+        failures.push("WGPU sparse UBO reconstructed no sparse slices in the timed window");
+      }
+      if (!(deltas.stagedBytes < deltas.fullBytes)) {
+        failures.push("WGPU sparse UBO did not reduce mapped bytes in the timed window");
+      }
+    }
+  }
+  return {
+    required: true,
+    expectedActive,
+    activated: final?.active === true,
+    schema: final?.schema ?? null,
+    sampleCount: valid.length,
+    initial,
+    final,
+    deltas,
+    failures,
   };
 }
 

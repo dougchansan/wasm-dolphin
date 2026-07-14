@@ -489,6 +489,33 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16],
         remapLatencyHistogram: [0, 1, 2, 3, 4, 0],
       },
+      uboSparse: {
+        schema: "wasm-dolphin.wgpu-sparse-ubo.v1",
+        instanceId: 7,
+        requested: true,
+        active: true,
+        coverageThreshold: 0.5,
+        classOrder: ["vs", "ps", "gs"],
+        classSizes: [4112, 1536, 64],
+        eligibleCalls: 101,
+        baselineCalls: 3,
+        sparseCalls: 90,
+        equalCalls: 8,
+        fullFallbackCalls: 4,
+        capacityMisses: 2,
+        fullBytes: 100_000,
+        stagedBytes: 5_000,
+        avoidedStagedBytes: 95_000,
+        copyForwardBytes: 80_000,
+        overlayRanges: 120,
+        overlayBytes: 5_000,
+        predictedGpuCopyBytes: 90_000,
+        invalidations: 2,
+        invalidationReasons: { "save-state-load": 2 },
+        callsByClass: [40, 31, 30],
+        sparseCallsByClass: [35, 28, 27],
+        stagedBytesByClass: [2_000, 2_000, 1_000],
+      },
     },
     audio: {
       workerMixCount: 11,
@@ -678,6 +705,31 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuMappedStagingRemapLatencyMaxMs, 8.5);
   assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyBucketBoundsMs, [1, 2, 4, 8, 16]);
   assert.deepEqual(flat.causalWgpuMappedStagingRemapLatencyHistogram, [0, 1, 2, 3, 4, 0]);
+  assert.equal(flat.causalWgpuSparseUboSchema, "wasm-dolphin.wgpu-sparse-ubo.v1");
+  assert.equal(flat.causalWgpuSparseUboInstanceId, 7);
+  assert.equal(flat.causalWgpuSparseUboRequested, true);
+  assert.equal(flat.causalWgpuSparseUboActive, true);
+  assert.equal(flat.causalWgpuSparseUboCoverageThreshold, 0.5);
+  assert.deepEqual(flat.causalWgpuSparseUboClassOrder, ["vs", "ps", "gs"]);
+  assert.deepEqual(flat.causalWgpuSparseUboClassSizes, [4112, 1536, 64]);
+  assert.equal(flat.causalWgpuSparseUboEligibleCalls, 101);
+  assert.equal(flat.causalWgpuSparseUboBaselineCalls, 3);
+  assert.equal(flat.causalWgpuSparseUboSparseCalls, 90);
+  assert.equal(flat.causalWgpuSparseUboEqualCalls, 8);
+  assert.equal(flat.causalWgpuSparseUboFullFallbackCalls, 4);
+  assert.equal(flat.causalWgpuSparseUboCapacityMisses, 2);
+  assert.equal(flat.causalWgpuSparseUboFullBytes, 100_000);
+  assert.equal(flat.causalWgpuSparseUboStagedBytes, 5_000);
+  assert.equal(flat.causalWgpuSparseUboAvoidedStagedBytes, 95_000);
+  assert.equal(flat.causalWgpuSparseUboCopyForwardBytes, 80_000);
+  assert.equal(flat.causalWgpuSparseUboOverlayRanges, 120);
+  assert.equal(flat.causalWgpuSparseUboOverlayBytes, 5_000);
+  assert.equal(flat.causalWgpuSparseUboPredictedGpuCopyBytes, 90_000);
+  assert.equal(flat.causalWgpuSparseUboInvalidations, 2);
+  assert.deepEqual(flat.causalWgpuSparseUboInvalidationReasons, { "save-state-load": 2 });
+  assert.deepEqual(flat.causalWgpuSparseUboCallsByClass, [40, 31, 30]);
+  assert.deepEqual(flat.causalWgpuSparseUboSparseCallsByClass, [35, 28, 27]);
+  assert.deepEqual(flat.causalWgpuSparseUboStagedBytesByClass, [2_000, 2_000, 1_000]);
   assert.equal(flat.causalWgpuReplayBudgetMs, 4);
   assert.equal(flat.causalWgpuReplayBudgetYieldCount, 7);
   assert.equal(flat.causalWgpuReplayBudgetAtomicOverrunMaxMs, 1.5);

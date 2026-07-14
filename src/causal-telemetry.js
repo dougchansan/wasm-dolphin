@@ -850,6 +850,44 @@ export function flattenCausalTelemetry(value) {
       telemetry.webgpu.mappedStaging?.remapLatencyBucketBoundsMs ?? [],
     causalWgpuMappedStagingRemapLatencyHistogram:
       telemetry.webgpu.mappedStaging?.remapLatencyHistogram ?? [],
+    causalWgpuSparseUboSchema: telemetry.webgpu.uboSparse?.schema ?? null,
+    causalWgpuSparseUboInstanceId: telemetry.webgpu.uboSparse?.instanceId ?? 0,
+    causalWgpuSparseUboRequested: telemetry.webgpu.uboSparse?.requested ?? false,
+    causalWgpuSparseUboActive: telemetry.webgpu.uboSparse?.active ?? false,
+    causalWgpuSparseUboCoverageThreshold:
+      telemetry.webgpu.uboSparse?.coverageThreshold ?? 0,
+    causalWgpuSparseUboClassOrder: telemetry.webgpu.uboSparse?.classOrder ?? [],
+    causalWgpuSparseUboClassSizes: telemetry.webgpu.uboSparse?.classSizes ?? [],
+    causalWgpuSparseUboEligibleCalls: telemetry.webgpu.uboSparse?.eligibleCalls ?? 0,
+    causalWgpuSparseUboBaselineCalls: telemetry.webgpu.uboSparse?.baselineCalls ?? 0,
+    causalWgpuSparseUboSparseCalls: telemetry.webgpu.uboSparse?.sparseCalls ?? 0,
+    causalWgpuSparseUboEqualCalls: telemetry.webgpu.uboSparse?.equalCalls ?? 0,
+    causalWgpuSparseUboFullFallbackCalls:
+      telemetry.webgpu.uboSparse?.fullFallbackCalls ?? 0,
+    causalWgpuSparseUboCapacityMisses:
+      telemetry.webgpu.uboSparse?.capacityMisses ?? 0,
+    causalWgpuSparseUboFullBytes: telemetry.webgpu.uboSparse?.fullBytes ?? 0,
+    causalWgpuSparseUboStagedBytes: telemetry.webgpu.uboSparse?.stagedBytes ?? 0,
+    causalWgpuSparseUboAvoidedStagedBytes:
+      telemetry.webgpu.uboSparse?.avoidedStagedBytes ?? 0,
+    causalWgpuSparseUboCopyForwardBytes:
+      telemetry.webgpu.uboSparse?.copyForwardBytes ?? 0,
+    causalWgpuSparseUboOverlayRanges:
+      telemetry.webgpu.uboSparse?.overlayRanges ?? 0,
+    causalWgpuSparseUboOverlayBytes:
+      telemetry.webgpu.uboSparse?.overlayBytes ?? 0,
+    causalWgpuSparseUboPredictedGpuCopyBytes:
+      telemetry.webgpu.uboSparse?.predictedGpuCopyBytes ?? 0,
+    causalWgpuSparseUboInvalidations:
+      telemetry.webgpu.uboSparse?.invalidations ?? 0,
+    causalWgpuSparseUboInvalidationReasons:
+      telemetry.webgpu.uboSparse?.invalidationReasons ?? {},
+    causalWgpuSparseUboCallsByClass:
+      telemetry.webgpu.uboSparse?.callsByClass ?? [],
+    causalWgpuSparseUboSparseCallsByClass:
+      telemetry.webgpu.uboSparse?.sparseCallsByClass ?? [],
+    causalWgpuSparseUboStagedBytesByClass:
+      telemetry.webgpu.uboSparse?.stagedBytesByClass ?? [],
     causalWgpuMappedDrainCoalescingEnabled:
       telemetry.webgpu.mappedDrainCoalescingEnabled ?? false,
     causalWgpuMappedDrainDeferred:
