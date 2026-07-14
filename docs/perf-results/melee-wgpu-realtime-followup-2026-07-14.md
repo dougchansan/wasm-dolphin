@@ -59,6 +59,41 @@ beyond its declared 8 ms limit. The UBO-package request was rejected because
 the rebuilt native core reported `requested=1`, `active=0`; no inactive flag was
 credited with a performance result.
 
+## Runtime-seam and CPU-topology follow-up
+
+Later runs at `2af87c8` isolated two machine controls that the earlier mixed
+campaign had conflated: persistent JIT-cache reuse and CPU topology. The same
+core and direct battle measured only `55.400%` and `55.569%` in fresh ephemeral
+profiles because the bundled prebuilt cache contains 8,192 entries and the
+battle compiled roughly 330 additional blocks. Reusing the battle-trained
+profile loaded about 1,480 additional modules and reduced new compilation to
+zero or two.
+
+| CPU placement | Repeats, game speed % | Interpretation |
+| --- | --- | --- |
+| All 32 logical CPUs | 64.960 | Cross-CCD placement is poor on this machine |
+| Cache CCD, all 16 logical CPUs (`0xffff`) | 99.685, 86.789, 86.400 | Fast once, not stable |
+| Other CCD, all 16 logical CPUs (`0xffff0000`) | 75.994 | Reject on this machine |
+| Cache CCD, one even thread per core (`0x5555`) | 99.244, 95.990 | Best repeated topology |
+| Cache CCD, one odd thread per core (`0xaaaa`) | 98.309 | Corroborates physical-core placement |
+| Cache CCD, four physical cores (`0x55`) | 97.072 | Fewer cores did not improve throughput |
+
+These muted runs used a fixed 12-second emulated work unit, direct queue
+uploads, geometry packing, the same verified save and core, and disabled Chrome
+background throttling. They had zero ring/upload waits, replay-budget yields,
+renderer errors, drops, aborts, and upload timeouts. The best run completed 12
+emulated seconds in 12.121 seconds (`59.813` core FPS), but the repeated gate is
+not yet met. Raw artifacts are under
+`.omx/wgpu-realtime-100/runtime-seam-warm-affinity-*` and
+`.omx/wgpu-realtime-100/topology/`.
+
+The result rules out the renderer-runtime ownership seam as the primary cause
+of the slow campaign: the same seam can reach realtime when the hot JIT cache
+and cache-CCD placement align. It also shows that affinity alone is not a
+product fix. The remaining architecture target is to move command replay off
+the core worker so the emulator and hundreds of thousands of small WebGPU
+queue writes no longer contend on one JavaScript execution thread.
+
 ## What the measurements establish
 
 1. Disabling the JIT run counter produced no reproducible benefit. The final
