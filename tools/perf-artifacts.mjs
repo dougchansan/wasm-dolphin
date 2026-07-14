@@ -1974,6 +1974,9 @@ export function evaluateWgpuSparseUboEvidence({ requested, samples = [] } = {}) 
     if (observation.coverageThreshold !== 0.5) {
       failures.push(`WGPU sparse UBO sample ${index} coverage threshold mismatch`);
     }
+    if (observation.maxSparseRanges !== 0) {
+      failures.push(`WGPU sparse UBO sample ${index} maxSparseRanges mismatch`);
+    }
     if (JSON.stringify(observation.classOrder) !== JSON.stringify(["vs", "ps", "gs"]) ||
         JSON.stringify(observation.classSizes) !== JSON.stringify([4112, 1536, 64])) {
       failures.push(`WGPU sparse UBO sample ${index} class schema mismatch`);
@@ -2043,8 +2046,8 @@ export function evaluateWgpuSparseUboEvidence({ requested, samples = [] } = {}) 
       if (deltas.eligibleCalls <= 0) {
         failures.push("WGPU sparse UBO handled no eligible uploads in the timed window");
       }
-      if (deltas.sparseCalls <= 0) {
-        failures.push("WGPU sparse UBO reconstructed no sparse slices in the timed window");
+      if (deltas.sparseCalls + deltas.equalCalls <= 0) {
+        failures.push("WGPU sparse UBO reconstructed no copy-forward snapshots in the timed window");
       }
       if (!(deltas.stagedBytes < deltas.fullBytes)) {
         failures.push("WGPU sparse UBO did not reduce mapped bytes in the timed window");

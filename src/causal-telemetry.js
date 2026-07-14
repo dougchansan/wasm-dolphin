@@ -856,6 +856,8 @@ export function flattenCausalTelemetry(value) {
     causalWgpuSparseUboActive: telemetry.webgpu.uboSparse?.active ?? false,
     causalWgpuSparseUboCoverageThreshold:
       telemetry.webgpu.uboSparse?.coverageThreshold ?? 0,
+    causalWgpuSparseUboMaxSparseRanges:
+      telemetry.webgpu.uboSparse?.maxSparseRanges ?? 0,
     causalWgpuSparseUboClassOrder: telemetry.webgpu.uboSparse?.classOrder ?? [],
     causalWgpuSparseUboClassSizes: telemetry.webgpu.uboSparse?.classSizes ?? [],
     causalWgpuSparseUboEligibleCalls: telemetry.webgpu.uboSparse?.eligibleCalls ?? 0,

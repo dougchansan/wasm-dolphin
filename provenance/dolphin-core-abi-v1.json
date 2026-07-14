@@ -74,8 +74,8 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 67486,
-      "sha256": "2966ef3830a2cc99226faa036a8253b41dc71e1d5250787eb24d21c7797247fd"
+      "size": 67582,
+      "sha256": "e48130932fa27c110ff0e70c5feff26525d99d5ff105034cd812317158f9ab1c"
     },
     {
       "path": "src/core-host.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 461862,
-      "sha256": "69d714c566188871d930b5a62d6af49b5d6cd509fea4ca0c288acfc7b1458604"
+      "size": 461886,
+      "sha256": "fa6b04f8978553ccfeae724ea4a9d8044a41c844de7a5a08d88e2e7ac57b3450"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -272,8 +272,8 @@
     {
       "path": "src/wgpu-sparse-ubo-copy-forward.js",
       "hashMode": "lf-normalized",
-      "size": 7151,
-      "sha256": "3588b33bbfa4726cd38637550cfcb854616ff2ef21d4137c3e18ba58b823f293"
+      "size": 7503,
+      "sha256": "08661edab9d9db7a4500587e4e6f9d24bf576b17b450e714fd0ac23cf6b926cc"
     }
   ],
   "memoryContract": {

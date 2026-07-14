@@ -730,6 +730,7 @@ test("sparse UBO evidence gates fixed-window deltas and rejects lifetime-only cl
     requested: active,
     active,
     coverageThreshold: 0.5,
+    maxSparseRanges: 0,
     classOrder: ["vs", "ps", "gs"],
     classSizes: [4112, 1536, 64],
     shadowValid: active ? [true, true, true] : [false, false, false],

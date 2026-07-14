@@ -495,6 +495,7 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
         requested: true,
         active: true,
         coverageThreshold: 0.5,
+        maxSparseRanges: 0,
         classOrder: ["vs", "ps", "gs"],
         classSizes: [4112, 1536, 64],
         eligibleCalls: 101,
@@ -710,6 +711,7 @@ test("CSV flattening carries the exact causal schema and decision fields", () =>
   assert.equal(flat.causalWgpuSparseUboRequested, true);
   assert.equal(flat.causalWgpuSparseUboActive, true);
   assert.equal(flat.causalWgpuSparseUboCoverageThreshold, 0.5);
+  assert.equal(flat.causalWgpuSparseUboMaxSparseRanges, 0);
   assert.deepEqual(flat.causalWgpuSparseUboClassOrder, ["vs", "ps", "gs"]);
   assert.deepEqual(flat.causalWgpuSparseUboClassSizes, [4112, 1536, 64]);
   assert.equal(flat.causalWgpuSparseUboEligibleCalls, 101);

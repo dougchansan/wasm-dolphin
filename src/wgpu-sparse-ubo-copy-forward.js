@@ -47,11 +47,15 @@ export function planWgpuUboDirtyRanges(current, previous, blockBytes = 16) {
 export function createWgpuSparseUboCopyForward({
   device,
   coverageThreshold = 0.5,
+  maxSparseRanges = 0,
   bufferUsage = 0x0004 | 0x0008,
 } = {}) {
   if (!device?.createBuffer) throw new TypeError("device must create WebGPU buffers");
   if (!(coverageThreshold > 0 && coverageThreshold <= 1)) {
     throw new RangeError("coverageThreshold must be greater than zero and at most one");
+  }
+  if (!Number.isSafeInteger(maxSparseRanges) || maxSparseRanges < 0) {
+    throw new RangeError("maxSparseRanges must be a non-negative safe integer");
   }
   const instanceId = nextSparseUboInstanceId++;
 
@@ -111,8 +115,13 @@ export function createWgpuSparseUboCopyForward({
     if (state.valid) {
       const dirty = planWgpuUboDirtyRanges(bytes, state.cpuShadow);
       dirtyBytes = dirty.dirtyBytes;
-      if (dirtyBytes / bytes.byteLength <= coverageThreshold) {
-        mode = dirtyBytes === 0 ? "equal" : "sparse";
+      if (dirtyBytes === 0) {
+        mode = "equal";
+        copyForward = true;
+        ranges = dirty.ranges;
+      } else if (dirty.ranges.length <= maxSparseRanges &&
+                 dirtyBytes / bytes.byteLength <= coverageThreshold) {
+        mode = "sparse";
         copyForward = true;
         ranges = dirty.ranges;
       } else {
@@ -196,6 +205,7 @@ export function createWgpuSparseUboCopyForward({
       requested: Boolean(requested),
       active: Boolean(active),
       coverageThreshold,
+      maxSparseRanges,
       classOrder: WGPU_SPARSE_UBO_CLASS_SPECS.map((spec) => spec.name),
       classSizes: WGPU_SPARSE_UBO_CLASS_SPECS.map((spec) => spec.size),
       shadowValid: states.map((state) => state.valid),

@@ -57,7 +57,7 @@ test("manager commits shadows only after an atomic stage succeeds", () => {
         : { ok: false, reason: "no-capacity" };
     },
   };
-  const manager = createWgpuSparseUboCopyForward({ device });
+  const manager = createWgpuSparseUboCopyForward({ device, maxSparseRanges: 64 });
   const first = new Uint8Array(64).fill(1);
   const destination = {};
 
@@ -115,6 +115,36 @@ test("high dirty coverage stages a full replacement snapshot", () => {
   assert.equal(calls.at(-1).copyForward, false);
   assert.deepEqual(calls.at(-1).ranges, [{ start: 0, end: 64 }]);
   assert.equal(manager.snapshot().fullFallbackCalls, 1);
+});
+
+test("default strategy copy-forwards equal snapshots but fully stages changes", () => {
+  const calls = [];
+  const pool = {
+    stageBufferSnapshot(options) {
+      calls.push(options);
+      return { ok: true, stagedBytes: options.ranges.reduce(
+        (total, range) => total + range.end - range.start, 0) };
+    },
+  };
+  const manager = createWgpuSparseUboCopyForward({ device: fakeDevice() });
+  const first = new Uint8Array(1536);
+  const changed = first.slice();
+  changed[16] = 1;
+  assert.equal(manager.stage({
+    pool, data: first, destination: {}, role: WGPU_UPLOAD_ROLE.UBO,
+  }).mode, "baseline");
+  assert.equal(manager.stage({
+    pool, data: changed, destination: {}, role: WGPU_UPLOAD_ROLE.UBO,
+  }).mode, "full-fallback");
+  assert.equal(calls.at(-1).copyForward, false);
+  assert.equal(manager.stage({
+    pool, data: changed, destination: {}, role: WGPU_UPLOAD_ROLE.UBO,
+  }).mode, "equal");
+  assert.equal(calls.at(-1).copyForward, true);
+  assert.deepEqual(calls.at(-1).ranges, []);
+  assert.equal(manager.snapshot().maxSparseRanges, 0);
+  assert.equal(manager.snapshot().sparseCalls, 0);
+  assert.equal(manager.snapshot().equalCalls, 1);
 });
 
 test("unknown and non-UBO uploads stay on the existing path", () => {
@@ -175,6 +205,6 @@ test("sparse UBO flag is wired from URL through validation and perf gating", asy
   assert.match(gate, /evaluateWgpuSparseUboEvidence/);
   assert.match(gate, /require wgpustagefast=0 to isolate the mechanism/);
   assert.match(artifacts, /handled no eligible uploads in the timed window/);
-  assert.match(artifacts, /reconstructed no sparse slices in the timed window/);
+  assert.match(artifacts, /reconstructed no copy-forward snapshots in the timed window/);
   assert.match(artifacts, /did not reduce mapped bytes in the timed window/);
 });

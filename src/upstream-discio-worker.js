@@ -6095,6 +6095,7 @@ function wgpuSparseUboSnapshot() {
     requested: wgpuSparseUboEnabled,
     active: false,
     coverageThreshold: 0.5,
+    maxSparseRanges: 0,
     classOrder: ["vs", "ps", "gs"],
     classSizes: [4112, 1536, 64],
     shadowValid: [false, false, false],
