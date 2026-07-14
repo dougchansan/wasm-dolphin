@@ -91,15 +91,16 @@ test("C++ protocol v3 blocks without fixed drop timeout and fails closed", async
 });
 
 test("worker negotiates v3 and propagates submit/device-loss failure to the ring", async () => {
-  const worker = await readFile(
-    new URL("../src/upstream-discio-worker.js", import.meta.url),
-    "utf8"
-  );
-  assert.match(worker, /Number\(data\.protocolVersion\) >= 3/);
-  assert.match(worker, /enableWgpuNonDroppingBackpressure\(webGpuCmdRing\)/);
-  assert.match(worker, /failWgpuRingConsumer\(webGpuCmdRing/);
+  const [worker, runtime] = await Promise.all([
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/wgpu-renderer-runtime.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(worker, /wgpuRendererRuntime\.attachRing/);
+  assert.match(runtime, /protocolVersion !== 2 && protocolVersion !== 3/);
+  assert.match(runtime, /enableWgpuNonDroppingBackpressure\(ring\)/);
+  assert.match(worker, /wgpuRendererRuntime\.emergencyFail\(errorCode\)/);
 
   const publishBody = /function publishWgpuReadIndex\([\s\S]*?\n\}/
     .exec(worker)?.[0] ?? "";
-  assert.match(publishBody, /publishWgpuRingProgress\(ring, 1, normalized\)/);
+  assert.match(publishBody, /wgpuRendererRuntime\.publishReadIndex\(readIndex\)/);
 });

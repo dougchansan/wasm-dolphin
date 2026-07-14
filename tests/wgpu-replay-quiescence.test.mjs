@@ -8,23 +8,26 @@ import test from "node:test";
 const readSource = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
 test("validation can quiesce hardware replay before a fixed save-state load", async () => {
-  const [worker, gate, quiescence] = await Promise.all([
+  const [worker, gate, quiescence, runtime] = await Promise.all([
     readSource("../src/upstream-discio-worker.js"),
     readSource("../tools/perf-regression-gate.mjs"),
     readSource("../src/wgpu-replay-quiescence.js"),
+    readSource("../src/wgpu-renderer-runtime.js"),
   ]);
 
   assert.match(worker, /case "validationFinalizeWgpuReplay"/);
   assert.match(worker, /await finalizeWgpuReplayQuiescence/);
   assert.match(worker, /WGPU replay finalization requires a paused core/);
-  assert.match(worker, /drainWebGpuCmdRing\("pump"\)/);
-  assert.match(worker, /await finalizeWgpuMappedDrain/);
-  assert.match(worker, /writeIndex:/);
-  assert.match(worker, /readIndex:/);
-  assert.match(worker, /publishedReadIndex:/);
-  assert.match(worker, /backlog:/);
-  assert.match(worker, /createWgpuReplayStabilityTracker/);
-  assert.match(worker, /awaitWgpuQueueCompletion/);
+  assert.match(worker, /new WgpuRendererRuntime/);
+  assert.match(worker, /drainWebGpuCmdRing\(source\)/);
+  assert.match(worker, /finalizeWgpuMappedDrain\(timeoutMs\)/);
+  assert.match(worker, /wgpuRendererRuntime\.quiesce/);
+  assert.match(runtime, /writeIndex:/);
+  assert.match(runtime, /readIndex:/);
+  assert.match(runtime, /publishedReadIndex:/);
+  assert.match(runtime, /backlog:/);
+  assert.match(runtime, /createWgpuReplayStabilityTracker/);
+  assert.match(runtime, /awaitWgpuQueueCompletion/);
   assert.match(quiescence, /minimumObservations = 2/);
   assert.match(quiescence, /minimumStableMs = 50/);
   assert.match(quiescence, /stableWriteIndex === snapshot\.writeIndex/);
@@ -55,9 +58,10 @@ test("validation can quiesce hardware replay before a fixed save-state load", as
 });
 
 test("replay finalization fails closed unless ring and mapped work are empty", async () => {
-  const [worker, quiescence] = await Promise.all([
+  const [worker, quiescence, runtime] = await Promise.all([
     readSource("../src/upstream-discio-worker.js"),
     readSource("../src/wgpu-replay-quiescence.js"),
+    readSource("../src/wgpu-renderer-runtime.js"),
   ]);
   const finalizer = worker.slice(
     worker.indexOf("async function finalizeWgpuReplayQuiescence"),
@@ -72,9 +76,10 @@ test("replay finalization fails closed unless ring and mapped work are empty", a
   assert.match(quiescence, /!snapshot\.loadFenceActive/);
   assert.match(quiescence, /queue\.onSubmittedWorkDone/);
   assert.match(quiescence, /GPU completion timed out/);
-  assert.match(finalizer, /postCompletionSnapshot/);
-  assert.match(finalizer, /validatePostCompletionReplaySnapshot/);
-  assert.match(finalizer, /WGPU replay finalization timed out/);
+  assert.match(finalizer, /wgpuRendererRuntime\.quiesce/);
+  assert.match(runtime, /postCompletionSnapshot/);
+  assert.match(runtime, /validatePostCompletionReplaySnapshot/);
+  assert.match(runtime, /WGPU replay finalization timed out/);
 });
 
 test("hardware final screenshots are captured only after the timed replay backlog is quiescent", async () => {

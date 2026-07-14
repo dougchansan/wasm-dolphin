@@ -37,11 +37,9 @@ import {
   summarizeWgpuReplayRange
 } from "./wgpu-replay-diagnostics.js";
 import {
-  awaitWgpuQueueCompletion,
-  createWgpuReplayStabilityTracker,
-  requireWgpuReplayRing,
-  validatePostCompletionReplaySnapshot,
-} from "./wgpu-replay-quiescence.js";
+  WgpuRendererRuntime,
+  failWgpuRingDescriptor,
+} from "./wgpu-renderer-runtime.js";
 import {
   FRESH_FRAME_DELIVERY,
   freshFrameDeliveryForPacing
@@ -67,7 +65,6 @@ import {
 import {
   enableWgpuUploadWatermark,
   nextWgpuUploadRead,
-  publishWgpuUploadRead,
   rebaseWgpuStagedUploadWindow
 } from "./wgpu-upload-watermark.js";
 import {
@@ -121,8 +118,7 @@ import {
   WGPU_CONSUMER_ERROR_SUBMIT,
   WGPU_CONSUMER_ERROR_UNKNOWN,
   enableWgpuNonDroppingBackpressure,
-  failWgpuRingConsumer,
-  publishWgpuRingProgress
+  failWgpuRingConsumer
 } from "./wgpu-ring-backpressure.js";
 import {
   WGPU_UPLOAD_PROBE_SCHEMA,
@@ -6082,6 +6078,22 @@ let wgpuBacklogLastSampleAt = 0;
 let wgpuBacklogLastValue = 0;
 let wgpuBacklogNonzeroSince = 0;
 let webGpuCmdRing = null;  // { headerI32, slotsBase, capacity, uploadBase }
+let wgpuRendererHeapBuffer = null;
+let wgpuRendererHeapGeneration = 0;
+const wgpuRendererRuntime = new WgpuRendererRuntime({
+  drain: ({ source = "pump" } = {}) => drainWebGpuCmdRing(source),
+  mappedSnapshot: () => ({
+    ...pendingWgpuUploadSnapshot(),
+    pendingRemaps: wgpuMappedRemapPromises.size,
+    capacityBlocked: wgpuMappedCapacityBlocked,
+    timerPending: wgpuMappedDrainTimer !== null,
+  }),
+  finalizeMapped: (timeoutMs) => finalizeWgpuMappedDrain(timeoutMs),
+  queue: () => renderGpu?.device?.queue ?? null,
+  coreState: () => api?.getCoreStateName?.() ?? "",
+  loadFenceActive: () => wgpuLoadFenceActive,
+  fatal: () => wgpuReplayFatal,
+});
 // Day-28/29 resource object table: producer-assigned id → real GPU
 // object built here on renderGpu.device. Phase A widens this to the
 // full AbstractGfx resource set.
@@ -6233,33 +6245,51 @@ function handleWebGpuCmdRing(event) {
     attachWgpuUploadProbeRing(data, heap.buffer);
     return;
   }
-  const uploadWatermarkProtocol = Number(data.protocolVersion) >= 2 &&
-    Number(data.headerWords) >= 5;
-  const nonDroppingProtocol = Number(data.protocolVersion) >= 3 &&
-    Number(data.headerWords) >= 7;
-  const headerWords = nonDroppingProtocol ? 7 : uploadWatermarkProtocol ? 5 : 4;
-  webGpuCmdRing = {
-    headerI32: new Int32Array(heap.buffer, data.headerPtr, headerWords),
-    headerU32: new Uint32Array(heap.buffer, data.headerPtr, headerWords),
-    consumerRead: new Uint32Array(heap.buffer, data.headerPtr, headerWords)[1] >>> 0,
-    slotsBase: data.slotsPtr,
-    capacity: data.capacity >>> 0,
-    // Phase A: per-frame upload arena base (absolute wasm-heap
-    // offset). UploadBuffer/UploadTexture src pointers are absolute
-    // heap offsets into this region; the consumer reads them straight
-    // from moduleInstance.HEAPU8 (zero-copy).
-    uploadBase: (data.uploadPtr >>> 0) || 0,
-    uploadSize: (data.uploadSize >>> 0) || 0,
-    uploadWatermarkEnabled: false,
-    protocolV3Enabled: false,
-    stagedUploads: new Map(),
-    stagedUploadBytes: 0,
-    heldReplayStart: null,
-    stagedPassStart: null,
-    stagedScanCursor: null
-  };
-  if (uploadWatermarkProtocol) enableWgpuUploadWatermark(webGpuCmdRing);
-  if (nonDroppingProtocol) enableWgpuNonDroppingBackpressure(webGpuCmdRing);
+  if (wgpuReplayFatal) {
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    postStatus("webgpu-cmd-ring: attach rejected after fatal replay state");
+    return;
+  }
+  if (wgpuRendererRuntime.ring) {
+    // The committed producer is a process-lifetime singleton: EnsureRing()
+    // allocates once and never frees or replaces its header. An exact repeat
+    // is therefore a transport retransmission, not a new renderer epoch.
+    if (wgpuRendererRuntime.matchesRing({
+      heapBuffer: heap.buffer,
+      descriptor: data,
+    })) {
+      postStatus("webgpu-cmd-ring: duplicate attachment ignored");
+      return;
+    }
+    const detail = "a different command ring arrived while the renderer still owns one";
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    recordRendererError("webgpu-command-ring-ownership", detail);
+    markWgpuReplayFatal("webgpu-command-ring-ownership", detail);
+    postStatus(`webgpu-cmd-ring: attach rejected: ${detail}`);
+    return;
+  }
+  if (wgpuRendererHeapBuffer !== heap.buffer) {
+    wgpuRendererHeapBuffer = heap.buffer;
+    wgpuRendererHeapGeneration += 1;
+  }
+  try {
+    // The renderer runtime is the sole owner of the live command-ring views.
+    // UploadBuffer/UploadTexture source pointers remain absolute offsets into
+    // the shared wasm heap, so replay stays zero-copy on this thread.
+    webGpuCmdRing = wgpuRendererRuntime.attachRing({
+      sessionId: "inline-discio",
+      heapGeneration: wgpuRendererHeapGeneration,
+      heapBuffer: heap.buffer,
+      descriptor: data,
+    });
+  } catch (error) {
+    const detail = error?.message || String(error);
+    failWgpuRingDescriptor({ heapBuffer: heap.buffer, descriptor: data });
+    recordRendererError("webgpu-command-ring-attach", detail);
+    markWgpuReplayFatal("webgpu-command-ring-attach", detail);
+    postStatus(`webgpu-cmd-ring: attach failed: ${detail}`);
+    return;
+  }
   publishWgpuReadIndex(webGpuCmdRing, webGpuCmdRing.consumerRead);
   collectWebGpuProducerStateStats();
   const requestedArenaBytes = wgpuUploadArenaMiB * 1024 * 1024;
@@ -6284,18 +6314,27 @@ function handleWebGpuCmdRing(event) {
 }
 
 function currentWgpuReadIndex(ring) {
-  return ring?.consumerRead == null
-    ? Atomics.load(ring.headerI32, 1) >>> 0
-    : ring.consumerRead >>> 0;
+  if (!ring) return 0;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU read requested by a non-owner");
+  }
+  return wgpuRendererRuntime.currentReadIndex();
 }
 
 function currentWgpuUploadReadIndex(ring) {
-  return ring?.headerI32 ? Atomics.load(ring.headerI32, 3) >>> 0 : 0;
+  if (!ring) return 0;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU upload read requested by a non-owner");
+  }
+  return wgpuRendererRuntime.currentUploadReadIndex();
 }
 
 function releaseWgpuUploadPayload(ring, uploadPointer, uploadBytes) {
   if (!ring?.uploadWatermarkEnabled) return null;
-  const nextRead = publishWgpuUploadRead(ring, uploadPointer, uploadBytes);
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU upload release attempted by a non-owner");
+  }
+  const nextRead = wgpuRendererRuntime.publishUploadRead(uploadPointer, uploadBytes);
   if (nextRead === null) {
     webGpuCausalStats.errorCount += 1;
     recordRendererError(
@@ -6438,13 +6477,14 @@ function stageHeldWgpuUploads(
 }
 
 function publishWgpuReadIndex(ring, readIndex) {
-  const normalized = readIndex >>> 0;
-  ring.consumerRead = normalized;
+  if (ring !== webGpuCmdRing || ring !== wgpuRendererRuntime.ring) {
+    throw new Error("WGPU read publication attempted by a non-owner");
+  }
   // Slot ownership follows actual consumption. The old replay-pump path
   // subtracted capacity-16K here, which made the producer treat already
   // consumed slots as occupied and reduced a 262K ring to an effective 16K.
   // WGPU_REPLAY_WINDOW_RECORDS is a per-drain work budget, not a reservation.
-  publishWgpuRingProgress(ring, 1, normalized);
+  return wgpuRendererRuntime.publishReadIndex(readIndex);
 }
 
 function startWgpuReplayPump() {
@@ -6899,114 +6939,16 @@ async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
 }
 
 function wgpuReplayQuiescenceSnapshot() {
-  const ring = webGpuCmdRing;
-  const mapped = pendingWgpuUploadSnapshot();
-  const mappedPool = mapped?.mapped;
-  const computePool = mapped?.compute;
-  if (!ring) {
-    return {
-      registered: false,
-      writeIndex: 0,
-      readIndex: 0,
-      publishedReadIndex: 0,
-      backlog: 0,
-      stagedUploads: 0,
-      heldReplay: false,
-      loadFenceActive: wgpuLoadFenceActive,
-      pendingMappedUploads: mapped?.pendingUploads ?? 0,
-      activeMappedBatches: (mappedPool?.activeBatches ?? 0) +
-        (computePool?.activeBatches ?? 0),
-      pendingRemaps: wgpuMappedRemapPromises.size,
-      capacityBlocked: wgpuMappedCapacityBlocked,
-      mappedDrainTimerPending: wgpuMappedDrainTimer !== null,
-      fatal: wgpuReplayFatal,
-    };
-  }
-  const writeIndex = Atomics.load(ring.headerI32, 0) >>> 0;
-  const readIndex = currentWgpuReadIndex(ring);
-  return {
-    registered: true,
-    writeIndex,
-    readIndex,
-    publishedReadIndex: Atomics.load(ring.headerI32, 1) >>> 0,
-    backlog: (writeIndex - readIndex) >>> 0,
-    stagedUploads: ring.stagedUploads?.size ?? 0,
-    heldReplay: ring.heldReplayStart != null || ring.stagedPassStart != null ||
-      ring.stagedScanCursor != null,
-    loadFenceActive: wgpuLoadFenceActive,
-    pendingMappedUploads: mapped?.pendingUploads ?? 0,
-    activeMappedBatches: (mappedPool?.activeBatches ?? 0) +
-      (computePool?.activeBatches ?? 0),
-    pendingRemaps: wgpuMappedRemapPromises.size,
-    capacityBlocked: wgpuMappedCapacityBlocked,
-    mappedDrainTimerPending: wgpuMappedDrainTimer !== null,
-    fatal: wgpuReplayFatal,
-  };
+  return wgpuRendererRuntime.snapshot();
 }
 
 async function finalizeWgpuReplayQuiescence(
   timeoutMs = 30_000,
   { requireRing = false } = {}
 ) {
-  const startedAtMs = globalThis.performance.now();
-  const deadlineAtMs = startedAtMs + timeoutMs;
-  let drainCount = 0;
-  const stabilityTracker = createWgpuReplayStabilityTracker();
-  let snapshot = wgpuReplayQuiescenceSnapshot();
-  const initial = { ...snapshot };
-
-  requireWgpuReplayRing(snapshot, requireRing);
-
-  for (;;) {
-    if (snapshot.fatal) {
-      throw new Error("WGPU replay finalization found a fatal replay state");
-    }
-    if (snapshot.backlog > 0) {
-      drainWebGpuCmdRing("pump");
-      drainCount += 1;
-    }
-
-    const remainingMs = deadlineAtMs - globalThis.performance.now();
-    if (remainingMs <= 0) {
-      throw new Error(
-        `WGPU replay finalization timed out: ${JSON.stringify(snapshot)}`
-      );
-    }
-    await finalizeWgpuMappedDrain(remainingMs);
-    snapshot = wgpuReplayQuiescenceSnapshot();
-    const stability = stabilityTracker.observe(snapshot, globalThis.performance.now());
-    if (stability.ready) {
-      const queue = renderGpu?.device?.queue;
-      const gpuCompletion = await awaitWgpuQueueCompletion(queue, {
-        required: requireRing,
-        deadlineAtMs,
-      });
-      const postCompletionSnapshot = wgpuReplayQuiescenceSnapshot();
-      validatePostCompletionReplaySnapshot(
-        postCompletionSnapshot,
-        stability.stableWriteIndex
-      );
-      return {
-        quiesced: true,
-        required: requireRing,
-        coreStateName: api?.getCoreStateName?.() ?? "",
-        initial,
-        ...postCompletionSnapshot,
-        drainCount,
-        stableEmptyObservations: stability.stableEmptyObservations,
-        stableEmptyMs: stability.stableEmptyMs,
-        gpuCompletion,
-        elapsedMs: globalThis.performance.now() - startedAtMs,
-      };
-    }
-    if (globalThis.performance.now() >= deadlineAtMs) {
-      throw new Error(
-        `WGPU replay finalization timed out: ${JSON.stringify(snapshot)}`
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    snapshot = wgpuReplayQuiescenceSnapshot();
-  }
+  return wgpuRendererRuntime.quiesce(timeoutMs, {
+    requireRing,
+  });
 }
 
 function drainWgpuSemanticOwnership() {
@@ -7433,7 +7375,7 @@ function markWgpuReplayFatal(scope, detail) {
     : scope === "submit-error"
       ? WGPU_CONSUMER_ERROR_SUBMIT
       : WGPU_CONSUMER_ERROR_UNKNOWN;
-  failWgpuRingConsumer(webGpuCmdRing, errorCode);
+  wgpuRendererRuntime.emergencyFail(errorCode);
   return true;
 }
 

@@ -63,6 +63,11 @@ ring/heap.
   acknowledgements without per-frame RPCs.
 - No live fallback occurs after canvas transfer or ring attachment. Recovery is
   a page reload with the experimental flag disabled.
+- The current C++ producer is a process-lifetime singleton: `EnsureRing()`
+  allocates its header once and never replaces it. The inline extraction may
+  ignore only an exact retransmission of that descriptor; any different second
+  handoff fails closed and requires a page reload. A future restartable renderer
+  must add an explicit native ring epoch before supporting in-worker replacement.
 - Boot has no dual-consumer interval: transfer the canvas before any context is
   created, but first run the renderer canary while fallback is still possible.
   Transfer/init the visible canvas, await renderer device/context readiness,

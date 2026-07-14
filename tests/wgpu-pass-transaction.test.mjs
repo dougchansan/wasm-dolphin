@@ -158,13 +158,16 @@ test("producer source stages passes, publishes batches once, and resets cached s
 });
 
 test("worker publishes the actual consumed index and uses 16K only as a work budget", async () => {
-  const worker = await readFile(
-    new URL("../src/upstream-discio-worker.js", import.meta.url),
-    "utf8"
-  );
+  const [worker, runtime] = await Promise.all([
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/wgpu-renderer-runtime.js", import.meta.url), "utf8"),
+  ]);
   const publishBody = /function publishWgpuReadIndex\([\s\S]*?\n\}/.exec(worker)?.[0] ?? "";
+  const runtimePublishBody = /publishReadIndex\(readIndex\) \{[\s\S]*?\n  \}/
+    .exec(runtime)?.[0] ?? "";
 
-  assert.match(publishBody, /publishWgpuRingProgress\(ring, 1, normalized\)/);
+  assert.match(publishBody, /wgpuRendererRuntime\.publishReadIndex\(readIndex\)/);
+  assert.match(runtimePublishBody, /publishWgpuRingProgress\(this\.ring, 1, normalized\)/);
   assert.doesNotMatch(publishBody, /capacity\s*-\s*WGPU_REPLAY_WINDOW_RECORDS/);
   assert.match(worker,
     /selectAtomicReplayLimit\(\{[\s\S]*?maxRecords:\s*WGPU_REPLAY_WINDOW_RECORDS/);

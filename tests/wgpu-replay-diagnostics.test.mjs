@@ -606,10 +606,11 @@ test("classifier correlates load epoch, EFB, XFB, and backbuffer mutation", () =
 });
 
 test("host-to-worker plumbing keeps the classifier query-gated and reportable", async () => {
-  const [host, adapter, worker] = await Promise.all([
+  const [host, adapter, worker, runtime] = await Promise.all([
     readFile(new URL("../src/core-host.js", import.meta.url), "utf8"),
     readFile(new URL("../src/upstream-worker-adapter.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8")
+    readFile(new URL("../src/upstream-discio-worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/wgpu-renderer-runtime.js", import.meta.url), "utf8")
   ]);
 
   assert.match(host, /requestedWgpuReplayDiagnostics\(window\.location\.search\)/);
@@ -680,7 +681,7 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     /let replayLimit = wgpuReplayBudgetMs > 0[\s\S]*?: wgpuAtomicPassReplay[\s\S]*?selectAtomicReplayLimit/);
   assert.match(worker, /const WGPU_REPLAY_WINDOW_RECORDS = 16384/);
   assert.match(worker, /publishWgpuReadIndex\(webGpuCmdRing, webGpuCmdRing\.consumerRead\)/);
-  assert.match(worker, /Atomics\.load\(ring\.headerI32, 3\)/);
+  assert.match(runtime, /Atomics\.load\(this\.ring\.headerI32, 3\)/);
   assert.match(worker, /type: "detachedWgpuFrame"/);
   assert.match(worker, /scheduleDetachedWgpuBitmap\(q\)/);
   assert.match(worker, /while \(read !== replayLimit\)/);
