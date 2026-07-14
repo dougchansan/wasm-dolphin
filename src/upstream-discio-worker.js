@@ -8128,11 +8128,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     } else if (op === WGPU_CMD_OP_BEGIN_PASS) {
       self._wgBpDefer = 0;
     }
-    const stagedUpload = (op === WGPU_CMD_OP_UPLOAD_BUFFER ||
-        op === WGPU_CMD_OP_UPLOAD_TEXTURE) && ring.stagedUploads?.size
-      ? ring.stagedUploads.get(read) ?? null
-      : null;
-    const retainedSemanticPayload = stagedUpload?.data ?? null;
+    const retainedSemanticPayload = ring.stagedUploads?.get(read)?.data ?? null;
     const exactRetainedSemanticPayload = retainedSemanticPayload &&
         op === WGPU_CMD_OP_UPLOAD_BUFFER
       ? retainedSemanticPayload.subarray(0, u32[recWord + 4])
@@ -8187,6 +8183,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const srcP = u32[recWord + 3];
           const uploadBytes = u32[recWord + 4];
           const uploadRole = u32[recWord + 5];
+          const stagedUpload = ring.stagedUploads?.get(read) ?? null;
           if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(
@@ -8346,15 +8343,13 @@ function drainWebGpuCmdRing(source = "presentation") {
                 const destinationOffset = u32[recWord + 2] & ~3;
                 if (stagedUpload) {
                   const stage = (data) => {
-                    const sparse = uploadRole === WGPU_UPLOAD_ROLE.UBO
-                      ? ensureWgpuSparseUbo(dev)?.stage({
-                          pool,
-                          data,
-                          destination: buf,
-                          destinationOffset,
-                          role: uploadRole,
-                        })
-                      : null;
+                    const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                      pool,
+                      data,
+                      destination: buf,
+                      destinationOffset,
+                      role: uploadRole,
+                    });
                     if (sparse?.handled) return sparse;
                     if (wgpuMappedStageFastEnabled) {
                       const reason = pool.stageBufferFast(data, buf, destinationOffset);
@@ -8373,15 +8368,13 @@ function drainWebGpuCmdRing(source = "presentation") {
                   stageReason = retainedAttempt.result.reason ?? null;
                   retainedAccepted = retainedAttempt.accepted;
                 } else {
-                  const sparse = uploadRole === WGPU_UPLOAD_ROLE.UBO
-                    ? ensureWgpuSparseUbo(dev)?.stage({
-                        pool,
-                        data: uploadSource,
-                        destination: buf,
-                        destinationOffset,
-                        role: uploadRole,
-                      })
-                    : null;
+                  const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                    pool,
+                    data: uploadSource,
+                    destination: buf,
+                    destinationOffset,
+                    role: uploadRole,
+                  });
                   if (sparse?.handled) {
                     stageAccepted = sparse.ok;
                     stageReason = sparse.reason ?? null;
@@ -8535,6 +8528,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const bpr = u32[recWord + 3];
           const h = u32[recWord + 5];
           const uploadBytes = Math.imul(bpr, h) >>> 0;
+          const stagedUpload = ring.stagedUploads?.get(read) ?? null;
           if (stagedUpload && wgpuUploadTransport !== "mapped") {
             ring.stagedUploads.delete(read);
             ring.stagedUploadBytes = Math.max(

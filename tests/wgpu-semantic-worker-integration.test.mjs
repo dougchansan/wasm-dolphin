@@ -63,37 +63,6 @@ test("legacy semantics snapshot before replay and commit only before the read cu
   assert.match(worker.slice(decision, advance), /retryPrepared/);
 });
 
-test("replay resolves retained upload payload once and only for upload opcodes", () => {
-  const loop = worker.slice(
-    worker.indexOf("while (read !== replayLimit)"),
-    worker.indexOf("read = (read + 1) >>> 0")
-  );
-  const lookup = loop.indexOf("ring.stagedUploads.get(read)");
-  const semantic = loop.indexOf("const retainedSemanticPayload");
-  assert.ok(lookup > 0);
-  assert.ok(semantic > lookup);
-  assert.equal(loop.match(/ring\.stagedUploads\.get\(read\)/g)?.length, 1);
-  assert.match(
-    loop.slice(0, semantic),
-    /op === WGPU_CMD_OP_UPLOAD_BUFFER[\s\S]*op === WGPU_CMD_OP_UPLOAD_TEXTURE[\s\S]*ring\.stagedUploads\?\.size/
-  );
-  assert.match(loop, /const retainedSemanticPayload = stagedUpload\?\.data/);
-});
-
-test("mapped sparse UBO staging is screened by the producer upload role", () => {
-  const uploadCase = worker.slice(
-    worker.indexOf("case WGPU_CMD_OP_UPLOAD_BUFFER"),
-    worker.indexOf("case WGPU_CMD_OP_CREATE_TEXTURE")
-  );
-  assert.equal(uploadCase.match(/ensureWgpuSparseUbo\(dev\)\?\.stage/g)?.length, 2);
-  assert.equal(
-    uploadCase.match(/uploadRole === WGPU_UPLOAD_ROLE\.UBO[\s\S]{0,120}ensureWgpuSparseUbo\(dev\)\?\.stage/g)?.length,
-    2
-  );
-  assert.match(uploadCase, /else if \(wgpuMappedStageFastEnabled\)/);
-  assert.match(uploadCase, /pool\.stageBuffer\(\{/);
-});
-
 test("load-fence and permanently rejected records invalidate evidence", () => {
   assert.match(
     worker,
