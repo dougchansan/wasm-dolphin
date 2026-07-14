@@ -116,14 +116,67 @@ A longer 60-second emulated work unit then completed in 60.236 wall seconds:
 
 The long run remained realtime even while the fight reached 1,197 blocks not
 present in the 9,681-entry warm cache. It therefore establishes sustained
-emulation/core speed on this machine. It does **not** establish 60 distinct
-visible frames per second: the low-overhead arm deliberately left hardware
-visual-cadence readback disabled, and presentation samples remained below 60.
-The next gate is distinct-frame cadence and input-to-visible latency, not more
-short core-speed screens.
+emulation/core speed on this machine. The low-overhead arm deliberately left
+hardware visual-cadence readback disabled, so distinct-frame cadence and input
+latency were measured separately below.
 
 Raw artifacts are under `.omx/wgpu-realtime-100/metrics-off/physical-even-*`
 and `.omx/wgpu-realtime-100/metrics-off/sustained-60s-physical-even-1`.
+
+## Visual cadence and input-to-GPU diagnostics
+
+Two headed, muted-audio diagnostics enabled hardware downsample readback, GPU
+completion, and six post-load input markers. Both directly loaded the same
+Kirby-versus-Link battle and produced correct changing hardware-WGPU output.
+
+| Run | Fixed-work speed % | Core FPS | Steady presentation FPS | Steady distinct visual FPS | Changed samples | GPU completion p95 / max ms | Input to GPU avg / p95 / max ms | Core poll to GPU avg / p95 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Replay pump on | 98.859 | 59.317 | 45.467 | 59.333 | 839 / 907 | 7.625 / 23.695 | 20.667 / 27 / 27 | 4.167 / 6 |
+| Replay pump off | 99.797 | 59.814 | 46.900 | 59.833 | 831 / 871 | 6.865 / 10.385 | 19.500 / 25 / 25 | 4.833 / 7 |
+
+All six inputs in each run were applied, observed by the core, submitted, and
+completed without missing, superseded, or expired markers. Visual readback had
+zero encode or map errors. These measurements stop at WebGPU queue completion;
+`physicalPhotonBoundaryIncluded=false`, so they are not physical
+input-to-photon results. The black square in these two diagnostic screenshots
+is the intentional optical-marker baseline, not a renderer failure.
+
+The pump-off sample reduced host wake/submission work and modestly improved the
+fixed-work result, but average replay backlog rose from `897` to `2,789`
+commands, p95 rose from `2,495` to `4,204`, and high-water rose from `3,913` to
+`7,366`. A later balanced rerun was invalid because the core did not mount in
+any completed arm; it produced no performance samples. Keep the replay pump on
+until a valid order-balanced campaign shows that the backlog and latency trade
+is safe.
+
+Raw artifacts are under `.omx/wgpu-realtime-100/visual-input/`.
+
+## Audible marker-free validation
+
+The final headed validation used AudioWorklet output with
+`PERF_AUDIO_MODE=audible`, disabled the optical marker, and sent no scripted
+input. The screenshot shows the correct Kirby-versus-Link battle with intact
+color, geometry, and HUD, and the settings panel correctly identifies the
+hardware WGPU renderer.
+
+| Measure | Result |
+| --- | ---: |
+| Fixed-work game speed | 99.346% |
+| Fixed-work core FPS | 59.615 |
+| Steady distinct visual FPS | 59.000 |
+| Presentation FPS, steady mean / p50 | 43.778 / 46 |
+| Audio requested / active transport | worklet / worklet |
+| Audio underrun frames / events | 0 / 0 |
+| Audio underruns / overruns | 0 / 0 |
+| GPU completion p95 | 7.095 ms |
+| WGPU errors / drops / aborts / timeouts | 0 / 0 / 0 / 0 |
+
+The run was harness-valid and ended with an empty replay ring and completed GPU
+fence. It remains release-non-qualifying because the retained candidate's
+tracked build-provenance evidence no longer matches the current source tree;
+therefore the harness correctly refuses an audible-audio qualification claim.
+This is a provenance gap, not a runtime failure. Raw evidence is under
+`.omx/wgpu-realtime-100/final-audible-20260714-132507/`.
 
 ## What the measurements establish
 
