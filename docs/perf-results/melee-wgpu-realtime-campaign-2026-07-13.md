@@ -26,6 +26,8 @@ the two-run visible mean to 75.41%. This is not 100% game speed.
 | Upload-run ingest, flat-store control | 79.499% off | 79.470% on | Throughput-neutral; reject behavior path |
 | Equal-only sparse UBO | 79.395% off | 79.933% on | +0.68%; within variance and almost no bytes avoided |
 | MessageChannel replay wake, A/B/B/A | 69.978% timer | 66.374% fast wake | -5.15%; rejected |
+| Mapped-stage timing sampling, eight runs | 71.965% exact | 72.527% stride 64 | +0.78%; small screening result, not promoted |
+| Global metrics overhead, eight runs | 73.778% sampled | 74.113% off | +0.46%; within run variance |
 
 Every listed run used the exact scene signature and reported zero WGPU replay
 errors and dropped commands. These are screening means, not confidence-bounded
@@ -177,6 +179,58 @@ into many smaller batches. Staging-only submissions rose enough to lower both
 game speed and presentation cadence. The behavior change was therefore removed;
 it must not be described as a throughput optimization.
 
+## Mapped-stage timing sampling
+
+Exact per-upload mapped-stage timing was compared with timing the first and
+every 64th eligible upload. The balanced eight-run screen used candidate core
+`1373f77f3b4606b9910f1dbbdff0749911f6b77bdec58a8233fcc94e24718cb8`,
+the exact battle save, full-CCD affinity, mapped uploads, visible output, and
+muted audio.
+
+| Metric | Exact timing | Stride 64 | Change |
+| --- | ---: | ---: | ---: |
+| Fixed-work game speed | 71.965% | 72.527% | +0.78% relative |
+| Fixed-work core FPS | 43.173 | 43.523 | +0.81% |
+| Presentation FPS | 29.22 | 28.60 | -2.14% |
+| Eligible upload calls per run | 965,371 | 975,331 | observational |
+| Timing samples per run | 965,371 | 15,243 | -98.42% |
+| Timing clock calls per run | 1,930,743 | 30,485 | -98.42% |
+
+All runs were valid and showed 17 or 18 readable changing battle samples with
+no WGPU errors, dropped commands, or GPU-completion failures. The speed effect
+is small compared with observed run variance and presentation did not improve,
+so stride 64 remains an explicit diagnostics option rather than a promoted
+default. Raw sampled duration counters are not extrapolated into exact totals.
+
+## Metrics-off overhead screen
+
+The gate now obtains a counter-free, fail-closed runtime configuration snapshot
+from renderer diagnostics. This allows `metrics=0` runs to prove their active
+mapped-upload, UBO-cache, staging, geometry, and tail-gate modes without
+re-enabling the counters being measured.
+
+An A/B/B/A plus B/A/A/B screen compared sampled metrics
+(`metrics=1&wgpumappedtiming=64`) with global metrics disabled. All eight runs
+used commit `f0b54d0`, candidate core
+`1373f77f3b4606b9910f1dbbdff0749911f6b77bdec58a8233fcc94e24718cb8`,
+the exact battle save, full-CCD affinity, visible hardware WGPU output, no JIT
+cache, and muted audio.
+
+| Metric | Sampled metrics | Metrics off | Change |
+| --- | ---: | ---: | ---: |
+| Fixed-work game speed mean | 73.778% | 74.113% | +0.34 points / +0.46% relative |
+| Game-speed sample SD | 1.977 | 1.340 | observational |
+| Fixed-work core FPS | 44.245 | 44.475 | +0.52% |
+| Presentation FPS | 31.29 | 29.14 | -6.87% |
+| Visible changes across four runs | 67 | 67 | equal |
+
+Every run reached the exact checkpoint and fixed-work target and reported no
+runtime failures. Muted audio makes these screens ineligible for audible-audio
+or release-qualification claims. The +0.46% speed difference is smaller than run-to-run
+variation and presentation cadence moved in the wrong direction. Metrics-off
+is appropriate for normal play and clean overhead controls, but observer
+overhead does not explain the remaining roughly 26% game-speed deficit.
+
 ## Local raw artifacts
 
 - `.omx/build/perf-results/fastbranch-visible-abba-*`
@@ -193,5 +247,7 @@ it must not be described as a throughput optimization.
 - `.omx/wgpu-realtime-100/jit-profile-1373f77f/`
 - `.omx/wgpu-realtime-100/pass-package-projection-1373f77f/`
 - `.omx/wgpu-realtime-100/fast-pump-1373f77f/`
+- `.omx/wgpu-realtime-100/mapped-timing-1373f77f/`
+- `.omx/wgpu-realtime-100/metrics-overhead-attested-f0b54d0/`
 
 No result in this document establishes realtime, no-lag, or 100% game speed.
