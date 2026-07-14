@@ -40,8 +40,11 @@ test("mapped staging fast path is opt-in and flows through the worker load paylo
   );
   assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageBufferFast\(/);
   assert.match(worker, /wgpuMappedStageFastEnabled[\s\S]*?\.stageTextureFast\(/);
-  assert.match(worker, /if \(stagedUpload && stageAccepted\) \{[\s\S]*?stagedUploads\.delete\(read\)/);
+  assert.match(worker, /flatRecords: wgpuMappedStageFastEnabled/);
+  assert.match(worker, /if \(sparse\?\.handled\) return sparse;[\s\S]*?stageBufferFast/);
   assert.match(gate, /"wgpustagefast"/);
+  assert.match(gate, /mappedStaging\?\.recordStore/);
+  assert.match(gate, /record store mismatch: requested=flat/);
   assert.match(harness, /\["WGPUSTAGEFAST", "wgpustagefast"\]/);
 });
 

@@ -203,7 +203,8 @@ test("sparse UBO flag is wired from URL through validation and perf gating", asy
   assert.match(worker, /wgpuSparseUbo\?\.reset\(`fatal-\$\{scope\}`\)/);
   assert.match(harness, /\["WGPUUBOSPARSE", "wgpuubosparse"\]/);
   assert.match(gate, /evaluateWgpuSparseUboEvidence/);
-  assert.match(gate, /require wgpustagefast=0 to isolate the mechanism/);
+  assert.doesNotMatch(gate, /require wgpustagefast=0 to isolate the mechanism/);
+  assert.match(worker, /if \(sparse\?\.handled\) return sparse;[\s\S]*?stageBufferFast/);
   assert.match(artifacts, /handled no eligible uploads in the timed window/);
   assert.match(artifacts, /reconstructed no copy-forward snapshots in the timed window/);
   assert.match(artifacts, /did not reduce mapped bytes in the timed window/);

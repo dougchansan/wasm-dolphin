@@ -45,6 +45,7 @@ for (const requiredPath of [
   "src/incremental-sha256.js",
   "src/wgpu-consumer-reset-attestation.js",
   "src/wgpu-legacy-semantic-decoder.js",
+  "src/wgpu-mapped-staging-pool.js",
   "src/wgpu-ownership-command-correlator.js",
   "src/wgpu-pass-package-projection.js",
   "src/wgpu-resource-generation-tracker.js",

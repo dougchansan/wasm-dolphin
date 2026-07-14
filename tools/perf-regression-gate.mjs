@@ -1160,9 +1160,6 @@ function summarizeScenario(
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
   failures.push(...sparseUbo.failures);
-  if (sparseUbo.expectedActive && String(scenario.params?.wgpustagefast ?? "0") !== "0") {
-    failures.push("WGPU sparse UBO benchmarks require wgpustagefast=0 to isolate the mechanism");
-  }
   failures.push(...causalFairness.failures);
   const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
   if (requestedDirtyRanges != null) {
@@ -1258,6 +1255,13 @@ function summarizeScenario(
       failures.push(
         `WGPU mapped staging fast-path mismatch: requested=${expectedMappedStageFast ? 1 : 0} ` +
         `active=${activeMappedStageFast == null ? "unavailable" : activeMappedStageFast ? 1 : 0}`
+      );
+    }
+    const recordStore = final.causalTelemetry?.webgpu?.mappedStaging?.recordStore;
+    if (expectedMappedStageFast && recordStore !== "flat") {
+      failures.push(
+        `WGPU mapped staging record store mismatch: requested=flat ` +
+        `active=${recordStore ?? "unavailable"}`
       );
     }
   }

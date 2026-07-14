@@ -243,6 +243,9 @@ test("reports bounded capacity misses without allocating or dropping prior uploa
     oldestPendingAtMs: 100,
     oldestPendingAgeMs: 0,
     activeBatches: 0,
+    recordStore: "objects",
+    flatRecordHighWater: 0,
+    flatRecordResetCount: 0,
     remapLatencyBucketBoundsMs: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000],
     bufferUploads: 1,
     bufferUploadsCoalesced: 0,
@@ -371,6 +374,74 @@ test("preserves global A-B-A record order across staging slots", () => {
   assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 1, 0]);
 });
 
+test("flat record store matches mixed object copies and reuses retained arrays", async () => {
+  const objectFake = createFakeDevice();
+  const flatFake = createFakeDevice();
+  const objectPool = createPool(objectFake, { slotCount: 1, flatRecords: false });
+  const flatPool = createPool(flatFake, { slotCount: 1, flatRecords: true });
+  const objectBuffer = { name: "object-buffer" };
+  const flatBuffer = { name: "flat-buffer" };
+  const objectTexture = { name: "object-texture" };
+  const flatTexture = { name: "flat-texture" };
+  const textureBytes = Uint8Array.from({ length: 8 }, (_, index) => index + 1);
+  const copySize = { width: 2, height: 2, depthOrArrayLayers: 1 };
+  const origin = { x: 3, y: 4, z: 0 };
+
+  for (const [pool, buffer, texture] of [
+    [objectPool, objectBuffer, objectTexture],
+    [flatPool, flatBuffer, flatTexture],
+  ]) {
+    assert.equal(pool.stageBufferFast(Uint8Array.of(1, 2, 3, 4), buffer, 8), null);
+    assert.equal(pool.stageBufferFast(Uint8Array.of(5, 6, 7, 8), buffer, 12), null);
+    assert.equal(pool.stageTextureFast(
+      textureBytes, texture, copySize, 4, 2, origin, 1, "all"
+    ), null);
+  }
+
+  const summarize = (copy) => copy[0] === "buffer"
+    ? [copy[0], copy[2], copy[4], copy[5]]
+    : [
+        copy[0], copy[1].offset, copy[1].bytesPerRow, copy[1].rowsPerImage,
+        copy[2].origin, copy[2].mipLevel, copy[2].aspect, copy[3],
+      ];
+  const objectBatch = objectPool.seal();
+  const flatBatch = flatPool.seal();
+  assert.deepEqual(
+    flatBatch.commandBuffer.copies.map(summarize),
+    objectBatch.commandBuffer.copies.map(summarize)
+  );
+  assert.equal(flatPool.snapshot().recordStore, "flat");
+  assert.equal(flatPool.snapshot().flatRecordHighWater, 2);
+  assert.equal(flatPool.snapshot().pendingUploads, 2);
+
+  const flatRemap = submitWgpuUploadBeforeRender({
+    queue: { submit() {} }, pool: flatPool, batch: flatBatch,
+  });
+  flatFake.buffers[0].maps[0].operation.resolve();
+  assert.equal(await flatRemap, true);
+  assert.equal(flatPool.snapshot().flatRecordResetCount, 1);
+  assert.equal(flatPool.snapshot().pendingUploads, 0);
+  assert.equal(flatPool.stageBufferFast(
+    Uint8Array.of(9, 8, 7, 6), flatBuffer, 16
+  ), null);
+  assert.equal(flatPool.snapshot().flatRecordHighWater, 2);
+});
+
+test("flat records preserve global A-B-A order without cross-record coalescing", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 2, slotSize: 8, flatRecords: true });
+  const destination = { name: "overlap" };
+
+  assert.equal(pool.stageBufferFast(Uint8Array.of(1, 1, 1, 1), destination, 0), null);
+  assert.equal(pool.stageBufferFast(new Uint8Array(8).fill(2), destination, 0), null);
+  assert.equal(pool.stageBufferFast(Uint8Array.of(3, 3, 3, 3), destination, 4), null);
+
+  const copies = pool.seal().commandBuffer.copies;
+  assert.equal(copies.length, 3, "A and C must not coalesce across B");
+  assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 1, 0]);
+  assert.equal(pool.snapshot().recordStore, "flat");
+});
+
 test("compound snapshots reconstruct sequential UBO slices byte-identically", () => {
   const fake = createFakeDevice();
   const pool = createPool(fake, { slotCount: 1, slotSize: 256 });
@@ -466,6 +537,48 @@ test("compound UBO ordering survives cross-slot staging and an interleaved uploa
   }
   assert.deepEqual([...new Uint8Array(destination.storage, 0, 64)], [...baseline]);
   assert.deepEqual([...new Uint8Array(destination.storage, 64, 64)], [...changed]);
+  assert.deepEqual([...new Uint8Array(shadow.storage)], [...changed]);
+  assert.deepEqual([...new Uint8Array(unrelated.storage)], [9, 8, 7, 6]);
+});
+
+test("flat records preserve compound UBO ordering and equal-copy reconstruction", () => {
+  const fake = createFakeDevice();
+  const pool = createPool(fake, { slotCount: 2, slotSize: 64, flatRecords: true });
+  const shadow = fake.device.createBuffer({ size: 64, usage: 0x000c });
+  const destination = fake.device.createBuffer({ size: 192, usage: 0x0008 });
+  const unrelated = fake.device.createBuffer({ size: 4, usage: 0x0008 });
+  const baseline = Uint8Array.from({ length: 64 }, (_, index) => index);
+  const changed = baseline.slice();
+  changed.fill(0xee, 16, 32);
+
+  pool.stageBufferSnapshot({
+    data: baseline, destination, shadowBuffer: shadow,
+    ranges: [{ start: 0, end: 64 }], copyForward: false,
+  });
+  assert.equal(pool.stageBufferFast(
+    Uint8Array.of(9, 8, 7, 6), unrelated, 0
+  ), null);
+  pool.stageBufferSnapshot({
+    data: changed, destination, destinationOffset: 64, shadowBuffer: shadow,
+    ranges: [{ start: 16, end: 32 }], copyForward: true,
+  });
+  const equal = pool.stageBufferSnapshot({
+    data: changed, destination, destinationOffset: 128, shadowBuffer: shadow,
+    ranges: [], copyForward: true,
+  });
+  assert.equal(equal.stagedBytes, 0);
+  assert.equal(pool.snapshot().pendingUploads, 4);
+
+  const copies = pool.seal().commandBuffer.copies;
+  assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 0, 1, 2, 1, 1, 2]);
+  for (const [, source, sourceOffset, target, targetOffset, size] of copies) {
+    new Uint8Array(target.storage, targetOffset, size).set(
+      new Uint8Array(source.storage, sourceOffset, size)
+    );
+  }
+  assert.deepEqual([...new Uint8Array(destination.storage, 0, 64)], [...baseline]);
+  assert.deepEqual([...new Uint8Array(destination.storage, 64, 64)], [...changed]);
+  assert.deepEqual([...new Uint8Array(destination.storage, 128, 64)], [...changed]);
   assert.deepEqual([...new Uint8Array(shadow.storage)], [...changed]);
   assert.deepEqual([...new Uint8Array(unrelated.storage)], [9, 8, 7, 6]);
 });

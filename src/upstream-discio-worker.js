@@ -224,6 +224,7 @@ let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
 let wgpuMappedStageFastEnabled = false;
+const WGPU_FAST_STAGE_ACCEPTED = Object.freeze({ ok: true, reason: null });
 let wgpuMappedDrainCoalescingEnabled = false;
 let wgpuRendererWorkerProbe = "off";
 let wgpuVisualCadenceEnabled = false;
@@ -6074,6 +6075,7 @@ function ensureWgpuMappedStagingPool(device) {
       bufferUsage: 0x0002 | 0x0004,
       mapMode: 0x0002,
       watchDeviceLoss: false,
+      flatRecords: wgpuMappedStageFastEnabled,
     });
   }
   return wgpuMappedStagingPool;
@@ -8331,44 +8333,56 @@ function drainWebGpuCmdRing(source = "presentation") {
                 let retainedAccepted = false;
                 let stageAccepted;
                 let stageReason = null;
-                if (wgpuMappedStageFastEnabled && !wgpuSparseUboEnabled) {
-                  stageReason = pool.stageBufferFast(
-                    stagedUpload?.data ?? uploadSource,
-                    buf,
-                    u32[recWord + 2] & ~3
-                  );
-                  stageAccepted = stageReason === null;
-                  if (stagedUpload && stageAccepted) {
-                    ring.stagedUploads.delete(read);
-                    retainedAccepted = true;
-                  }
-                } else {
+                const destinationOffset = u32[recWord + 2] & ~3;
+                if (stagedUpload) {
                   const stage = (data) => {
                     const sparse = ensureWgpuSparseUbo(dev)?.stage({
                       pool,
                       data,
                       destination: buf,
-                      destinationOffset: u32[recWord + 2] & ~3,
+                      destinationOffset,
                       role: uploadRole,
                     });
                     if (sparse?.handled) return sparse;
-                    return pool.stageBuffer({
-                      data,
-                      destination: buf,
-                      destinationOffset: u32[recWord + 2] & ~3,
-                    });
+                    if (wgpuMappedStageFastEnabled) {
+                      const reason = pool.stageBufferFast(data, buf, destinationOffset);
+                      return reason === null
+                        ? WGPU_FAST_STAGE_ACCEPTED
+                        : { ok: false, reason };
+                    }
+                    return pool.stageBuffer({ data, destination: buf, destinationOffset });
                   };
-                  const retainedAttempt = stagedUpload
-                    ? attemptRetainedWgpuUpload({
-                        stagedUploads: ring.stagedUploads,
-                        recordIndex: read,
-                        stage,
-                      })
-                    : null;
-                  const staged = retainedAttempt?.result ?? stage(uploadSource);
-                  stageAccepted = staged.ok;
-                  stageReason = staged.reason ?? null;
-                  retainedAccepted = Boolean(retainedAttempt?.accepted);
+                  const retainedAttempt = attemptRetainedWgpuUpload({
+                    stagedUploads: ring.stagedUploads,
+                    recordIndex: read,
+                    stage,
+                  });
+                  stageAccepted = retainedAttempt.result.ok;
+                  stageReason = retainedAttempt.result.reason ?? null;
+                  retainedAccepted = retainedAttempt.accepted;
+                } else {
+                  const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                    pool,
+                    data: uploadSource,
+                    destination: buf,
+                    destinationOffset,
+                    role: uploadRole,
+                  });
+                  if (sparse?.handled) {
+                    stageAccepted = sparse.ok;
+                    stageReason = sparse.reason ?? null;
+                  } else if (wgpuMappedStageFastEnabled) {
+                    stageReason = pool.stageBufferFast(uploadSource, buf, destinationOffset);
+                    stageAccepted = stageReason === null;
+                  } else {
+                    const staged = pool.stageBuffer({
+                      data: uploadSource,
+                      destination: buf,
+                      destinationOffset,
+                    });
+                    stageAccepted = staged.ok;
+                    stageReason = staged.reason ?? null;
+                  }
                 }
                 const stageElapsedMs = performance.now() - stageStartedAt;
                 webGpuCausalStats.mappedStagingCopyCount += stageAccepted ? 1 : 0;

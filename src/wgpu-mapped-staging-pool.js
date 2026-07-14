@@ -3,6 +3,9 @@
 
 const COPY_ALIGNMENT = 4;
 const TEXTURE_ROW_ALIGNMENT = 256;
+const RECORD_KIND_BUFFER = 0;
+const RECORD_KIND_TEXTURE = 1;
+const RECORD_KIND_BUFFER_SNAPSHOT = 2;
 const REMAP_LATENCY_BUCKET_BOUNDS_MS = Object.freeze([
   1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000,
 ]);
@@ -14,6 +17,7 @@ export function createWgpuMappedStagingPool({
   bufferUsage = resolveBufferUsage(),
   mapMode = resolveMapWriteMode(),
   watchDeviceLoss = true,
+  flatRecords = false,
   now = () => globalThis.performance.now(),
 } = {}) {
   if (!device?.createBuffer || !device?.createCommandEncoder) {
@@ -34,6 +38,7 @@ export function createWgpuMappedStagingPool({
   if (typeof now !== "function") throw new TypeError("now must be a function");
 
   const owner = Symbol("wgpu-mapped-staging-pool");
+  const useFlatRecords = Boolean(flatRecords);
   const slots = Array.from({ length: slotCount }, (_, id) => {
     const buffer = device.createBuffer({
       label: `Dolphin mapped upload staging ${id}`,
@@ -46,7 +51,8 @@ export function createWgpuMappedStagingPool({
       buffer,
       mappedBytes: new Uint8Array(buffer.getMappedRange()),
       cursor: 0,
-      records: [],
+      records: useFlatRecords ? null : [],
+      flatRecords: useFlatRecords ? createFlatRecordStore() : null,
       firstRecordAtMs: 0,
       state: "mapped",
       epoch: 0,
@@ -58,6 +64,8 @@ export function createWgpuMappedStagingPool({
   let nextBatchId = 1;
   let nextRecordSequence = 1;
   let lastRecordSequenceStaged = 0;
+  let flatRecordHighWater = 0;
+  let flatRecordResetCount = 0;
   const activeBatches = new Set();
   const metrics = {
     bufferUploads: 0,
@@ -124,26 +132,18 @@ export function createWgpuMappedStagingPool({
     }
 
     slot.mappedBytes.set(bytes, offset);
-    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    if (recordCount(slot) === 0) slot.firstRecordAtMs = now();
     const recordSequence = nextRecordSequence++;
-    const previous = slot.records.at(-1);
-    if (previous?.kind === "buffer" && previous.destination === destination &&
-        previous.sequenceEnd === lastRecordSequenceStaged &&
-        previous.sourceOffset + previous.size === offset &&
-        previous.destinationOffset + previous.size === destinationOffset) {
-      previous.size += bytes.byteLength;
-      previous.sequenceEnd = recordSequence;
+    if (appendBufferRecord(
+      slot,
+      recordSequence,
+      offset,
+      bytes.byteLength,
+      destination,
+      destinationOffset
+    )) {
       metrics.bufferUploadsCoalesced += 1;
     } else {
-      slot.records.push({
-        kind: "buffer",
-        sequenceStart: recordSequence,
-        sequenceEnd: recordSequence,
-        sourceOffset: offset,
-        size: bytes.byteLength,
-        destination,
-        destinationOffset,
-      });
       metrics.copyCommandsEncoded += 1;
     }
     lastRecordSequenceStaged = recordSequence;
@@ -243,20 +243,19 @@ export function createWgpuMappedStagingPool({
       );
     }
     slot.cursor = offset + stagedBytes;
-    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    if (recordCount(slot) === 0) slot.firstRecordAtMs = now();
     const recordSequence = nextRecordSequence++;
-    slot.records.push({
-      kind: "buffer-snapshot",
-      sequenceStart: recordSequence,
-      sequenceEnd: recordSequence,
-      sourceOffset: offset,
-      size: bytes.byteLength,
+    appendBufferSnapshotRecord(
+      slot,
+      recordSequence,
+      offset,
+      bytes.byteLength,
       destination,
       destinationOffset,
       shadowBuffer,
-      copyForward: Boolean(copyForward),
-      ranges: plannedRanges,
-    });
+      Boolean(copyForward),
+      plannedRanges
+    );
     lastRecordSequenceStaged = recordSequence;
 
     const copyCommands = (copyForward ? 1 : 0) + plannedRanges.length * 2;
@@ -354,21 +353,20 @@ export function createWgpuMappedStagingPool({
       }
     }
 
-    if (slot.records.length === 0) slot.firstRecordAtMs = now();
+    if (recordCount(slot) === 0) slot.firstRecordAtMs = now();
     const recordSequence = nextRecordSequence++;
-    slot.records.push({
-      kind: "texture",
-      sequenceStart: recordSequence,
-      sequenceEnd: recordSequence,
-      sourceOffset: offset,
-      bytesPerRow: packedBytesPerRow,
-      rowsPerImage: height,
+    appendTextureRecord(
+      slot,
+      recordSequence,
+      offset,
+      packedBytesPerRow,
+      height,
       destination,
       origin,
       mipLevel,
       aspect,
-      copySize: { width, height, depthOrArrayLayers },
-    });
+      { width, height, depthOrArrayLayers }
+    );
     lastRecordSequenceStaged = recordSequence;
     metrics.textureUploads += 1;
     metrics.copyCommandsEncoded += 1;
@@ -384,17 +382,202 @@ export function createWgpuMappedStagingPool({
         );
   }
 
+  function recordCount(slot) {
+    return useFlatRecords ? slot.flatRecords.count : slot.records.length;
+  }
+
+  function appendBufferRecord(
+    slot,
+    sequence,
+    sourceOffset,
+    size,
+    destination,
+    destinationOffset
+  ) {
+    if (!useFlatRecords) {
+      const previous = slot.records.at(-1);
+      if (previous?.kind === "buffer" && previous.destination === destination &&
+          previous.sequenceEnd === lastRecordSequenceStaged &&
+          previous.sourceOffset + previous.size === sourceOffset &&
+          previous.destinationOffset + previous.size === destinationOffset) {
+        previous.size += size;
+        previous.sequenceEnd = sequence;
+        return true;
+      }
+      slot.records.push({
+        kind: "buffer",
+        sequenceStart: sequence,
+        sequenceEnd: sequence,
+        sourceOffset,
+        size,
+        destination,
+        destinationOffset,
+      });
+      return false;
+    }
+
+    const records = slot.flatRecords;
+    const previous = records.count - 1;
+    if (previous >= 0 && records.kinds[previous] === RECORD_KIND_BUFFER &&
+        records.destinations[previous] === destination &&
+        records.sequenceEnds[previous] === lastRecordSequenceStaged &&
+        records.sourceOffsets[previous] + records.sizes[previous] === sourceOffset &&
+        records.destinationOffsets[previous] + records.sizes[previous] === destinationOffset) {
+      records.sizes[previous] += size;
+      records.sequenceEnds[previous] = sequence;
+      return true;
+    }
+    const index = records.count;
+    records.kinds[index] = RECORD_KIND_BUFFER;
+    records.sequenceStarts[index] = sequence;
+    records.sequenceEnds[index] = sequence;
+    records.sourceOffsets[index] = sourceOffset;
+    records.sizes[index] = size;
+    records.destinations[index] = destination;
+    records.destinationOffsets[index] = destinationOffset;
+    records.count += 1;
+    flatRecordHighWater = Math.max(flatRecordHighWater, records.count);
+    return false;
+  }
+
+  function appendTextureRecord(
+    slot,
+    sequence,
+    sourceOffset,
+    bytesPerRow,
+    rowsPerImage,
+    destination,
+    origin,
+    mipLevel,
+    aspect,
+    copySize
+  ) {
+    if (!useFlatRecords) {
+      slot.records.push({
+        kind: "texture",
+        sequenceStart: sequence,
+        sequenceEnd: sequence,
+        sourceOffset,
+        bytesPerRow,
+        rowsPerImage,
+        destination,
+        origin,
+        mipLevel,
+        aspect,
+        copySize,
+      });
+      return;
+    }
+    const records = slot.flatRecords;
+    const index = records.count;
+    records.kinds[index] = RECORD_KIND_TEXTURE;
+    records.sequenceStarts[index] = sequence;
+    records.sequenceEnds[index] = sequence;
+    records.sourceOffsets[index] = sourceOffset;
+    records.sizes[index] = bytesPerRow;
+    records.rowsPerImage[index] = rowsPerImage;
+    records.destinations[index] = destination;
+    records.origins[index] = origin;
+    records.mipLevels[index] = mipLevel;
+    records.aspects[index] = aspect;
+    records.copySizes[index] = copySize;
+    records.count += 1;
+    flatRecordHighWater = Math.max(flatRecordHighWater, records.count);
+  }
+
+  function appendBufferSnapshotRecord(
+    slot,
+    sequence,
+    sourceOffset,
+    size,
+    destination,
+    destinationOffset,
+    shadowBuffer,
+    copyForward,
+    ranges
+  ) {
+    if (!useFlatRecords) {
+      slot.records.push({
+        kind: "buffer-snapshot",
+        sequenceStart: sequence,
+        sequenceEnd: sequence,
+        sourceOffset,
+        size,
+        destination,
+        destinationOffset,
+        shadowBuffer,
+        copyForward,
+        ranges,
+      });
+      return;
+    }
+    const records = slot.flatRecords;
+    const index = records.count;
+    records.kinds[index] = RECORD_KIND_BUFFER_SNAPSHOT;
+    records.sequenceStarts[index] = sequence;
+    records.sequenceEnds[index] = sequence;
+    records.sourceOffsets[index] = sourceOffset;
+    records.sizes[index] = size;
+    records.destinations[index] = destination;
+    records.destinationOffsets[index] = destinationOffset;
+    records.shadowBuffers[index] = shadowBuffer;
+    records.copyForwards[index] = copyForward;
+    records.snapshotRanges[index] = ranges;
+    records.count += 1;
+    flatRecordHighWater = Math.max(flatRecordHighWater, records.count);
+  }
+
+  function encodeFlatRecordsInSequence(encoder, batchSlots) {
+    const cursors = new Array(batchSlots.length).fill(0);
+    let remaining = batchSlots.reduce((total, slot) => total + recordCount(slot), 0);
+    while (remaining > 0) {
+      let selected = -1;
+      let selectedSequence = Number.POSITIVE_INFINITY;
+      for (let slotIndex = 0; slotIndex < batchSlots.length; slotIndex += 1) {
+        const records = batchSlots[slotIndex].flatRecords;
+        const recordIndex = cursors[slotIndex];
+        if (recordIndex >= records.count) continue;
+        const sequence = records.sequenceStarts[recordIndex];
+        if (sequence < selectedSequence) {
+          selected = slotIndex;
+          selectedSequence = sequence;
+        }
+      }
+      if (selected < 0) throw new Error("flat mapped records lost global sequence order");
+      const slot = batchSlots[selected];
+      encodeFlatRecord(encoder, slot.buffer, slot.flatRecords, cursors[selected]);
+      cursors[selected] += 1;
+      remaining -= 1;
+    }
+  }
+
+  function clearSlotRecords(slot) {
+    if (!useFlatRecords) {
+      slot.records = [];
+      return;
+    }
+    const records = slot.flatRecords;
+    if (records.count > 0) flatRecordResetCount += 1;
+    records.destinations.fill(undefined, 0, records.count);
+    records.origins.fill(undefined, 0, records.count);
+    records.aspects.fill(undefined, 0, records.count);
+    records.copySizes.fill(undefined, 0, records.count);
+    records.shadowBuffers.fill(undefined, 0, records.count);
+    records.snapshotRanges.fill(undefined, 0, records.count);
+    records.count = 0;
+  }
+
   function seal() {
     assertUsable();
-    const batchSlots = slots.filter((slot) => slot.state === "mapped" && slot.records.length > 0);
+    const batchSlots = slots.filter((slot) => slot.state === "mapped" && recordCount(slot) > 0);
     if (batchSlots.length === 0) return null;
 
     const encoder = device.createCommandEncoder({ label: "Dolphin mapped staging uploads" });
     try {
       const sealedBytes = batchSlots.reduce((total, slot) => total + slot.cursor, 0);
-      const sealedRecords = batchSlots.reduce((total, slot) => total + slot.records.length, 0);
+      const sealedRecords = batchSlots.reduce((total, slot) => total + recordCount(slot), 0);
       const oldestPendingAtMs = Math.min(...batchSlots.map((slot) => slot.firstRecordAtMs));
-      const orderedRecords = batchSlots.flatMap((slot) =>
+      const orderedRecords = useFlatRecords ? null : batchSlots.flatMap((slot) =>
         slot.records.map((record) => ({ slot, record }))
       ).sort((left, right) => left.record.sequenceStart - right.record.sequenceStart);
       for (const slot of batchSlots) {
@@ -402,8 +585,12 @@ export function createWgpuMappedStagingPool({
         slot.mappedBytes = null;
         slot.state = "sealed";
       }
-      for (const { slot, record } of orderedRecords) {
-        encodeRecord(encoder, slot.buffer, record);
+      if (useFlatRecords) {
+        encodeFlatRecordsInSequence(encoder, batchSlots);
+      } else {
+        for (const { slot, record } of orderedRecords) {
+          encodeRecord(encoder, slot.buffer, record);
+        }
       }
       const batch = Object.freeze({
         owner,
@@ -435,7 +622,7 @@ export function createWgpuMappedStagingPool({
     const remaps = batch.slots.map((slot) => {
       const remapStartedAt = now();
       slot.state = "remapping";
-      slot.records = [];
+      clearSlotRecords(slot);
       slot.firstRecordAtMs = 0;
       slot.cursor = 0;
       slot.epoch = generation;
@@ -477,7 +664,7 @@ export function createWgpuMappedStagingPool({
     for (const slot of slots) {
       slot.epoch += 1;
       slot.state = "failed";
-      slot.records = [];
+      clearSlotRecords(slot);
       slot.firstRecordAtMs = 0;
       slot.cursor = 0;
       slot.mappedBytes = null;
@@ -494,7 +681,7 @@ export function createWgpuMappedStagingPool({
     const states = { mapped: 0, sealed: 0, remapping: 0, failed: 0 };
     for (const slot of slots) states[slot.state] += 1;
     const oldestPendingAtMs = slots.reduce((oldest, slot) => {
-      if (slot.state !== "mapped" || slot.records.length === 0) return oldest;
+      if (slot.state !== "mapped" || recordCount(slot) === 0) return oldest;
       return oldest === 0 ? slot.firstRecordAtMs : Math.min(oldest, slot.firstRecordAtMs);
     }, 0);
     return {
@@ -504,7 +691,7 @@ export function createWgpuMappedStagingPool({
       failed,
       lastError,
       states,
-      pendingUploads: slots.reduce((count, slot) => count + slot.records.length, 0),
+      pendingUploads: slots.reduce((count, slot) => count + recordCount(slot), 0),
       pendingBytes: slots.reduce(
         (bytes, slot) => bytes + (slot.state === "mapped" ? slot.cursor : 0),
         0
@@ -512,6 +699,9 @@ export function createWgpuMappedStagingPool({
       oldestPendingAtMs,
       oldestPendingAgeMs: oldestPendingAtMs > 0 ? Math.max(0, now() - oldestPendingAtMs) : 0,
       activeBatches: activeBatches.size,
+      recordStore: useFlatRecords ? "flat" : "objects",
+      flatRecordHighWater,
+      flatRecordResetCount,
       remapLatencyBucketBoundsMs: [...REMAP_LATENCY_BUCKET_BOUNDS_MS],
       ...metrics,
       remapLatencyHistogram: [...metrics.remapLatencyHistogram],
@@ -683,6 +873,86 @@ function encodeRecord(encoder, sourceBuffer, record) {
     bytesPerRow: record.bytesPerRow,
     rowsPerImage: record.rowsPerImage,
   }, destination, record.copySize);
+}
+
+function encodeFlatRecord(encoder, sourceBuffer, records, index) {
+  const kind = records.kinds[index];
+  if (kind === RECORD_KIND_BUFFER) {
+    encoder.copyBufferToBuffer(
+      sourceBuffer,
+      records.sourceOffsets[index],
+      records.destinations[index],
+      records.destinationOffsets[index],
+      records.sizes[index]
+    );
+    return;
+  }
+  if (kind === RECORD_KIND_BUFFER_SNAPSHOT) {
+    const destination = records.destinations[index];
+    const destinationOffset = records.destinationOffsets[index];
+    const shadowBuffer = records.shadowBuffers[index];
+    const size = records.sizes[index];
+    if (records.copyForwards[index]) {
+      encoder.copyBufferToBuffer(
+        shadowBuffer,
+        0,
+        destination,
+        destinationOffset,
+        size
+      );
+    }
+    const ranges = records.snapshotRanges[index];
+    for (const range of ranges) {
+      encoder.copyBufferToBuffer(
+        sourceBuffer,
+        records.sourceOffsets[index] + range.packedOffset,
+        destination,
+        destinationOffset + range.start,
+        range.size
+      );
+    }
+    for (const range of ranges) {
+      encoder.copyBufferToBuffer(
+        sourceBuffer,
+        records.sourceOffsets[index] + range.packedOffset,
+        shadowBuffer,
+        range.start,
+        range.size
+      );
+    }
+    return;
+  }
+  const destination = { texture: records.destinations[index] };
+  if (records.origins[index] !== undefined) destination.origin = records.origins[index];
+  if (records.mipLevels[index] !== undefined) destination.mipLevel = records.mipLevels[index];
+  if (records.aspects[index] !== undefined) destination.aspect = records.aspects[index];
+  encoder.copyBufferToTexture({
+    buffer: sourceBuffer,
+    offset: records.sourceOffsets[index],
+    bytesPerRow: records.sizes[index],
+    rowsPerImage: records.rowsPerImage[index],
+  }, destination, records.copySizes[index]);
+}
+
+function createFlatRecordStore() {
+  return {
+    count: 0,
+    kinds: [],
+    sequenceStarts: [],
+    sequenceEnds: [],
+    sourceOffsets: [],
+    sizes: [],
+    destinations: [],
+    destinationOffsets: [],
+    rowsPerImage: [],
+    origins: [],
+    mipLevels: [],
+    aspects: [],
+    copySizes: [],
+    shadowBuffers: [],
+    copyForwards: [],
+    snapshotRanges: [],
+  };
 }
 
 function success(slot, offset, logicalBytes, stagedBytes) {

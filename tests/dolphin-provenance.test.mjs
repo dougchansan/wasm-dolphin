@@ -317,6 +317,7 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
     "src/incremental-sha256.js",
     "src/wgpu-consumer-reset-attestation.js",
     "src/wgpu-legacy-semantic-decoder.js",
+    "src/wgpu-mapped-staging-pool.js",
     "src/wgpu-ownership-command-correlator.js",
     "src/wgpu-resource-generation-tracker.js",
     "src/wgpu-semantic-digest.js",
@@ -401,6 +402,24 @@ test("ABI verification rejects mutations to every declared contract", () => {
     writeFileSync(manifestPath, JSON.stringify(manifest));
     assert.throws(() => verifyCoreAbiManifest(projectRoot, manifestPath), pattern);
   }
+});
+
+test("ABI verification rejects mapped staging source drift", () => {
+  const manifest = JSON.parse(
+    readFileSync(join(projectRoot, "provenance/dolphin-core-abi-v1.json"), "utf8")
+  );
+  const stagingSource = manifest.contractSources.find(
+    (source) => source.path === "src/wgpu-mapped-staging-pool.js"
+  );
+  assert.ok(stagingSource, "mapped staging must be declared as an ABI contract source");
+  stagingSource.sha256 = "0".repeat(64);
+  const temporary = mkdtempSync(join(tmpdir(), "dolphin-abi-staging-"));
+  const manifestPath = join(temporary, "tampered-staging.json");
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.throws(
+    () => verifyCoreAbiManifest(projectRoot, manifestPath),
+    /SHA-256 mismatch/
+  );
 });
 
 test("locked patches replay exactly, are idempotent, and reject every third checkout state", () => {
