@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 59751,
-      "sha256": "569d72406e7c9d6f3b46924f032c84e652be67ffdfccae90f8983685e6bd58f3"
+      "size": 60543,
+      "sha256": "6aa329255cf8e49969e912485f3f83446f4f305487957e3475e0f86512a870d8"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 462990,
-      "sha256": "948d3c35b1ec8a6dd2b6547515c8c166293df8bf1ff6e7d86db6aa05aa1534a7"
+      "size": 488997,
+      "sha256": "987b52f15fdff423aa89e045688f4278f7235cf561c3b30033e0e13d1be23a27"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 40163,
-      "sha256": "5d4d3af46d6b0d4019684635000b4429fc0462ad71338e5c70964f92c4b237f4"
+      "size": 40694,
+      "sha256": "b2880fc1257dfb0c70c48b9cbc229ec3107f4489aa9120139e170f194cc0eb7d"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -182,8 +182,8 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 36572,
-      "sha256": "b82c4e040ab5ce743ba1598933f45ea666b2df92022b6950615e9508f085fad4"
+      "size": 38408,
+      "sha256": "c9024f6b92ea2786d2f57a358ec23a22d8bd62073b9266b3b2b45443236cee90"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -278,8 +278,38 @@
     {
       "path": "src/wgpu-mapped-staging-pool.js",
       "hashMode": "lf-normalized",
-      "size": 33135,
-      "sha256": "b5957f10e214b0518b5a2e7cb2b3532fa8c0ee4419d66ca8a51c1d632d9bcdf8"
+      "size": 33136,
+      "sha256": "e4a3ad1b169c5fb9e888e82f1433cc7cfdebbc44516835a8e56c67a542bebd4c"
+    },
+    {
+      "path": "src/jit-cache-identity.js",
+      "hashMode": "lf-normalized",
+      "size": 2470,
+      "sha256": "cefdd0471021456bd80bf90437cf8b9f5fe20e1fa6f414d56ea3792a3c3333c3"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 15475,
+      "sha256": "dd04e6619a238d829e0de74db608567525f8f25b252c106963840df134388cf4"
+    },
+    {
+      "path": "src/wgpu-upload-run-projection.js",
+      "hashMode": "lf-normalized",
+      "size": 11761,
+      "sha256": "f58874238197bcafd4ec37f171366f73a52776611714c9f269bd29e81459579c"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-codec.js",
+      "hashMode": "lf-normalized",
+      "size": 13118,
+      "sha256": "e22b6018bb2500a699393971f395553fec8b43ac417820135a4a99cbb3710b6b"
+    },
+    {
+      "path": "src/wgpu-ubo-compute-reconstruction.js",
+      "hashMode": "lf-normalized",
+      "size": 22717,
+      "sha256": "d70ee7357fd8ab3c0d1ced427c6b561e35fc94b14ed258f4fd79ff11a0652c3a"
     }
   ],
   "memoryContract": {
@@ -483,6 +513,7 @@
       "validationFinalizeWgpuMappedDrain",
       "validationFinalizeWgpuRendererProbe",
       "validationReadCoreProgress",
+      "validationReadJitCacheReadiness",
       "validationSetCorePaused"
     ],
     "notificationFields": {

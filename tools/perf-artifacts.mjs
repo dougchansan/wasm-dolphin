@@ -5,6 +5,8 @@ import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
+import { WGPU_UBO_COMPUTE_PROJECTION_SCHEMA } from
+  "../src/wgpu-ubo-compute-projection.js";
 import { REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS } from "./dolphin-provenance.mjs";
 import {
   WGPU_DRAW_PROFILE_PHASE_ORDER,
@@ -84,6 +86,58 @@ export function normalizePerfAudioMode(value) {
     );
   }
   return mode;
+}
+
+export function evaluateJitCacheReadiness(snapshot) {
+  if (snapshot?.enabled === false) {
+    return { ready: true, invalidReasons: [] };
+  }
+  const invalidReasons = [];
+  if (snapshot?.enabled !== true) invalidReasons.push("enabled is not true");
+  if (snapshot?.bootLoadComplete !== true) invalidReasons.push("bootLoadComplete is not true");
+  if (snapshot?.lazyFillStarted !== true) invalidReasons.push("lazyFillStarted is not true");
+  if (snapshot?.lazyFillActive !== false) invalidReasons.push("lazyFillActive is not false");
+  if (snapshot?.lazyFillCompleted !== true) invalidReasons.push("lazyFillCompleted is not true");
+  if (snapshot?.lazyFillTerminalReason !== "complete") {
+    invalidReasons.push(`lazyFillTerminalReason is ${snapshot?.lazyFillTerminalReason ?? "missing"}`);
+  }
+  if (Number(snapshot?.lazyFillFailureCount) !== 0) {
+    invalidReasons.push(`lazyFillFailureCount is ${snapshot?.lazyFillFailureCount ?? "missing"}`);
+  }
+  if (Number(snapshot?.verificationPending) !== 0) {
+    invalidReasons.push(`verificationPending is ${snapshot?.verificationPending ?? "missing"}`);
+  }
+  if (Number(snapshot?.compilePending) !== 0) {
+    invalidReasons.push(`compilePending is ${snapshot?.compilePending ?? "missing"}`);
+  }
+  if (Number(snapshot?.idbWritesPending) !== 0) {
+    invalidReasons.push(`idbWritesPending is ${snapshot?.idbWritesPending ?? "missing"}`);
+  }
+  const workerCount = Number(snapshot?.pthreadWorkerCount);
+  if (!(workerCount > 0)) invalidReasons.push(`pthreadWorkerCount is ${snapshot?.pthreadWorkerCount ?? "missing"}`);
+  const requiredWorkerCount = Number(snapshot?.pthreadRequiredWorkerCount);
+  const requiredBarrierAcked = Number(snapshot?.pthreadRequiredBarrierAcked);
+  if (!(requiredWorkerCount > 0)) {
+    invalidReasons.push(
+      `pthreadRequiredWorkerCount is ${snapshot?.pthreadRequiredWorkerCount ?? "missing"}`
+    );
+  }
+  if (requiredBarrierAcked !== requiredWorkerCount) {
+    invalidReasons.push(
+      `pthreadRequiredBarrierAcked is ${snapshot?.pthreadRequiredBarrierAcked ?? "missing"}`
+    );
+  }
+  if (Number(snapshot?.pthreadInstallPostFailures) !== 0) {
+    invalidReasons.push(
+      `pthreadInstallPostFailures is ${snapshot?.pthreadInstallPostFailures ?? "missing"}`
+    );
+  }
+  if (Number(snapshot?.pthreadBarrierInvalidAcks) !== 0) {
+    invalidReasons.push(
+      `pthreadBarrierInvalidAcks is ${snapshot?.pthreadBarrierInvalidAcks ?? "missing"}`
+    );
+  }
+  return { ready: invalidReasons.length === 0, invalidReasons };
 }
 
 export function evaluateAudioClaimQualification({
@@ -1048,6 +1102,8 @@ export function summarizeComparison(configValue, runs) {
     }
     invalidReasons.push(...evaluateWgpuUploadProbeWorkloadEquivalence(blockRuns)
       .map((reason) => `${blockId}: ${reason}`));
+    invalidReasons.push(...evaluateFixedSceneMeasurementBoundaryEquivalence(blockRuns)
+      .map((reason) => `${blockId}: ${reason}`));
     const valuesA = armA.map((run) => Number(readPath(run, config.primaryMetric)));
     const valuesB = armB.map((run) => Number(readPath(run, config.primaryMetric)));
     if ([...valuesA, ...valuesB].some((number) => !Number.isFinite(number))) {
@@ -1260,6 +1316,27 @@ export function evaluateWgpuUploadProbeWorkloadEquivalence(runs = []) {
     const expected = digestLists[0][0];
     if (digestLists.some((value) => value[0] !== expected)) {
       failures.push("upload-probe initial submit structure differs across runs");
+    }
+  }
+  return failures;
+}
+
+export function evaluateFixedSceneMeasurementBoundaryEquivalence(runs = []) {
+  const required = runs.some(
+    (run) => run?.fixedEmulatedWork?.enabled === true || run?.fixedSceneMeasurementBoundary != null
+  );
+  if (!required) return [];
+  const signatures = runs.map((run) => run?.fixedSceneMeasurementBoundary?.signature ?? null);
+  if (signatures.some((signature) => signature === null)) {
+    return ["fixed-scene signature is missing from one or more fixed-work runs"];
+  }
+  const failures = [];
+  const reference = signatures[0];
+  for (const field of ["coreTicks", "ppcPc", "xfbHash", "width", "height"]) {
+    if (reference?.[field] == null) {
+      failures.push(`fixed-scene ${field} is missing`);
+    } else if (signatures.some((signature) => signature?.[field] !== reference[field])) {
+      failures.push(`fixed-scene ${field} differs across runs`);
     }
   }
   return failures;
@@ -2051,6 +2128,161 @@ export function evaluateWgpuSparseUboEvidence({ requested, samples = [] } = {}) 
       }
       if (!(deltas.stagedBytes < deltas.fullBytes)) {
         failures.push("WGPU sparse UBO did not reduce mapped bytes in the timed window");
+      }
+    }
+  }
+  return {
+    required: true,
+    expectedActive,
+    activated: final?.active === true,
+    schema: final?.schema ?? null,
+    sampleCount: valid.length,
+    initial,
+    final,
+    deltas,
+    failures,
+  };
+}
+
+export function evaluateWgpuUboComputeProjectionEvidence({
+  requested,
+  samples = [],
+} = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedActive = String(requested) === "1";
+  const failures = [];
+  if (!expectedActive && String(requested) !== "0") {
+    failures.push(`wgpuubocomputeprojection=${requested} is unsupported`);
+  }
+  const observations = samples.map(
+    (sample) => sample?.causalTelemetry?.webgpu?.uboComputeProjection ?? null
+  );
+  const valid = [];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation || typeof observation !== "object") {
+      failures.push(`WGPU UBO compute projection sample ${index} is missing or malformed`);
+      continue;
+    }
+    valid.push(observation);
+    if (observation.schema !== WGPU_UBO_COMPUTE_PROJECTION_SCHEMA) {
+      failures.push(`WGPU UBO compute projection sample ${index} schema mismatch`);
+    }
+    for (const [name, expected] of [
+      ["requested", expectedActive],
+      ["active", expectedActive],
+      ["enabled", expectedActive],
+      ["projectionOnly", true],
+      ["replayBehaviorChanged", false],
+      ["runtimeEligible", false],
+    ]) {
+      if (observation[name] !== expected) {
+        failures.push(
+          `WGPU UBO compute projection sample ${index} ${name} mismatch`
+        );
+      }
+    }
+    const eligibleCalls = observation.eligible?.calls;
+    const eligibleBytes = observation.eligible?.bytes;
+    const records = observation.records ?? {};
+    const bytes = observation.bytes ?? {};
+    const commands = observation.commands ?? {};
+    const packages = observation.packages ?? {};
+    const nonnegative = [
+      eligibleCalls, eligibleBytes, records.total, records.full, records.delta,
+      records.equal, records.rawFull, records.utilityRaw,
+      records.unknownClassRaw, records.ranges, records.reconstructedBytes,
+      bytes.payload, bytes.descriptors, bytes.packageWork,
+      bytes.packagePadding, bytes.projected, commands.legacyCopy,
+      commands.projectedCopy, commands.dispatches, commands.packages,
+      packages.records, observation.malformed,
+      observation.unclassifiedResourceIdentity,
+    ];
+    if (nonnegative.some(
+      (value) => !Number.isSafeInteger(value) || value < 0
+    )) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} contains invalid counters`
+      );
+      continue;
+    }
+    if (eligibleCalls !== records.total ||
+        eligibleCalls !== commands.legacyCopy ||
+        eligibleCalls !== packages.records ||
+        eligibleBytes !== records.reconstructedBytes ||
+        records.full + records.delta + records.equal + records.rawFull !==
+          records.total) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} record accounting is inconsistent`
+      );
+    }
+    if (bytes.packageWork !== bytes.payload + bytes.descriptors ||
+        bytes.projected !== bytes.packageWork + bytes.packagePadding ||
+        bytes.avoided !== eligibleBytes - bytes.projected) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} byte accounting is inconsistent`
+      );
+    }
+    if (commands.projectedCopy !== commands.packages ||
+        commands.dispatches !== commands.packages ||
+        commands.avoidedCopy !== commands.legacyCopy - commands.projectedCopy) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} command accounting is inconsistent`
+      );
+    }
+    if (records.utilityRaw + records.unknownClassRaw > records.rawFull) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} raw-record accounting is inconsistent`
+      );
+    }
+    if (!expectedActive && (eligibleCalls !== 0 || eligibleBytes !== 0)) {
+      failures.push(
+        `WGPU UBO compute projection sample ${index} disabled counters must remain zero`
+      );
+    }
+  }
+
+  const initial = valid[0] ?? null;
+  const final = valid.at(-1) ?? null;
+  let deltas = null;
+  if (expectedActive) {
+    if (valid.length < 2) {
+      failures.push("WGPU UBO compute projection needs at least two timed samples");
+    } else {
+      deltas = {
+        eligibleCalls: final.eligible.calls - initial.eligible.calls,
+        eligibleBytes: final.eligible.bytes - initial.eligible.bytes,
+        projectedBytes: final.bytes.projected - initial.bytes.projected,
+        legacyCopy: final.commands.legacyCopy - initial.commands.legacyCopy,
+        projectedCopy:
+          final.commands.projectedCopy - initial.commands.projectedCopy,
+        dispatches: final.commands.dispatches - initial.commands.dispatches,
+        malformed: final.malformed - initial.malformed,
+        unclassifiedResourceIdentity:
+          final.unclassifiedResourceIdentity - initial.unclassifiedResourceIdentity,
+      };
+      deltas.projectedGpuCommands = deltas.projectedCopy + deltas.dispatches;
+      deltas.avoidedBytes = deltas.eligibleBytes - deltas.projectedBytes;
+      deltas.avoidedGpuCommands = deltas.legacyCopy - deltas.projectedGpuCommands;
+      if (deltas.eligibleCalls <= 0 || deltas.eligibleBytes <= 0) {
+        failures.push(
+          "WGPU UBO compute projection observed no eligible timed uploads"
+        );
+      }
+      if (deltas.malformed !== 0 || deltas.unclassifiedResourceIdentity !== 0) {
+        failures.push(
+          "WGPU UBO compute projection observed malformed or unclassified timed uploads"
+        );
+      }
+      if (!(deltas.projectedBytes < deltas.eligibleBytes)) {
+        failures.push(
+          "WGPU UBO compute projection did not reduce timed package bytes"
+        );
+      }
+      if (!(deltas.projectedGpuCommands < deltas.legacyCopy)) {
+        failures.push(
+          "WGPU UBO compute projection did not reduce total timed GPU commands"
+        );
       }
     }
   }

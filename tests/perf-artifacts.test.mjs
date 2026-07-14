@@ -29,6 +29,7 @@ import {
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
   evaluateWgpuSparseUboEvidence,
+  evaluateWgpuUboComputeProjectionEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   evaluateWgpuUploadProbeWorkloadEquivalence,
@@ -798,6 +799,109 @@ test("sparse UBO evidence gates fixed-window deltas and rejects lifetime-only cl
         sample({ ...snapshot({ scale: 2 }), eligibleCalls: 99 }),
       ],
     }), /call accounting is inconsistent|per-class calls are inconsistent/],
+  ]) {
+    assert.match(result.failures.join("\n"), pattern, label);
+  }
+});
+
+test("UBO compute projection evidence requires passive, conserved byte and command savings", () => {
+  const snapshot = ({ scale = 1, active = true, malformed = 0,
+    projectedBytes = 25_600 * scale } = {}) => {
+    const eligibleCalls = active ? 100 * scale : 0;
+    const eligibleBytes = active ? 100_000 * scale : 0;
+    const packageWork = active ? 25_000 * scale : 0;
+    const packagePadding = active ? projectedBytes - packageWork : 0;
+    const packages = active ? 5 * scale : 0;
+    return {
+      schema: "wasm-dolphin.wgpu-ubo-compute-projection.v1",
+      requested: active,
+      active,
+      enabled: active,
+      projectionOnly: true,
+      replayBehaviorChanged: false,
+      runtimeEligible: false,
+      eligible: { calls: eligibleCalls, bytes: eligibleBytes },
+      bytes: {
+        payload: active ? 20_000 * scale : 0,
+        descriptors: active ? 5_000 * scale : 0,
+        packageWork,
+        packagePadding,
+        projected: active ? projectedBytes : 0,
+        avoided: active ? eligibleBytes - projectedBytes : 0,
+      },
+      commands: {
+        legacyCopy: eligibleCalls,
+        projectedCopy: packages,
+        avoidedCopy: eligibleCalls - packages,
+        dispatches: packages,
+        packages,
+      },
+      records: {
+        total: eligibleCalls,
+        full: active ? 3 * scale : 0,
+        delta: active ? 50 * scale : 0,
+        equal: active ? 40 * scale : 0,
+        rawFull: active ? 7 * scale : 0,
+        utilityRaw: active ? 5 * scale : 0,
+        unknownClassRaw: active ? 2 * scale : 0,
+        ranges: active ? 60 * scale : 0,
+        reconstructedBytes: eligibleBytes,
+      },
+      packages: { records: eligibleCalls },
+      malformed,
+      unclassifiedResourceIdentity: 0,
+    };
+  };
+  const sample = (uboComputeProjection) => ({
+    causalTelemetry: { webgpu: { uboComputeProjection } },
+  });
+
+  const enabled = evaluateWgpuUboComputeProjectionEvidence({
+    requested: "1",
+    samples: [sample(snapshot()), sample(snapshot({ scale: 2 }))],
+  });
+  assert.deepEqual(enabled.failures, []);
+  assert.equal(enabled.deltas.eligibleBytes, 100_000);
+  assert.equal(enabled.deltas.projectedBytes, 25_600);
+  assert.equal(enabled.deltas.projectedGpuCommands, 10);
+  assert.equal(enabled.deltas.avoidedGpuCommands, 90);
+
+  assert.deepEqual(evaluateWgpuUboComputeProjectionEvidence({
+    requested: "0",
+    samples: [sample(snapshot({ active: false }))],
+  }).failures, []);
+
+  for (const [label, result, pattern] of [
+    ["missing", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1", samples: [{}],
+    }), /missing or malformed|at least two/],
+    ["malformed", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [sample(snapshot()), sample(snapshot({ scale: 2, malformed: 1 }))],
+    }), /malformed or unclassified/],
+    ["no byte saving", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample(snapshot({ scale: 2, projectedBytes: 125_600 })),
+      ],
+    }), /did not reduce timed package bytes/],
+    ["no command saving", evaluateWgpuUboComputeProjectionEvidence({
+      requested: "1",
+      samples: [
+        sample(snapshot()),
+        sample({
+          ...snapshot({ scale: 2 }),
+          commands: {
+            legacyCopy: 200,
+            projectedCopy: 100,
+            avoidedCopy: 100,
+            dispatches: 100,
+            packages: 100,
+          },
+        }),
+      ],
+    }), /did not reduce total timed GPU commands/],
   ]) {
     assert.match(result.failures.join("\n"), pattern, label);
   }

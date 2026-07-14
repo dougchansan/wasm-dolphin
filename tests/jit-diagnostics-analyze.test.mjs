@@ -9,6 +9,7 @@ import {
   findMostDiagnosticHelper,
   parseCorrelatedSliceTuple,
   parseDvdCompletionProfile,
+  parseFallbackMapStats,
   parseJitHelperStats,
   parseSlicePhaseProfile,
   parseSlowCoreTimingEvents,
@@ -36,6 +37,7 @@ test("parses classified emit failures and split runloop timing", () => {
     worstSlice: null,
     worstDvdCompletion: null,
     throttleSites: [],
+    fallbackMap: { status: "unavailable", enabled: null },
     runloop: {
       sliceCount: 2249456,
       averageUs: 28,
@@ -45,6 +47,39 @@ test("parses classified emit failures and split runloop timing", () => {
       executeMaxUs: 4164
     },
     emitFailureKeys: [{ opcode: 31, subop10: 202, count: 8, samplePc: "0x80123456" }]
+  });
+});
+
+test("parses fallback map diagnostics into stable A/B fields", () => {
+  const measured = parseFallbackMapStats(
+    "fbmap:hit/empty/collision/found/missing:338317077/41609/1338784/1334310/46083"
+  );
+  assert.deepEqual(measured, {
+    status: "enabled",
+    enabled: true,
+    hit: 338317077,
+    emptyMiss: 41609,
+    collisionMiss: 1338784,
+    slowFound: 1334310,
+    slowMissing: 46083,
+    dispatchCount: 339697470,
+    slowLookupCount: 1380393,
+    collisionRate: 1338784 / 339697470,
+    slowLookupRate: 1380393 / 339697470,
+    slowFoundRate: 1334310 / 1380393,
+    internallyConsistent: true,
+  });
+  assert.deepEqual(parseFallbackMapStats("tier:guarded fbmap:off runloop:1slices"), {
+    status: "off",
+    enabled: false,
+  });
+  assert.deepEqual(parseFallbackMapStats("tier:guarded emitfail:0"), {
+    status: "unavailable",
+    enabled: null,
+  });
+  assert.deepEqual(parseJitHelperStats("fbmap:off").fallbackMap, {
+    status: "off",
+    enabled: false,
   });
 });
 

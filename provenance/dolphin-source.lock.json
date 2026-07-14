@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "385dffd01489e4714f880ddba74d5bcd30871b4f1597e142456ff72762b3f08f",
+  "patchSeriesSha256": "574d798703fd4e6b32ea95d206d560cc7ba5b276ab9edf364216b59c45117015",
   "patches": [
     {
       "order": 1,
@@ -373,6 +373,54 @@
     },
     {
       "order": 44,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0046-persistent-jit-cache-sha256-identity.patch",
+      "size": 5655,
+      "sha256": "f00205fcb64c9f4bb62b9d70fc1b9ef2bf6b76c98b81eff973f324d7e83dd7d1"
+    },
+    {
+      "order": 45,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0047-cached-interpreter-fast-branch-inline.patch",
+      "size": 1285,
+      "sha256": "aa633c424d7cbd344d5692455c11d2fd3e8fc9bd556a328a126e340c9556fc6b"
+    },
+    {
+      "order": 46,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0048-jit-fallback-map-diagnostics.patch",
+      "size": 6352,
+      "sha256": "f670a6125821d5d5921fc3fcc5bfafe172276ea90ad365657fe94b8ad4c77aa7"
+    },
+    {
+      "order": 47,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0049-jit-fallback-map-sizing.patch",
+      "size": 1998,
+      "sha256": "3224d9c00e3966e11a4452cefe028dec4772ab5f74f03955e480522ac2a0b13a"
+    },
+    {
+      "order": 48,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0050-cached-interpreter-direct-wasm-block-dispatch.patch",
+      "size": 2236,
+      "sha256": "2bfc32f09a5462c91c17316b235a367f00963a1db6a1116b5751887b987d92f7"
+    },
+    {
+      "order": 49,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0051-tag-webgpu-ubo-ring-resource.patch",
+      "size": 3362,
+      "sha256": "88a857108ad607ee1f0eb04f7eed6d4fcacf8801d1aa948fd7f987d6195d8e8a"
+    },
+    {
+      "order": 50,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -380,7 +428,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 45,
+      "order": 51,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

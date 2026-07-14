@@ -1,0 +1,60 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -50,7 +50,11 @@
+ #include "Core/PowerPC/PPCTables.h"
+ #include "Core/PowerPC/PowerPC.h"
+ #include "Core/System.h"
+ 
++#ifndef DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
++#define DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH 0
++#endif
++
+ #ifdef __EMSCRIPTEN__
+ #ifndef DOLPHIN_WEB_INLINE_FAST_BRANCH
+ #define DOLPHIN_WEB_INLINE_FAST_BRANCH 1
+@@ -59,8 +63,15 @@
+ #if DOLPHIN_WEB_INLINE_FAST_BRANCH
+ #define DOLPHIN_WEB_FAST_BRANCH_INLINE __attribute__((always_inline))
+ #else
+ #define DOLPHIN_WEB_FAST_BRANCH_INLINE
+ #endif
++
++#if DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
++#define DOLPHIN_WEB_DIRECT_WASM_BLOCK_INLINE __attribute__((always_inline))
++#else
++#define DOLPHIN_WEB_DIRECT_WASM_BLOCK_INLINE
++#endif
+ #else
+ #define DOLPHIN_WEB_FAST_BRANCH_INLINE
++#define DOLPHIN_WEB_DIRECT_WASM_BLOCK_INLINE
+ #endif
+@@ -7763,6 +7774,16 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+     {
+       Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
++#if DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
++    else if (callback == AnyCallbackCast(RunWasmBlock))
++    {
++      if (const auto distance =
++              RunWasmBlock(ppc_state, *reinterpret_cast<const WasmBlockOperands*>(payload)))
++        normal_entry += distance;
++      else
++        break;
++    }
++#endif
+ #if DOLPHIN_WEB_HOT_DISPATCH_ORDER
+     // DOLPHIN_WEB_HOT_DISPATCH_ORDER_BEGIN
+@@ -10432,9 +10453,9 @@ s32 CachedInterpreter::FastDcbxLoop(PowerPC::PowerPCState& ppc_state,
+ }
+ 
+ #ifdef __EMSCRIPTEN__
+-s32 CachedInterpreter::RunWasmBlock(PowerPC::PowerPCState& ppc_state,
+-                                    const WasmBlockOperands& operands)
++DOLPHIN_WEB_DIRECT_WASM_BLOCK_INLINE s32 CachedInterpreter::RunWasmBlock(
++    PowerPC::PowerPCState& ppc_state, const WasmBlockOperands& operands)
+ {
+   using WasmBlockFunction = int (*)(int);
+ 
+   ++s_wasm_block_run_count;

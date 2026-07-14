@@ -35,9 +35,17 @@ export const WGPU_REPLAY_OP_NAMES = Object.freeze([
   "BLIT_TEXTURE"
 ]);
 
-export function createWgpuReplayOpMetrics() {
+export function createWgpuReplayOpMetrics({
+  replayTimingSamplePeriod = 32,
+  now = () => performance.now(),
+} = {}) {
+  const timingSamplePeriod = Math.max(
+    1,
+    Math.trunc(Number(replayTimingSamplePeriod) || 32)
+  );
   const replayCount = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
-  const replayCpuTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayTimingSampleCount = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
+  const replayCpuSampleTotalMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const replayCpuMaxMs = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const uploadCopyCalls = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
   const uploadCopyBytes = new Float64Array(WGPU_REPLAY_OP_NAMES.length);
@@ -54,8 +62,37 @@ export function createWgpuReplayOpMetrics() {
     if (!validOp(op)) return false;
     const elapsed = finiteNonnegative(cpuTimeMs);
     replayCount[op] += 1;
-    replayCpuTotalMs[op] += elapsed;
+    replayTimingSampleCount[op] += 1;
+    replayCpuSampleTotalMs[op] += elapsed;
     replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function beginReplay(op) {
+    if (!validOp(op)) return null;
+    replayCount[op] += 1;
+    const count = replayCount[op];
+    return count === 1 || count % timingSamplePeriod === 0 ? now() : null;
+  }
+
+  function finishReplay(op, startedAt) {
+    if (!validOp(op) || startedAt === null) return false;
+    const elapsed = finiteNonnegative(now() - startedAt);
+    replayTimingSampleCount[op] += 1;
+    replayCpuSampleTotalMs[op] += elapsed;
+    replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed);
+    return true;
+  }
+
+  function recordReplayBatch(op, count = 0, cpuTimeMs = 0) {
+    if (!validOp(op)) return false;
+    const records = Math.max(0, Math.trunc(Number(count) || 0));
+    if (records === 0) return false;
+    const elapsed = finiteNonnegative(cpuTimeMs);
+    replayCount[op] += records;
+    replayTimingSampleCount[op] += records;
+    replayCpuSampleTotalMs[op] += elapsed;
+    replayCpuMaxMs[op] = Math.max(replayCpuMaxMs[op], elapsed / records);
     return true;
   }
 
@@ -80,7 +117,8 @@ export function createWgpuReplayOpMetrics() {
   function reset() {
     for (const metric of [
       replayCount,
-      replayCpuTotalMs,
+      replayTimingSampleCount,
+      replayCpuSampleTotalMs,
       replayCpuMaxMs,
       uploadCopyCalls,
       uploadCopyBytes,
@@ -94,13 +132,21 @@ export function createWgpuReplayOpMetrics() {
   }
 
   function snapshot({ enabled = true } = {}) {
+    const replayCpuTotalMs = replayCount.map((count, op) => {
+      const samples = replayTimingSampleCount[op];
+      return samples > 0 ? replayCpuSampleTotalMs[op] * (count / samples) : 0;
+    });
     return {
       schema: "wasm-dolphin.wgpu-replay-op-metrics.v1",
       enabled: Boolean(enabled),
+      replayTimingMode: "per-op-periodic-sample",
+      replayTimingSamplePeriod: timingSamplePeriod,
       opCount: WGPU_REPLAY_OP_NAMES.length,
       names: [...WGPU_REPLAY_OP_NAMES],
       histogram: Array.from(replayCount),
       replayCpuTotalMs: Array.from(replayCpuTotalMs),
+      replayTimingSampleCounts: Array.from(replayTimingSampleCount),
+      replayCpuSampleTotalMs: Array.from(replayCpuSampleTotalMs),
       replayCpuMaxMs: Array.from(replayCpuMaxMs),
       uploadCopyCalls: Array.from(uploadCopyCalls),
       uploadCopyBytes: Array.from(uploadCopyBytes),
@@ -115,6 +161,9 @@ export function createWgpuReplayOpMetrics() {
 
   return {
     recordReplay,
+    beginReplay,
+    finishReplay,
+    recordReplayBatch,
     recordUploadCopy,
     recordQueueUpload,
     reset,

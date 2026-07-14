@@ -24,6 +24,7 @@ import {
   evaluateCandidateCoreBundle,
   evaluateMetricsModeEvidence,
   evaluateCoreSelectionEvidence,
+  evaluateJitCacheReadiness,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
   evaluateWgpuSemanticQualificationEvidence,
@@ -32,6 +33,7 @@ import {
   evaluateWgpuProducerProfileEvidence,
   evaluateWgpuDrawProfileEvidence,
   evaluateWgpuSparseUboEvidence,
+  evaluateWgpuUboComputeProjectionEvidence,
   evaluateWgpuTailGateEvidence,
   evaluateWgpuRendererWorkerProbeEvidence,
   validateWgpuUploadProbeFinalization,
@@ -106,8 +108,11 @@ async function main() {
   const postLoadInputScriptCanonical = serializePostLoadInputScript(postLoadInputScript);
   const inputMaxLatenessMs = numberEnv("PERF_INPUT_MAX_LATENESS_MS", 100);
   const inputMarkerTimeoutMs = numberEnv("PERF_INPUT_MARKER_TIMEOUT_MS", 2500);
-  if (inputMaxLatenessMs < 0 || inputMarkerTimeoutMs <= 0) {
-    throw new Error("Input lateness must be non-negative and marker timeout must be positive");
+  const jitCacheReadyTimeoutMs = numberEnv("PERF_JIT_CACHE_READY_TIMEOUT_MS", 120_000);
+  if (inputMaxLatenessMs < 0 || inputMarkerTimeoutMs <= 0 || jitCacheReadyTimeoutMs <= 0) {
+    throw new Error(
+      "Input lateness must be non-negative; marker and JIT-cache readiness timeouts must be positive"
+    );
   }
   const settleSeconds = numberEnv("SETTLE_SECONDS", 2);
   const tolerance = cli.tolerance ?? numberEnv("PERF_DROP_TOLERANCE", 0.05);
@@ -160,6 +165,7 @@ async function main() {
       audioMode,
       browserCpuAffinity,
       inputMarkerTimeoutMs,
+      jitCacheReadyTimeoutMs,
       inputMaxLatenessMs,
       outDir,
       postLoadInputScript,
@@ -442,6 +448,13 @@ async function runScenario(scenario, context) {
     ...scenario,
     params: Object.fromEntries(url.searchParams.entries()),
   };
+  const jitCacheReadinessRequired =
+    scenario.params.wasmjit !== "0" && scenario.params.nojitcache !== "1";
+  let jitCacheReadiness = {
+    required: jitCacheReadinessRequired,
+    ready: !jitCacheReadinessRequired,
+    reason: jitCacheReadinessRequired ? "not-observed" : "disabled-by-scenario",
+  };
   const fixedWorkPollIntervalMs = uploadProbeMode ? 10 : FIXED_WORK_POLL_INTERVAL_MS;
   let fixedEmulatedWork = {
     enabled: context.targetCoreSeconds != null,
@@ -532,6 +545,7 @@ async function runScenario(scenario, context) {
       : null;
     manifest.benchmark.inputMaxLatenessMs = context.inputMaxLatenessMs;
     manifest.benchmark.inputMarkerTimeoutMs = context.inputMarkerTimeoutMs;
+    manifest.benchmark.jitCacheReadyTimeoutMs = context.jitCacheReadyTimeoutMs;
     manifest.benchmark.inputMarkerDispatchPolicy = context.postLoadInputScript.length
       ? "one-in-flight-through-marker-completion"
       : null;
@@ -615,22 +629,41 @@ async function runScenario(scenario, context) {
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
     await page.waitForTimeout(context.settleSeconds * 1000);
-    let probeMeasurementBoundary = null;
-    if (uploadProbeMode) {
-      const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
-      if (!pause?.paused || pause?.coreStateName !== "Paused") {
-        throw new Error(`Upload probe core did not pause at measurement boundary: ${JSON.stringify(pause)}`);
-      }
-      const measurementReload = await loadStateFileWithTimeout(page, context.saveStateUrl);
-      if (!measurementReload?.loaded) {
+    const fixedWorkEnabled = context.targetCoreSeconds != null;
+    if (context.postLoadInputScript.length > 0) {
+      inputMarkerReadiness = await waitForInputMarkerReady(page, {
+        pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
+        timeoutMs: context.inputMarkerTimeoutMs,
+      });
+      if (!inputMarkerReadiness.ready) {
         throw new Error(
-          `Upload probe measurement save reload failed: ${measurementReload?.error || JSON.stringify(measurementReload)}`
+          `Input marker telemetry was not ready before the timed window after ` +
+          `${inputMarkerReadiness.waitedMs} ms`
         );
       }
-      const measurementCheckpoint = assertBattleCheckpoint(
-        parseBattleCheckpoint(measurementReload),
-        expectedBattleCheckpointForParams(scenario.params)
+    }
+    let fixedSceneMeasurementBoundary = null;
+    let probeMeasurementBoundary = null;
+    if (fixedWorkEnabled || uploadProbeMode) {
+      fixedSceneMeasurementBoundary = await establishFixedSceneMeasurementBoundary(
+        page,
+        context.saveStateUrl,
+        expectedBattleCheckpointForParams(scenario.params),
+        {
+          jitCacheReadinessRequired,
+          jitCacheReadyTimeoutMs: context.jitCacheReadyTimeoutMs,
+        }
       );
+      jitCacheReadiness = fixedSceneMeasurementBoundary.jitCacheReadiness;
+      manifest.benchmark.jitCacheReadiness = jitCacheReadiness;
+      manifest.benchmark.fixedSceneMeasurementBoundary = {
+        reloadedSaveState: true,
+        checkpoint: fixedSceneMeasurementBoundary.checkpoint,
+        progress: fixedSceneMeasurementBoundary.progress,
+        signature: fixedSceneMeasurementBoundary.signature,
+      };
+    }
+    if (uploadProbeMode) {
       const begun = await requestWorkerRpc(
         page,
         "validationBeginWgpuRendererProbeMeasurement",
@@ -644,7 +677,6 @@ async function runScenario(scenario, context) {
       }
       begun.observedAtMs = await page.evaluate(() => performance.now());
       probeMeasurementBoundary = begun;
-      await resumeAfterBattleCheckpoint(page);
       manifest.benchmark.rendererWorkerProbeMeasurementBoundary = {
         schema: boundarySnapshot.schema,
         initialRead: boundarySnapshot.initialRead,
@@ -652,20 +684,8 @@ async function runScenario(scenario, context) {
         coreTicks: begun.coreTicks,
         frame: begun.frame,
         reloadedSaveState: true,
-        checkpoint: measurementCheckpoint,
+        checkpoint: fixedSceneMeasurementBoundary.checkpoint,
       };
-    }
-    if (context.postLoadInputScript.length > 0) {
-      inputMarkerReadiness = await waitForInputMarkerReady(page, {
-        pollIntervalMs: INPUT_MARKER_POLL_INTERVAL_MS,
-        timeoutMs: context.inputMarkerTimeoutMs,
-      });
-      if (!inputMarkerReadiness.ready) {
-        throw new Error(
-          `Input marker telemetry was not ready before the timed window after ` +
-          `${inputMarkerReadiness.waitedMs} ms`
-        );
-      }
     }
     manifest.fixture.saveStateLoaded = true;
     manifest.fixture.loadResult = saveStateLoad;
@@ -673,22 +693,33 @@ async function runScenario(scenario, context) {
     manifest.benchmark.timingStartedAt = new Date().toISOString();
     await writeFile(path.join(scenarioDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
+    if (fixedSceneMeasurementBoundary) {
+      const resumed = await resumeAfterBattleCheckpoint(page);
+      fixedSceneMeasurementBoundary.progress.observedAtMs = Number(resumed.transitionAtMs);
+      fixedSceneMeasurementBoundary.resumed = resumed;
+      manifest.benchmark.fixedSceneMeasurementBoundary.resumed = {
+        coreTicks: Number(resumed.coreTicks),
+        frame: Number(resumed.frame),
+        transitionAtMs: Number(resumed.transitionAtMs),
+        observedAtMs: Number(resumed.observedAtMs),
+      };
+    }
     const startedAt = Date.now();
     const wallTimeCapMs = context.durationSeconds * 1000;
-    const fixedWorkEnabled = context.targetCoreSeconds != null;
     const totalSamples = fixedWorkEnabled
       ? Math.floor(wallTimeCapMs / context.sampleMs)
       : Math.ceil(wallTimeCapMs / context.sampleMs);
     let sampleIndex = 0;
     let inputIndex = 0;
-    let fixedWorkBaseline = fixedWorkEnabled && probeMeasurementBoundary
-      ? fixedWorkObservation(probeMeasurementBoundary)
+    let fixedWorkBaseline = fixedWorkEnabled && fixedSceneMeasurementBoundary
+      ? fixedWorkObservation(fixedSceneMeasurementBoundary.progress)
       : null;
     if (fixedWorkBaseline) {
       manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
       fixedEmulatedWork = summarizeFixedEmulatedWork({
         targetCoreSeconds: context.targetCoreSeconds,
-        coreTicksPerSecond: Number(probeMeasurementBoundary.coreTicksPerSecond) || 0,
+        coreTicksPerSecond:
+          Number(fixedSceneMeasurementBoundary.progress.coreTicksPerSecond) || 0,
         baseline: fixedWorkBaseline,
         observation: fixedWorkBaseline,
         wallTimeCapSeconds: context.durationSeconds,
@@ -734,7 +765,7 @@ async function runScenario(scenario, context) {
           coreTicksPerSecond: fixedEmulatedWork.coreTicksPerSecond,
           deadlineMs: deadline,
           pollIntervalMs: fixedWorkPollIntervalMs,
-          liveWorkerProgress: uploadProbeMode,
+          liveWorkerProgress: fixedWorkEnabled,
           targetCoreSeconds: context.targetCoreSeconds,
           wallTimeCapSeconds: context.durationSeconds,
         });
@@ -788,20 +819,6 @@ async function runScenario(scenario, context) {
         if (!manifest.benchmark.timingBaselineEstablishedAt) {
           manifest.benchmark.timingBaselineEstablishedAt = new Date().toISOString();
         }
-        if (fixedWorkEnabled && !fixedWorkBaseline) {
-          const coreTicksPerSecond = Number(sample.coreTicksPerSecond) ||
-            Number(saveStateLoad.response?.coreTicksPerSecond) || 0;
-          fixedWorkBaseline = fixedWorkObservation(sample);
-          fixedEmulatedWork = summarizeFixedEmulatedWork({
-            targetCoreSeconds: context.targetCoreSeconds,
-            coreTicksPerSecond,
-            baseline: fixedWorkBaseline,
-            observation: fixedWorkBaseline,
-            wallTimeCapSeconds: context.durationSeconds,
-            pollIntervalMs: fixedWorkPollIntervalMs,
-          });
-          manifest.benchmark.fixedEmulatedWork = fixedEmulatedWork;
-        }
         if (!context.continueInvalidCheckpoint) assertRunProvenance(manifest);
       } else if (fixedWorkEnabled) {
         fixedEmulatedWork = action.atMs >= wallTimeCapMs && progressAtAction
@@ -829,7 +846,9 @@ async function runScenario(scenario, context) {
       }
     }
     const mappedDrainFinalizationMode =
-      String(scenario.params?.wgpudraincoalesce ?? "0") === "1";
+      String(scenario.params?.wgpudraincoalesce ?? "0") === "1" ||
+      String(scenario.params?.wgpuubocomputeprojection ?? "0") === "1" ||
+      String(scenario.params?.wgpuubocompute ?? "0") === "1";
     if (uploadProbeMode || mappedDrainFinalizationMode) {
       const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
       if (!pause?.paused || pause?.coreStateName !== "Paused") {
@@ -920,7 +939,11 @@ async function runScenario(scenario, context) {
       }
     }
     if (browser) {
-      const pages = browser.contexts().flatMap((browserContext) => browserContext.pages());
+      const pages = typeof browser.contexts === "function"
+        ? browser.contexts().flatMap((browserContext) => browserContext.pages())
+        : typeof browser.pages === "function"
+          ? browser.pages()
+          : page ? [page] : [];
       if (pages[0]) await saveScreenshot(pages[0], scenarioDir, "error.png");
     }
   } finally {
@@ -1010,6 +1033,8 @@ async function runScenario(scenario, context) {
   summary.metrics.wgpuTailGate = wgpuTailGate;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
+  summary.fixedSceneMeasurementBoundary =
+    manifest?.benchmark?.fixedSceneMeasurementBoundary ?? null;
   if (uploadProbeMode) {
     const probe = summary.final?.causalTelemetry?.webgpu?.rendererWorkerProbe;
     summary.uploadProbeWorkload = {
@@ -1040,6 +1065,7 @@ async function runScenario(scenario, context) {
     events: inputEvents,
     delivery: postLoadInputDelivery,
   };
+  summary.jitCacheReadiness = jitCacheReadiness;
   summary.audioMode = context.audioMode;
   summary.browserCpuAffinity = browserLaunch?.cpuAffinity || {
     enabled: context.browserCpuAffinity.enabled,
@@ -1084,6 +1110,7 @@ async function runScenario(scenario, context) {
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
       fixedEmulatedWork,
+      jitCacheReadiness,
       audioMode: context.audioMode,
       audioClaimsEligible: manifest.qualification.audioClaims.eligible,
     };
@@ -1132,6 +1159,10 @@ function summarizeScenario(
     requested: scenario.params?.wgpuubosparse,
     samples: timedWindow,
   });
+  const uboComputeProjection = evaluateWgpuUboComputeProjectionEvidence({
+    requested: scenario.params?.wgpuubocomputeprojection,
+    samples: timedWindow,
+  });
   const metrics = {
     fullTimedWindow,
     steadyState,
@@ -1157,6 +1188,7 @@ function summarizeScenario(
     causalFairness,
     wgpuDirtyRangeProjection: dirtyRangeProjection,
     wgpuSparseUbo: sparseUbo,
+    wgpuUboComputeProjection: uboComputeProjection,
     wgpuOwnershipTrace: final.causalTelemetry?.webgpu?.ownershipTrace ?? null,
     visibleChangedCount: timedWindow.filter((sample) => sample.visibleChanged).length,
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
@@ -1171,6 +1203,7 @@ function summarizeScenario(
   if (metrics.emitfail > 0) failures.push(`emitfail=${metrics.emitfail}`);
   if (metrics.compilefail > 0) failures.push(`compilefail=${metrics.compilefail}`);
   failures.push(...sparseUbo.failures);
+  failures.push(...uboComputeProjection.failures);
   failures.push(...causalFairness.failures);
   const requestedDirtyRanges = scenario.params?.wgpudirtyranges;
   if (requestedDirtyRanges != null) {
@@ -1520,7 +1553,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagingslots", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuuploadrunprojection", "wgpuubocomputeprojection", "wgpuubocompute", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagingslots", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }
@@ -1619,6 +1652,127 @@ async function pauseForBattleCheckpoint(page) {
   return response;
 }
 
+async function establishFixedSceneMeasurementBoundary(
+  page,
+  saveStateUrl,
+  expectedCheckpoint,
+  { jitCacheReadinessRequired = false, jitCacheReadyTimeoutMs = 120_000 } = {}
+) {
+  let pause = null;
+  let jitCacheReadiness = { required: false, ready: true, reason: "disabled-by-scenario" };
+  let pausedJitCacheReadiness = null;
+  let jitCacheFenceAttempts = 0;
+  if (jitCacheReadinessRequired) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      jitCacheFenceAttempts = attempt;
+      jitCacheReadiness = await waitForStableJitCacheReadiness(page, {
+        timeoutMs: jitCacheReadyTimeoutMs,
+      });
+      pause = await pauseForBattleCheckpoint(page);
+      pausedJitCacheReadiness = await requestWorkerRpc(
+        page,
+        "validationReadJitCacheReadiness",
+        {},
+        workerRpcTimeoutMs()
+      );
+      const pausedEvaluation = evaluateJitCacheReadiness(pausedJitCacheReadiness);
+      const countersStable =
+        jitCacheReadinessSignature(pausedJitCacheReadiness) ===
+        jitCacheReadinessSignature(jitCacheReadiness.final);
+      if (pausedEvaluation.ready && countersStable) break;
+      if (attempt === 3) {
+        throw new Error(
+          "JIT cache changed between the running-worker barrier and pause: " +
+          JSON.stringify({ before: jitCacheReadiness.final, after: pausedJitCacheReadiness })
+        );
+      }
+      await resumeAfterBattleCheckpoint(page);
+      pause = null;
+    }
+  } else {
+    pause = await pauseForBattleCheckpoint(page);
+  }
+  const reload = await loadStateFileWithTimeout(page, saveStateUrl);
+  if (!reload?.loaded) {
+    throw new Error(
+      `Fixed-scene measurement save reload failed: ${reload?.error || JSON.stringify(reload)}`
+    );
+  }
+  const checkpoint = assertBattleCheckpoint(
+    parseBattleCheckpoint(reload),
+    expectedCheckpoint
+  );
+  if (Number(checkpoint.coreTicks) !== Number(expectedCheckpoint.coreTicks)) {
+    throw new Error(
+      `Fixed-scene measurement requires canonical tick ${expectedCheckpoint.coreTicks}, ` +
+      `got ${checkpoint.coreTicks}`
+    );
+  }
+  const progress = await requestWorkerRpc(page, "validationReadCoreProgress", {}, 5000);
+
+  const requiredFinite = [
+    "coreTicks",
+    "coreTicksPerSecond",
+    "frame",
+    "ppcPc",
+    "loadedCheckpointGeneration",
+    "loadedCheckpointTicks",
+    "loadedCheckpointPpcPc",
+  ];
+  const invalid = requiredFinite.filter((field) => !Number.isFinite(Number(progress?.[field])));
+  if (invalid.length > 0 || Number(progress.coreTicksPerSecond) <= 0) {
+    throw new Error(
+      `Fixed-scene worker progress is incomplete: ${invalid.join(", ") || "coreTicksPerSecond"}`
+    );
+  }
+  const mismatches = [];
+  if (Number(progress.coreTicks) !== Number(checkpoint.coreTicks)) {
+    mismatches.push(`coreTicks ${progress.coreTicks} != ${checkpoint.coreTicks}`);
+  }
+  if (Number(progress.ppcPc) !== Number(checkpoint.ppcPc)) {
+    mismatches.push(`ppcPc ${progress.ppcPc} != ${checkpoint.ppcPc}`);
+  }
+  if (Number(progress.loadedCheckpointTicks) !== Number(checkpoint.coreTicks)) {
+    mismatches.push(
+      `loadedCheckpointTicks ${progress.loadedCheckpointTicks} != ${checkpoint.coreTicks}`
+    );
+  }
+  if (Number(progress.loadedCheckpointPpcPc) !== Number(checkpoint.ppcPc)) {
+    mismatches.push(
+      `loadedCheckpointPpcPc ${progress.loadedCheckpointPpcPc} != ${checkpoint.ppcPc}`
+    );
+  }
+  if (
+    Number(progress.loadedCheckpointGeneration) !==
+    Number(checkpoint.loadedCheckpointGeneration)
+  ) {
+    mismatches.push(
+      `loadedCheckpointGeneration ${progress.loadedCheckpointGeneration} != ` +
+      `${checkpoint.loadedCheckpointGeneration}`
+    );
+  }
+  if (mismatches.length > 0) {
+    throw new Error(`Fixed-scene measurement boundary drifted while paused: ${mismatches.join("; ")}`);
+  }
+
+  return {
+    pause,
+    jitCacheReadiness,
+    pausedJitCacheReadiness,
+    jitCacheFenceAttempts,
+    reload,
+    checkpoint,
+    progress,
+    signature: {
+      coreTicks: checkpoint.coreTicks,
+      ppcPc: checkpoint.ppcPc,
+      xfbHash: checkpoint.xfbHash,
+      width: checkpoint.width,
+      height: checkpoint.height,
+    },
+  };
+}
+
 async function resumeAfterBattleCheckpoint(page) {
   const response = await page.evaluate(async ({ timeoutMs }) => {
     const host = window.__host;
@@ -1640,6 +1794,7 @@ async function resumeAfterBattleCheckpoint(page) {
   if (response?.coreStateName !== "Running") {
     throw new Error(`Core did not resume after battle checkpoint: ${JSON.stringify(response)}`);
   }
+  return response;
 }
 
 async function readRendererDiagnostics(page) {
@@ -1669,6 +1824,58 @@ async function requestWorkerRpc(page, type, payload = {}, timeoutMs = workerRpcT
       );
     });
   }, { type, payload, timeoutMs });
+}
+
+async function waitForStableJitCacheReadiness(page, { timeoutMs, pollIntervalMs = 250 }) {
+  const startedAt = Date.now();
+  const snapshots = [];
+  let previousSignature = null;
+  let stableReadySamples = 0;
+  while (Date.now() - startedAt <= timeoutMs) {
+    const snapshot = await requestWorkerRpc(
+      page,
+      "validationReadJitCacheReadiness",
+      {},
+      Math.min(workerRpcTimeoutMs(), timeoutMs)
+    );
+    const evaluation = evaluateJitCacheReadiness(snapshot);
+    const signature = jitCacheReadinessSignature(snapshot);
+    snapshots.push({ ...snapshot, evaluation });
+    if (snapshots.length > 8) snapshots.shift();
+    if (evaluation.ready && signature === previousSignature) {
+      stableReadySamples += 1;
+    } else {
+      stableReadySamples = evaluation.ready ? 1 : 0;
+    }
+    if (stableReadySamples >= 2) {
+      return {
+        required: true,
+        ready: true,
+        waitedMs: Date.now() - startedAt,
+        stableReadySamples,
+        final: snapshot,
+        snapshots,
+      };
+    }
+    previousSignature = signature;
+    await page.waitForTimeout(pollIntervalMs);
+  }
+  const final = snapshots.at(-1) || null;
+  throw new Error(
+    `JIT cache did not reach stable readiness within ${timeoutMs} ms: ${JSON.stringify(final)}`
+  );
+}
+
+function jitCacheReadinessSignature(snapshot) {
+  return JSON.stringify({
+    cacheSize: Number(snapshot?.cacheSize),
+    newCompileCount: Number(snapshot?.newCompileCount),
+    idbWriteCount: Number(snapshot?.idbWriteCount),
+    lazyFillAddedEntries: Number(snapshot?.lazyFillAddedEntries),
+    pthreadBarrierGeneration: Number(snapshot?.pthreadBarrierGeneration),
+    pthreadBarrierAcked: Number(snapshot?.pthreadBarrierAcked),
+    pthreadRequiredBarrierAcked: Number(snapshot?.pthreadRequiredBarrierAcked),
+  });
 }
 
 async function loadStateFileWithTimeout(page, saveUrl) {
@@ -1888,7 +2095,7 @@ async function readFixedWorkProgress(page, { liveWorkerProgress = false } = {}) 
     return {
       coreTicks: Number(progress?.coreTicks) || 0,
       frame: Number(progress?.frame) || 0,
-      observedAtMs: await page.evaluate(() => performance.now()),
+      observedAtMs: Number(progress?.observedAtMs),
     };
   }
   return page.evaluate(() => {

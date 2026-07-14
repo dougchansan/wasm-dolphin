@@ -62,7 +62,7 @@ function callbackBranches(source) {
 }
 
 test("release WASM selects the measured callback identity order", async () => {
-  const source = await readFile(sourceUrl, "utf8");
+  const source = (await readFile(sourceUrl, "utf8")).replaceAll("\r\n", "\n");
 
   assert.match(
     source,
@@ -75,7 +75,7 @@ test("release WASM selects the measured callback identity order", async () => {
 });
 
 test("candidate and rollback orders preserve identical callback bodies", async () => {
-  const source = await readFile(sourceUrl, "utf8");
+  const source = (await readFile(sourceUrl, "utf8")).replaceAll("\r\n", "\n");
   const candidate = callbackBranches(markedBlock(source, "DOLPHIN_WEB_HOT_DISPATCH_ORDER"));
   const legacy = callbackBranches(markedBlock(source, "DOLPHIN_WEB_LEGACY_DISPATCH_ORDER"));
 

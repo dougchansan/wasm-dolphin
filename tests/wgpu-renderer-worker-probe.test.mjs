@@ -75,7 +75,7 @@ test("upload probes share one executor, suppress visible replay, and disclose bl
   assert.match(disc, /headerPtr \+ 7 \* 4 > heapBuffer\.byteLength/);
   assert.match(disc, /failWgpuUploadProbeRing\("upload probe requires protocol v3 handoff"\)/);
   assert.match(gate, /validateWgpuUploadProbeFinalization/);
-  assert.match(gate, /liveWorkerProgress: uploadProbeMode/);
+  assert.match(gate, /liveWorkerProgress: fixedWorkEnabled/);
   assert.match(app, /requestedWgpuRendererWorkerProbe\(window\.location\.search\)/);
   assert.match(app, /Intentional blank diagnostic:/);
   assert.match(page, /id="blankProbeNotice"/);

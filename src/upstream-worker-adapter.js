@@ -92,6 +92,9 @@ export class UpstreamWorkerAdapter {
     gpuCompletionDiagnostics = false,
     wgpuDirtyRangeProjection = false,
     wgpuPassPackageProjection = false,
+    wgpuUploadRunProjection = false,
+    wgpuUboComputeProjection = false,
+    wgpuUboComputeReconstruction = false,
     wgpuOwnershipTrace = false,
     wgpuSemanticRuntime = false,
     inputLatencyDiagnostics = false,
@@ -182,6 +185,9 @@ export class UpstreamWorkerAdapter {
     this.gpuCompletionDiagnostics = Boolean(gpuCompletionDiagnostics);
     this.wgpuDirtyRangeProjection = Boolean(wgpuDirtyRangeProjection);
     this.wgpuPassPackageProjection = Boolean(wgpuPassPackageProjection);
+    this.wgpuUploadRunProjection = Boolean(wgpuUploadRunProjection);
+    this.wgpuUboComputeProjection = Boolean(wgpuUboComputeProjection);
+    this.wgpuUboComputeReconstruction = Boolean(wgpuUboComputeReconstruction);
     this.wgpuOwnershipTrace = Boolean(wgpuOwnershipTrace);
     this.wgpuSemanticRuntime = Boolean(wgpuSemanticRuntime);
     this.inputLatencyDiagnostics = Boolean(inputLatencyDiagnostics);
@@ -367,6 +373,9 @@ export class UpstreamWorkerAdapter {
       gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
       wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
       wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+      wgpuUploadRunProjection: this.wgpuUploadRunProjection,
+      wgpuUboComputeProjection: this.wgpuUboComputeProjection,
+      wgpuUboComputeReconstruction: this.wgpuUboComputeReconstruction,
       wgpuOwnershipTrace: this.wgpuOwnershipTrace,
       wgpuSemanticRuntime: this.wgpuSemanticRuntime,
       inputLatencyDiagnostics: this.inputLatencyDiagnostics,

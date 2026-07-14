@@ -73,6 +73,25 @@
             );
           }
         }
+      } else if (data.type === "dolphin-jit-cache-barrier") {
+        // Worker messages are processed in FIFO order. Acknowledging this
+        // marker proves that the initial cache and every preceding lazy add
+        // have reached this pthread before a fixed-scene benchmark starts.
+        if (
+          typeof Module !== "undefined" &&
+          !Module._dolphinJitCache &&
+          globalThis._dolphinPendingJitCache
+        ) {
+          Module._dolphinJitCache = globalThis._dolphinPendingJitCache;
+        }
+        const installedCache =
+          typeof Module !== "undefined" ? Module._dolphinJitCache : null;
+        globalThis.postMessage({
+          type: "dolphin-jit-cache-barrier-ack",
+          generation: data.generation,
+          installed: Boolean(installedCache?.get && installedCache?.set),
+          cacheSize: Number(installedCache?.size) || 0,
+        });
       }
     });
   } else {

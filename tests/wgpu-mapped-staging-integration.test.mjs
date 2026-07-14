@@ -127,9 +127,12 @@ test("submission orders upload before render and capacity never falls back", asy
   const worker = await readSource("../src/upstream-discio-worker.js");
   assert.match(
     worker,
-    /q\.submit\(mappedBatch\s*\? \[mappedBatch\.commandBuffer, renderCommandBuffer\]/
+    /q\.submit\(\[\s*\.\.\.\(mappedBatch\?\.ordinary \? \[mappedBatch\.ordinary\.commandBuffer\] : \[\]\),\s*\.\.\.\(mappedBatch\?\.compute \? \[mappedBatch\.compute\.commandBuffer\] : \[\]\),\s*renderCommandBuffer,\s*\]\)/
   );
-  assert.match(worker, /(?:q|queue)\.submit\(\[batch\.commandBuffer\]\)/);
+  assert.match(
+    worker,
+    /queue\.submit\(\[\s*\.\.\.\(batch \? \[batch\.commandBuffer\] : \[\]\),\s*\.\.\.\(computeBatch \? \[computeBatch\.commandBuffer\] : \[\]\),\s*\]\)/
+  );
   assert.match(
     worker,
     /if \(mappedCapacityHold\) \{[\s\S]*?if \(pass\) \{[\s\S]*?markWgpuReplayFatal/

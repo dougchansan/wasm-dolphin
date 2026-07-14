@@ -135,6 +135,25 @@ test("WGPU replay op metrics retain an exact 25-op zero-filled histogram", () =>
   assert.ok(metrics.snapshot().histogram.every((value) => value === 0));
 });
 
+test("WGPU replay timing samples without losing exact opcode counts", () => {
+  let clock = 0;
+  const metrics = createWgpuReplayOpMetrics({
+    replayTimingSamplePeriod: 4,
+    now: () => ++clock,
+  });
+  for (let index = 0; index < 8; index += 1) {
+    const startedAt = metrics.beginReplay(6);
+    metrics.finishReplay(6, startedAt);
+  }
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.replayTimingMode, "per-op-periodic-sample");
+  assert.equal(snapshot.replayTimingSamplePeriod, 4);
+  assert.equal(snapshot.histogram[6], 8);
+  assert.equal(snapshot.replayTimingSampleCounts[6], 3);
+  assert.equal(snapshot.replayCpuSampleTotalMs[6], 3);
+  assert.equal(snapshot.replayCpuTotalMs[6], 8);
+});
+
 test("WGPU replay diagnostics are opt-in", () => {
   assert.equal(requestedWgpuReplayDiagnostics(""), false);
   assert.equal(requestedWgpuReplayDiagnostics("?wgpuclassify=1"), true);
@@ -644,11 +663,8 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
     worker,
     /wgpuReplayOps: wgpuReplayOpMetrics\.snapshot\(\{ enabled: causalMetricsEnabled \}\)/
   );
-  assert.match(worker, /const replayOpStartedAt = causalMetricsEnabled \? performance\.now\(\) : 0/);
-  assert.match(
-    worker,
-    /wgpuReplayOpMetrics\.recordReplay\(op, performance\.now\(\) - replayOpStartedAt\)/
-  );
+  assert.match(worker, /wgpuReplayOpMetrics\.beginReplay\(op\)/);
+  assert.match(worker, /wgpuReplayOpMetrics\.finishReplay\(op, replayOpStartedAt\)/);
   assert.match(worker, /wgpuReplayOpMetrics\.recordUploadCopy\(/);
   assert.match(worker, /wgpuReplayOpMetrics\.recordQueueUpload\(/);
   assert.match(worker,

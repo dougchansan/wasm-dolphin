@@ -42,6 +42,9 @@ import { legacyTickQueueRequested } from "./presentation-pacing.js";
 import { requestedGpuCompletionDiagnostics } from "./gpu-completion-telemetry.js";
 import { requestedWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { requestedWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { requestedWgpuUploadRunProjection } from "./wgpu-upload-run-projection.js";
+import { requestedWgpuUboComputeProjection } from "./wgpu-ubo-compute-projection.js";
+import { requestedWgpuUboComputeReconstruction } from "./wgpu-ubo-compute-reconstruction.js";
 import { requestedWgpuOwnershipTrace } from "./wgpu-ownership-trace.js";
 import { requestedWgpuSemanticRuntime } from "./wgpu-semantic-runtime.js";
 import {
@@ -145,6 +148,13 @@ export class EmulatorHost {
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
     this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(
+      window.location.search
+    );
+    this.wgpuUploadRunProjection = requestedWgpuUploadRunProjection(window.location.search);
+    this.wgpuUboComputeProjection = requestedWgpuUboComputeProjection(
+      window.location.search
+    );
+    this.wgpuUboComputeReconstruction = requestedWgpuUboComputeReconstruction(
       window.location.search
     );
     this.wgpuOwnershipTrace = requestedWgpuOwnershipTrace(window.location.search);
@@ -391,6 +401,9 @@ export class EmulatorHost {
             gpuCompletionDiagnostics: this.gpuCompletionDiagnostics,
             wgpuDirtyRangeProjection: this.wgpuDirtyRangeProjection,
             wgpuPassPackageProjection: this.wgpuPassPackageProjection,
+            wgpuUploadRunProjection: this.wgpuUploadRunProjection,
+            wgpuUboComputeProjection: this.wgpuUboComputeProjection,
+            wgpuUboComputeReconstruction: this.wgpuUboComputeReconstruction,
             wgpuOwnershipTrace: this.wgpuOwnershipTrace,
             wgpuSemanticRuntime: this.wgpuSemanticRuntime,
             inputLatencyDiagnostics: this.inputLatencyDiagnostics,

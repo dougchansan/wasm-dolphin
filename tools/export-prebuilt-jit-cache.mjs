@@ -27,6 +27,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { encodePrebuiltCache } from "../src/prebuilt-jit-cache-format.js";
+import {
+  JIT_CACHE_ENTRY_KEY_SCHEMA,
+  canonicalCoreFingerprint,
+  verifyCanonicalWasmBlockKey
+} from "../src/jit-cache-identity.js";
 
 // Match the validator's playwright resolution: prefer the validator-local
 // install at .omx/browser-probe/node_modules/playwright, fall back to top-level.
@@ -59,14 +64,26 @@ const outPath = process.env.OUT_PATH
 // broke audio in real Chrome (probe was clean, real-browser dropped 18u/16d).
 // Original safe config: 16 pthreads × 8k modules = 128k Module instances.
 const maxEntries = Number(process.env.MAX_ENTRIES || 8192);
+const targetFingerprint = process.env.TARGET_FINGERPRINT?.trim().toLowerCase() || null;
+if (targetFingerprint && !/^[0-9a-f]{64}$/.test(targetFingerprint)) {
+  console.error("TARGET_FINGERPRINT must be a 64-character lowercase or uppercase SHA-256 hex digest.");
+  process.exit(2);
+}
+const encodedFingerprint = targetFingerprint
+  ? canonicalCoreFingerprint(targetFingerprint)
+  : null;
 
 console.log(`[export] persistDir=${persistDir}`);
 console.log(`[export] baseUrl=${baseUrl}`);
 console.log(`[export] outPath=${outPath}`);
 console.log(`[export] maxEntries=${maxEntries}`);
+if (encodedFingerprint) console.log(`[export] targetFingerprint=${encodedFingerprint}`);
 
+const configuredExecutable = process.env.BROWSER_EXECUTABLE?.trim();
 const ctx = await chromium.launchPersistentContext(persistDir, {
-  channel: process.env.BROWSER_CHANNEL || "chrome",
+  ...(configuredExecutable
+    ? { executablePath: path.resolve(configuredExecutable) }
+    : { channel: process.env.BROWSER_CHANNEL || "chrome" }),
   headless: process.env.HEADED !== "1",
   args: [
     "--autoplay-policy=no-user-gesture-required",
@@ -84,7 +101,7 @@ await page.goto(`${baseUrl}?export=1`, { waitUntil: "domcontentloaded", timeout:
 const dump = await page.evaluate(async (cap) => {
   function openDb() {
     return new Promise((resolve) => {
-      const req = indexedDB.open("dolphin-jit-cache", 2);
+      const req = indexedDB.open("dolphin-jit-cache", 3);
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
     });
@@ -130,10 +147,11 @@ const dump = await page.evaluate(async (cap) => {
     });
   }
   const db = await openDb();
-  if (!db) return { fingerprint: null, entries: [] };
+  if (!db) return { fingerprint: null, entryKeySchema: null, entries: [] };
   const fingerprint = await readMeta(db, "buildFingerprint");
+  const entryKeySchema = await readMeta(db, "entryKeySchema");
   const entries = await readAllModules(db, cap);
-  return { fingerprint, entries };
+  return { fingerprint, entryKeySchema, entries };
 }, maxEntries);
 
 await ctx.close();
@@ -146,18 +164,27 @@ if (!dump.entries.length) {
   console.error("[export] IDB modules store is empty — validator run produced no JIT cache.");
   process.exit(2);
 }
+if (dump.entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+  console.error(`[export] unsupported or missing entryKeySchema: ${dump.entryKeySchema || "<missing>"}`);
+  process.exit(2);
+}
 
 // Re-pack the Array<number> back into Uint8Array for the encoder.
 const entriesMap = new Map();
 let totalBytes = 0;
 for (const { hash, bytes } of dump.entries) {
   const u8 = Uint8Array.from(bytes);
+  if (!(await verifyCanonicalWasmBlockKey(hash, u8))) {
+    console.error(`[export] block key/bytes mismatch for ${hash}; refusing mixed cache export`);
+    process.exit(2);
+  }
   entriesMap.set(hash, u8);
   totalBytes += u8.byteLength;
 }
 
 const blob = encodePrebuiltCache({
-  fingerprint: dump.fingerprint,
+  fingerprint: encodedFingerprint || dump.fingerprint,
+  entryKeySchema: dump.entryKeySchema,
   entries: entriesMap
 });
 
@@ -166,5 +193,7 @@ await writeFile(outPath, blob);
 
 console.log(
   `[export] wrote ${outPath} — ${entriesMap.size} modules, ${(blob.byteLength / 1048576).toFixed(2)} MiB ` +
-    `(${(totalBytes / 1048576).toFixed(2)} MiB raw WASM, fingerprint ${dump.fingerprint.slice(0, 16)}...)`
+  `(${(totalBytes / 1048576).toFixed(2)} MiB raw WASM, ` +
+  `source fingerprint ${dump.fingerprint.slice(0, 16)}..., ` +
+  `target fingerprint ${(encodedFingerprint || dump.fingerprint).slice(0, 32)}...)`
 );

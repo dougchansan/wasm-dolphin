@@ -374,6 +374,7 @@ test("preserves global A-B-A record order across staging slots", () => {
   assert.deepEqual(copies.map((copy) => fake.buffers.indexOf(copy[1])), [0, 1, 0]);
 });
 
+
 test("flat record store matches mixed object copies and reuses retained arrays", async () => {
   const objectFake = createFakeDevice();
   const flatFake = createFakeDevice();

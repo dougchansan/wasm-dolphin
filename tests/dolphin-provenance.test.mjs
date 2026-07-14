@@ -291,7 +291,7 @@ function createDependentLockedPatchFixture() {
 test("committed Dolphin provenance and ABI manifests verify", () => {
   const result = verifyDolphinProvenance(projectRoot);
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
-  assert.equal(result.patches.count, 45);
+  assert.equal(result.patches.count, 51);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
   assert.equal(result.vendorSnapshot.rootPaths, 108);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
@@ -315,6 +315,7 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
   );
   for (const path of [
     "src/incremental-sha256.js",
+    "src/jit-cache-identity.js",
     "src/wgpu-consumer-reset-attestation.js",
     "src/wgpu-legacy-semantic-decoder.js",
     "src/wgpu-mapped-staging-pool.js",
@@ -324,6 +325,10 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
     "src/wgpu-semantic-parity-sink.js",
     "src/wgpu-semantic-runtime.js",
     "src/wgpu-semantic-v2-decoder.js",
+    "src/wgpu-ubo-compute-projection.js",
+    "src/wgpu-ubo-compute-codec.js",
+    "src/wgpu-ubo-compute-reconstruction.js",
+    "src/wgpu-upload-run-projection.js",
   ]) {
     assert.ok(
       coreAbi.contractSources.some((source) => source.path === path),

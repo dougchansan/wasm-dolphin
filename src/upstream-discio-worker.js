@@ -11,6 +11,12 @@ import {
 import { parseDolHeader } from "./dol.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 import {
+  JIT_CACHE_ENTRY_KEY_SCHEMA,
+  canonicalCoreFingerprint,
+  classifyJitCacheIdentity,
+  verifyCanonicalWasmBlockKey
+} from "./jit-cache-identity.js";
+import {
   createCausalTelemetry,
   emptyStageWindow,
   parseCoreProfileTelemetry,
@@ -76,6 +82,15 @@ import {
 } from "./wgpu-upload-attribution.js";
 import { createWgpuDirtyRangeProjection } from "./wgpu-dirty-range-projection.js";
 import { createWgpuPassPackageProjection } from "./wgpu-pass-package-projection.js";
+import { createWgpuUploadRunProjection } from "./wgpu-upload-run-projection.js";
+import {
+  WGPU_UBO_COMPUTE_CLASS_BYTES,
+  createWgpuUboComputeProjection
+} from "./wgpu-ubo-compute-projection.js";
+import {
+  WGPU_UBO_RING_ROLE,
+  createWgpuUboComputeReconstruction
+} from "./wgpu-ubo-compute-reconstruction.js";
 import {
   WGPU_OWNERSHIP_EVENT,
   attachWgpuOwnershipTraceFromApi,
@@ -261,6 +276,15 @@ let wgpuDirtyRangeProjectionActive = false;
 let wgpuPassPackageProjection = createWgpuPassPackageProjection();
 let wgpuPassPackageProjectionRequested = false;
 let wgpuPassPackageProjectionActive = false;
+let wgpuUploadRunProjection = createWgpuUploadRunProjection();
+let wgpuUploadRunProjectionRequested = false;
+let wgpuUploadRunProjectionActive = false;
+let wgpuUboComputeProjection = createWgpuUboComputeProjection();
+let wgpuUboComputeProjectionRequested = false;
+let wgpuUboComputeProjectionActive = false;
+let wgpuUboComputeReconstruction = null;
+let wgpuUboComputeReconstructionRequested = false;
+let wgpuUboComputeReconstructionActive = false;
 let wgpuOwnershipTrace = createWgpuOwnershipTrace();
 let wgpuOwnershipTraceRequested = false;
 let wgpuOwnershipTraceActive = false;
@@ -620,6 +644,15 @@ function rendererDiagnosticsPayload() {
       requested: wgpuPassPackageProjectionRequested,
       active: wgpuPassPackageProjectionActive
     }),
+    wgpuUploadRunProjection: wgpuUploadRunProjection.snapshot({
+      requested: wgpuUploadRunProjectionRequested,
+      active: wgpuUploadRunProjectionActive
+    }),
+    wgpuUboComputeProjection: wgpuUboComputeProjection.snapshot({
+      requested: wgpuUboComputeProjectionRequested,
+      active: wgpuUboComputeProjectionActive
+    }),
+    wgpuUboComputeReconstruction: wgpuUboComputeReconstructionSnapshot(),
     wgpuOwnershipTrace: wgpuOwnershipTrace.snapshot(),
     wgpuSemanticRuntime: wgpuSemanticRuntime.snapshot(),
     wgpuVisualCadence: wgpuVisualCadenceSnapshot(),
@@ -705,6 +738,26 @@ async function handleMessage(type, payload) {
       wgpuPassPackageProjectionRequested = Boolean(payload.wgpuPassPackageProjection);
       wgpuPassPackageProjectionActive = wgpuPassPackageProjectionRequested &&
         causalMetricsEnabled && payload.videoBackend === "WebGPU-Real";
+      wgpuUploadRunProjection = createWgpuUploadRunProjection({
+        maxEnvelopeBytes: WGPU_MAPPED_STAGING_SLOT_BYTES,
+      });
+      wgpuUploadRunProjectionRequested = Boolean(payload.wgpuUploadRunProjection);
+      wgpuUploadRunProjectionActive = wgpuUploadRunProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
+      wgpuUboComputeProjection = createWgpuUboComputeProjection();
+      wgpuUboComputeProjectionRequested = Boolean(payload.wgpuUboComputeProjection);
+      wgpuUboComputeProjectionActive = wgpuUboComputeProjectionRequested &&
+        causalMetricsEnabled && payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
+      wgpuUboComputeReconstruction = null;
+      wgpuUboComputeReconstructionRequested = Boolean(
+        payload.wgpuUboComputeReconstruction
+      );
+      wgpuUboComputeReconstructionActive =
+        wgpuUboComputeReconstructionRequested && causalMetricsEnabled &&
+        payload.videoBackend === "WebGPU-Real" &&
+        payload.wgpuUploadTransport === "mapped";
       wgpuOwnershipTrace = createWgpuOwnershipTrace();
       wgpuSemanticRuntimeRequested = Boolean(payload.wgpuSemanticRuntime);
       wgpuSemanticRuntimeActive = wgpuSemanticRuntimeRequested &&
@@ -810,6 +863,8 @@ async function handleMessage(type, payload) {
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
         wgpuVisualCadence: payload.wgpuVisualCadence,
         wgpuPassPackageProjection: payload.wgpuPassPackageProjection,
+        wgpuUploadRunProjection: payload.wgpuUploadRunProjection,
+        wgpuUboComputeProjection: payload.wgpuUboComputeProjection,
         wgpuOwnershipTrace: payload.wgpuOwnershipTrace,
         wgpuSemanticRuntime: payload.wgpuSemanticRuntime,
         oglSabEnabled: oglPixelSabView !== null
@@ -846,6 +901,10 @@ async function handleMessage(type, payload) {
     case "reset":
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.RESET);
       wgpuSparseUbo?.reset("core-reset");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("core-reset");
+      }
+      wgpuUboComputeReconstruction?.reset("core-reset");
       workletAudioProducer.transition();
       api?.reset();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
@@ -869,6 +928,10 @@ async function handleMessage(type, payload) {
     case "loadState": {
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
       wgpuSparseUbo?.reset("slot-state-load");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("slot-state-load");
+      }
+      wgpuUboComputeReconstruction?.reset("slot-state-load");
       workletAudioProducer.transition();
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
@@ -900,21 +963,71 @@ async function handleMessage(type, payload) {
         return { paused: false, error: "SetCorePaused export unavailable" };
       }
       const paused = Boolean(payload.paused);
+      const transitionAtMs = performance.now();
       api.setCorePaused(paused ? 1 : 0);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
+      const observedAtMs = performance.now();
       return {
         paused: api?.getCoreStateName?.() === "Paused",
         requestedPaused: paused,
         coreStateName: api?.getCoreStateName?.() ?? "",
+        transitionAtMs,
+        observedAtMs,
         ...framePayload(),
       };
     }
-    case "validationReadCoreProgress":
+    case "validationReadCoreProgress": {
+      const loadedCheckpoint = readLastLoadedCheckpoint();
       return {
         frame: api?.getFrame?.() ?? 0,
         coreTicks: readCoreTicks(),
         coreTicksPerSecond: readCoreTicksPerSecond(),
+        ppcPc: api?.getPpcPc?.() ?? 0,
+        loadedCheckpointGeneration: loadedCheckpoint.generation,
+        loadedCheckpointTicks: loadedCheckpoint.ticks,
+        loadedCheckpointPpcPc: loadedCheckpoint.ppcPc,
+        observedAtMs: performance.now(),
       };
+    }
+    case "validationReadJitCacheReadiness": {
+      const requiredWorkers = dolphinJitPthreadRuntime
+        ? [...new Set(dolphinJitPthreadRuntime.runningWorkers || [])]
+        : [];
+      const requiredBarrierAcked = requiredWorkers.filter(
+        (worker) =>
+          dolphinJitPthreadBarrierAckGeneration.get(worker) ===
+          dolphinJitPthreadBarrierGeneration
+      ).length;
+      return {
+        schema: "wasm-dolphin.jit-cache-readiness.v1",
+        enabled: dolphinJitCachePersistenceEnabled,
+        bootLoadComplete: dolphinJitBootLoadComplete,
+        bootLoadedEntries: dolphinJitBootLoadedEntries,
+        lazyFillStarted: dolphinJitLazyFillStarted,
+        lazyFillActive: dolphinJitLazyFillActive,
+        lazyFillCompleted: dolphinJitLazyFillCompleted,
+        lazyFillSourceEntries: dolphinJitLazyFillSourceEntries,
+        lazyFillProcessedEntries: dolphinJitLazyFillProcessedEntries,
+        lazyFillAddedEntries: dolphinJitLazyFillAddedEntries,
+        lazyFillTerminalReason: dolphinJitLazyFillTerminalReason,
+        lazyFillFailureCount: dolphinJitLazyFillFailureCount,
+        cacheSize: dolphinJitCacheMap.size,
+        newCompileCount: dolphinJitNewCompileCount,
+        verificationPending: dolphinJitVerificationPending.size,
+        compilePending: dolphinJitCompilePending,
+        idbWritesPending: dolphinJitIdbWritesPending,
+        idbWriteCount: dolphinJitIdbWriteCount,
+        pthreadWorkerCount: dolphinJitPthreadWorkers.length,
+        pthreadBarrierGeneration: dolphinJitPthreadBarrierGeneration,
+        pthreadBarrierExpected: dolphinJitPthreadBarrierExpected,
+        pthreadBarrierAcked: dolphinJitPthreadBarrierAcked,
+        pthreadRequiredWorkerCount: requiredWorkers.length,
+        pthreadRequiredBarrierAcked: requiredBarrierAcked,
+        pthreadInstallPostFailures: dolphinJitPthreadInstallPostFailures,
+        pthreadBarrierInvalidAcks: dolphinJitPthreadBarrierInvalidAcks,
+        observedAtMs: performance.now(),
+      };
+    }
     case "validationFinalizeWgpuRendererProbe": {
       if (api?.getCoreStateName?.() !== "Paused") {
         throw new Error("WGPU renderer probe finalization requires a paused core");
@@ -951,6 +1064,10 @@ async function handleMessage(type, payload) {
     case "loadStateFile": {
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.LOAD);
       wgpuSparseUbo?.reset("save-state-load");
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("save-state-load");
+      }
+      wgpuUboComputeReconstruction?.reset("save-state-load");
       workletAudioProducer.transition();
       // Write the .sav bytes into the Emscripten FS, then ask the core
       // to State::LoadAs it. Dolphin save states are build/version
@@ -1223,6 +1340,9 @@ async function loadCore({
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
   wgpuVisualCadence: requestedWgpuVisualCadence = false,
   wgpuPassPackageProjection: requestedWgpuPassPackageProjection = false,
+  wgpuUploadRunProjection: requestedWgpuUploadRunProjection = false,
+  wgpuUboComputeProjection: requestedWgpuUboComputeProjection = false,
+  wgpuUboComputeReconstruction: requestedWgpuUboComputeReconstruction = false,
   wgpuOwnershipTrace: requestedWgpuOwnershipTrace = false,
   wgpuSemanticRuntime: requestedWgpuSemanticRuntime = false,
   oglSabEnabled = false
@@ -1261,6 +1381,36 @@ async function loadCore({
   }
   if (requestedWgpuPassPackageProjection && videoBackend !== "WebGPU-Real") {
     throw new Error("wgpupackageprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUploadRunProjection && !collectMetrics) {
+    throw new Error("wgpuuploadrunprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuUploadRunProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuuploadrunprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUploadRunProjection && requestedWgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuuploadrunprojection=1 requires wgpuuploadtransport=mapped");
+  }
+  if (requestedWgpuUboComputeProjection && !collectMetrics) {
+    throw new Error("wgpuubocomputeprojection=1 requires metrics=1");
+  }
+  if (requestedWgpuUboComputeProjection && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubocomputeprojection=1 requires video=wgpu");
+  }
+  if (requestedWgpuUboComputeProjection && requestedWgpuUploadTransport !== "mapped") {
+    throw new Error(
+      "wgpuubocomputeprojection=1 requires wgpuuploadtransport=mapped"
+    );
+  }
+  if (requestedWgpuUboComputeReconstruction && !collectMetrics) {
+    throw new Error("wgpuubocompute=1 requires metrics=1");
+  }
+  if (requestedWgpuUboComputeReconstruction && videoBackend !== "WebGPU-Real") {
+    throw new Error("wgpuubocompute=1 requires video=wgpu");
+  }
+  if (requestedWgpuUboComputeReconstruction &&
+      requestedWgpuUploadTransport !== "mapped") {
+    throw new Error("wgpuubocompute=1 requires wgpuuploadtransport=mapped");
   }
   if (requestedWgpuOwnershipTrace && !collectMetrics) {
     throw new Error("wgpuownershiptrace=1 requires metrics=1");
@@ -1364,6 +1514,10 @@ async function loadCore({
   wgpuMappedStagingPool = null;
   wgpuSparseUbo?.reset("core-reload");
   wgpuSparseUbo = null;
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset("core-reload");
+  }
+  wgpuUboComputeReconstruction = null;
   wgpuMappedRemapPromises = new Set();
   wgpuMappedCapacityBlocked = false;
   wgpuMappedCapacityBlockedAt = 0;
@@ -1549,24 +1703,32 @@ async function loadCore({
   // boot-time mass re-instantiation of thousands of cached WebAssembly
   // Modules, no persistence). Deterministic isolation/mitigation for the
   // renderer OOM — the JIT just recompiles fresh this session.
-  // §28cg prebuilt cache pre-warm. If the app ships a `/prebuilt-jit-cache.bin`
-  // matching this build's fingerprint, populate IDB from it BEFORE
-  // reconcileJitCacheWithBuild runs — that function then loads the modules out
-  // of IDB via the existing async-compile batches (same path warm boots take).
+  // §28cg prebuilt cache pre-warm. Reconcile identity first so legacy,
+  // missing-metadata, or stale rows are cleared before a prebuilt file can
+  // seed the v3 store. Newly seeded rows then use the same verified load path.
   // First-session cold starts get the same warm-cache treatment as session 2+,
   // killing the menu-nav interpret stall measured in §28bz/§28cf.
-  if (!noJitCache && buildFingerprint) {
-    const _t_prebuilt = performance.now();
-    const seeded = await maybeSeedIdbFromPrebuiltCache(coreUrl, buildFingerprint);
-    console.log(`[boot-phase] prebuilt-jit-cache seed took ${(performance.now() - _t_prebuilt).toFixed(1)}ms (seeded ${seeded} new IDB entries)`);
-  }
   const _t_idb = performance.now();
+  dolphinJitCachePersistenceEnabled = !noJitCache;
+  dolphinJitBootLoadComplete = false;
+  dolphinJitBootLoadedEntries = 0;
   if (!noJitCache) {
     await reconcileJitCacheWithBuild(buildFingerprint);
   } else {
     postStatus("jit-cache: DISABLED via ?nojitcache=1 (no IDB load/persist)");
   }
   console.log(`[boot-phase] reconcileJitCacheWithBuild took ${(performance.now() - _t_idb).toFixed(1)}ms (cache size now ${dolphinJitCacheMap.size})`);
+  if (!noJitCache && buildFingerprint) {
+    const _t_prebuilt = performance.now();
+    const seeded = await maybeSeedIdbFromPrebuiltCache(coreUrl, buildFingerprint);
+    if (seeded > 0) {
+      const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
+      if (loaded >= DOLPHIN_JIT_PREWARM_THRESHOLD) dolphinJitCachePreWarmed = true;
+    }
+    console.log(`[boot-phase] prebuilt-jit-cache seed took ${(performance.now() - _t_prebuilt).toFixed(1)}ms (seeded ${seeded} new IDB entries)`);
+  }
+  dolphinJitBootLoadedEntries = dolphinJitCacheMap.size;
+  dolphinJitBootLoadComplete = true;
 
   // Day-15 (wasm-dolphin) WebGPU video backend: when the user selects
   // `?video=webgpu`, the existing WebGPU presenter (createWebGpuPresenter)
@@ -1695,7 +1857,7 @@ async function loadCore({
     wgpuStateCacheEnabled && !wgpuProducerStateCacheAvailable;
   // Renderer transport is required even when persistent JIT caching is not.
   // ?nojitcache=1 gates only the optional cache channel below.
-  installDolphinPthreadChannels(moduleInstance, {
+  await installDolphinPthreadChannels(moduleInstance, {
     jitCacheEnabled: !noJitCache
   });
   if (wgpuOwnershipTraceActive) {
@@ -2714,6 +2876,15 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
         requested: wgpuPassPackageProjectionRequested,
         active: wgpuPassPackageProjectionActive
       }),
+      uploadRunProjection: wgpuUploadRunProjection.snapshot({
+        requested: wgpuUploadRunProjectionRequested,
+        active: wgpuUploadRunProjectionActive
+      }),
+      uboComputeProjection: wgpuUboComputeProjection.snapshot({
+        requested: wgpuUboComputeProjectionRequested,
+        active: wgpuUboComputeProjectionActive
+      }),
+      uboComputeReconstruction: wgpuUboComputeReconstructionSnapshot(),
       ownershipTrace: wgpuOwnershipTrace.snapshot(),
       semanticRuntime: wgpuSemanticRuntime.snapshot(),
       registered: Boolean(webGpuCmdRing),
@@ -4982,11 +5153,11 @@ function isFatalStatusMessage(message) {
 // pool so each pthread can consult it from its EM_JS compile body. Each
 // pthread instantiates cached Modules locally on its own wasmTable —
 // bypassing the cross-pthread-table problem from Day 6.
-const dolphinJitCacheMap = new Map(); // Map<hashHex, WebAssembly.Module>
+const dolphinJitCacheMap = new Map(); // Map<canonical SHA-256 key, WebAssembly.Module>
 const DOLPHIN_JIT_IDB_NAME = "dolphin-jit-cache";
 const DOLPHIN_JIT_IDB_STORE = "modules";
 const DOLPHIN_JIT_IDB_META = "metadata";
-const DOLPHIN_JIT_IDB_VERSION = 2;
+const DOLPHIN_JIT_IDB_VERSION = 3;
 // §28u: 8192 was far too small for full Melee — the user's cache
 // plateaued at ~8135 (cap hit) while still in the menus, so EVERY
 // later 3D scene (intro/2nd cutscene, battle) exceeded the cap →
@@ -5009,9 +5180,26 @@ const DOLPHIN_JIT_CACHE_MAX = 49152; // hard cap on in-memory entries
 // to PTHREAD_POOL_SIZE.
 const DOLPHIN_JIT_IDB_BOOT_LOAD_MAX = 8192;
 const DOLPHIN_JIT_FINGERPRINT_KEY = "buildFingerprint";
+const DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY = "entryKeySchema";
 let dolphinJitIdb = null;
 let dolphinJitIdbWritesPending = 0;
 let dolphinJitIdbWriteCount = 0;
+async function verifyDolphinJitEntries(entries, batchSize = 64) {
+  const verified = [];
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const batch = entries.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(async (entry) => {
+      const key = String(entry.hash ?? entry.key ?? "");
+      const value = entry.bytes ?? entry.value;
+      const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+      if (!(bytes instanceof Uint8Array)) return null;
+      return await verifyCanonicalWasmBlockKey(key, bytes) ? { ...entry, key, bytes } : null;
+    }));
+    if (results.some((entry) => entry === null)) return null;
+    verified.push(...results);
+  }
+  return verified;
+}
 function openDolphinJitIdb() {
   return new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
@@ -5028,10 +5216,10 @@ function openDolphinJitIdb() {
     }
     request.onupgradeneeded = (event) => {
       const db = request.result;
-      // v1 → v2: add metadata store. The pre-v2 modules have no associated
-      // build fingerprint, so clear them on upgrade — they'd otherwise be
-      // treated as belonging to the current build and only grow stale.
-      if (event.oldVersion < 2 && db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
+      // v3 replaces collision-prone FNV keys with canonical SHA-256 keys.
+      // Existing rows cannot be migrated without re-hashing their bytes, so
+      // drop them atomically and let the current build repopulate the store.
+      if (event.oldVersion < 3 && db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
         db.deleteObjectStore(DOLPHIN_JIT_IDB_STORE);
       }
       if (!db.objectStoreNames.contains(DOLPHIN_JIT_IDB_STORE)) {
@@ -5121,13 +5309,21 @@ async function loadDolphinJitCacheFromIdb(db) {
   const COMPILE_BATCH = 64;
   for (let i = 0; i < entries.length; i += COMPILE_BATCH) {
     if (dolphinJitCacheMap.size >= DOLPHIN_JIT_IDB_BOOT_LOAD_MAX) break;
-    const batch = [];
+    const candidates = [];
     for (const { key, value } of entries.slice(i, i + COMPILE_BATCH)) {
       if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) continue;
       if (dolphinJitCacheMap.has(key)) continue;
       const buf = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-      batch.push({ key, p: WebAssembly.compile(buf) });
+      candidates.push({ key: String(key), buf });
     }
+    const verified = await Promise.all(candidates.map(async ({ key, buf }) => ({
+      key,
+      buf,
+      valid: await verifyCanonicalWasmBlockKey(String(key), buf)
+    })));
+    const batch = verified
+      .filter(({ valid }) => valid)
+      .map(({ key, buf }) => ({ key, p: WebAssembly.compile(buf) }));
     const res = await Promise.allSettled(batch.map((b) => b.p));
     for (let k = 0; k < res.length; k++) {
       if (res[k].status === "fulfilled") {
@@ -5139,8 +5335,16 @@ async function loadDolphinJitCacheFromIdb(db) {
   }
   return loaded;
 }
-function writeDolphinJitEntryToIdb(hash, bytes) {
+async function writeDolphinJitEntryToIdb(hash, bytes) {
   if (!dolphinJitIdb) return;
+  const buf = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+  if (!(buf instanceof Uint8Array) || !(await verifyCanonicalWasmBlockKey(String(hash), buf))) {
+    if (!self._dolphinJitIdbIdentityErrLogged) {
+      self._dolphinJitIdbIdentityErrLogged = true;
+      postStatus("jit-cache: rejected IDB write with mismatched block identity");
+    }
+    return;
+  }
   try {
     const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
     tx.onabort = () => {
@@ -5151,7 +5355,7 @@ function writeDolphinJitEntryToIdb(hash, bytes) {
     };
     const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
     dolphinJitIdbWritesPending += 1;
-    const req = store.put(bytes, hash);
+    const req = store.put(buf, hash);
     req.onsuccess = () => {
       dolphinJitIdbWritesPending -= 1;
       dolphinJitIdbWriteCount += 1;
@@ -5183,7 +5387,6 @@ async function fetchWasmAndFingerprint(coreUrlValue, expectedSha256 = DEFAULT_UP
   // wasm sits beside it under the conventional name.
   const wasmUrl = new URL("dolphin-core-upstream.wasm", coreUrlValue).href;
   let buffer = null;
-  let fingerprint = null;
   try {
     const resp = await fetch(wasmUrl);
     if (!resp.ok) {
@@ -5197,16 +5400,9 @@ async function fetchWasmAndFingerprint(coreUrlValue, expectedSha256 = DEFAULT_UP
   if (actualSha256 !== expectedSha256) {
     throw new Error(`Core WASM SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
   }
-  // Stride-64 FNV-1a over the full wasm. 8MB / 64 = 128K iters ≈ 1ms.
-  // Wasm files have distinct bytes throughout (code section, data section,
-  // import/export names), so any non-trivial build change moves the hash.
-  const view = new Uint8Array(buffer);
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < view.length; i += 64) {
-    h ^= view[i];
-    h = Math.imul(h, 16777619);
-  }
-  fingerprint = ((h ^ view.length) >>> 0).toString(16) + ":" + view.length.toString(16);
+  // The verified artifact digest is already available. Reuse the complete
+  // SHA-256 rather than a sampled fingerprint that can alias distinct cores.
+  const fingerprint = canonicalCoreFingerprint(actualSha256);
   return { wasmBinary: buffer, fingerprint, sha256: actualSha256 };
 }
 // Open IDB eagerly so loadCore() doesn't pay the open latency. Module load
@@ -5274,14 +5470,23 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
     );
     return 0;
   }
+  if (decoded.entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+    postStatus("jit-cache: prebuilt entry-key schema mismatch; ignored");
+    return 0;
+  }
+  const verifiedEntries = await verifyDolphinJitEntries(decoded.entries);
+  if (!verifiedEntries) {
+    postStatus("jit-cache: prebuilt block identity mismatch; entire file ignored");
+    return 0;
+  }
   // §28ch: only seed the FIRST DOLPHIN_JIT_IDB_BOOT_LOAD_MAX entries into
   // IDB synchronously — past testing showed a 16k-entry IDB tx blocks the
   // main thread ~3s and re-inflates the startup freeze the prebuilt cache
   // was meant to fix. Stash the OVERFLOW in `dolphinJitPrebuiltOverflow`;
   // the lazy-fill task drains it post-boot and writes-back to IDB after
   // each successful compile so subsequent sessions read from the IDB path.
-  const boot = decoded.entries.slice(0, DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
-  const overflow = decoded.entries.slice(DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  const boot = verifiedEntries.slice(0, DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
+  const overflow = verifiedEntries.slice(DOLPHIN_JIT_IDB_BOOT_LOAD_MAX);
   if (overflow.length > 0) {
     dolphinJitPrebuiltOverflow = overflow;
   }
@@ -5290,8 +5495,8 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
       const tx = dolphinJitIdb.transaction(DOLPHIN_JIT_IDB_STORE, "readwrite");
       const store = tx.objectStore(DOLPHIN_JIT_IDB_STORE);
       let inserted = 0;
-      for (const { hash, bytes } of boot) {
-        store.put(bytes, hash);
+      for (const { key, bytes } of boot) {
+        store.put(bytes, key);
         inserted += 1;
       }
       tx.oncomplete = () => resolve(inserted);
@@ -5305,6 +5510,11 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
   // a same-build cache and just loads (vs clearing) the seeded modules.
   if (seeded > 0) {
     await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, currentFingerprint);
+    await writeDolphinJitMetadata(
+      dolphinJitIdb,
+      DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY,
+      JIT_CACHE_ENTRY_KEY_SCHEMA
+    );
     postStatus(`jit-cache: seeded ${seeded} prebuilt modules into IDB (fingerprint match)`);
   }
   return seeded;
@@ -5313,15 +5523,34 @@ async function maybeSeedIdbFromPrebuiltCache(coreUrlValue, currentFingerprint) {
 async function reconcileJitCacheWithBuild(fingerprint) {
   await dolphinJitIdbReady;
   if (!dolphinJitIdb) return 0;
-  const stored = await readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY);
-  if (stored && fingerprint && stored !== fingerprint) {
+  const [storedFingerprint, storedEntryKeySchema] = await Promise.all([
+    readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY),
+    readDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY)
+  ]);
+  const identity = classifyJitCacheIdentity({
+    storedFingerprint,
+    storedEntryKeySchema,
+    currentFingerprint: fingerprint
+  });
+  if (identity.reset) {
     await clearDolphinJitModulesStore(dolphinJitIdb);
+    dolphinJitCacheMap.clear();
+    dolphinJitPrebuiltOverflow = null;
     postStatus(
-      `jit-cache: build changed (${stored.slice(0, 8)} → ${fingerprint.slice(0, 8)}); cleared stale modules`
+      `jit-cache: identity reset (${identity.reason}); cleared unverified modules`
     );
   }
   if (fingerprint) {
-    await writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, fingerprint);
+    await Promise.all([
+      writeDolphinJitMetadata(dolphinJitIdb, DOLPHIN_JIT_FINGERPRINT_KEY, fingerprint),
+      writeDolphinJitMetadata(
+        dolphinJitIdb,
+        DOLPHIN_JIT_ENTRY_KEY_SCHEMA_KEY,
+        JIT_CACHE_ENTRY_KEY_SCHEMA
+      )
+    ]);
+  } else {
+    return 0;
   }
   const loaded = await loadDolphinJitCacheFromIdb(dolphinJitIdb);
   if (loaded > 0) {
@@ -5336,33 +5565,56 @@ async function reconcileJitCacheWithBuild(fingerprint) {
   return loaded;
 }
 let dolphinJitNewCompileCount = 0;
-function handleDolphinJitNewCompile(event) {
+let dolphinJitCompilePending = 0;
+const dolphinJitVerificationPending = new Set();
+async function handleDolphinJitNewCompile(event) {
   const data = event.data;
   if (!data || data.type !== "dolphin-jit-new-compile") return;
-  dolphinJitNewCompileCount += 1;
   if (!data.hash || !data.bytes) return;
-  if (dolphinJitCacheMap.has(data.hash)) return;
+  const key = String(data.hash);
+  const bytes = data.bytes instanceof ArrayBuffer ? new Uint8Array(data.bytes) : data.bytes;
+  if (!(bytes instanceof Uint8Array)) return;
+  if (dolphinJitCacheMap.has(key) || dolphinJitVerificationPending.has(key)) return;
   if (dolphinJitCacheMap.size >= DOLPHIN_JIT_CACHE_MAX) return;
+  dolphinJitVerificationPending.add(key);
+  let valid = false;
+  try {
+    valid = await verifyCanonicalWasmBlockKey(String(data.hash), bytes);
+  } finally {
+    dolphinJitVerificationPending.delete(key);
+  }
+  if (!valid) {
+    if (!self._dolphinJitIncomingIdentityErrLogged) {
+      self._dolphinJitIncomingIdentityErrLogged = true;
+      postStatus("jit-cache: rejected pthread compile with mismatched block identity");
+    }
+    return;
+  }
+  if (dolphinJitCacheMap.has(key)) return;
+  dolphinJitNewCompileCount += 1;
   // Reserve the slot synchronously so duplicate notifications dedupe even
   // before the async compile finishes. Replace with the real Module once
   // compilation completes. Async to keep discio off-critical-path. After
   // the compile lands, persist to IndexedDB so subsequent boots can
   // pre-warm without recompiling.
-  dolphinJitCacheMap.set(data.hash, null);
+  dolphinJitCacheMap.set(key, null);
   // Persist bytes synchronously (fire-and-forget IDB put). Storage format
   // is raw wasm bytes; we recompile at boot. WebAssembly.Module storage in
   // IDB proved unreliable empirically (put().oncomplete fires but
   // req.onsuccess never does, and the data doesn't survive). Bytes are
   // boring TypedArrays and clone reliably.
-  writeDolphinJitEntryToIdb(data.hash, data.bytes);
-  WebAssembly.compile(data.bytes).then((mod) => {
-    dolphinJitCacheMap.set(data.hash, mod);
+  void writeDolphinJitEntryToIdb(key, bytes);
+  dolphinJitCompilePending += 1;
+  WebAssembly.compile(bytes).then((mod) => {
+    dolphinJitCacheMap.set(key, mod);
   }).catch((err) => {
-    dolphinJitCacheMap.delete(data.hash);
+    dolphinJitCacheMap.delete(key);
     if (!self._dolphinJitNewCompileErrLogged) {
       self._dolphinJitNewCompileErrLogged = true;
       postStatus(`jit-cache: async compile-on-discio failed: ${err?.message || err}`);
     }
+  }).finally(() => {
+    dolphinJitCompilePending -= 1;
   });
   if (
     dolphinJitNewCompileCount === 1 ||
@@ -5378,7 +5630,27 @@ function handleDolphinJitNewCompile(event) {
 // task (kicked off after reconcileJitCacheWithBuild) can broadcast new
 // modules to pthread workers as they become available.
 let dolphinJitPthreadWorkers = [];
+let dolphinJitPthreadRuntime = null;
+let dolphinJitCachePersistenceEnabled = false;
+let dolphinJitBootLoadComplete = false;
+let dolphinJitBootLoadedEntries = 0;
 let dolphinJitLazyFillActive = false;
+let dolphinJitLazyFillStarted = false;
+let dolphinJitLazyFillCompleted = false;
+let dolphinJitLazyFillSourceEntries = 0;
+let dolphinJitLazyFillProcessedEntries = 0;
+let dolphinJitLazyFillAddedEntries = 0;
+let dolphinJitLazyFillTerminalReason = "not-started";
+let dolphinJitLazyFillFailureCount = 0;
+let dolphinJitLazyFillPromise = null;
+let dolphinJitPthreadBarrierGeneration = 0;
+let dolphinJitPthreadBarrierExpected = 0;
+let dolphinJitPthreadBarrierAcked = 0;
+let dolphinJitPthreadInstallPostFailures = 0;
+let dolphinJitPthreadBarrierInvalidAcks = 0;
+const dolphinJitPthreadBarrierAckGeneration = new WeakMap();
+const dolphinJitPthreadBarrierListeners = new WeakSet();
+const dolphinJitPthreadCompileListeners = new WeakSet();
 // §28ch overflow buffer: prebuilt entries beyond the boot-load cap that
 // we DON'T write to IDB upfront (the 20MiB IDB tx blocked the main thread
 // long enough to inflate the startup freeze). Lazy fill compiles from
@@ -5386,21 +5658,78 @@ let dolphinJitLazyFillActive = false;
 // sessions can read from the existing IDB-path.
 let dolphinJitPrebuiltOverflow = null;
 
-export function installDolphinPthreadChannels(
+function handleDolphinJitPthreadBarrierAck(event, worker) {
+  const data = event.data;
+  if (data?.type !== "dolphin-jit-cache-barrier-ack") return;
+  if (Number(data.generation) !== dolphinJitPthreadBarrierGeneration) return;
+  if (dolphinJitPthreadBarrierAckGeneration.get(worker) === data.generation) return;
+  if (data.installed !== true || !Number.isFinite(Number(data.cacheSize))) {
+    dolphinJitPthreadBarrierInvalidAcks += 1;
+    return;
+  }
+  dolphinJitPthreadBarrierAckGeneration.set(worker, data.generation);
+  dolphinJitPthreadBarrierAcked += 1;
+}
+
+function handleDolphinJitPthreadBarrierAckEvent(event) {
+  handleDolphinJitPthreadBarrierAck(event, event.currentTarget);
+}
+
+function ensureDolphinJitPthreadListeners(worker) {
+  if (!dolphinJitPthreadBarrierListeners.has(worker)) {
+    worker.addEventListener("message", handleDolphinJitPthreadBarrierAckEvent);
+    dolphinJitPthreadBarrierListeners.add(worker);
+  }
+  if (!dolphinJitPthreadCompileListeners.has(worker)) {
+    worker.addEventListener("message", handleDolphinJitNewCompile);
+    dolphinJitPthreadCompileListeners.add(worker);
+  }
+}
+
+function publishDolphinJitPthreadBarrier(workers = dolphinJitPthreadWorkers) {
+  const targets = [...new Set(workers)];
+  dolphinJitPthreadBarrierGeneration += 1;
+  dolphinJitPthreadBarrierExpected = targets.length;
+  dolphinJitPthreadBarrierAcked = 0;
+  dolphinJitPthreadBarrierInvalidAcks = 0;
+  for (const worker of targets) {
+    try {
+      worker.postMessage({
+        type: "dolphin-jit-cache-barrier",
+        generation: dolphinJitPthreadBarrierGeneration,
+      });
+    } catch {
+      dolphinJitPthreadInstallPostFailures += 1;
+    }
+  }
+}
+
+async function waitForDolphinJitPthreadBarrier(timeoutMs = 30_000) {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt <= timeoutMs) {
+    if (dolphinJitPthreadInstallPostFailures > 0) return false;
+    if (dolphinJitPthreadBarrierAcked === dolphinJitPthreadBarrierExpected) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+export async function installDolphinPthreadChannels(
   moduleInstance,
   { jitCacheEnabled = true } = {}
 ) {
   const pthread = moduleInstance?.PThread;
+  dolphinJitPthreadRuntime = pthread || null;
   if (!pthread) {
     if (jitCacheEnabled) {
       postStatus("jit-cache: Module.PThread unavailable; persistent JIT cache disabled");
     }
     return;
   }
-  const workers = [
+  const workers = [...new Set([
     ...(pthread.runningWorkers || []),
     ...(pthread.unusedWorkers || [])
-  ];
+  ])];
 
   // These messages originate on whichever pthread owns Dolphin's video
   // thread. They are transport, not JIT-cache functionality.
@@ -5429,6 +5758,7 @@ export function installDolphinPthreadChannels(
   // reconcileJitCacheWithBuild before reaching this call site), so we
   // can push immediately.
   dolphinJitPthreadWorkers = workers;
+  dolphinJitPthreadInstallPostFailures = 0;
   if (!workers.length) {
     postStatus("jit-cache: no pthread workers visible at boot (PTHREAD_POOL_SIZE may be 0)");
     return;
@@ -5441,20 +5771,14 @@ export function installDolphinPthreadChannels(
   let sent = 0;
   for (const w of workers) {
     try {
+      ensureDolphinJitPthreadListeners(w);
       w.postMessage({ type: "dolphin-jit-cache", cache: dolphinJitCacheMap });
       sent += 1;
     } catch (err) {
+      dolphinJitPthreadInstallPostFailures += 1;
       if (!self._dolphinJitChannelErrLogged) {
         self._dolphinJitChannelErrLogged = true;
         postStatus(`jit-cache: postMessage to pthread worker failed: ${err?.message || err}`);
-      }
-    }
-    try {
-      w.addEventListener("message", handleDolphinJitNewCompile);
-    } catch (err) {
-      if (!self._dolphinJitListenerErrLogged) {
-        self._dolphinJitListenerErrLogged = true;
-        postStatus(`jit-cache: listener installation failed: ${err?.message || err}`);
       }
     }
   }
@@ -5464,7 +5788,20 @@ export function installDolphinPthreadChannels(
   // the game runs. Cost: small CPU on discio worker + N postMessages,
   // each well under the 16ms frame budget. Gain: bigger effective cache
   // covering menu-nav transitions that the bounded boot-load missed.
-  startLazyJitCacheFill();
+  dolphinJitLazyFillPromise = startLazyJitCacheFill().catch((error) => {
+    dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillCompleted = false;
+    dolphinJitLazyFillTerminalReason = "error";
+    dolphinJitLazyFillFailureCount += 1;
+    postStatus(`jit-cache: lazy fill failed: ${error?.message || error}`);
+  });
+  await dolphinJitLazyFillPromise;
+  publishDolphinJitPthreadBarrier(workers);
+  const synchronized = await waitForDolphinJitPthreadBarrier();
+  postStatus(
+    `jit-cache: pre-boot pthread fence ${synchronized ? "complete" : "incomplete"} ` +
+    `(${dolphinJitPthreadBarrierAcked}/${dolphinJitPthreadBarrierExpected} acknowledged)`
+  );
 }
 
 // §28ch: continue loading IDB modules past DOLPHIN_JIT_IDB_BOOT_LOAD_MAX,
@@ -5473,8 +5810,18 @@ export function installDolphinPthreadChannels(
 // the per-pthread Module._dolphinJitCache. Idempotent: starts once,
 // silently no-ops on subsequent calls.
 async function startLazyJitCacheFill() {
-  if (dolphinJitLazyFillActive) return;
-  if (!dolphinJitIdb) return;
+  if (dolphinJitLazyFillStarted) return;
+  dolphinJitLazyFillStarted = true;
+  dolphinJitLazyFillCompleted = false;
+  dolphinJitLazyFillSourceEntries = 0;
+  dolphinJitLazyFillProcessedEntries = 0;
+  dolphinJitLazyFillAddedEntries = 0;
+  dolphinJitLazyFillTerminalReason = "running";
+  dolphinJitLazyFillFailureCount = 0;
+  if (!dolphinJitIdb) {
+    dolphinJitLazyFillTerminalReason = "indexeddb-unavailable";
+    return;
+  }
   dolphinJitLazyFillActive = true;
   const startedAt = performance.now();
   const startSize = dolphinJitCacheMap.size;
@@ -5485,6 +5832,7 @@ async function startLazyJitCacheFill() {
   // cap fall back to the IDB-cursor path.
   let remaining = [];
   let fromOverflow = false;
+  let cursorFailed = false;
   if (dolphinJitPrebuiltOverflow && dolphinJitPrebuiltOverflow.length > 0) {
     fromOverflow = true;
     for (const { hash, bytes } of dolphinJitPrebuiltOverflow) {
@@ -5507,12 +5855,27 @@ async function startLazyJitCacheFill() {
           }
           cursor.continue();
         };
-        cur.onerror = () => resolve(out);
-      } catch { resolve(out); }
+        cur.onerror = () => {
+          cursorFailed = true;
+          resolve(out);
+        };
+      } catch {
+        cursorFailed = true;
+        resolve(out);
+      }
     });
+  }
+  dolphinJitLazyFillSourceEntries = remaining.length;
+  if (cursorFailed) {
+    dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillTerminalReason = "cursor-error";
+    dolphinJitLazyFillFailureCount += 1;
+    return;
   }
   if (remaining.length === 0) {
     dolphinJitLazyFillActive = false;
+    dolphinJitLazyFillCompleted = true;
+    dolphinJitLazyFillTerminalReason = "complete";
     return;
   }
   postStatus(`jit-cache: lazy fill starting on ${remaining.length} extra IDB entries`);
@@ -5525,29 +5888,45 @@ async function startLazyJitCacheFill() {
   for (let i = 0; i < remaining.length; i += LAZY_BATCH) {
     if (dolphinJitCacheMap.size >= HARD_CAP) break;
     const slice = remaining.slice(i, i + LAZY_BATCH);
-    const compiles = slice.map((entry) => {
+    const verifiedSlice = await Promise.all(slice.map(async (entry) => {
       if (!(entry.value instanceof Uint8Array) && !(entry.value instanceof ArrayBuffer)) {
         return null;
       }
       const buf = entry.value instanceof ArrayBuffer
         ? new Uint8Array(entry.value)
         : entry.value;
+      if (!(await verifyCanonicalWasmBlockKey(String(entry.key), buf))) return null;
+      return { entry, buf };
+    }));
+    const compiles = verifiedSlice.map((verified) => {
+      if (!verified) return null;
+      const { entry, buf } = verified;
       // Only carry bytes through when sourced from the overflow buffer —
       // those need IDB write-back. IDB-sourced entries are already there.
       return { key: entry.key, p: WebAssembly.compile(buf), bytes: fromOverflow ? buf : null };
     }).filter(Boolean);
+    dolphinJitLazyFillFailureCount += verifiedSlice.length - compiles.length;
     const settled = await Promise.allSettled(compiles.map((c) => c.p));
+    dolphinJitLazyFillProcessedEntries += slice.length;
     for (let k = 0; k < settled.length; k++) {
-      if (settled[k].status !== "fulfilled") continue;
+      if (settled[k].status !== "fulfilled") {
+        dolphinJitLazyFillFailureCount += 1;
+        continue;
+      }
       const key = compiles[k].key;
       const mod = settled[k].value;
       const bytes = compiles[k].bytes;
       dolphinJitCacheMap.set(key, mod);
       added += 1;
+      dolphinJitLazyFillAddedEntries = added;
       // Push to every pthread worker. Modules are structured-clone-safe
       // so the receiver can install them on its local wasmTable.
       for (const w of dolphinJitPthreadWorkers) {
-        try { w.postMessage({ type: "dolphin-jit-cache-add", hash: key, module: mod }); } catch {}
+        try {
+          w.postMessage({ type: "dolphin-jit-cache-add", hash: key, module: mod });
+        } catch {
+          dolphinJitLazyFillFailureCount += 1;
+        }
       }
       // §28ch persist-on-fill: when the source was the prebuilt-overflow
       // (not already in IDB), write the bytes so subsequent sessions skip
@@ -5563,6 +5942,14 @@ async function startLazyJitCacheFill() {
     `jit-cache: lazy fill done — added ${added} (cache ${startSize}→${dolphinJitCacheMap.size}) in ${ms}ms`
   );
   dolphinJitLazyFillActive = false;
+  dolphinJitLazyFillCompleted =
+    dolphinJitLazyFillProcessedEntries === dolphinJitLazyFillSourceEntries &&
+    dolphinJitLazyFillFailureCount === 0;
+  dolphinJitLazyFillTerminalReason = dolphinJitLazyFillCompleted
+    ? "complete"
+    : dolphinJitCacheMap.size >= HARD_CAP
+      ? "capacity"
+      : "incomplete";
 }
 
 // Day-27: cross-thread WebGPU command ring. The video pthread can't
@@ -5592,6 +5979,8 @@ const WGPU_CMD_OP_DRAW_TEST = 4;
 // catastrophic. Non-shared so no engine rejects it (cf. TextDecoder).
 const WGPU_DYN_OFF_SCRATCH = new Uint32Array(4);
 const WGPU_CMD_OP_CREATE_BUFFER = 5;
+const WGPU_BUFFER_RESOURCE_ROLE_UNKNOWN = 0;
+const WGPU_BUFFER_RESOURCE_ROLE_UBO_RING = 1;
 const WGPU_CMD_OP_UPLOAD_BUFFER = 6;
 const WGPU_CMD_OP_CREATE_TEXTURE = 7;
 const WGPU_CMD_OP_UPLOAD_TEXTURE = 8;
@@ -6052,6 +6441,7 @@ function clearWgpuReplayStateAfterDeviceLoss() {
     );
   }
   wgpuMappedStagingPool?.invalidate("WebGPU device lost");
+  wgpuUboComputeReconstruction?.invalidate("device-loss");
   wgpuSparseUbo?.reset("device-loss");
   wgpuSparseUbo = null;
   wgpuMappedCapacityBlocked = false;
@@ -6067,6 +6457,12 @@ function clearWgpuReplayStateAfterDeviceLoss() {
   wgpuPassStateCache.reset("device-lost");
   if (wgpuPassPackageProjectionActive) {
     wgpuPassPackageProjection.reset("device-lost");
+  }
+  if (wgpuUploadRunProjectionActive) {
+    wgpuUploadRunProjection.reset("device-lost");
+  }
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset("device-lost");
   }
 }
 
@@ -6088,10 +6484,94 @@ function ensureWgpuMappedStagingPool(device) {
   return wgpuMappedStagingPool;
 }
 
+function ensureWgpuUboComputeReconstruction(device) {
+  if (!wgpuUboComputeReconstructionActive) return null;
+  wgpuUboComputeReconstruction ??= createWgpuUboComputeReconstruction({
+    device,
+    watchDeviceLoss: true,
+  });
+  return wgpuUboComputeReconstruction;
+}
+
+function wgpuUboComputeReconstructionSnapshot() {
+  const snapshot = wgpuUboComputeReconstruction?.snapshot() ?? null;
+  return {
+    schema: snapshot?.schema ?? "wasm-dolphin.wgpu-ubo-compute-reconstruction.v1",
+    requested: wgpuUboComputeReconstructionRequested,
+    eligible: wgpuUboComputeReconstructionRequested,
+    active: wgpuUboComputeReconstructionActive && Boolean(snapshot?.active),
+    runtimeEligible: wgpuUboComputeReconstructionActive,
+    projectionOnly: false,
+    replayBehaviorChanged: wgpuUboComputeReconstructionActive,
+    disabledReason: wgpuUboComputeReconstructionRequested &&
+        !wgpuUboComputeReconstructionActive
+      ? "requires-metrics-hardware-wgpu-mapped"
+      : null,
+    ...(snapshot ?? {}),
+  };
+}
+
+function pendingWgpuUploadSnapshot() {
+  const mapped = wgpuMappedStagingPool?.snapshot() ?? null;
+  const compute = wgpuUboComputeReconstruction?.snapshot() ?? null;
+  return {
+    pendingUploads: (mapped?.pendingUploads ?? 0) + (compute?.pendingUploads ?? 0),
+    pendingBytes: mapped?.pendingBytes ?? 0,
+    oldestPendingAgeMs: mapped?.oldestPendingAgeMs ?? 0,
+    mapped,
+    compute,
+  };
+}
+
 function ensureWgpuSparseUbo(device) {
   if (!wgpuSparseUboEnabled) return null;
   wgpuSparseUbo ??= createWgpuSparseUboCopyForward({ device });
   return wgpuSparseUbo;
+}
+
+function classifyWgpuUboComputeUpload(role, byteLength) {
+  if (role === WGPU_UPLOAD_ROLE.UTILITY_UNIFORM) {
+    return { resourceClass: "RAW_FULL", utility: true, rawReason: "utility" };
+  }
+  if (role !== WGPU_UPLOAD_ROLE.UBO) return null;
+  for (const [resourceClass, classBytes] of Object.entries(
+    WGPU_UBO_COMPUTE_CLASS_BYTES
+  )) {
+    if (byteLength === classBytes) {
+      return { resourceClass, utility: false, rawReason: null };
+    }
+  }
+  return {
+    resourceClass: "RAW_FULL",
+    utility: false,
+    rawReason: "unknown-class-size",
+  };
+}
+
+function stageWgpuUboComputeUpload({
+  resourceId,
+  role,
+  destinationOffset,
+  data,
+  borrowBytes = false,
+} = {}) {
+  if (!wgpuUboComputeReconstructionActive || role !== WGPU_UPLOAD_ROLE.UBO) {
+    return null;
+  }
+  const classification = classifyWgpuUboComputeUpload(role, data?.byteLength ?? 0);
+  if (!classification || classification.resourceClass === "RAW_FULL") return null;
+  const manager = wgpuUboComputeReconstruction;
+  if (!manager) {
+    return { handled: true, ok: false, reason: "ubo-compute-manager-unavailable" };
+  }
+  const result = manager.stage({
+    resourceId,
+    resourceClass: classification.resourceClass,
+    destinationOffset,
+    bytes: data,
+    borrowBytes,
+  });
+  return { handled: true, ...result };
 }
 
 function wgpuSparseUboSnapshot() {
@@ -6160,7 +6640,7 @@ function mappedDrainForceReason(reason) {
 }
 
 function prepareWgpuMappedDrainSubmission(reason, decisionPrepared = false) {
-  const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  const snapshot = pendingWgpuUploadSnapshot();
   const pending = (snapshot?.pendingUploads ?? 0) > 0;
   if (!decisionPrepared) {
     const decision = wgpuMappedDrainCoalescer.force(mappedDrainForceReason(reason), {
@@ -6182,17 +6662,37 @@ function submitPendingWgpuMappedUploads(reason = "coalescing-deadline") {
   const queue = renderGpu?.device?.queue;
   if (!pool || !queue) return false;
   let batch = null;
+  let computeBatch = null;
   try {
     batch = pool.seal();
-    if (!batch) return false;
-    queue.submit([batch.commandBuffer]);
+    if (wgpuUboComputeReconstructionActive && wgpuUboComputeReconstruction) {
+      computeBatch = wgpuUboComputeReconstruction.seal(
+        `Dolphin ordered UBO reconstruction: ${reason}`
+      );
+      if (computeBatch && !computeBatch.ok) {
+        throw new Error(`UBO compute seal failed: ${computeBatch.reason}`);
+      }
+    }
+    if (!batch && !computeBatch) return false;
+    if (wgpuUboComputeProjectionActive) {
+      wgpuUboComputeProjection.boundary(reason);
+    }
+    queue.submit([
+      ...(batch ? [batch.commandBuffer] : []),
+      ...(computeBatch ? [computeBatch.commandBuffer] : []),
+    ]);
     gpuCompletionTracker.recordSubmittedWork(queue, "hardware-upload-staging");
     if (causalMetricsEnabled) webGpuCausalStats.queueSubmissionCount += 1;
     wgpuReplayClassifier?.recordSubmission({ reason, submitted: true });
-    wgpuMappedDrainCoalescer.recordSubmission(
-      Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
-    );
-    trackWgpuMappedRemap(pool.acceptSubmission(batch));
+    if (batch) {
+      wgpuMappedDrainCoalescer.recordSubmission(
+        Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
+      );
+      trackWgpuMappedRemap(pool.acceptSubmission(batch));
+    }
+    if (computeBatch) {
+      trackWgpuMappedRemap(wgpuUboComputeReconstruction.accept(computeBatch));
+    }
     return true;
   } catch (error) {
     if (batch) {
@@ -6200,6 +6700,15 @@ function submitPendingWgpuMappedUploads(reason = "coalescing-deadline") {
         pool.rejectSubmission(batch, error);
       } catch {
         pool.invalidate(error);
+      }
+    }
+    if (computeBatch?.ok) {
+      try {
+        trackWgpuMappedRemap(
+          wgpuUboComputeReconstruction.reject(computeBatch, "submit-error")
+        );
+      } catch {
+        wgpuUboComputeReconstruction = null;
       }
     }
     recordRendererError("submit-error", error?.message || error);
@@ -6227,7 +6736,7 @@ function scheduleWgpuMappedDrainDeadline(decision) {
     }
     wgpuMappedDrainTimer = null;
     wgpuMappedDrainTimerToken = null;
-    const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    const snapshot = pendingWgpuUploadSnapshot();
     const pending = (snapshot?.pendingUploads ?? 0) > 0;
     const timerDecision = wgpuMappedDrainCoalescer.onTimer(token, {
       pending,
@@ -6244,8 +6753,10 @@ function scheduleWgpuMappedDrainDeadline(decision) {
 }
 
 function forceWgpuMappedDrainLifecycle(reason) {
-  if (!wgpuMappedDrainCoalescingEnabled) return false;
-  const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  if (!wgpuMappedDrainCoalescingEnabled) {
+    return submitPendingWgpuMappedUploads(reason);
+  }
+  const snapshot = pendingWgpuUploadSnapshot();
   const pending = (snapshot?.pendingUploads ?? 0) > 0;
   const decision = wgpuMappedDrainCoalescer.force(reason, {
     pending,
@@ -6267,7 +6778,7 @@ function forceWgpuMappedDrainLifecycle(reason) {
 async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
   const deadlineAt = globalThis.performance.now() + timeoutMs;
   for (;;) {
-    const snapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    const snapshot = pendingWgpuUploadSnapshot();
     if ((snapshot?.pendingUploads ?? 0) > 0) {
       forceWgpuMappedDrainLifecycle(WGPU_MAPPED_DRAIN_FORCE_REASONS.FINALIZATION);
     }
@@ -6293,11 +6804,15 @@ async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
     }
     await Promise.resolve();
   }
-  const finalSnapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+  const finalSnapshot = pendingWgpuUploadSnapshot();
+  const mappedFinal = finalSnapshot.mapped;
+  const computeFinal = finalSnapshot.compute;
   const quiesced = !wgpuReplayFatal &&
     (finalSnapshot?.pendingUploads ?? 0) === 0 &&
-    (finalSnapshot?.activeBatches ?? 0) === 0 &&
-    (finalSnapshot?.states?.remapping ?? 0) === 0 &&
+    (mappedFinal?.activeBatches ?? 0) === 0 &&
+    (mappedFinal?.states?.remapping ?? 0) === 0 &&
+    (computeFinal?.activeBatches ?? 0) === 0 &&
+    (computeFinal?.states?.remapping ?? 0) === 0 &&
     wgpuMappedRemapPromises.size === 0 &&
     !wgpuMappedCapacityBlocked;
   if (!quiesced) {
@@ -6306,8 +6821,10 @@ async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
   return {
     quiesced: true,
     pendingUploads: finalSnapshot?.pendingUploads ?? 0,
-    activeBatches: finalSnapshot?.activeBatches ?? 0,
-    remappingSlots: finalSnapshot?.states?.remapping ?? 0,
+    activeBatches: (mappedFinal?.activeBatches ?? 0) +
+      (computeFinal?.activeBatches ?? 0),
+    remappingSlots: (mappedFinal?.states?.remapping ?? 0) +
+      (computeFinal?.states?.remapping ?? 0),
     activeCapacityWait: false,
   };
 }
@@ -6724,6 +7241,10 @@ function markWgpuReplayFatal(scope, detail) {
   wgpuReplayFatal = { scope: String(scope), detail: String(detail || "unknown") };
   resetWgpuMappedDrainCoalescing(WGPU_MAPPED_DRAIN_FORCE_REASONS.FATAL);
   wgpuSparseUbo?.reset(`fatal-${scope}`);
+  if (wgpuUboComputeProjectionActive) {
+    wgpuUboComputeProjection.reset(`fatal-${scope}`);
+  }
+  wgpuUboComputeReconstruction?.invalidate(`fatal-${scope}`);
   if (wgpuMappedStagingPool?.snapshot().pendingUploads > 0) {
     wgpuMappedStagingPool.invalidate(`fatal ${scope}: ${detail || "unknown"}`);
   }
@@ -7611,6 +8132,13 @@ function drainWebGpuCmdRing(source = "presentation") {
       if (wgpuPassPackageProjectionActive) {
         wgpuPassPackageProjection.reset("load-fence-discard");
       }
+      if (wgpuUploadRunProjectionActive) {
+        wgpuUploadRunProjection.reset("load-fence-discard");
+      }
+      if (wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.reset("load-fence-discard");
+      }
+      wgpuUboComputeReconstruction?.reset("load-fence-discard");
       publishWgpuReadIndex(ring, discardTo);
       wgpuReplayClassifier?.recordLoadFence({
         discardedRecords,
@@ -7643,6 +8171,7 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
   }
   if (write === read) {
+    if (wgpuUploadRunProjectionActive) wgpuUploadRunProjection.boundary("drain");
     webGpuCausalStats.replayBudgetStopReasons.empty += 1;
     webGpuCausalStats.backlogAfterLast = 0;
     webGpuCausalStats.emptyDrainCount += 1;
@@ -7866,25 +8395,63 @@ function drainWebGpuCmdRing(source = "presentation") {
   };
   const acceptMappedBatch = (batch) => {
     if (!batch) return;
-    wgpuMappedDrainCoalescer.recordSubmission(
-      Math.max(0, globalThis.performance.now() - batch.oldestPendingAtMs)
-    );
-    trackWgpuMappedRemap(wgpuMappedStagingPool.acceptSubmission(batch));
+    if (batch.ordinary) {
+      wgpuMappedDrainCoalescer.recordSubmission(
+        Math.max(0, globalThis.performance.now() - batch.ordinary.oldestPendingAtMs)
+      );
+      trackWgpuMappedRemap(wgpuMappedStagingPool.acceptSubmission(batch.ordinary));
+    }
+    if (batch.compute) {
+      trackWgpuMappedRemap(wgpuUboComputeReconstruction.accept(batch.compute));
+    }
   };
   const rejectMappedBatch = (batch, error) => {
     if (!batch) return;
-    try {
-      wgpuMappedStagingPool.rejectSubmission(batch, error);
-    } catch {
-      wgpuMappedStagingPool.invalidate(error);
+    if (batch.ordinary) {
+      try {
+        wgpuMappedStagingPool.rejectSubmission(batch.ordinary, error);
+      } catch {
+        wgpuMappedStagingPool.invalidate(error);
+      }
+    }
+    if (batch.compute) {
+      try {
+        trackWgpuMappedRemap(
+          wgpuUboComputeReconstruction.reject(batch.compute, "submit-error")
+        );
+      } catch {
+        wgpuUboComputeReconstruction = null;
+      }
     }
   };
   const sealMappedBatch = (reason = "drain-boundary", decisionPrepared = false) => {
     if (wgpuUploadTransport !== "mapped") return null;
     prepareWgpuMappedDrainSubmission(reason, decisionPrepared);
+    let ordinary = null;
+    let compute = null;
     try {
-      return ensureWgpuMappedStagingPool(dev).seal();
+      ordinary = ensureWgpuMappedStagingPool(dev).seal();
+      compute = wgpuUboComputeReconstructionActive &&
+          wgpuUboComputeReconstruction
+        ? wgpuUboComputeReconstruction.seal(
+            `Dolphin ordered UBO reconstruction: ${reason}`
+          )
+        : null;
+      if (compute && !compute.ok) {
+        throw new Error(`UBO compute seal failed: ${compute.reason}`);
+      }
+      if ((ordinary || compute) && wgpuUboComputeProjectionActive) {
+        wgpuUboComputeProjection.boundary(reason);
+      }
+      return ordinary || compute ? { ordinary, compute } : null;
     } catch (error) {
+      if (ordinary) {
+        try {
+          wgpuMappedStagingPool.rejectSubmission(ordinary, error);
+        } catch {
+          wgpuMappedStagingPool.invalidate(error);
+        }
+      }
       markWgpuReplayFatal("staging-seal", error?.message || error);
       return null;
     }
@@ -7917,9 +8484,11 @@ function drainWebGpuCmdRing(source = "presentation") {
     let submitted = false;
     try {
       const renderCommandBuffer = enc.finish();
-      q.submit(mappedBatch
-        ? [mappedBatch.commandBuffer, renderCommandBuffer]
-        : [renderCommandBuffer]);
+      q.submit([
+        ...(mappedBatch?.ordinary ? [mappedBatch.ordinary.commandBuffer] : []),
+        ...(mappedBatch?.compute ? [mappedBatch.compute.commandBuffer] : []),
+        renderCommandBuffer,
+      ]);
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
       acceptMappedBatch(mappedBatch);
       submitted = true;
@@ -8143,7 +8712,9 @@ function drainWebGpuCmdRing(source = "presentation") {
             : undefined
         )
       : null;
-    const replayOpStartedAt = causalMetricsEnabled ? performance.now() : 0;
+    const replayOpStartedAt = causalMetricsEnabled
+      ? wgpuReplayOpMetrics.beginReplay(op)
+      : null;
     let replayRecordAccepted = true;
     try {
       switch (op) {
@@ -8163,8 +8734,42 @@ function drainWebGpuCmdRing(source = "presentation") {
           const id = u32[recWord + 1];
           if (!webGpuObjects.buffers.has(id)) {
             const size = Math.max(16, (u32[recWord + 2] + 3) & ~3);
-            webGpuObjects.buffers.set(id,
-              dev.createBuffer({ size, usage: u32[recWord + 3] }));
+            const producerUsage = u32[recWord + 3];
+            const resourceRole = u32[recWord + 4] || WGPU_BUFFER_RESOURCE_ROLE_UNKNOWN;
+            let computeManager = null;
+            let usage = producerUsage;
+            if (wgpuUboComputeReconstructionActive &&
+                resourceRole === WGPU_BUFFER_RESOURCE_ROLE_UBO_RING) {
+              try {
+                computeManager = ensureWgpuUboComputeReconstruction(dev);
+                usage |= 0x0080; // GPUBufferUsage.STORAGE
+              } catch (error) {
+                wgpuUboComputeReconstructionActive = false;
+                console.warn(
+                  `[webgpu-ubo-compute] disabled before replay: ${error?.message || error}`
+                );
+              }
+            }
+            const createdBuffer = dev.createBuffer({ size, usage });
+            webGpuObjects.buffers.set(id, createdBuffer);
+            if (computeManager) {
+              try {
+                computeManager.registerResource({
+                  resourceId: id,
+                  role: WGPU_UBO_RING_ROLE,
+                  buffer: createdBuffer,
+                  size,
+                  usage,
+                });
+              } catch (error) {
+                wgpuUboComputeReconstructionActive = false;
+                wgpuUboComputeReconstruction = null;
+                console.warn(
+                  `[webgpu-ubo-compute] resource registration fell back to legacy: ` +
+                  `${error?.message || error}`
+                );
+              }
+            }
             // The utility UBO is the unique 4096-byte uniform buffer
             // (kUtilUboSize). Track its id so we can dump what
             // UploadUtilityUniforms actually writes (src_offset/size
@@ -8343,6 +8948,14 @@ function drainWebGpuCmdRing(source = "presentation") {
                 const destinationOffset = u32[recWord + 2] & ~3;
                 if (stagedUpload) {
                   const stage = (data) => {
+                    const compute = stageWgpuUboComputeUpload({
+                      resourceId: bufferId,
+                      role: uploadRole,
+                      destinationOffset,
+                      data,
+                      borrowBytes: true,
+                    });
+                    if (compute?.handled) return compute;
                     const sparse = ensureWgpuSparseUbo(dev)?.stage({
                       pool,
                       data,
@@ -8368,14 +8981,23 @@ function drainWebGpuCmdRing(source = "presentation") {
                   stageReason = retainedAttempt.result.reason ?? null;
                   retainedAccepted = retainedAttempt.accepted;
                 } else {
-                  const sparse = ensureWgpuSparseUbo(dev)?.stage({
+                  const compute = stageWgpuUboComputeUpload({
+                    resourceId: bufferId,
+                    role: uploadRole,
+                    destinationOffset,
+                    data: uploadSource,
+                  });
+                  const sparse = compute?.handled ? null : ensureWgpuSparseUbo(dev)?.stage({
                     pool,
                     data: uploadSource,
                     destination: buf,
                     destinationOffset,
                     role: uploadRole,
                   });
-                  if (sparse?.handled) {
+                  if (compute?.handled) {
+                    stageAccepted = compute.ok;
+                    stageReason = compute.reason ?? null;
+                  } else if (sparse?.handled) {
                     stageAccepted = sparse.ok;
                     stageReason = sparse.reason ?? null;
                   } else if (wgpuMappedStageFastEnabled) {
@@ -8422,6 +9044,20 @@ function drainWebGpuCmdRing(source = "presentation") {
                     uploadBytes,
                     u32[recWord + 2] & ~3
                   );
+                  if (wgpuUboComputeProjectionActive) {
+                    const classification = classifyWgpuUboComputeUpload(
+                      uploadRole,
+                      uploadBytes
+                    );
+                    if (classification) {
+                      wgpuUboComputeProjection.observeUpload({
+                        resourceId: bufferId,
+                        destinationOffset,
+                        bytes: uploadSource.subarray(0, uploadBytes),
+                        ...classification,
+                      });
+                    }
+                  }
                   if (wgpuDirtyRangeProjectionActive) {
                     wgpuDirtyRangeProjection.recordUpload({
                       bufferId,
@@ -9951,7 +10587,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_DESTROY: {
           const pendingMappedDestroyUploads =
-            (wgpuMappedStagingPool?.snapshot().pendingUploads ?? 0) > 0;
+            pendingWgpuUploadSnapshot().pendingUploads > 0;
           if (wgpuMappedDrainCoalescingEnabled && pendingMappedDestroyUploads) {
             if (pass) {
               markWgpuReplayFatal(
@@ -9964,7 +10600,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               ? submitEnc("destroy")
               : flushMappedUploadsOnly("destroy");
             const destroyStillPending =
-              (wgpuMappedStagingPool?.snapshot().pendingUploads ?? 0) > 0;
+              pendingWgpuUploadSnapshot().pendingUploads > 0;
             if (!destroySubmitted || destroyStillPending) {
               markWgpuReplayFatal(
                 "destroy-order",
@@ -10024,7 +10660,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       }
     }
     if (causalMetricsEnabled) {
-      wgpuReplayOpMetrics.recordReplay(op, performance.now() - replayOpStartedAt);
+      wgpuReplayOpMetrics.finishReplay(op, replayOpStartedAt);
     }
     if (wgpuSemanticRuntimeActive && wgpuSemanticRuntime.isOpen()) {
       if (replayRecordAccepted && !wgpuReplayFatal && !mappedCapacityHold) {
@@ -10074,6 +10710,23 @@ function drainWebGpuCmdRing(source = "presentation") {
       // before the authoritative legacy read cursor advances.
       wgpuPassPackageProjection.observeConsumedRecord(op, read, payloadBytes);
     }
+    if (wgpuUploadRunProjectionActive && replayRecordAccepted) {
+      wgpuUploadRunProjection.observeAcceptedRecord({
+        op,
+        recordIndex: read,
+        sourcePointer: op === WGPU_CMD_OP_UPLOAD_BUFFER ? u32[recWord + 3] : 0,
+        logicalBytes: op === WGPU_CMD_OP_UPLOAD_BUFFER ? u32[recWord + 4] : 0,
+        alignedBytes: op === WGPU_CMD_OP_UPLOAD_BUFFER
+          ? (u32[recWord + 4] + 3) & ~3
+          : 0,
+        sourceArenaBase: ring.uploadBase,
+        sourceArenaSize: ring.uploadSize,
+        hasDestination: op === WGPU_CMD_OP_UPLOAD_BUFFER &&
+          webGpuObjects.buffers.has(u32[recWord + 1]),
+        retained: op === WGPU_CMD_OP_UPLOAD_BUFFER && Boolean(retainedSemanticPayload),
+        semanticCapture: Boolean(preparedSemanticRecord),
+      });
+    }
     read = (read + 1) >>> 0;
     if (wgpuReplayBudgetMs > 0) {
       if (op === WGPU_CMD_OP_BEGIN_PASS) protocolPassDepth += 1;
@@ -10089,10 +10742,11 @@ function drainWebGpuCmdRing(source = "presentation") {
       }
     }
   }
+  if (wgpuUploadRunProjectionActive) wgpuUploadRunProjection.boundary("drain");
   if (wgpuReplayBudgetMs > 0) replayLimit = read;
   if (!wgpuReplayFatal) {
     endPass("drain-boundary", read);
-    const mappedSnapshot = wgpuMappedStagingPool?.snapshot() ?? null;
+    const mappedSnapshot = pendingWgpuUploadSnapshot();
     const pendingMappedUploads = (mappedSnapshot?.pendingUploads ?? 0) > 0;
     const mappedDrainDecision = wgpuMappedDrainCoalescer.atBoundary({
       pending: pendingMappedUploads,

@@ -143,6 +143,10 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
       outputDir: configure.outputDir,
       nagaLibrarySha256: configure.nagaLibrarySha256,
       wasmMemoryPages: configure.wasmMemoryPages,
+      fastBranchInline: configure.fastBranchInline,
+      fallbackMapDiagnostics: configure.fallbackMapDiagnostics,
+      fallbackMapBits: configure.fallbackMapBits,
+      directWasmBlockDispatch: configure.directWasmBlockDispatch,
       wasmCompileFlags: configure.wasmCompileFlags,
       cmakeArgs: configure.cmakeArgs,
       cmakeCacheSha256: sha256File(resolve(absoluteBuildDir, "CMakeCache.txt"))

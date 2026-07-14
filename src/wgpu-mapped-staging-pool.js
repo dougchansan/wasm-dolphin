@@ -110,6 +110,7 @@ export function createWgpuMappedStagingPool({
     return stageBufferBytes(viewBytes(data, true), destination, destinationOffset, alignment, true);
   }
 
+
   function stageBufferBytes(bytes, destination, destinationOffset, alignment, fast) {
     if (!bytes || !destination) throw new TypeError("buffer upload needs data and destination");
     if (!isNonnegativeInteger(destinationOffset) || destinationOffset % COPY_ALIGNMENT !== 0 ||

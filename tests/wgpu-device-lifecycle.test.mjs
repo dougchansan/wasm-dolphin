@@ -82,6 +82,6 @@ test("worker loss integration stops replay and reapplies the geometry epoch", as
   assert.match(worker, /recordRendererError\("submit-error"[\s\S]*?markWgpuReplayFatal\("submit-error"/);
   assert.match(
     worker,
-    /wgpuReplayOpMetrics\.recordReplay\([\s\S]*?if \(wgpuReplayFatal\) break;[\s\S]*?read = \(read \+ 1\)/
+    /wgpuReplayOpMetrics\.finishReplay\([\s\S]*?if \(wgpuReplayFatal\) break;[\s\S]*?read = \(read \+ 1\)/
   );
 });

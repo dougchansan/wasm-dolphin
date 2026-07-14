@@ -9,7 +9,7 @@ test("Emscripten feature probes avoid production LTO while Release keeps it", as
   );
   assert.match(
     source,
-    /const wasmCompileFlags = "-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0[^"]*"/
+    /const wasmCompileFlags =[\s\S]*?-O3 -pthread -msimd128 -flto -DXXH_VECTOR=0[\s\S]*?-DDOLPHIN_WEB_INLINE_FAST_BRANCH=\$\{fastBranchInline\}/
   );
   assert.match(source, /const wasmDebugProbeFlags = "-O0 -fno-lto"/);
   assert.match(source, /"-DCMAKE_TRY_COMPILE_CONFIGURATION=Debug"/);
