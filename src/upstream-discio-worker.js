@@ -223,6 +223,9 @@ let wgpuGeometryPackEnabled = false;
 let wgpuGeometryRangeEnabled = false;
 let wgpuUploadArenaMiB = 32;
 let wgpuUploadTransport = "queue";
+const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
+const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
+let wgpuMappedStagingSlotCount = WGPU_MAPPED_STAGING_SLOT_COUNT;
 let wgpuMappedStageFastEnabled = false;
 const WGPU_FAST_STAGE_ACCEPTED = Object.freeze({ ok: true, reason: null });
 let wgpuMappedDrainCoalescingEnabled = false;
@@ -247,8 +250,6 @@ let wgpuMappedStagingGeneration = 0;
 let wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer();
 let wgpuMappedDrainTimer = null;
 let wgpuMappedDrainTimerToken = null;
-const WGPU_MAPPED_STAGING_SLOT_COUNT = 3;
-const WGPU_MAPPED_STAGING_SLOT_BYTES = 16 * 1024 * 1024;
 let wgpuProducerStateCacheAvailable = false;
 let wgpuConsumerStateCacheEnabled = false;
 let wgpuPassStateCache = createWgpuPassStateCache();
@@ -803,6 +804,7 @@ async function handleMessage(type, payload) {
         wgpuGeometryRange: payload.wgpuGeometryRange,
         wgpuUploadArenaMiB: payload.wgpuUploadArenaMiB,
         wgpuUploadTransport: payload.wgpuUploadTransport,
+        wgpuMappedStagingSlotCount: payload.wgpuMappedStagingSlotCount,
         wgpuMappedStageFast: payload.wgpuMappedStageFast,
         wgpuMappedDrainCoalescing: payload.wgpuMappedDrainCoalescing,
         wgpuRendererWorkerProbe: payload.wgpuRendererWorkerProbe,
@@ -1214,6 +1216,8 @@ async function loadCore({
   wgpuGeometryRange: requestedWgpuGeometryRange = false,
   wgpuUploadArenaMiB: requestedWgpuUploadArenaMiB = 32,
   wgpuUploadTransport: requestedWgpuUploadTransport = "queue",
+  wgpuMappedStagingSlotCount: requestedWgpuMappedStagingSlotCount =
+    WGPU_MAPPED_STAGING_SLOT_COUNT,
   wgpuMappedStageFast: requestedWgpuMappedStageFast = false,
   wgpuMappedDrainCoalescing: requestedWgpuMappedDrainCoalescing = false,
   wgpuRendererWorkerProbe: requestedWgpuRendererWorkerProbe = "off",
@@ -1329,6 +1333,9 @@ async function loadCore({
     wgpuGeometryPackEnabled && Boolean(requestedWgpuGeometryRange);
   wgpuUploadArenaMiB = Number(requestedWgpuUploadArenaMiB) === 64 ? 64 : 32;
   wgpuUploadTransport = requestedWgpuUploadTransport === "mapped" ? "mapped" : "queue";
+  wgpuMappedStagingSlotCount = Number(requestedWgpuMappedStagingSlotCount) === 4
+    ? 4
+    : WGPU_MAPPED_STAGING_SLOT_COUNT;
   if (requestedWgpuSparseUbo && wgpuUploadTransport !== "mapped") {
     throw new Error("wgpuubosparse=1 requires wgpuuploadtransport=mapped");
   }
@@ -6068,7 +6075,7 @@ function ensureWgpuMappedStagingPool(device) {
   if (!wgpuMappedStagingPool) {
     wgpuMappedStagingPool = createWgpuMappedStagingPool({
       device,
-      slotCount: WGPU_MAPPED_STAGING_SLOT_COUNT,
+      slotCount: wgpuMappedStagingSlotCount,
       slotSize: WGPU_MAPPED_STAGING_SLOT_BYTES,
       // MAP_WRITE | COPY_SRC and GPUMapMode.WRITE. Passing the numeric
       // values keeps the worker test seam independent of WebGPU globals.

@@ -23,6 +23,7 @@ import {
   requestedWgpuDrawProfile,
   requestedWgpuGeometryPack,
   requestedWgpuGeometryRange,
+  requestedWgpuMappedStagingSlotCount,
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuMappedStageFast,
@@ -34,6 +35,15 @@ import {
   selectAtomicReplayLimit,
   summarizeWgpuReplayRange
 } from "../src/wgpu-replay-diagnostics.js";
+
+test("mapped staging slot count is strict and defaults to three", () => {
+  assert.equal(requestedWgpuMappedStagingSlotCount(""), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=3"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=4"), 4);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=04"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=6"), 3);
+  assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=garbage"), 3);
+});
 
 test("only upload-isolation probes intentionally suppress visible output", () => {
   for (const mode of ["inline-upload", "worker-upload", "null-drain"]) {

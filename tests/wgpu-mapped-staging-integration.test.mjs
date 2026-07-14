@@ -7,6 +7,25 @@ import test from "node:test";
 
 const readSource = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
+test("mapped staging slot count is explicit and flows through validation", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStagingSlotCount\(\s*window\.location\.search\s*\)/);
+  assert.match(host, /wgpuMappedStagingSlotCount: this\.wgpuMappedStagingSlotCount/);
+  assert.match(adapter, /this\.wgpuMappedStagingSlotCount = Number\(wgpuMappedStagingSlotCount\) === 4 \? 4 : 3/);
+  assert.match(adapter, /wgpuMappedStagingSlotCount: this\.wgpuMappedStagingSlotCount/);
+  assert.match(worker, /wgpuMappedStagingSlotCount: payload\.wgpuMappedStagingSlotCount/);
+  assert.match(worker, /slotCount: wgpuMappedStagingSlotCount/);
+  assert.match(gate, /"wgpustagingslots"/);
+  assert.match(gate, /WGPU mapped staging slot-count mismatch/);
+  assert.match(harness, /\["WGPUSTAGINGSLOTS", "wgpustagingslots"\]/);
+});
+
 test("upload transport flows from URL parsing through the worker load payload", async () => {
   const [host, adapter, worker] = await Promise.all([
     readSource("../src/core-host.js"),
