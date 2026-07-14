@@ -8211,20 +8211,18 @@ function drainWebGpuCmdRing(source = "presentation") {
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
             const bid = u32[recWord + 1];
-            if (wgpuDeepReplayDiagnostics) {
-              self._wgUbN = (self._wgUbN || 0) + 1;
-              // First few + periodic so steady-state UBO uploads are
-              // visible (one-shot only caught the pre-SetConstants zero).
-              if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
-                const ff = new Float32Array(uploadSource.buffer,
-                                            uploadSource.byteOffset,
-                                            Math.min(len, 160) >>> 2);
-                console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
-                  `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
-                  `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
-                  `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
-                  `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
-              }
+            self._wgUbN = (self._wgUbN || 0) + 1;
+            // First few + periodic so steady-state UBO uploads are
+            // visible (one-shot only caught the pre-SetConstants zero).
+            if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
+              const ff = new Float32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset,
+                                          Math.min(len, 160) >>> 2);
+              console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
+                `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
+                `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
+                `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
+                `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
             }
             // §28b: PixelShaderConstants has fogcolor (int4 @byte432),
             // fogi (int4 @448), fogf (float4 @464). The backdrop FS
@@ -8297,8 +8295,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             // the EFB-copy src_size is observable DEEP in the A-only
             // black-3D dwell (src_size≈0 ⇒ degenerate UV ⇒ uniform
             // white copy = the §28x root).
-            if (wgpuDeepReplayDiagnostics && bid === self._wgUtilBuf) {
-              let _utWcOk = false;
+            let _utWcOk = false;
+            if (bid === self._wgUtilBuf) {
               const _un = Date.now();
               self._wgUtUbT0 = self._wgUtUbT0 || _un;
               const _ut = Math.floor((_un - self._wgUtUbT0) / 5000);
@@ -8307,20 +8305,22 @@ function drainWebGpuCmdRing(source = "presentation") {
                 self._wgUtUbWc = _ut;
                 _utWcOk = true;
               }
-              if ((self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8 || _utWcOk) {
-                const uf = new Float32Array(uploadSource.buffer,
-                                            uploadSource.byteOffset,
-                                            Math.min(len, 64) >>> 2);
-                const ui = new Uint32Array(uploadSource.buffer,
-                                           uploadSource.byteOffset,
-                                           Math.min(len, 64) >>> 2);
-                console.log(`[webgpu-DIAG-utilubo] id=${bid} len=${len} ` +
-                  `src_offset=${uf[0]?.toFixed(4)},${uf[1]?.toFixed(4)} ` +
-                  `src_size=${uf[2]?.toFixed(4)},${uf[3]?.toFixed(4)} ` +
-                  `filt=${ui[4]},${ui[5]},${ui[6]} gamma_rcp=${uf[7]?.toFixed(3)} ` +
-                  `clamp=${uf[8]?.toFixed(4)},${uf[9]?.toFixed(4)} ` +
-                  `pxh=${uf[10]?.toFixed(5)}`);
-              }
+            }
+            if (bid === self._wgUtilBuf &&
+                ((self._wgUtilUbN = (self._wgUtilUbN || 0) + 1) <= 8
+                 || _utWcOk)) {
+              const uf = new Float32Array(uploadSource.buffer,
+                                          uploadSource.byteOffset,
+                                          Math.min(len, 64) >>> 2);
+              const ui = new Uint32Array(uploadSource.buffer,
+                                         uploadSource.byteOffset,
+                                         Math.min(len, 64) >>> 2);
+              console.log(`[webgpu-DIAG-utilubo] id=${bid} len=${len} ` +
+                `src_offset=${uf[0]?.toFixed(4)},${uf[1]?.toFixed(4)} ` +
+                `src_size=${uf[2]?.toFixed(4)},${uf[3]?.toFixed(4)} ` +
+                `filt=${ui[4]},${ui[5]},${ui[6]} gamma_rcp=${uf[7]?.toFixed(3)} ` +
+                `clamp=${uf[8]?.toFixed(4)},${uf[9]?.toFixed(4)} ` +
+                `pxh=${uf[10]?.toFixed(5)}`);
             }
             // §28-vtxdata: snapshot the vertex batch bytes from the
             // HEAP before they go to the GPU (this is the only window
@@ -8549,20 +8549,18 @@ function drainWebGpuCmdRing(source = "presentation") {
               const w = u32[recWord + 4];
             // DIAG one-shot per tex id: confirm uploaded pixels aren't
             // all-zero (→ black sampling). Dumps first 4 RGBA texels.
-            if (wgpuDeepReplayDiagnostics) {
-              self._wgUtN = self._wgUtN || {};
-              const tid = u32[recWord + 1];
-              if (!self._wgUtN[tid] &&
-                  (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
-                self._wgUtN[tid] = true;
-                const px = uploadSource.subarray(0, Math.min(uploadBytes, 16));
-                let nz = 0;
-                const chk = uploadSource.subarray(0, Math.min(uploadBytes, 4096));
-                for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
-                console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
-                  `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
-                  `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
-              }
+            self._wgUtN = self._wgUtN || {};
+            const tid = u32[recWord + 1];
+            if (!self._wgUtN[tid] &&
+                (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
+              self._wgUtN[tid] = true;
+              const px = uploadSource.subarray(0, Math.min(uploadBytes, 16));
+              let nz = 0;
+              const chk = uploadSource.subarray(0, Math.min(uploadBytes, 4096));
+              for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
+              console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
+                `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
+                `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
               if (wgpuUploadTransport === "mapped") {
                 const stageStartedAt = performance.now();

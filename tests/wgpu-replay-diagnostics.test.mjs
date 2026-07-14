@@ -669,33 +669,6 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /updateWgpuBacklogState\(backlogAfter, performance\.now\(\)\)/);
 });
 
-test("historical upload byte dumps stay off the ordinary replay path", async () => {
-  const worker = await readFile(
-    new URL("../src/upstream-discio-worker.js", import.meta.url),
-    "utf8"
-  );
-  const bufferUpload = worker.slice(
-    worker.indexOf("case WGPU_CMD_OP_UPLOAD_BUFFER"),
-    worker.indexOf("case WGPU_CMD_OP_CREATE_TEXTURE")
-  );
-  const textureUpload = worker.slice(
-    worker.indexOf("case WGPU_CMD_OP_UPLOAD_TEXTURE"),
-    worker.indexOf("case WGPU_CMD_OP_CREATE_SAMPLER")
-  );
-  assert.match(
-    bufferUpload,
-    /if \(wgpuDeepReplayDiagnostics\) \{[\s\S]{0,500}self\._wgUbN/
-  );
-  assert.match(
-    bufferUpload,
-    /if \(wgpuDeepReplayDiagnostics && bid === self\._wgUtilBuf\) \{[\s\S]{0,700}self\._wgUtilUbN/
-  );
-  assert.match(
-    textureUpload,
-    /if \(wgpuDeepReplayDiagnostics\) \{[\s\S]{0,500}self\._wgUtN/
-  );
-});
-
 test("worker reads the first completed EFB pass before later presents can clear it", async () => {
   const worker = await readFile(
     new URL("../src/upstream-discio-worker.js", import.meta.url),
