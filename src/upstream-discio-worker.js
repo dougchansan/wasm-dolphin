@@ -7767,16 +7767,10 @@ function drainWebGpuCmdRing(source = "presentation") {
   // draw activity for the backbuffer (fb=0) and XFB-format (fb=47)
   // passes — tells us whether the present/XFB-copy draw actually runs.
   let passFbId = -1;
-  let pd = wgpuDeepReplayDiagnostics
-    ? { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 }
-    : null;
-  if (wgpuDeepReplayDiagnostics) self._wgPassDiag = self._wgPassDiag || {};
+  let pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };
+  self._wgPassDiag = self._wgPassDiag || {};
   const flushPassDiag = () => {
     if (passFbId < 0) return;
-    if (!wgpuDeepReplayDiagnostics) {
-      passFbId = -1;
-      return;
-    }
     const key = passFbId === 0 ? "fb0" : "fb" + passFbId;
     const n = (self._wgPassDiag[key] = (self._wgPassDiag[key] || 0) + 1);
     // [webgpu-DIAG-cpypass] EFB-copy target passes (the 640x480
@@ -8918,17 +8912,16 @@ function drainWebGpuCmdRing(source = "presentation") {
                 webGpuObjects.pipeTpl.get(pid)?.desc?.vertex?.buffers?.length
               );
               webGpuExecStats.setPipe++;
-              if (pd) pd.pipeOk++;
+              pd.pipeOk++;
             } catch (error) {
               if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.recordPipelineApplyFailed();
               passHasPipe = false;
               recordRendererError("set-pipeline", error?.message || error);
               webGpuExecStats.missPipe++;
-              if (pd) pd.pipeMiss++;
+              pd.pipeMiss++;
             }
           } else {
-            webGpuExecStats.missPipe++;
-            if (pd) pd.pipeMiss++;
+            webGpuExecStats.missPipe++; pd.pipeMiss++;
             if (pass && !p) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "pipeline", id: pid });
             }
@@ -8991,7 +8984,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                 }
               }
               webGpuExecStats.setBg++;
-              if (pd) pd.bgOk++;
+              pd.bgOk++;
             } catch (error) {
               if (wgpuConsumerStateCacheEnabled) {
                 wgpuPassStateCache.recordBindGroupApplyFailed(bgSlot);
@@ -8999,13 +8992,10 @@ function drainWebGpuCmdRing(source = "presentation") {
               if (bgSlot < 3) bgValid[bgSlot] = false;
               recordRendererError("set-bind-group", error?.message || error);
               webGpuExecStats.missBg++;
-              if (pd) pd.bgMiss++;
+              pd.bgMiss++;
             }
           }
-          else {
-            webGpuExecStats.missBg++;
-            if (pd) pd.bgMiss++;
-          }
+          else { webGpuExecStats.missBg++; pd.bgMiss++; }
           break;
         }
         case WGPU_CMD_OP_SET_VERTEX_BUFFER: {
@@ -9155,8 +9145,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
-            webGpuExecStats.draw++;
-            if (pd) pd.draw++;
+            webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
               framebufferId: passFbId,
               indexed: false,
@@ -9183,8 +9172,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           } else if (pass) {
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
-            webGpuExecStats.drawIdx++;
-            if (pd) pd.drawIdx++;
+            webGpuExecStats.drawIdx++; pd.drawIdx++;
             wgpuReplayClassifier?.recordRealDraw({
               framebufferId: passFbId,
               indexed: true,
@@ -9197,12 +9185,12 @@ function drainWebGpuCmdRing(source = "presentation") {
                 baseVertex: u32[recWord + 4]
               })
             });
-            if (!wgpuDeepReplayDiagnostics) break;
             if ((self._wgDi = (self._wgDi || 0) + 1) <= 5) {
               console.log(`[webgpu-exec] DRAW_INDEXED#${self._wgDi} ` +
                 `idx=${u32[recWord + 1]} inst=${u32[recWord + 2]} ` +
                 `firstIdx=${u32[recWord + 3]} baseVtx=${u32[recWord + 4]}`);
             }
+            if (!wgpuDeepReplayDiagnostics) break;
             // §28-vtxdata: dark-menu probe — for the menu textured
             // pipeline (stride 20, TexCoord0 @location(8) float32x2
             // @offset 12) read the uploaded per-vertex texcoord bytes.

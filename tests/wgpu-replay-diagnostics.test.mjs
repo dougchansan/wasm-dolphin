@@ -669,30 +669,6 @@ test("host-to-worker plumbing keeps the classifier query-gated and reportable", 
   assert.match(worker, /updateWgpuBacklogState\(backlogAfter, performance\.now\(\)\)/);
 });
 
-test("legacy pass and indexed-draw accounting stays behind deep diagnostics", async () => {
-  const worker = await readFile(
-    new URL("../src/upstream-discio-worker.js", import.meta.url),
-    "utf8"
-  );
-  const flushStart = worker.indexOf("const flushPassDiag = () =>");
-  const flushEnd = worker.indexOf("const ensureEnc = () =>", flushStart);
-  const flush = worker.slice(flushStart, flushEnd);
-  assert.match(
-    flush,
-    /if \(!wgpuDeepReplayDiagnostics\) \{[\s\S]{0,120}passFbId = -1;[\s\S]{0,80}return;/
-  );
-
-  const replay = worker.slice(
-    worker.indexOf("case WGPU_CMD_OP_SET_PIPELINE"),
-    worker.indexOf("case WGPU_CMD_OP_END_PASS")
-  );
-  assert.equal(replay.match(/if \(pd\) pd\.(?:pipeOk|pipeMiss|bgOk|bgMiss|draw|drawIdx)\+\+/g)?.length, 8);
-  assert.match(
-    replay,
-    /recordRealDraw\([\s\S]*?if \(!wgpuDeepReplayDiagnostics\) break;[\s\S]*?self\._wgDi/
-  );
-});
-
 test("worker reads the first completed EFB pass before later presents can clear it", async () => {
   const worker = await readFile(
     new URL("../src/upstream-discio-worker.js", import.meta.url),
