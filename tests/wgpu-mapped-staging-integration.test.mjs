@@ -21,6 +21,8 @@ test("mapped staging slot count is explicit and flows through validation", async
   assert.match(adapter, /wgpuMappedStagingSlotCount: this\.wgpuMappedStagingSlotCount/);
   assert.match(worker, /wgpuMappedStagingSlotCount: payload\.wgpuMappedStagingSlotCount/);
   assert.match(worker, /slotCount: wgpuMappedStagingSlotCount/);
+  assert.match(worker, /enabled: wgpuUploadTransport === "mapped"/);
+  assert.match(worker, /recordStore: wgpuMappedStageFastEnabled \? "flat" : "objects"/);
   assert.match(gate, /"wgpustagingslots"/);
   assert.match(gate, /WGPU mapped staging slot-count mismatch/);
   assert.match(harness, /\["WGPUSTAGINGSLOTS", "wgpustagingslots"\]/);
@@ -170,5 +172,6 @@ test("performance validation fails closed when the mapped arm executes queue tra
   const gate = await readSource("../tools/perf-regression-gate.mjs");
   assert.match(gate, /"wgpuuploadtransport"/);
   assert.match(gate, /WGPU upload transport mismatch: requested=/);
-  assert.match(gate, /final\.causalTelemetry\?\.webgpu\?\.uploadTransport/);
+  assert.match(gate, /observedWgpu\?\.uploadTransport/);
+  assert.match(gate, /evaluateWgpuRuntimeConfigEvidence/);
 });

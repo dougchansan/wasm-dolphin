@@ -34,4 +34,6 @@ test("host and worker plumb the gate through fail-closed activation", async () =
   assert.match(worker, /applyWgpuTailGate\("core reset"\)/);
   assert.match(worker, /applyWgpuTailGate\("slot state reload"\)/);
   assert.match(worker, /applyWgpuTailGate\("save-state reload"\)/);
+  assert.match(worker, /tailGate: \{\s*schema: WGPU_TAIL_GATE_SCHEMA,\s*schemaVersion: 1,/s);
+  assert.match(worker, /enabled: wgpuTailGateRequested && wgpuTailGateAvailable/);
 });

@@ -27,6 +27,7 @@ import {
   evaluateJitCacheReadiness,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuRuntimeConfigEvidence,
   evaluateWgpuSemanticQualificationEvidence,
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
@@ -976,10 +977,14 @@ async function runScenario(scenario, context) {
     samples,
   });
   invalidReasons.push(...wgpuDrawProfile.failures);
-  const wgpuTailGate = evaluateWgpuTailGateEvidence({
-    requested: scenario.params.wgputailgate,
-    samples,
-  });
+  const metricsEnabled = String(scenario.params.metrics) === "1";
+  const requestedTailGate = scenario.params.wgputailgate;
+  const wgpuTailGate = metricsEnabled
+    ? evaluateWgpuTailGateEvidence({ requested: requestedTailGate, samples })
+    : evaluateMetricsOffWgpuTailGate({
+        requested: requestedTailGate,
+        runtimeConfig: renderer?.runtimeConfig,
+      });
   invalidReasons.push(...wgpuTailGate.failures);
   invalidReasons.push(...evaluateCoreSelectionEvidence({
     url: url.href,
@@ -1025,7 +1030,7 @@ async function runScenario(scenario, context) {
     consoleLines,
     consoleErrors,
     invalidReasons,
-    { expectedInputEvents: context.postLoadInputScript.length }
+    { expectedInputEvents: context.postLoadInputScript.length, renderer }
   );
   summary.metrics.softwareRasterInstrumentation = softwareRasterInstrumentation;
   summary.metrics.wgpuProducerProfile = wgpuProducerProfile;
@@ -1136,6 +1141,33 @@ async function runScenario(scenario, context) {
   return summary;
 }
 
+function evaluateMetricsOffWgpuTailGate({ requested, runtimeConfig } = {}) {
+  if (requested == null) return { required: false, failures: [] };
+  const expectedEnabled = String(requested) === "1";
+  const tailGate = runtimeConfig?.tailGate;
+  const failures = [];
+  if (expectedEnabled) {
+    failures.push("wgputailgate=1 requires metrics=1");
+  }
+  if (tailGate?.requested !== expectedEnabled || tailGate?.enabled !== expectedEnabled) {
+    failures.push(
+      `WGPU tail gate runtime mismatch: requested=${expectedEnabled ? 1 : 0} ` +
+      `capturedRequested=${tailGate?.requested == null
+        ? "unavailable"
+        : tailGate.requested ? 1 : 0} ` +
+      `active=${tailGate?.enabled == null ? "unavailable" : tailGate.enabled ? 1 : 0}`
+    );
+  }
+  return {
+    required: true,
+    expectedEnabled,
+    activated: tailGate?.enabled === true,
+    schema: tailGate?.schema ?? null,
+    runtimeConfig: tailGate ?? null,
+    failures,
+  };
+}
+
 function summarizeScenario(
   scenario,
   url,
@@ -1144,12 +1176,18 @@ function summarizeScenario(
   consoleLines,
   consoleErrors,
   invalidReasons,
-  { expectedInputEvents = 0 } = {}
+  { expectedInputEvents = 0, renderer = null } = {}
 ) {
   const timedWindow = samples;
   const windows = summarizeTimedMetricWindows(samples, scenario.assertAfterSeconds);
   const steadyStateWindow = windows.steadyStateWindow;
   const final = samples.at(-1) || {};
+  const runtimeConfigEvidence = evaluateWgpuRuntimeConfigEvidence({
+    required: scenario.params?.video === "wgpu",
+    runtimeConfig: renderer?.runtimeConfig,
+    params: scenario.params,
+  });
+  const observedWgpu = final.causalTelemetry?.webgpu ?? runtimeConfigEvidence.runtimeConfig;
   const helperText = timedWindow.map((sample) => sample.helper || "").join(" | ");
   const fullTimedWindow = windows.fullTimedWindow.metrics;
   const steadyState = steadyStateWindow.metrics;
@@ -1194,6 +1232,7 @@ function summarizeScenario(
     readableCanvasSamples: timedWindow.filter((sample) => sample.visibleHash && !sample.visibleError).length,
   };
   const failures = [];
+  failures.push(...runtimeConfigEvidence.failures);
   const warnings = [];
   const targetFailures = [];
   const targetIssue = (message) => {
@@ -1243,7 +1282,7 @@ function summarizeScenario(
   }
   const requestedUploadTransport = scenario.params?.wgpuuploadtransport;
   if (requestedUploadTransport) {
-    const activeUploadTransport = final.causalTelemetry?.webgpu?.uploadTransport;
+    const activeUploadTransport = observedWgpu?.uploadTransport;
     if (activeUploadTransport !== requestedUploadTransport) {
       failures.push(
         `WGPU upload transport mismatch: requested=${requestedUploadTransport} ` +
@@ -1254,7 +1293,7 @@ function summarizeScenario(
   const requestedUboPack = scenario.params?.wgpuubopack;
   if (requestedUboPack != null) {
     const expectedUboPack = String(requestedUboPack) === "1";
-    const activeUboPack = final.causalTelemetry?.webgpu?.uboPackEnabled;
+    const activeUboPack = observedWgpu?.uboPackEnabled;
     if (activeUboPack !== expectedUboPack) {
       failures.push(
         `WGPU UBO pack mismatch: requested=${expectedUboPack ? 1 : 0} ` +
@@ -1265,8 +1304,7 @@ function summarizeScenario(
   const requestedUboMetrics = scenario.params?.wgpuubometrics;
   if (requestedUboMetrics != null) {
     const expectedUboMetrics = String(requestedUboMetrics) === "1";
-    const activeUboMetrics =
-      final.causalTelemetry?.webgpu?.producerUboCacheMetricsEnabled;
+    const activeUboMetrics = observedWgpu?.producerUboCacheMetricsEnabled;
     if (activeUboMetrics !== expectedUboMetrics) {
       failures.push(
         `WGPU UBO metrics mismatch: requested=${expectedUboMetrics ? 1 : 0} ` +
@@ -1274,15 +1312,14 @@ function summarizeScenario(
       );
     }
     if (expectedUboMetrics &&
-        final.causalTelemetry?.webgpu?.producerUboChangeAvailable !== true) {
+        observedWgpu?.producerUboChangeAvailable !== true) {
       failures.push("WGPU UBO change-attribution schema is unavailable or malformed");
     }
   }
   const requestedUniformFast = scenario.params?.wgpuuniformfast;
   if (requestedUniformFast != null) {
     const expectedUniformFast = String(requestedUniformFast) === "1";
-    const activeUniformFast =
-      final.causalTelemetry?.webgpu?.producerUniformFastEnabled;
+    const activeUniformFast = observedWgpu?.producerUniformFastEnabled;
     if (activeUniformFast !== expectedUniformFast) {
       failures.push(
         `WGPU uniform fast mismatch: requested=${expectedUniformFast ? 1 : 0} ` +
@@ -1295,8 +1332,7 @@ function summarizeScenario(
   const requestedMappedStagingSlots = scenario.params?.wgpustagingslots;
   if (requestedMappedStagingSlots != null) {
     const expectedMappedStagingSlots = String(requestedMappedStagingSlots) === "4" ? 4 : 3;
-    const activeMappedStagingSlots =
-      final.causalTelemetry?.webgpu?.mappedStaging?.slotCount;
+    const activeMappedStagingSlots = observedWgpu?.mappedStaging?.slotCount;
     if (activeMappedStagingSlots !== expectedMappedStagingSlots) {
       failures.push(
         `WGPU mapped staging slot-count mismatch: requested=${expectedMappedStagingSlots} ` +
@@ -1306,15 +1342,14 @@ function summarizeScenario(
   }
   if (requestedMappedStageFast != null) {
     const expectedMappedStageFast = String(requestedMappedStageFast) === "1";
-    const activeMappedStageFast =
-      final.causalTelemetry?.webgpu?.mappedStagingFastPath;
+    const activeMappedStageFast = observedWgpu?.mappedStagingFastPath;
     if (activeMappedStageFast !== expectedMappedStageFast) {
       failures.push(
         `WGPU mapped staging fast-path mismatch: requested=${expectedMappedStageFast ? 1 : 0} ` +
         `active=${activeMappedStageFast == null ? "unavailable" : activeMappedStageFast ? 1 : 0}`
       );
     }
-    const recordStore = final.causalTelemetry?.webgpu?.mappedStaging?.recordStore;
+    const recordStore = observedWgpu?.mappedStaging?.recordStore;
     if (expectedMappedStageFast && recordStore !== "flat") {
       failures.push(
         `WGPU mapped staging record store mismatch: requested=flat ` +
@@ -1325,7 +1360,7 @@ function summarizeScenario(
   if (requestedMappedStageTiming != null) {
     const expectedMappedStageTiming = String(requestedMappedStageTiming) === "64" ? 64 : 1;
     const activeMappedStageTiming =
-      final.causalTelemetry?.webgpu?.uploadAttribution?.mappedStageTiming?.stride;
+      observedWgpu?.uploadAttribution?.mappedStageTiming?.stride;
     if (activeMappedStageTiming !== expectedMappedStageTiming) {
       failures.push(
         `WGPU mapped staging timing mismatch: requested=${expectedMappedStageTiming} ` +
@@ -1488,7 +1523,7 @@ function summarizeScenario(
   }
   failures.push(...evaluateWgpuGeometryRangeEvidence({
     requested: scenario.params?.wgpugeomrange,
-    telemetry: final.causalTelemetry?.webgpu,
+    telemetry: observedWgpu,
   }).failures);
   failures.push(...evaluateWgpuSemanticQualificationEvidence({
     requested: scenario.params?.wgpusemantic,

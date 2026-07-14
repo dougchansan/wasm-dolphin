@@ -29,6 +29,80 @@ export const WGPU_PRODUCER_PROFILE_SCHEMA_VERSION = 1;
 export const WGPU_DRAW_PROFILE_SCHEMA_VERSION = 1;
 export const WGPU_TAIL_GATE_SCHEMA_VERSION = 1;
 export const WGPU_SPARSE_UBO_SCHEMA = "wasm-dolphin.wgpu-sparse-ubo.v1";
+export const WGPU_RUNTIME_CONFIG_SCHEMA = "wasm-dolphin.wgpu-runtime-config.v1";
+
+export function evaluateWgpuRuntimeConfigEvidence({
+  required = false,
+  runtimeConfig,
+  params = {},
+} = {}) {
+  if (!required) return { required: false, runtimeConfig: runtimeConfig ?? null, failures: [] };
+  const failures = [];
+  if (runtimeConfig?.schema !== WGPU_RUNTIME_CONFIG_SCHEMA) {
+    failures.push(
+      `WGPU runtime config schema mismatch: ${runtimeConfig?.schema ?? "unavailable"}`
+    );
+  }
+  const requestedFlag = (name) => String(params?.[name] ?? "0") === "1";
+  const expectedMetricsEnabled = String(params?.metrics) === "1";
+  const expectedUploadTransport = params?.wgpuuploadtransport === "mapped" ? "mapped" : "queue";
+  const expectedUboCache = requestedFlag("wgpuubocache");
+  const expectedUboMetrics = expectedMetricsEnabled && requestedFlag("wgpuubometrics");
+  const expectedUniformFast = requestedFlag("wgpuuniformfast");
+  const expectedUboPack = requestedFlag("wgpuubopack") && !expectedUboCache;
+  const expectedStageFast = expectedUploadTransport === "mapped" && requestedFlag("wgpustagefast");
+  const expectedSlots = String(params?.wgpustagingslots) === "4" ? 4 : 3;
+  const expectedTimingStride = String(params?.wgpumappedtiming) === "64" ? 64 : 1;
+  const expectedGeometryPack = requestedFlag("wgpugeompack");
+  const expectedGeometryRange = expectedGeometryPack && requestedFlag("wgpugeomrange");
+  const expectedTailGate = requestedFlag("wgputailgate");
+  const expect = (label, actual, expected) => {
+    if (actual !== expected) {
+      failures.push(
+        `WGPU runtime config ${label} mismatch: requested=${String(expected)} ` +
+        `active=${actual == null ? "unavailable" : String(actual)}`
+      );
+    }
+  };
+  expect("metrics", runtimeConfig?.metricsEnabled, expectedMetricsEnabled);
+  expect("upload transport", runtimeConfig?.uploadTransport, expectedUploadTransport);
+  expect("UBO cache", runtimeConfig?.uboCacheEnabled, expectedUboCache);
+  expect("UBO metrics", runtimeConfig?.producerUboCacheMetricsEnabled, expectedUboMetrics);
+  expect("uniform fast", runtimeConfig?.producerUniformFastEnabled, expectedUniformFast);
+  expect("UBO pack", runtimeConfig?.uboPackEnabled, expectedUboPack);
+  if ((expectedUboCache || expectedUboMetrics || expectedUniformFast) &&
+      runtimeConfig?.producerUboCacheAvailable !== true) {
+    failures.push("WGPU runtime config UBO cache producer setter is unavailable");
+  }
+  if (expectedUboPack && runtimeConfig?.producerUboPackAvailable !== true) {
+    failures.push("WGPU runtime config UBO pack producer setter is unavailable");
+  }
+  expect("mapped staging", runtimeConfig?.mappedStaging?.enabled,
+    expectedUploadTransport === "mapped");
+  expect("mapped staging fast path", runtimeConfig?.mappedStagingFastPath, expectedStageFast);
+  expect("mapped staging slots", runtimeConfig?.mappedStaging?.slotCount, expectedSlots);
+  expect("mapped staging record store", runtimeConfig?.mappedStaging?.recordStore,
+    expectedStageFast ? "flat" : "objects");
+  expect("mapped timing enabled", runtimeConfig?.mappedStaging?.timing?.enabled,
+    expectedMetricsEnabled);
+  expect("mapped timing stride", runtimeConfig?.mappedStaging?.timing?.stride,
+    expectedTimingStride);
+  expect("geometry pack", runtimeConfig?.geometryPackEnabled, expectedGeometryPack);
+  expect("geometry range", runtimeConfig?.geometryRangeEnabled, expectedGeometryRange);
+  if (expectedGeometryRange && runtimeConfig?.producerGeometryRangeAvailable !== true) {
+    failures.push("WGPU runtime config geometry-range producer setter is unavailable");
+  }
+  expect("tail gate requested", runtimeConfig?.tailGate?.requested, expectedTailGate);
+  expect("tail gate enabled", runtimeConfig?.tailGate?.enabled, expectedTailGate);
+  if (expectedTailGate && runtimeConfig?.tailGate?.available !== true) {
+    failures.push("WGPU runtime config tail-gate producer setter is unavailable");
+  }
+  if (runtimeConfig?.tailGate?.schema !== WGPU_TAIL_GATE_SCHEMA ||
+      runtimeConfig?.tailGate?.schemaVersion !== WGPU_TAIL_GATE_SCHEMA_VERSION) {
+    failures.push("WGPU runtime config tail-gate schema is unavailable or malformed");
+  }
+  return { required: true, runtimeConfig: runtimeConfig ?? null, failures };
+}
 
 export const FIXED_MELEE_BATTLE_FIXTURE = Object.freeze({
   sceneLabel: "Melee Kirby vs Link fixed battle",

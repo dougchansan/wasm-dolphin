@@ -621,6 +621,45 @@ function wgpuOutputContractPayload() {
   };
 }
 
+function wgpuRuntimeConfigPayload() {
+  return {
+    schema: "wasm-dolphin.wgpu-runtime-config.v1",
+    metricsEnabled: causalMetricsEnabled,
+    uploadTransport: wgpuUploadTransport,
+    stateCacheEnabled: wgpuStateCacheEnabled,
+    uboCacheEnabled: Boolean(webGpuUboCacheMode() & 1),
+    producerUboCacheMetricsEnabled: Boolean(webGpuUboCacheMode() & 2),
+    producerUniformFastEnabled: Boolean(webGpuUboCacheMode() & 4),
+    uboPackEnabled: Boolean(webGpuUboPackMode()),
+    producerUboCacheAvailable: Boolean(api?.setWebGpuUboCacheEnabled),
+    producerUboPackAvailable: Boolean(api?.setWebGpuUboPackEnabled),
+    geometryPackEnabled: wgpuGeometryPackEnabled,
+    geometryRangeEnabled: wgpuGeometryRangeEnabled,
+    producerGeometryRangeAvailable: Boolean(api?.setWebGpuGeometryRangeEnabled),
+    mappedStagingFastPath: wgpuMappedStageFastEnabled,
+    mappedStaging: {
+      enabled: wgpuUploadTransport === "mapped",
+      slotCount: wgpuMappedStagingSlotCount,
+      recordStore: wgpuMappedStageFastEnabled ? "flat" : "objects",
+      timing: {
+        enabled: causalMetricsEnabled,
+        stride: wgpuMappedStageTimingStride,
+      },
+    },
+    uploadAttribution: {
+      mappedStageTiming: { stride: wgpuMappedStageTimingStride },
+    },
+    mappedDrainCoalescingEnabled: wgpuMappedDrainCoalescingEnabled,
+    tailGate: {
+      schema: WGPU_TAIL_GATE_SCHEMA,
+      schemaVersion: 1,
+      requested: wgpuTailGateRequested,
+      available: wgpuTailGateAvailable,
+      enabled: wgpuTailGateRequested && wgpuTailGateAvailable,
+    },
+  };
+}
+
 function rendererDiagnosticsPayload() {
   return {
     ...rendererDiagnostics,
@@ -634,6 +673,7 @@ function rendererDiagnosticsPayload() {
     workerTransport: workerTransportTelemetry(),
     diagnosticLogFilter: wgpuDiagnosticLogFilter.snapshot(),
     outputContract: wgpuOutputContractPayload(),
+    runtimeConfig: wgpuRuntimeConfigPayload(),
     wgpuReplayClassifier: wgpuReplayClassifier?.snapshot() ?? null,
     wgpuReplayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
     wgpuUploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),

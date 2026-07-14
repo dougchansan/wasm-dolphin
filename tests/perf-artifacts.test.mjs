@@ -23,6 +23,7 @@ import {
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
   evaluateWgpuGeometryRangeEvidence,
+  evaluateWgpuRuntimeConfigEvidence,
   evaluateWgpuSemanticQualificationEvidence,
   evaluateWgpuDiagnosticLogFilterEvidence,
   evaluateWgpuOutputContractEvidence,
@@ -397,6 +398,74 @@ test("geometry range evidence requires both activation and the producer ABI", ()
     requested: "1",
     telemetry: null,
   }).failures[0], /active=unavailable/);
+});
+
+test("metrics-off WGPU evidence requires a matching static runtime config", () => {
+  const params = {
+    metrics: "0",
+    wgpuuploadtransport: "mapped",
+    wgpuubocache: "1",
+    wgpuubometrics: "0",
+    wgpuuniformfast: "0",
+    wgpuubopack: "0",
+    wgpustagefast: "0",
+    wgpustagingslots: "3",
+    wgpumappedtiming: "1",
+    wgpugeompack: "0",
+    wgpugeomrange: "0",
+    wgputailgate: "0",
+  };
+  const runtimeConfig = {
+    schema: "wasm-dolphin.wgpu-runtime-config.v1",
+    metricsEnabled: false,
+    uploadTransport: "mapped",
+    uboCacheEnabled: true,
+    producerUboCacheMetricsEnabled: false,
+    producerUniformFastEnabled: false,
+    uboPackEnabled: false,
+    producerUboCacheAvailable: true,
+    producerUboPackAvailable: true,
+    mappedStagingFastPath: false,
+    mappedStaging: {
+      enabled: true,
+      slotCount: 3,
+      recordStore: "objects",
+      timing: { enabled: false, stride: 1 },
+    },
+    geometryPackEnabled: false,
+    geometryRangeEnabled: false,
+    producerGeometryRangeAvailable: true,
+    tailGate: {
+      schema: "wasm-dolphin.wgpu-tail-gate.v1",
+      schemaVersion: 1,
+      requested: false,
+      available: true,
+      enabled: false,
+    },
+  };
+  const valid = evaluateWgpuRuntimeConfigEvidence({
+    required: true,
+    params,
+    runtimeConfig,
+  });
+  assert.deepEqual(valid.failures, []);
+  assert.match(evaluateWgpuRuntimeConfigEvidence({
+    required: true,
+    params,
+    runtimeConfig: null,
+  }).failures.join("\n"), /schema mismatch|upload transport mismatch/);
+  for (const [field, value, pattern] of [
+    ["uploadTransport", "queue", /upload transport mismatch/],
+    ["uboCacheEnabled", false, /UBO cache mismatch/],
+    ["producerUboCacheAvailable", false, /producer setter is unavailable/],
+    ["geometryRangeEnabled", true, /geometry range mismatch/],
+  ]) {
+    assert.match(evaluateWgpuRuntimeConfigEvidence({
+      required: true,
+      params,
+      runtimeConfig: { ...runtimeConfig, [field]: value },
+    }).failures.join("\n"), pattern);
+  }
 });
 
 test("WGPU semantic qualification requires complete post-load evidence", () => {
