@@ -262,6 +262,7 @@ let wgpuMappedCapacityBlocked = false;
 let wgpuMappedCapacityBlockedAt = 0;
 let wgpuMappedCapacityBlockedRole = WGPU_UPLOAD_ROLE.UNKNOWN;
 let wgpuMappedStagingGeneration = 0;
+let wgpuMappedStageTimingStride = 1;
 let wgpuMappedDrainCoalescer = createWgpuMappedDrainCoalescer();
 let wgpuMappedDrainTimer = null;
 let wgpuMappedDrainTimerToken = null;
@@ -729,7 +730,12 @@ async function handleMessage(type, payload) {
       metricsDiagnostics = createMetricsDiagnostics();
       metricsDiagnostics.enabled = collectMetrics;
       wgpuReplayOpMetrics = createWgpuReplayOpMetrics();
-      wgpuUploadAttribution = createWgpuUploadAttribution();
+      wgpuMappedStageTimingStride = Number(payload.wgpuMappedStageTimingStride) === 64
+        ? 64
+        : 1;
+      wgpuUploadAttribution = createWgpuUploadAttribution({
+        mappedStageTimingStride: wgpuMappedStageTimingStride,
+      });
       wgpuDirtyRangeProjection = createWgpuDirtyRangeProjection();
       wgpuDirtyRangeProjectionRequested = Boolean(payload.wgpuDirtyRangeProjection);
       wgpuDirtyRangeProjectionActive =
@@ -2807,6 +2813,9 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
   lastCausalTelemetryAt = now;
   if (wgpuOwnershipTraceActive) drainWgpuSemanticOwnership();
   const loadedCheckpoint = readLastLoadedCheckpoint();
+  const uploadAttributionSnapshot = wgpuUploadAttribution.snapshot({
+    enabled: causalMetricsEnabled,
+  });
   return createCausalTelemetry({
     enabled: true,
     capturedAtMs: now,
@@ -2868,7 +2877,7 @@ function maybeCreateCausalTelemetry(videoStats, { force = false } = {}) {
           webGpuCausalStats.replayPumpWakeCount
         : 0,
       replayOps: wgpuReplayOpMetrics.snapshot({ enabled: causalMetricsEnabled }),
-      uploadAttribution: wgpuUploadAttribution.snapshot({ enabled: causalMetricsEnabled }),
+      uploadAttribution: uploadAttributionSnapshot,
       dirtyRangeProjection: wgpuDirtyRangeProjection.snapshot({
         requested: wgpuDirtyRangeProjectionRequested,
         active: wgpuDirtyRangeProjectionActive
@@ -8941,7 +8950,9 @@ function drainWebGpuCmdRing(source = "presentation") {
                 self._wgVbSnap.delete(self._wgVbSnap.keys().next().value);
             }
               if (wgpuUploadTransport === "mapped") {
-                const stageStartedAt = performance.now();
+                const stageStartedAt = causalMetricsEnabled
+                  ? wgpuUploadAttribution.beginMappedStageTiming(uploadRole)
+                  : null;
                 const pool = ensureWgpuMappedStagingPool(dev);
                 let retainedAccepted = false;
                 let stageAccepted;
@@ -9014,14 +9025,20 @@ function drainWebGpuCmdRing(source = "presentation") {
                     stageReason = staged.reason ?? null;
                   }
                 }
-                const stageElapsedMs = performance.now() - stageStartedAt;
+                const stageElapsedMs = stageStartedAt !== null
+                  ? wgpuUploadAttribution.finishMappedStageTiming(
+                    uploadRole, stageStartedAt, len
+                  )
+                  : null;
+                if (wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null) {
+                  webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                  webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                    webGpuCausalStats.mappedStagingCopyMaxMs,
+                    stageElapsedMs
+                  );
+                }
                 webGpuCausalStats.mappedStagingCopyCount += stageAccepted ? 1 : 0;
                 webGpuCausalStats.mappedStagingCopyBytes += stageAccepted ? len : 0;
-                webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
-                webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
-                  webGpuCausalStats.mappedStagingCopyMaxMs,
-                  stageElapsedMs
-                );
                 if (!stageAccepted) {
                   mappedCapacityHold = true;
                   if (stageReason === "no-capacity") {
@@ -9200,7 +9217,11 @@ function drainWebGpuCmdRing(source = "presentation") {
                 `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
             }
               if (wgpuUploadTransport === "mapped") {
-                const stageStartedAt = performance.now();
+                const stageStartedAt = causalMetricsEnabled
+                  ? wgpuUploadAttribution.beginMappedStageTiming(
+                      WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT
+                    )
+                  : null;
                 const pool = ensureWgpuMappedStagingPool(dev);
                 const copySize = { width: w, height: h, depthOrArrayLayers: 1 };
                 const origin = { x: 0, y: 0, z: uz };
@@ -9244,14 +9265,22 @@ function drainWebGpuCmdRing(source = "presentation") {
                   stageReason = staged.reason ?? null;
                   retainedAccepted = Boolean(retainedAttempt?.accepted);
                 }
-                const stageElapsedMs = performance.now() - stageStartedAt;
+                const stageElapsedMs = stageStartedAt !== null
+                  ? wgpuUploadAttribution.finishMappedStageTiming(
+                    WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT,
+                    stageStartedAt,
+                    uploadBytes
+                  )
+                  : null;
+                if (wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null) {
+                  webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
+                  webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
+                    webGpuCausalStats.mappedStagingCopyMaxMs,
+                    stageElapsedMs
+                  );
+                }
                 webGpuCausalStats.mappedStagingCopyCount += stageAccepted ? 1 : 0;
                 webGpuCausalStats.mappedStagingCopyBytes += stageAccepted ? uploadBytes : 0;
-                webGpuCausalStats.mappedStagingCopyTotalMs += stageElapsedMs;
-                webGpuCausalStats.mappedStagingCopyMaxMs = Math.max(
-                  webGpuCausalStats.mappedStagingCopyMaxMs,
-                  stageElapsedMs
-                );
                 if (!stageAccepted) {
                   mappedCapacityHold = true;
                   if (stageReason === "no-capacity") {

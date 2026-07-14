@@ -706,6 +706,7 @@ export function flattenCausalTelemetry(value) {
   );
   const uploadPassAssociation = uploadAttribution.passAssociation;
   const queueWrite = uploadAttribution.queueWrite;
+  const mappedStageTiming = uploadAttribution.mappedStageTiming;
   const capacityWait = uploadAttribution.capacityWait;
   const passPackageProjection = deepMerge(
     createWgpuPassPackageProjection().snapshot({ requested: false, active: false }),
@@ -1121,6 +1122,24 @@ export function flattenCausalTelemetry(value) {
     causalWgpuQueueWriteSlowEvents: queueWrite.slowEvents,
     causalWgpuUploadBucketCallsByRole: uploadAttribution.bucketCallsByRole,
     causalWgpuUploadBucketBytesByRole: uploadAttribution.bucketBytesByRole,
+    causalWgpuMappedStageTimingSchema: mappedStageTiming.schema,
+    causalWgpuMappedStageTimingMode: mappedStageTiming.mode,
+    causalWgpuMappedStageTimingStride: mappedStageTiming.stride,
+    causalWgpuMappedStageTimingEligibleCalls: mappedStageTiming.eligibleCalls,
+    causalWgpuMappedStageTimingSampleCount: mappedStageTiming.sampleCount,
+    causalWgpuMappedStageTimingSampleBytes: mappedStageTiming.sampleBytes,
+    causalWgpuMappedStageTimingSampleTotalMs: mappedStageTiming.sampleTotalMs,
+    causalWgpuMappedStageTimingSampleMaxMs: mappedStageTiming.sampleMaxMs,
+    causalWgpuMappedStageTimingEligibleCallsByRole:
+      mappedStageTiming.eligibleCallsByRole,
+    causalWgpuMappedStageTimingSampleCountsByRole:
+      mappedStageTiming.sampleCountsByRole,
+    causalWgpuMappedStageTimingSampleBytesByRole:
+      mappedStageTiming.sampleBytesByRole,
+    causalWgpuMappedStageTimingSampleTotalMsByRole:
+      mappedStageTiming.sampleTotalMsByRole,
+    causalWgpuMappedStageTimingSampleMaxMsByRole:
+      mappedStageTiming.sampleMaxMsByRole,
     causalWgpuMappedCapacityWaitAttempts: capacityWait.totalAttempts,
     causalWgpuMappedCapacityWaitEpisodes: capacityWait.totalEpisodes,
     causalWgpuMappedCapacityWaitCompletedEpisodes: capacityWait.completedEpisodes,

@@ -366,6 +366,12 @@ export function requestedWgpuMappedStagingSlotCount(
   return new URLSearchParams(search).get("wgpustagingslots") === "4" ? 4 : 3;
 }
 
+export function requestedWgpuMappedStageTimingStride(
+  search = globalThis.location?.search ?? ""
+) {
+  return new URLSearchParams(search).get("wgpumappedtiming") === "64" ? 64 : 1;
+}
+
 export function requestedWgpuUboPack(
   search = globalThis.location?.search ?? "",
   enabledByDefault = false

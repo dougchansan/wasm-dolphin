@@ -74,14 +74,14 @@
     {
       "path": "src/causal-telemetry.js",
       "hashMode": "lf-normalized",
-      "size": 67582,
-      "sha256": "e48130932fa27c110ff0e70c5feff26525d99d5ff105034cd812317158f9ab1c"
+      "size": 68696,
+      "sha256": "e8a3799c80e542818351125822dd30cdc91db63bb7dcb1c93caf0c98d033203e"
     },
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 60543,
-      "sha256": "6aa329255cf8e49969e912485f3f83446f4f305487957e3475e0f86512a870d8"
+      "size": 60771,
+      "sha256": "5455c5847eec83a05960306eaa6e5e53cbba6b45cabd5824f77d291c0f7ed471"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 489073,
-      "sha256": "398af59b3c074431262eeb6fefcec8ab885df9a70d6a973f858c561ebb7cdca8"
+      "size": 490242,
+      "sha256": "2242dd575af10c268fc79a6f03c643b5c28690c42c02d6bbffda2c6cdfda1bc8"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,8 +158,8 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 40694,
-      "sha256": "b2880fc1257dfb0c70c48b9cbc229ec3107f4489aa9120139e170f194cc0eb7d"
+      "size": 40892,
+      "sha256": "3b6f14259c77f535e8c325710de81a6f89efb4a58d46d3fff4bf5f2403cbd5cf"
     },
     {
       "path": "src/upstream-worker-protocol.js",
@@ -182,14 +182,14 @@
     {
       "path": "src/wgpu-replay-diagnostics.js",
       "hashMode": "lf-normalized",
-      "size": 38408,
-      "sha256": "c9024f6b92ea2786d2f57a358ec23a22d8bd62073b9266b3b2b45443236cee90"
+      "size": 38594,
+      "sha256": "7457ddf67c737ed980a38542e0afff7e80c1400279a8e84c7ddfea2349012e64"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
       "hashMode": "lf-normalized",
-      "size": 13383,
-      "sha256": "38673e65fb61b46eedc2f4df9024392843f3e6588ea9540e760fd68dfff4c12b"
+      "size": 16466,
+      "sha256": "91ded4e08a71512a5be88695bdb33663b49c97704d6825f39cdf337e302a5e87"
     },
     {
       "path": "src/wgpu-upload-watermark.js",

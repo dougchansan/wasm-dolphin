@@ -26,6 +26,27 @@ test("mapped staging slot count is explicit and flows through validation", async
   assert.match(harness, /\["WGPUSTAGINGSLOTS", "wgpustagingslots"\]/);
 });
 
+test("mapped staging timing stride is explicit, sampled, and benchmark-visible", async () => {
+  const [host, adapter, worker, gate, harness] = await Promise.all([
+    readSource("../src/core-host.js"),
+    readSource("../src/upstream-worker-adapter.js"),
+    readSource("../src/upstream-discio-worker.js"),
+    readSource("../tools/perf-regression-gate.mjs"),
+    readSource("../tools/menu-progress-validate.mjs"),
+  ]);
+  assert.match(host, /requestedWgpuMappedStageTimingStride\(\s*window\.location\.search\s*\)/);
+  assert.match(host, /wgpuMappedStageTimingStride: this\.wgpuMappedStageTimingStride/);
+  assert.match(adapter, /Number\(wgpuMappedStageTimingStride\) === 64 \? 64 : 1/);
+  assert.match(adapter, /wgpuMappedStageTimingStride: this\.wgpuMappedStageTimingStride/);
+  assert.match(worker, /Number\(payload\.wgpuMappedStageTimingStride\) === 64/);
+  assert.match(worker, /mappedStageTimingStride: wgpuMappedStageTimingStride/);
+  assert.match(worker, /beginMappedStageTiming\(uploadRole\)/);
+  assert.match(worker, /beginMappedStageTiming\(\s*WGPU_UPLOAD_ROLE\.TEXTURE_ADJACENT/);
+  assert.match(worker, /wgpuMappedStageTimingStride === 1 && stageElapsedMs !== null/);
+  assert.match(gate, /WGPU mapped staging timing mismatch/);
+  assert.match(harness, /\["WGPUMAPPEDTIMING", "wgpumappedtiming"\]/);
+});
+
 test("upload transport flows from URL parsing through the worker load payload", async () => {
   const [host, adapter, worker] = await Promise.all([
     readSource("../src/core-host.js"),

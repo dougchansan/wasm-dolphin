@@ -109,6 +109,54 @@ test("mapped capacity waits retain the blocked upload role", () => {
   assert.equal(wait.totalMsByRole[WGPU_UPLOAD_ROLE.UNKNOWN], 4);
 });
 
+test("mapped staging timing samples independently by role without unsampled clocks", () => {
+  let clockCalls = 0;
+  const metrics = createWgpuUploadAttribution({
+    mappedStageTimingStride: 64,
+    now: () => clockCalls++,
+  });
+  for (let index = 0; index < 129; index += 1) {
+    const startedAt = metrics.beginMappedStageTiming(WGPU_UPLOAD_ROLE.UBO);
+    metrics.finishMappedStageTiming(WGPU_UPLOAD_ROLE.UBO, startedAt, 64);
+  }
+  for (let index = 0; index < 2; index += 1) {
+    const startedAt = metrics.beginMappedStageTiming(WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT);
+    metrics.finishMappedStageTiming(
+      WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT, startedAt, 256
+    );
+  }
+
+  const timing = metrics.snapshot().mappedStageTiming;
+  assert.equal(clockCalls, 8);
+  assert.equal(timing.mode, "per-role-periodic-sample");
+  assert.equal(timing.stride, 64);
+  assert.equal(timing.eligibleCalls, 131);
+  assert.equal(timing.sampleCount, 4);
+  assert.equal(timing.sampleCountsByRole[WGPU_UPLOAD_ROLE.UBO], 3);
+  assert.equal(timing.sampleCountsByRole[WGPU_UPLOAD_ROLE.TEXTURE_ADJACENT], 1);
+  assert.equal(timing.sampleBytes, 448);
+  assert.equal(timing.sampleTotalMs, 4);
+});
+
+test("exact mapped staging timing accepts a zero-valued start clock", () => {
+  const readings = [0, 2.5];
+  const metrics = createWgpuUploadAttribution({
+    mappedStageTimingStride: 1,
+    now: () => readings.shift(),
+  });
+  const startedAt = metrics.beginMappedStageTiming(WGPU_UPLOAD_ROLE.VERTEX);
+  assert.equal(startedAt, 0);
+  assert.equal(
+    metrics.finishMappedStageTiming(WGPU_UPLOAD_ROLE.VERTEX, startedAt, 1024),
+    2.5
+  );
+  const timing = metrics.snapshot().mappedStageTiming;
+  assert.equal(timing.mode, "exact");
+  assert.equal(timing.eligibleCalls, 1);
+  assert.equal(timing.sampleCount, 1);
+  assert.equal(timing.sampleTotalMs, 2.5);
+});
+
 test("queue.writeBuffer retains only the 32 longest >20ms events", () => {
   const metrics = createWgpuUploadAttribution();
   for (let index = 0; index < 40; index += 1) {
@@ -201,6 +249,8 @@ test("reset restores all counters, buckets, pass state, and maxima", () => {
   assert.equal(snapshot.capacityWait.totalAttempts, 0);
   assert.equal(snapshot.capacityWait.totalMs, 0);
   assert.ok(snapshot.capacityWait.attemptsByRole.every((value) => value === 0));
+  assert.equal(snapshot.mappedStageTiming.eligibleCalls, 0);
+  assert.equal(snapshot.mappedStageTiming.sampleCount, 0);
   assert.deepEqual(snapshot.passAssociation, {
     definition: "uploads-after-previous-boundary-through-following-end-pass",
     preBeginUploadsFoldIntoFollowingPass: true,

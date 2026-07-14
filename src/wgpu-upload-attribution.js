@@ -49,7 +49,11 @@ const SLOW_QUEUE_WRITE_EVENT_LIMIT = 32;
 // Uploads are commonly published before BEGIN_PASS. A window therefore starts
 // immediately after the previous END/abort/incomplete boundary. Pre-BEGIN
 // uploads remain in that window and are finalized by the following END_PASS.
-export function createWgpuUploadAttribution() {
+export function createWgpuUploadAttribution({
+  mappedStageTimingStride = 1,
+  now = () => performance.now(),
+} = {}) {
+  const timingStride = Number(mappedStageTimingStride) === 64 ? 64 : 1;
   const callsByRole = new Float64Array(ROLE_COUNT);
   const bytesByRole = new Float64Array(ROLE_COUNT);
   const maxBytesByRole = new Float64Array(ROLE_COUNT);
@@ -67,6 +71,11 @@ export function createWgpuUploadAttribution() {
   const capacityWaitCompletedByRole = new Float64Array(ROLE_COUNT);
   const capacityWaitTotalMsByRole = new Float64Array(ROLE_COUNT);
   const capacityWaitMaxMsByRole = new Float64Array(ROLE_COUNT);
+  const mappedTimingEligibleByRole = new Float64Array(ROLE_COUNT);
+  const mappedTimingSamplesByRole = new Float64Array(ROLE_COUNT);
+  const mappedTimingSampleBytesByRole = new Float64Array(ROLE_COUNT);
+  const mappedTimingSampleTotalMsByRole = new Float64Array(ROLE_COUNT);
+  const mappedTimingSampleMaxMsByRole = new Float64Array(ROLE_COUNT);
 
   let totalCalls = 0;
   let totalBytes = 0;
@@ -92,6 +101,11 @@ export function createWgpuUploadAttribution() {
   let capacityWaitActive = false;
   let slowQueueWriteObservedCount = 0;
   let queueWriteSequence = 0;
+  let mappedTimingEligibleCalls = 0;
+  let mappedTimingSampleCount = 0;
+  let mappedTimingSampleBytes = 0;
+  let mappedTimingSampleTotalMs = 0;
+  let mappedTimingSampleMaxMs = 0;
   const slowQueueWriteEvents = [];
 
   resetWindow();
@@ -154,6 +168,32 @@ export function createWgpuUploadAttribution() {
       });
     }
     return roleIndex;
+  }
+
+  function beginMappedStageTiming(role) {
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    mappedTimingEligibleCalls += 1;
+    mappedTimingEligibleByRole[roleIndex] += 1;
+    const roleSequence = mappedTimingEligibleByRole[roleIndex];
+    return (roleSequence - 1) % timingStride === 0 ? now() : null;
+  }
+
+  function finishMappedStageTiming(role, startedAt, bytes = 0) {
+    if (startedAt === null) return null;
+    const roleIndex = validRole(role) ? role : WGPU_UPLOAD_ROLE.UNKNOWN;
+    const elapsedMs = finiteNonnegative(now() - startedAt);
+    const byteCount = finiteNonnegative(bytes);
+    mappedTimingSampleCount += 1;
+    mappedTimingSampleBytes += byteCount;
+    mappedTimingSampleTotalMs += elapsedMs;
+    mappedTimingSampleMaxMs = Math.max(mappedTimingSampleMaxMs, elapsedMs);
+    mappedTimingSamplesByRole[roleIndex] += 1;
+    mappedTimingSampleBytesByRole[roleIndex] += byteCount;
+    mappedTimingSampleTotalMsByRole[roleIndex] += elapsedMs;
+    mappedTimingSampleMaxMsByRole[roleIndex] = Math.max(
+      mappedTimingSampleMaxMsByRole[roleIndex], elapsedMs
+    );
+    return elapsedMs;
   }
 
   function recordCapacityWaitAttempt(role) {
@@ -258,6 +298,11 @@ export function createWgpuUploadAttribution() {
     capacityWaitCompletedByRole.fill(0);
     capacityWaitTotalMsByRole.fill(0);
     capacityWaitMaxMsByRole.fill(0);
+    mappedTimingEligibleByRole.fill(0);
+    mappedTimingSamplesByRole.fill(0);
+    mappedTimingSampleBytesByRole.fill(0);
+    mappedTimingSampleTotalMsByRole.fill(0);
+    mappedTimingSampleMaxMsByRole.fill(0);
     totalCalls = 0;
     totalBytes = 0;
     maxBytes = 0;
@@ -279,6 +324,11 @@ export function createWgpuUploadAttribution() {
     capacityWaitActive = false;
     slowQueueWriteObservedCount = 0;
     queueWriteSequence = 0;
+    mappedTimingEligibleCalls = 0;
+    mappedTimingSampleCount = 0;
+    mappedTimingSampleBytes = 0;
+    mappedTimingSampleTotalMs = 0;
+    mappedTimingSampleMaxMs = 0;
     slowQueueWriteEvents.length = 0;
     resetWindow();
   }
@@ -312,6 +362,7 @@ export function createWgpuUploadAttribution() {
           .map((event) => ({ ...event }))
           .sort((left, right) => right.durationMs - left.durationMs),
       },
+      mappedStageTiming: mappedStageTimingSnapshot(),
       capacityWait: {
         schema: "wasm-dolphin.wgpu-capacity-wait-attribution.v1",
         totalAttempts: capacityWaitTotalAttempts,
@@ -344,6 +395,24 @@ export function createWgpuUploadAttribution() {
     };
   }
 
+  function mappedStageTimingSnapshot() {
+    return {
+      schema: "wasm-dolphin.wgpu-mapped-stage-timing.v1",
+      mode: timingStride === 1 ? "exact" : "per-role-periodic-sample",
+      stride: timingStride,
+      eligibleCalls: mappedTimingEligibleCalls,
+      sampleCount: mappedTimingSampleCount,
+      sampleBytes: mappedTimingSampleBytes,
+      sampleTotalMs: mappedTimingSampleTotalMs,
+      sampleMaxMs: mappedTimingSampleMaxMs,
+      eligibleCallsByRole: Array.from(mappedTimingEligibleByRole),
+      sampleCountsByRole: Array.from(mappedTimingSamplesByRole),
+      sampleBytesByRole: Array.from(mappedTimingSampleBytesByRole),
+      sampleTotalMsByRole: Array.from(mappedTimingSampleTotalMsByRole),
+      sampleMaxMsByRole: Array.from(mappedTimingSampleMaxMsByRole),
+    };
+  }
+
   function resetWindow() {
     passOpen = false;
     windowCalls = 0;
@@ -372,6 +441,8 @@ export function createWgpuUploadAttribution() {
   return {
     recordUpload,
     recordQueueWrite,
+    beginMappedStageTiming,
+    finishMappedStageTiming,
     recordCapacityWaitAttempt,
     beginCapacityWait,
     recordCapacityWaitDuration,

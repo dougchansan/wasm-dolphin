@@ -27,6 +27,7 @@ import {
   requestedWgpuUploadArenaMiB,
   requestedWgpuUploadTransport,
   requestedWgpuMappedStageFast,
+  requestedWgpuMappedStageTimingStride,
   requestedWgpuMappedDrainCoalescing,
   requestedWgpuStateCache,
   requestedWgpuUboCache,
@@ -43,6 +44,14 @@ test("mapped staging slot count is strict and defaults to three", () => {
   assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=04"), 3);
   assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=6"), 3);
   assert.equal(requestedWgpuMappedStagingSlotCount("?wgpustagingslots=garbage"), 3);
+});
+
+test("mapped staging timing stride is strict and preserves exact timing by default", () => {
+  assert.equal(requestedWgpuMappedStageTimingStride(""), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=1"), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=64"), 64);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=064"), 1);
+  assert.equal(requestedWgpuMappedStageTimingStride("?wgpumappedtiming=0"), 1);
 });
 
 test("only upload-isolation probes intentionally suppress visible output", () => {

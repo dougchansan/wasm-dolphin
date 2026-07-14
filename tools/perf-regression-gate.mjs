@@ -1291,6 +1291,7 @@ function summarizeScenario(
     }
   }
   const requestedMappedStageFast = scenario.params?.wgpustagefast;
+  const requestedMappedStageTiming = scenario.params?.wgpumappedtiming;
   const requestedMappedStagingSlots = scenario.params?.wgpustagingslots;
   if (requestedMappedStagingSlots != null) {
     const expectedMappedStagingSlots = String(requestedMappedStagingSlots) === "4" ? 4 : 3;
@@ -1318,6 +1319,17 @@ function summarizeScenario(
       failures.push(
         `WGPU mapped staging record store mismatch: requested=flat ` +
         `active=${recordStore ?? "unavailable"}`
+      );
+    }
+  }
+  if (requestedMappedStageTiming != null) {
+    const expectedMappedStageTiming = String(requestedMappedStageTiming) === "64" ? 64 : 1;
+    const activeMappedStageTiming =
+      final.causalTelemetry?.webgpu?.uploadAttribution?.mappedStageTiming?.stride;
+    if (activeMappedStageTiming !== expectedMappedStageTiming) {
+      failures.push(
+        `WGPU mapped staging timing mismatch: requested=${expectedMappedStageTiming} ` +
+        `active=${activeMappedStageTiming ?? "unavailable"}`
       );
     }
   }
@@ -1553,7 +1565,7 @@ function selectedScenarios() {
     fastsw: process.env.FASTSW || "1",
     metrics: process.env.METRICS || "1",
   };
-  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuuploadrunprojection", "wgpuubocomputeprojection", "wgpuubocompute", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagingslots", "wgpustagefast", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
+  for (const name of ["disable", "regalloc", "smearcompile", "blockmerge", "shortprefix", "fastmemhoist", "nogamepad", "nojitcache", "xfbfast", "gpucomplete", "inputlatency", "inputphoton", "inputphotonsize", "inputphotonx", "inputphotony", "audiotransport", "ppcprof", "wgpustatecache", "wgpuubocache", "wgpuubometrics", "wgpuuniformfast", "wgpupackageprojection", "wgpuuploadrunprojection", "wgpuubocomputeprojection", "wgpuubocompute", "wgpuownershiptrace", "wgpusemantic", "wgpuubopack", "wgpuubosparse", "wgpugeompack", "wgpugeomrange", "wgpuuploadmb", "wgpuuploadtransport", "wgpustagingslots", "wgpustagefast", "wgpumappedtiming", "wgpudraincoalesce", "wgpurenderprobe", "wgpudirtyranges", "wgpuprodprofile", "wgputailgate", "wgpudiagquiet", "wgpureplayms", "wgpupower", "swtevfast", "swtevshadow"]) {
     const envName = name.toUpperCase();
     if (process.env[envName] != null) softwareParams[name] = process.env[envName];
   }

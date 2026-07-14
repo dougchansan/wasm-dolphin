@@ -94,8 +94,18 @@ test("causal telemetry has a stable versioned shape", () => {
   assert.equal(value.input.marker.overhead.padStatsPollParse.calls, 0);
 });
 
-test("flattens UBO change vectors and mapped capacity-wait roles", () => {
-  const uploadAttribution = createWgpuUploadAttribution();
+test("flattens UBO change vectors and mapped upload timing roles", () => {
+  const readings = [10, 12.5];
+  const uploadAttribution = createWgpuUploadAttribution({
+    mappedStageTimingStride: 64,
+    now: () => readings.shift(),
+  });
+  const stageStartedAt = uploadAttribution.beginMappedStageTiming(
+    WGPU_UPLOAD_ROLE.UBO
+  );
+  uploadAttribution.finishMappedStageTiming(
+    WGPU_UPLOAD_ROLE.UBO, stageStartedAt, 1536
+  );
   uploadAttribution.recordCapacityWaitAttempt(WGPU_UPLOAD_ROLE.UBO);
   uploadAttribution.beginCapacityWait(WGPU_UPLOAD_ROLE.UBO);
   uploadAttribution.recordCapacityWaitDuration(WGPU_UPLOAD_ROLE.UBO, 12.5);
@@ -124,6 +134,15 @@ test("flattens UBO change vectors and mapped capacity-wait roles", () => {
   assert.deepEqual(flat.causalWgpuProducerUboDirty256Bytes, [256, 512, 768]);
   assert.equal(flat.causalWgpuMappedCapacityWaitEpisodes, 1);
   assert.equal(flat.causalWgpuMappedCapacityWaitTotalMs, 12.5);
+  assert.equal(flat.causalWgpuMappedStageTimingStride, 64);
+  assert.equal(flat.causalWgpuMappedStageTimingEligibleCalls, 1);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleCount, 1);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleBytes, 1536);
+  assert.equal(flat.causalWgpuMappedStageTimingSampleTotalMs, 2.5);
+  assert.equal(
+    flat.causalWgpuMappedStageTimingSampleCountsByRole[WGPU_UPLOAD_ROLE.UBO],
+    1
+  );
   assert.equal(
     flat.causalWgpuMappedCapacityWaitTotalMsByRole[WGPU_UPLOAD_ROLE.UBO],
     12.5

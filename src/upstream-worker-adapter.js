@@ -86,6 +86,7 @@ export class UpstreamWorkerAdapter {
     wgpuUploadTransport = "queue",
     wgpuMappedStagingSlotCount = 3,
     wgpuMappedStageFast = false,
+    wgpuMappedStageTimingStride = 1,
     wgpuMappedDrainCoalescing = false,
     wgpuRendererWorkerProbe = "off",
     wgpuVisualCadence = false,
@@ -177,6 +178,7 @@ export class UpstreamWorkerAdapter {
     this.wgpuUploadTransport = wgpuUploadTransport === "mapped" ? "mapped" : "queue";
     this.wgpuMappedStagingSlotCount = Number(wgpuMappedStagingSlotCount) === 4 ? 4 : 3;
     this.wgpuMappedStageFast = Boolean(wgpuMappedStageFast);
+    this.wgpuMappedStageTimingStride = Number(wgpuMappedStageTimingStride) === 64 ? 64 : 1;
     this.wgpuMappedDrainCoalescing = Boolean(wgpuMappedDrainCoalescing);
     this.wgpuRendererWorkerProbe = new Set([
       "canary", "inline-upload", "worker-upload", "null-drain"
@@ -367,6 +369,7 @@ export class UpstreamWorkerAdapter {
       wgpuUploadTransport: this.wgpuUploadTransport,
       wgpuMappedStagingSlotCount: this.wgpuMappedStagingSlotCount,
       wgpuMappedStageFast: this.wgpuMappedStageFast,
+      wgpuMappedStageTimingStride: this.wgpuMappedStageTimingStride,
       wgpuMappedDrainCoalescing: this.wgpuMappedDrainCoalescing,
       wgpuRendererWorkerProbe: this.wgpuRendererWorkerProbe,
       wgpuVisualCadence: this.wgpuVisualCadence,
