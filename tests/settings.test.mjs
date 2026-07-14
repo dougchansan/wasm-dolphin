@@ -142,6 +142,20 @@ test("builds the playable Melee preset href", () => {
   assert.equal(url.searchParams.get("fastsw"), null);
 });
 
+test("preserves the experimental hardware WebGPU renderer through settings", () => {
+  const settings = readSettingsFromSearch(
+    "?core=upstream&video=wgpu&presenter=webgpu&metrics=0"
+  );
+  assert.equal(settings.video, "wgpu");
+
+  const url = new URL(buildSettingsHref("http://localhost:5173/", settings));
+  assert.equal(url.searchParams.get("video"), "wgpu");
+  assert.equal(
+    describeSettings({ ...settings, cpu: "dual", wasmjit: "1" }),
+    "Upstream / WGPU / dual CPU / JIT on"
+  );
+});
+
 test("playable and settings links cannot retain blank WGPU probes", () => {
   const diagnosticHref =
     "http://localhost:5173/?video=wgpu&wgpurenderprobe=null-drain&metrics=1#play";
