@@ -1,5 +1,8 @@
 # Documentation
 
+- [Hardware-WGPU renderer worker and upload package plan](wgpu-renderer-worker-plan.md) - seven staged implementation items, ownership/lifecycle invariants, bounded package design, validation gates, and rollback.
+- [Hardware-WGPU realtime follow-up (2026-07-14)](perf-results/melee-wgpu-realtime-followup-2026-07-14.md) - fixed-battle results, unreproduced 99.716% observation, rejected experiments, and next architecture.
+- [Machine-readable realtime follow-up evidence](perf-results/melee-wgpu-realtime-followup-2026-07-14.json) - exact run URLs, core/cache identities, artifact hashes, fixed-work results, and post-run correctness evidence.
 - [Hardware WebGPU performance audit (2026-07-13)](performance-audit-2026-07-13.md) - applied-save semantic proof, reproducible candidate, current bottleneck classification, rejected refactors, and next optimization plan.
 - [Hardware-WGPU no-lag screening closure (2026-07-13)](perf-results/melee-wgpu-no-lag-screening-2026-07-13.md) - item 1–9 proofs, balanced screens, audible fairness evidence, and the no-promotion release decision.
 - [Machine-readable no-lag screening closure](perf-results/melee-wgpu-no-lag-screening-2026-07-13.json) - exact identities, effects, artifact hashes, and retained defaults.
