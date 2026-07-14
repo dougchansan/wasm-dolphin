@@ -9035,18 +9035,22 @@ function drainWebGpuCmdRing(source = "presentation") {
                 const destinationOffset = u32[recWord + 2] & ~3;
                 if (stagedUpload) {
                   const stage = (data) => {
-                    const producerPackage = stageWgpuUboComputePackage({
-                      resourceId: bufferId,
-                      role: uploadRole,
-                      data,
-                    });
-                    const compute = producerPackage ?? stageWgpuUboComputeUpload({
-                      resourceId: bufferId,
-                      role: uploadRole,
-                      destinationOffset,
-                      data,
-                      borrowBytes: true,
-                    });
+                    const compute = uploadRole === WGPU_UPLOAD_ROLE.UBO_COMPUTE_PACKAGE
+                      ? stageWgpuUboComputePackage({
+                          resourceId: bufferId,
+                          role: uploadRole,
+                          data,
+                        })
+                      : wgpuUboComputeReconstructionActive &&
+                          uploadRole === WGPU_UPLOAD_ROLE.UBO
+                        ? stageWgpuUboComputeUpload({
+                            resourceId: bufferId,
+                            role: uploadRole,
+                            destinationOffset,
+                            data,
+                            borrowBytes: true,
+                          })
+                        : null;
                     if (compute?.handled) return compute;
                     const sparse = ensureWgpuSparseUbo(dev)?.stage({
                       pool,
@@ -9073,17 +9077,21 @@ function drainWebGpuCmdRing(source = "presentation") {
                   stageReason = retainedAttempt.result.reason ?? null;
                   retainedAccepted = retainedAttempt.accepted;
                 } else {
-                  const producerPackage = stageWgpuUboComputePackage({
-                    resourceId: bufferId,
-                    role: uploadRole,
-                    data: uploadSource,
-                  });
-                  const compute = producerPackage ?? stageWgpuUboComputeUpload({
-                    resourceId: bufferId,
-                    role: uploadRole,
-                    destinationOffset,
-                    data: uploadSource,
-                  });
+                  const compute = uploadRole === WGPU_UPLOAD_ROLE.UBO_COMPUTE_PACKAGE
+                    ? stageWgpuUboComputePackage({
+                        resourceId: bufferId,
+                        role: uploadRole,
+                        data: uploadSource,
+                      })
+                    : wgpuUboComputeReconstructionActive &&
+                        uploadRole === WGPU_UPLOAD_ROLE.UBO
+                      ? stageWgpuUboComputeUpload({
+                          resourceId: bufferId,
+                          role: uploadRole,
+                          destinationOffset,
+                          data: uploadSource,
+                        })
+                      : null;
                   const sparse = compute?.handled ? null : ensureWgpuSparseUbo(dev)?.stage({
                     pool,
                     data: uploadSource,

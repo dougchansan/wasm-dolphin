@@ -42,6 +42,14 @@ test("worker admits only producer-tagged UBO rings and orders compute before ren
   assert.match(worker, /const result = manager\.stageEncodedPackage/);
   assert.match(
     worker,
+    /uploadRole === WGPU_UPLOAD_ROLE\.UBO_COMPUTE_PACKAGE[\s\S]*?stageWgpuUboComputePackage/
+  );
+  assert.match(
+    worker,
+    /wgpuUboComputeReconstructionActive &&[\s\S]*?uploadRole === WGPU_UPLOAD_ROLE\.UBO[\s\S]*?stageWgpuUboComputeUpload/
+  );
+  assert.match(
+    worker,
     /\.\.\.\(mappedBatch\?\.ordinary[\s\S]*\.\.\.\(mappedBatch\?\.compute[\s\S]*renderCommandBuffer/
   );
   assert.match(worker, /markWgpuReplayFatal\("staging-seal"/);
