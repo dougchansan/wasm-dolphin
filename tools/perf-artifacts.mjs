@@ -4,6 +4,8 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { JIT_CACHE_ENTRY_KEY_SCHEMA, canonicalCoreFingerprint } from
+  "../src/jit-cache-identity.js";
 import { CAUSAL_TELEMETRY_SCHEMA_VERSION } from "../src/causal-telemetry.js";
 import { WGPU_UBO_COMPUTE_PROJECTION_SCHEMA } from
   "../src/wgpu-ubo-compute-projection.js";
@@ -1850,7 +1852,11 @@ export function resolveCoreArtifactPath(root, urlValue) {
 export function selectedCoreServedPaths(root, wasmPath) {
   const relative = path.relative(root, wasmPath).replaceAll("\\", "/");
   if (relative === "cores/dolphin/dolphin-core-upstream.wasm") {
-    return { js: "cores/dolphin/dolphin-core-upstream.js", wasm: relative };
+    return {
+      js: "cores/dolphin/dolphin-core-upstream.js",
+      wasm: relative,
+      prebuilt: "cores/dolphin/prebuilt-jit-cache.bin",
+    };
   }
   const match = /^build\/core-candidates\/([0-9a-f]{64})\/dolphin-core-upstream\.wasm$/i.exec(relative);
   if (!match) throw new Error(`Selected core is outside a supported served location: ${relative}`);
@@ -1858,6 +1864,67 @@ export function selectedCoreServedPaths(root, wasmPath) {
   return {
     js: `${prefix}/dolphin-core-upstream.js`,
     wasm: `${prefix}/dolphin-core-upstream.wasm`,
+    prebuilt: `${prefix}/prebuilt-jit-cache.bin`,
+  };
+}
+
+export function evaluatePrebuiltJitCacheEvidence({
+  evidence,
+  expectedSha256,
+  manifestEntry,
+  requireManifestEntry = false,
+} = {}) {
+  const expected = String(expectedSha256 || "").toLowerCase().replace(/^sha256:/, "");
+  const failures = [];
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    failures.push("selected prebuilt expected WASM SHA-256 is invalid");
+  }
+  const expectedFingerprint = /^[0-9a-f]{64}$/.test(expected)
+    ? canonicalCoreFingerprint(expected)
+    : null;
+  if (!evidence) {
+    failures.push("selected prebuilt cache evidence is missing");
+  } else {
+    if (!/^[0-9a-f]{64}$/.test(String(evidence.sha256 || ""))) {
+      failures.push("selected prebuilt cache SHA-256 is invalid");
+    }
+    if (!(Number(evidence.bytes) > 0)) failures.push("selected prebuilt cache size is invalid");
+    if (evidence.fingerprint !== expectedFingerprint) {
+      failures.push(
+        `selected prebuilt fingerprint mismatch: expected=${expectedFingerprint || "invalid"} ` +
+        `actual=${evidence.fingerprint || "missing"}`
+      );
+    }
+    if (evidence.entryKeySchema !== JIT_CACHE_ENTRY_KEY_SCHEMA) {
+      failures.push("selected prebuilt entry-key schema mismatch");
+    }
+    if (!Number.isSafeInteger(evidence.entryCount) || evidence.entryCount <= 0) {
+      failures.push("selected prebuilt entry count is invalid");
+    }
+    if (evidence.entriesVerified !== true) {
+      failures.push("selected prebuilt entry payload verification is missing");
+    }
+  }
+  if (requireManifestEntry && !manifestEntry) {
+    failures.push("selected prebuilt candidate manifest entry is missing");
+  } else if (manifestEntry) {
+    for (const [field, label] of [
+      ["sha256", "hash"],
+      ["bytes", "size"],
+      ["fingerprint", "fingerprint"],
+      ["entryKeySchema", "entry-key schema"],
+      ["entryCount", "entry count"],
+      ["entriesVerified", "entry payload verification"],
+    ]) {
+      if (manifestEntry[field] !== evidence?.[field]) {
+        failures.push(`selected prebuilt manifest ${label} mismatch`);
+      }
+    }
+  }
+  return {
+    verified: failures.length === 0,
+    evidence: evidence ?? null,
+    failures,
   };
 }
 

@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 491841,
-      "sha256": "324f4c39a2c3399fbd3ddb7c9ce40a67ee04e36420ff3226a3415be343219635"
+      "size": 496272,
+      "sha256": "e8758a13a932543af75523b6a780453794072a3e4dcf78b41dbed06e4ac35777"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -184,6 +184,12 @@
       "hashMode": "lf-normalized",
       "size": 38594,
       "sha256": "7457ddf67c737ed980a38542e0afff7e80c1400279a8e84c7ddfea2349012e64"
+    },
+    {
+      "path": "src/wgpu-replay-quiescence.js",
+      "hashMode": "lf-normalized",
+      "size": 3195,
+      "sha256": "9d09b59427ddc901b90b369f3b4d5c057f63c1ba635cb81b1e104d7283e9cf5d"
     },
     {
       "path": "src/wgpu-upload-attribution.js",
@@ -512,6 +518,7 @@
       "validationBeginWgpuRendererProbeMeasurement",
       "validationFinalizeWgpuMappedDrain",
       "validationFinalizeWgpuRendererProbe",
+      "validationFinalizeWgpuReplay",
       "validationReadCoreProgress",
       "validationReadJitCacheReadiness",
       "validationSetCorePaused"

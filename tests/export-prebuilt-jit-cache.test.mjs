@@ -14,4 +14,5 @@ test("prebuilt-cache export can retarget a validation-equivalent core fingerprin
   assert.match(source, /verifyCanonicalWasmBlockKey\(hash, u8\)/);
   assert.match(source, /BROWSER_EXECUTABLE/);
   assert.match(source, /executablePath: path\.resolve\(configuredExecutable\)/);
+  assert.match(source, /writeCandidatePrebuiltCache/);
 });

@@ -32,6 +32,10 @@ import {
   canonicalCoreFingerprint,
   verifyCanonicalWasmBlockKey
 } from "../src/jit-cache-identity.js";
+import {
+  candidatePrebuiltLocation,
+  writeCandidatePrebuiltCache,
+} from "./prebuilt-jit-cache-provenance.mjs";
 
 // Match the validator's playwright resolution: prefer the validator-local
 // install at .omx/browser-probe/node_modules/playwright, fall back to top-level.
@@ -189,7 +193,11 @@ const blob = encodePrebuiltCache({
 });
 
 await mkdir(path.dirname(outPath), { recursive: true });
-await writeFile(outPath, blob);
+if (candidatePrebuiltLocation(process.cwd(), outPath)) {
+  await writeCandidatePrebuiltCache({ root: process.cwd(), outPath, blob });
+} else {
+  await writeFile(outPath, blob);
+}
 
 console.log(
   `[export] wrote ${outPath} — ${entriesMap.size} modules, ${(blob.byteLength / 1048576).toFixed(2)} MiB ` +

@@ -22,6 +22,7 @@ import {
   describeFile,
   evaluateAudioClaimQualification,
   evaluateCandidateCoreBundle,
+  evaluatePrebuiltJitCacheEvidence,
   evaluateMetricsModeEvidence,
   evaluateCoreSelectionEvidence,
   evaluateJitCacheReadiness,
@@ -73,6 +74,7 @@ import {
   launchWithWindowsCpuAffinity,
   parseWindowsCpuAffinityMask,
 } from "./windows-process-affinity.mjs";
+import { describePrebuiltJitCache } from "./prebuilt-jit-cache-provenance.mjs";
 
 const root = process.cwd();
 const cli = parseArgs(process.argv.slice(2));
@@ -431,6 +433,10 @@ async function runScenario(scenario, context) {
   let saveStateLoad = null;
   let renderer = null;
   let finalScreenshotCaptured = false;
+  let postTimedReplayQuiescence = null;
+  let postRunFinalizedTelemetry = null;
+  let postRunCorrectness = null;
+  let finalScreenshotSemantics = "post-timed-window";
   let inputMarkerReadiness = {
     required: context.postLoadInputScript.length > 0,
     ready: context.postLoadInputScript.length === 0,
@@ -599,9 +605,19 @@ async function runScenario(scenario, context) {
     manifest.benchmark.audioModeApplication = audioModeApplication;
     const readiness = await waitForCoreReady(page);
     const pauseResponse = await pauseForBattleCheckpoint(page);
+    const replayQuiescence = await finalizeWgpuReplay(page, {
+      required: expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real",
+    });
     const attemptedAt = new Date().toISOString();
     const response = await loadStateFileWithTimeout(page, context.saveStateUrl);
-    saveStateLoad = { attemptedAt, readiness, pauseResponse, response, loaded: Boolean(response?.loaded) };
+    saveStateLoad = {
+      attemptedAt,
+      readiness,
+      pauseResponse,
+      replayQuiescence,
+      response,
+      loaded: Boolean(response?.loaded),
+    };
     if (!saveStateLoad.loaded) {
       throw new Error(`Save-state load failed: ${response?.error || JSON.stringify(response)}`);
     }
@@ -653,6 +669,8 @@ async function runScenario(scenario, context) {
         {
           jitCacheReadinessRequired,
           jitCacheReadyTimeoutMs: context.jitCacheReadyTimeoutMs,
+          wgpuReplayRequired:
+            expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real",
         }
       );
       jitCacheReadiness = fixedSceneMeasurementBoundary.jitCacheReadiness;
@@ -662,6 +680,7 @@ async function runScenario(scenario, context) {
         checkpoint: fixedSceneMeasurementBoundary.checkpoint,
         progress: fixedSceneMeasurementBoundary.progress,
         signature: fixedSceneMeasurementBoundary.signature,
+        replayQuiescence: fixedSceneMeasurementBoundary.replayQuiescence,
       };
     }
     if (uploadProbeMode) {
@@ -846,15 +865,26 @@ async function runScenario(scenario, context) {
         break;
       }
     }
+    const timedWindowEndedAt = new Date().toISOString();
+    const timedFinalSample = samples.at(-1) || null;
     const mappedDrainFinalizationMode =
       String(scenario.params?.wgpudraincoalesce ?? "0") === "1" ||
       String(scenario.params?.wgpuubocomputeprojection ?? "0") === "1" ||
       String(scenario.params?.wgpuubocompute ?? "0") === "1";
-    if (uploadProbeMode || mappedDrainFinalizationMode) {
-      const pause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
-      if (!pause?.paused || pause?.coreStateName !== "Paused") {
-        throw new Error(`WGPU core did not pause for finalization: ${JSON.stringify(pause)}`);
+    const hardwareWgpuRun =
+      expectedDolphinVideoBackend(scenario.params.video) === "WebGPU-Real";
+    const postRunFinalizationRequired =
+      uploadProbeMode || mappedDrainFinalizationMode || hardwareWgpuRun;
+    let postRunPause = null;
+    if (postRunFinalizationRequired) {
+      postRunPause = await requestWorkerRpc(page, "validationSetCorePaused", { paused: true });
+      if (!postRunPause?.paused || postRunPause?.coreStateName !== "Paused") {
+        throw new Error(
+          `WGPU core did not pause for post-run finalization: ${JSON.stringify(postRunPause)}`
+        );
       }
+    }
+    if (uploadProbeMode || mappedDrainFinalizationMode) {
       const finalized = await requestWorkerRpc(
         page,
         uploadProbeMode
@@ -863,22 +893,21 @@ async function runScenario(scenario, context) {
         { timeoutMs: 10_000 },
         20_000
       );
-      const finalSample = samples.at(-1);
-      if (!finalSample) throw new Error("WGPU finalization has no timed sample to update");
       if (!finalized?.causalTelemetry) {
         throw new Error("WGPU finalization did not return causal telemetry");
       }
       if (mappedDrainFinalizationMode && !finalized?.mappedDrainFinalization?.quiesced) {
         throw new Error("WGPU mapped drain finalization did not return quiescent evidence");
       }
-      finalSample.causalTelemetry = finalized.causalTelemetry;
-      Object.assign(
-        finalSample,
-        flattenCausalTelemetry(finalized.causalTelemetry),
-        flattenWgpuDirtyRangeProjection(
-          finalized.causalTelemetry?.webgpu?.dirtyRangeProjection
-        )
-      );
+      postRunFinalizedTelemetry = {
+        causalTelemetry: finalized.causalTelemetry,
+        flattened: {
+          ...flattenCausalTelemetry(finalized.causalTelemetry),
+          ...flattenWgpuDirtyRangeProjection(
+            finalized.causalTelemetry?.webgpu?.dirtyRangeProjection
+          ),
+        },
+      };
       if (uploadProbeMode) {
         const snapshot = finalized?.snapshot;
         if (!snapshot?.quiesced || !snapshot?.passed) {
@@ -923,7 +952,45 @@ async function runScenario(scenario, context) {
       }
     }
     manifest.benchmark.inputScriptDeliveredEventCount = inputEvents.length;
+    if (hardwareWgpuRun) {
+      const replayQuiescence = await finalizeWgpuReplay(page, {
+        required: true,
+      });
+      postTimedReplayQuiescence = {
+        timedMetricsFrozen: true,
+        paused: true,
+        ...replayQuiescence,
+      };
+      manifest.benchmark.postTimedReplayQuiescence = postTimedReplayQuiescence;
+      finalScreenshotSemantics = "post-timed-replay-quiescence";
+    }
+    const compositorSettledAtMs = hardwareWgpuRun
+      ? await waitForAnimationFrames(page, 2)
+      : null;
+    postRunCorrectness = {
+      schema: "wasm-dolphin.post-run-correctness.v1",
+      separatedFromTimedWindow: true,
+      timedWindowEndedAt,
+      timedSampleCount: samples.length,
+      timedFinalObservedAtMs: timedFinalSample?.observedAtMs ?? null,
+      timedFinalCoreTicks: timedFinalSample?.coreTicks ?? null,
+      pause: postRunPause,
+      replayQuiescence: postTimedReplayQuiescence,
+      compositorAnimationFrames: hardwareWgpuRun ? 2 : 0,
+      compositorSettledAtMs,
+      finalizedTelemetry: postRunFinalizedTelemetry,
+    };
+    manifest.benchmark.postRunCorrectness = postRunCorrectness;
+    manifest.benchmark.finalScreenshotSemantics = finalScreenshotSemantics;
     finalScreenshotCaptured = await saveScreenshot(page, scenarioDir, "final.png");
+    postRunCorrectness.screenshot = {
+      file: "final.png",
+      captured: finalScreenshotCaptured,
+      capturedAt: new Date().toISOString(),
+    };
+    if (hardwareWgpuRun && !finalScreenshotCaptured) {
+      throw new Error("Hardware WGPU post-run correctness screenshot was not captured");
+    }
     await page.waitForTimeout(100);
     renderer = withExpectedRendererIdentity(await readRendererDiagnostics(page), scenario.params);
     manifest.renderer = renderer;
@@ -1038,10 +1105,15 @@ async function runScenario(scenario, context) {
   summary.metrics.wgpuTailGate = wgpuTailGate;
   summary.metrics.fixedEmulatedWork = fixedEmulatedWork;
   summary.fixedEmulatedWork = fixedEmulatedWork;
+  summary.postTimedReplayQuiescence = postTimedReplayQuiescence;
+  summary.postRunCorrectness = postRunCorrectness;
+  summary.finalScreenshotSemantics = finalScreenshotSemantics;
   summary.fixedSceneMeasurementBoundary =
     manifest?.benchmark?.fixedSceneMeasurementBoundary ?? null;
   if (uploadProbeMode) {
-    const probe = summary.final?.causalTelemetry?.webgpu?.rendererWorkerProbe;
+    const probe =
+      postRunFinalizedTelemetry?.causalTelemetry?.webgpu?.rendererWorkerProbe ??
+      summary.final?.causalTelemetry?.webgpu?.rendererWorkerProbe;
     summary.uploadProbeWorkload = {
       requested: scenario.params.wgpurenderprobe,
       coreSha256: context.coreArtifact?.sha256 ?? null,
@@ -1114,6 +1186,7 @@ async function runScenario(scenario, context) {
       inputEventsFile: "input-events.json",
       consoleFile: "console.log",
       screenshotFile: finalScreenshotCaptured ? "final.png" : null,
+      screenshotSemantics: finalScreenshotSemantics,
       fixedEmulatedWork,
       jitCacheReadiness,
       audioMode: context.audioMode,
@@ -1703,7 +1776,11 @@ async function establishFixedSceneMeasurementBoundary(
   page,
   saveStateUrl,
   expectedCheckpoint,
-  { jitCacheReadinessRequired = false, jitCacheReadyTimeoutMs = 120_000 } = {}
+  {
+    jitCacheReadinessRequired = false,
+    jitCacheReadyTimeoutMs = 120_000,
+    wgpuReplayRequired = false,
+  } = {}
 ) {
   let pause = null;
   let jitCacheReadiness = { required: false, ready: true, reason: "disabled-by-scenario" };
@@ -1739,6 +1816,9 @@ async function establishFixedSceneMeasurementBoundary(
   } else {
     pause = await pauseForBattleCheckpoint(page);
   }
+  const replayQuiescence = await finalizeWgpuReplay(page, {
+    required: wgpuReplayRequired,
+  });
   const reload = await loadStateFileWithTimeout(page, saveStateUrl);
   if (!reload?.loaded) {
     throw new Error(
@@ -1807,6 +1887,7 @@ async function establishFixedSceneMeasurementBoundary(
     jitCacheReadiness,
     pausedJitCacheReadiness,
     jitCacheFenceAttempts,
+    replayQuiescence,
     reload,
     checkpoint,
     progress,
@@ -1842,6 +1923,29 @@ async function resumeAfterBattleCheckpoint(page) {
     throw new Error(`Core did not resume after battle checkpoint: ${JSON.stringify(response)}`);
   }
   return response;
+}
+
+async function finalizeWgpuReplay(page, { required = false } = {}) {
+  const timeoutMs = Math.max(workerRpcTimeoutMs(), 30_000);
+  const response = await requestWorkerRpc(
+    page,
+    "validationFinalizeWgpuReplay",
+    { timeoutMs, requireRing: required },
+    timeoutMs + 1000
+  );
+  const replayQuiescence = response?.replayQuiescence;
+  if (
+    !replayQuiescence?.quiesced ||
+    replayQuiescence.backlog !== 0 ||
+    replayQuiescence.readIndex !== replayQuiescence.publishedReadIndex ||
+    replayQuiescence.coreStateName !== "Paused" ||
+    (required && !replayQuiescence.registered)
+  ) {
+    throw new Error(
+      `WGPU replay did not quiesce: ${JSON.stringify(replayQuiescence)}`
+    );
+  }
+  return replayQuiescence;
 }
 
 async function readRendererDiagnostics(page) {
@@ -2239,12 +2343,22 @@ async function launchBrowser(chromium, headed, cpuAffinity) {
     ? path.resolve(requestedPersistentProfile)
     : null;
   if (persistentProfileDir) await mkdir(persistentProfileDir, { recursive: true });
+  const disableBackgroundThrottling =
+    process.env.PERF_DISABLE_BACKGROUND_THROTTLING === "1";
   const args = [
     "--autoplay-policy=no-user-gesture-required",
     "--enable-webgl",
     "--enable-unsafe-webgpu",
-    "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
   ];
+  if (disableBackgroundThrottling) {
+    args.push(
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows"
+    );
+  } else {
+    args.push("--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling");
+  }
   if (process.env.PERF_PROBE_AGGRESSIVE_GPU === "1") {
     args.push("--ignore-gpu-blocklist", "--use-angle=d3d11");
   }
@@ -2390,7 +2504,7 @@ async function verifyServedApplication(baseUrl, coreArtifact, corePath) {
   for (const selectedPath of [selectedCore.js, selectedCore.wasm]) {
     if (!roots.includes(selectedPath)) roots.push(selectedPath);
   }
-  const optionalRuntimeAssets = ["cores/dolphin/prebuilt-jit-cache.bin"];
+  const optionalRuntimeAssets = [selectedCore.prebuilt];
   for (const asset of optionalRuntimeAssets) {
     if (existsSync(path.join(root, ...asset.split("/")))) roots.push(asset);
   }
@@ -2413,6 +2527,26 @@ async function verifyServedApplication(baseUrl, coreArtifact, corePath) {
     };
   }
   const identity = assertServedArtifactIdentity(expectedArtifacts, servedArtifacts);
+  let prebuiltJitCache = {
+    present: false,
+    path: selectedCore.prebuilt,
+    verified: true,
+  };
+  if (paths.includes(selectedCore.prebuilt)) {
+    const blob = await readFile(path.join(root, ...selectedCore.prebuilt.split("/")));
+    const evidence = {
+      path: selectedCore.prebuilt,
+      ...describePrebuiltJitCache(blob),
+    };
+    const validation = evaluatePrebuiltJitCacheEvidence({
+      evidence,
+      expectedSha256: coreArtifact.sha256,
+    });
+    if (!validation.verified) {
+      throw new Error(`Selected prebuilt JIT cache identity failed: ${validation.failures.join("; ")}`);
+    }
+    prebuiltJitCache = { present: true, ...evidence, verified: true };
+  }
   const manifestText = JSON.stringify(
     Object.fromEntries(paths.map((relativePath) => [relativePath, {
       bytes: expectedArtifacts[relativePath].bytes,
@@ -2427,6 +2561,7 @@ async function verifyServedApplication(baseUrl, coreArtifact, corePath) {
     baseUrl,
     roots,
     dependencyCount: paths.length,
+    prebuiltJitCache,
     manifestSha256: createHash("sha256").update(manifestText).digest("hex"),
     isolationHeaders: {
       coop: rootResponse.headers.get("cross-origin-opener-policy"),
@@ -2564,15 +2699,40 @@ async function collectBuildProvenance(coreArtifact, corePath) {
     const bundleFiles = {};
     for (const entry of candidateManifest.value?.files || []) {
       const candidateFile = path.join(root, candidatePrefix, String(entry?.name || ""));
-      if (existsSync(candidateFile)) bundleFiles[entry.name] = (await describeFile(candidateFile)).sha256;
+      bundleFiles[entry.name] = existsSync(candidateFile)
+        ? (await describeFile(candidateFile)).sha256
+        : null;
     }
+    const prebuiltPath = path.join(root, candidatePrefix, "prebuilt-jit-cache.bin");
+    const prebuiltEntry = candidateManifest.value?.files?.find(
+      (entry) => entry?.name === "prebuilt-jit-cache.bin"
+    );
+    const prebuiltEvidence = existsSync(prebuiltPath)
+      ? {
+          path: `${candidatePrefix}/prebuilt-jit-cache.bin`,
+          ...describePrebuiltJitCache(await readFile(prebuiltPath)),
+        }
+      : null;
+    const prebuiltValidation = prebuiltEvidence || prebuiltEntry
+      ? evaluatePrebuiltJitCacheEvidence({
+          evidence: prebuiltEvidence,
+          expectedSha256: coreArtifact.sha256,
+          manifestEntry: prebuiltEntry,
+          requireManifestEntry: true,
+        })
+      : { verified: true, evidence: null, failures: [] };
+    const bundleValidation = evaluateCandidateCoreBundle({
+      manifest: candidateManifest.value,
+      expectedSha256: coreArtifact.sha256,
+      files: bundleFiles,
+    });
+    const candidateFailures = [...bundleValidation.failures, ...prebuiltValidation.failures];
     buildProvenance.candidateBundle = {
       path: candidateManifestPath,
-      ...evaluateCandidateCoreBundle({
-        manifest: candidateManifest.value,
-        expectedSha256: coreArtifact.sha256,
-        files: bundleFiles,
-      }),
+      ...bundleValidation,
+      verified: candidateFailures.length === 0,
+      failures: candidateFailures,
+      prebuiltJitCache: prebuiltValidation,
     };
   }
   buildProvenance.verification = validateLockedBuildProvenance(buildProvenance);
@@ -2690,6 +2850,28 @@ async function packageBuildProvenance(scenarioDir, rawEvidenceFiles) {
 
 function sha256Buffer(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function waitForAnimationFrames(page, count, timeoutMs = 5000) {
+  let timeoutHandle;
+  try {
+    return await Promise.race([
+      page.evaluate(async (frameCount) => {
+        for (let index = 0; index < frameCount; index += 1) {
+          await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+        }
+        return performance.now();
+      }, count),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Compositor settle timed out after ${timeoutMs} ms`)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
 
 async function saveScreenshot(page, scenarioDir, name) {

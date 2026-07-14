@@ -19,6 +19,7 @@ import {
   classifyGateOutcome,
   collectRunMetadata,
   evaluateCandidateCoreBundle,
+  evaluatePrebuiltJitCacheEvidence,
   evaluateMetricsModeEvidence,
   evaluateCoreSelectionEvidence,
   evaluateSoftwareRasterInstrumentationEvidence,
@@ -311,6 +312,7 @@ test("served core paths follow the selected content-addressed candidate", () => 
     {
       js: "cores/dolphin/dolphin-core-upstream.js",
       wasm: "cores/dolphin/dolphin-core-upstream.wasm",
+      prebuilt: "cores/dolphin/prebuilt-jit-cache.bin",
     }
   );
   assert.deepEqual(
@@ -321,6 +323,7 @@ test("served core paths follow the selected content-addressed candidate", () => 
     {
       js: `build/core-candidates/${hash}/dolphin-core-upstream.js`,
       wasm: `build/core-candidates/${hash}/dolphin-core-upstream.wasm`,
+      prebuilt: `build/core-candidates/${hash}/prebuilt-jit-cache.bin`,
     }
   );
 });
@@ -378,6 +381,47 @@ test("candidate bundle evidence binds every packaged file to the selected WASM",
   });
   assert.equal(invalid.verified, false);
   assert.match(invalid.failures.join("\n"), /coreId|hash mismatch|WASM hash/);
+});
+
+test("selected prebuilt cache evidence is bound to the selected WASM and manifest entry", () => {
+  const hash = "a".repeat(64);
+  const sha256 = "b".repeat(64);
+  const evidence = {
+    path: `build/core-candidates/${hash}/prebuilt-jit-cache.bin`,
+    bytes: 1234,
+    sha256,
+    fingerprint: `dolphin-core-sha256-v1:${hash}`,
+    entryKeySchema: "wasm-block-sha256-v1",
+    entryCount: 8192,
+    entriesVerified: true,
+  };
+  const manifestEntry = {
+    name: "prebuilt-jit-cache.bin",
+    sha256,
+    bytes: 1234,
+    fingerprint: evidence.fingerprint,
+    entryKeySchema: evidence.entryKeySchema,
+    entryCount: 8192,
+    entriesVerified: true,
+  };
+  assert.deepEqual(evaluatePrebuiltJitCacheEvidence({
+    evidence,
+    expectedSha256: hash,
+    manifestEntry,
+  }).failures, []);
+
+  const invalid = evaluatePrebuiltJitCacheEvidence({
+    evidence: { ...evidence, fingerprint: `dolphin-core-sha256-v1:${"c".repeat(64)}` },
+    expectedSha256: hash,
+    manifestEntry: { ...manifestEntry, entryCount: 1 },
+  });
+  assert.equal(invalid.verified, false);
+  assert.match(invalid.failures.join("\n"), /fingerprint|entry count/);
+  assert.match(evaluatePrebuiltJitCacheEvidence({
+    evidence,
+    expectedSha256: hash,
+    requireManifestEntry: true,
+  }).failures.join("\n"), /manifest entry is missing/);
 });
 
 test("geometry range evidence requires both activation and the producer ABI", () => {

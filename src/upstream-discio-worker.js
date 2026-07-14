@@ -37,6 +37,12 @@ import {
   summarizeWgpuReplayRange
 } from "./wgpu-replay-diagnostics.js";
 import {
+  awaitWgpuQueueCompletion,
+  createWgpuReplayStabilityTracker,
+  requireWgpuReplayRing,
+  validatePostCompletionReplaySnapshot,
+} from "./wgpu-replay-quiescence.js";
+import {
   FRESH_FRAME_DELIVERY,
   freshFrameDeliveryForPacing
 } from "./presentation-pacing.js";
@@ -1094,6 +1100,19 @@ async function handleMessage(type, payload) {
       );
       return {
         mappedDrainFinalization,
+        ...framePayload({ forceCausalTelemetry: true }),
+      };
+    }
+    case "validationFinalizeWgpuReplay": {
+      if (api?.getCoreStateName?.() !== "Paused") {
+        throw new Error("WGPU replay finalization requires a paused core");
+      }
+      const replayQuiescence = await finalizeWgpuReplayQuiescence(
+        Math.max(1000, Math.min(30_000, Number(payload.timeoutMs) || 30_000)),
+        { requireRing: Boolean(payload.requireRing) }
+      );
+      return {
+        replayQuiescence,
         ...framePayload({ forceCausalTelemetry: true }),
       };
     }
@@ -6877,6 +6896,117 @@ async function finalizeWgpuMappedDrain(timeoutMs = 10_000) {
       (computeFinal?.states?.remapping ?? 0),
     activeCapacityWait: false,
   };
+}
+
+function wgpuReplayQuiescenceSnapshot() {
+  const ring = webGpuCmdRing;
+  const mapped = pendingWgpuUploadSnapshot();
+  const mappedPool = mapped?.mapped;
+  const computePool = mapped?.compute;
+  if (!ring) {
+    return {
+      registered: false,
+      writeIndex: 0,
+      readIndex: 0,
+      publishedReadIndex: 0,
+      backlog: 0,
+      stagedUploads: 0,
+      heldReplay: false,
+      loadFenceActive: wgpuLoadFenceActive,
+      pendingMappedUploads: mapped?.pendingUploads ?? 0,
+      activeMappedBatches: (mappedPool?.activeBatches ?? 0) +
+        (computePool?.activeBatches ?? 0),
+      pendingRemaps: wgpuMappedRemapPromises.size,
+      capacityBlocked: wgpuMappedCapacityBlocked,
+      mappedDrainTimerPending: wgpuMappedDrainTimer !== null,
+      fatal: wgpuReplayFatal,
+    };
+  }
+  const writeIndex = Atomics.load(ring.headerI32, 0) >>> 0;
+  const readIndex = currentWgpuReadIndex(ring);
+  return {
+    registered: true,
+    writeIndex,
+    readIndex,
+    publishedReadIndex: Atomics.load(ring.headerI32, 1) >>> 0,
+    backlog: (writeIndex - readIndex) >>> 0,
+    stagedUploads: ring.stagedUploads?.size ?? 0,
+    heldReplay: ring.heldReplayStart != null || ring.stagedPassStart != null ||
+      ring.stagedScanCursor != null,
+    loadFenceActive: wgpuLoadFenceActive,
+    pendingMappedUploads: mapped?.pendingUploads ?? 0,
+    activeMappedBatches: (mappedPool?.activeBatches ?? 0) +
+      (computePool?.activeBatches ?? 0),
+    pendingRemaps: wgpuMappedRemapPromises.size,
+    capacityBlocked: wgpuMappedCapacityBlocked,
+    mappedDrainTimerPending: wgpuMappedDrainTimer !== null,
+    fatal: wgpuReplayFatal,
+  };
+}
+
+async function finalizeWgpuReplayQuiescence(
+  timeoutMs = 30_000,
+  { requireRing = false } = {}
+) {
+  const startedAtMs = globalThis.performance.now();
+  const deadlineAtMs = startedAtMs + timeoutMs;
+  let drainCount = 0;
+  const stabilityTracker = createWgpuReplayStabilityTracker();
+  let snapshot = wgpuReplayQuiescenceSnapshot();
+  const initial = { ...snapshot };
+
+  requireWgpuReplayRing(snapshot, requireRing);
+
+  for (;;) {
+    if (snapshot.fatal) {
+      throw new Error("WGPU replay finalization found a fatal replay state");
+    }
+    if (snapshot.backlog > 0) {
+      drainWebGpuCmdRing("pump");
+      drainCount += 1;
+    }
+
+    const remainingMs = deadlineAtMs - globalThis.performance.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `WGPU replay finalization timed out: ${JSON.stringify(snapshot)}`
+      );
+    }
+    await finalizeWgpuMappedDrain(remainingMs);
+    snapshot = wgpuReplayQuiescenceSnapshot();
+    const stability = stabilityTracker.observe(snapshot, globalThis.performance.now());
+    if (stability.ready) {
+      const queue = renderGpu?.device?.queue;
+      const gpuCompletion = await awaitWgpuQueueCompletion(queue, {
+        required: requireRing,
+        deadlineAtMs,
+      });
+      const postCompletionSnapshot = wgpuReplayQuiescenceSnapshot();
+      validatePostCompletionReplaySnapshot(
+        postCompletionSnapshot,
+        stability.stableWriteIndex
+      );
+      return {
+        quiesced: true,
+        required: requireRing,
+        coreStateName: api?.getCoreStateName?.() ?? "",
+        initial,
+        ...postCompletionSnapshot,
+        drainCount,
+        stableEmptyObservations: stability.stableEmptyObservations,
+        stableEmptyMs: stability.stableEmptyMs,
+        gpuCompletion,
+        elapsedMs: globalThis.performance.now() - startedAtMs,
+      };
+    }
+    if (globalThis.performance.now() >= deadlineAtMs) {
+      throw new Error(
+        `WGPU replay finalization timed out: ${JSON.stringify(snapshot)}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    snapshot = wgpuReplayQuiescenceSnapshot();
+  }
 }
 
 function drainWgpuSemanticOwnership() {

@@ -116,7 +116,7 @@ test("mapped drain coalescing is opt-in, bounded, and generation-fenced", async 
   assert.match(worker, /WGPU mapped drain finalization did not quiesce/);
   assert.match(
     gate,
-    /"validationFinalizeWgpuMappedDrain"[\s\S]*?finalSample\.causalTelemetry = finalized\.causalTelemetry/
+    /"validationFinalizeWgpuMappedDrain"[\s\S]*?postRunFinalizedTelemetry = \{[\s\S]*?causalTelemetry: finalized\.causalTelemetry/
   );
   assert.match(gate, /mappedDrainFinalization\?\.quiesced/);
   assert.match(gate, /params: Object\.fromEntries\(url\.searchParams\.entries\(\)\)/);
