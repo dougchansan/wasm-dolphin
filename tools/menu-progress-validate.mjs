@@ -146,6 +146,7 @@ if (process.env.REGALLOC) url.searchParams.set("regalloc", process.env.REGALLOC)
 if (process.env.SHORTPREFIX) url.searchParams.set("shortprefix", process.env.SHORTPREFIX);
 if (process.env.SMEARCOMPILE) url.searchParams.set("smearcompile", process.env.SMEARCOMPILE);
 if (process.env.FASTMEMHOIST) url.searchParams.set("fastmemhoist", process.env.FASTMEMHOIST);
+if (process.env.TIMEDRIFT) url.searchParams.set("timedrift", process.env.TIMEDRIFT);
 if (process.env.OGLSAB) url.searchParams.set("oglsab", process.env.OGLSAB);
 // §28cx in-page main-thread profiler passthrough (?mainprof=1). Headless can
 // only validate the tooling emits — real-Chrome contention is the authoritative
@@ -170,7 +171,10 @@ const persistBrowserData = persistUserDataDir
 const chromiumLaunchArgs = [
   "--autoplay-policy=no-user-gesture-required",
   "--enable-webgl",
-  "--enable-unsafe-webgpu",
+  // §28cx: --enable-unsafe-webgpu exposes experimental WebGPU features/limits a
+  // normal user's Chrome lacks. Set NO_UNSAFE_WEBGPU=1 to reproduce stable-only
+  // WebGPU (what the user actually runs) — used to diagnose warm-only black.
+  ...(process.env.NO_UNSAFE_WEBGPU ? [] : ["--enable-unsafe-webgpu"]),
   "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
 ];
 
