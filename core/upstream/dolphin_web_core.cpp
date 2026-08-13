@@ -533,6 +533,17 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_DSP_THREAD, false);
   Config::SetBase(Config::MAIN_FAST_DISC_SPEED, true);
   Config::SetBase(Config::MAIN_EMULATION_SPEED, s_emulation_speed);
+  // §28cz play-speed sync. When the browser CPU falls more than MaxFallback
+  // (100ms) behind in a heavy scene, Dolphin's throttle normally CONCEDES that
+  // time (slides the reference clock forward) and never catches up, so the
+  // in-game clock drifts behind a real stopwatch. CorrectTimeDrift=true disables
+  // that concession: the throttle recovers the lost time so the game clock
+  // tracks wall-clock. Opt-in via ?timedrift=1 (Module['dolphinCorrectTimeDrift']);
+  // default false keeps stock Dolphin behavior so the default root is unchanged.
+  const bool correct_time_drift =
+      EM_ASM_INT({ return (typeof Module !== 'undefined' &&
+                           Module['dolphinCorrectTimeDrift']) ? 1 : 0; }) != 0;
+  Config::SetBase(Config::MAIN_CORRECT_TIME_DRIFT, correct_time_drift);
   Config::SetBase(Config::MAIN_OVERCLOCK_ENABLE, true);
   Config::SetBase(Config::MAIN_OVERCLOCK, s_cpu_overclock);
   Config::SetBase(Config::MAIN_PRECISION_FRAME_TIMING, false);

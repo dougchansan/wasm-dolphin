@@ -99,6 +99,7 @@ export class EmulatorHost {
     this.fastSoftwareRaster = requestedFastSoftwareRaster();
     this.softwareTevHotCaseMode = requestedSoftwareTevHotCaseMode(window.location.search);
     this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
+    this.correctTimeDrift = requestedCorrectTimeDrift();
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
@@ -371,6 +372,7 @@ export class EmulatorHost {
             fastSoftwareRaster: this.fastSoftwareRaster,
             softwareTevHotCaseMode: this.softwareTevHotCaseMode,
             xfbFastPaths: this.xfbFastPaths,
+            correctTimeDrift: this.correctTimeDrift,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
@@ -1297,6 +1299,13 @@ function requestedOglSab() {
 function requestedFastSoftwareRaster() {
   const requested = Number.parseInt(new URLSearchParams(window.location.search).get("fastsw") || "1", 10);
   return Number.isFinite(requested) ? Math.min(3, Math.max(0, requested)) : 1;
+}
+
+// §28cz play-speed sync: opt-in ?timedrift=1 flips Dolphin's MAIN_CORRECT_TIME_DRIFT
+// so the throttle recovers time lost to heavy-scene CPU stalls (game clock tracks a
+// real stopwatch) instead of conceding it. Default off = stock throttle behavior.
+function requestedCorrectTimeDrift() {
+  return new URLSearchParams(window.location.search).get("timedrift") === "1";
 }
 
 // Day-1 bisection knob: ?disable=cat1,cat2 → bitmask handed to the C++ JIT.

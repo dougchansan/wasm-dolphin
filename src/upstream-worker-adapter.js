@@ -58,6 +58,7 @@ export class UpstreamWorkerAdapter {
     fastSoftwareRaster = 0,
     softwareTevHotCaseMode = 0,
     xfbFastPaths = 0,
+    correctTimeDrift = false,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
@@ -146,6 +147,7 @@ export class UpstreamWorkerAdapter {
     this.fastSoftwareRaster = Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0));
     this.softwareTevHotCaseMode = (Number(softwareTevHotCaseMode) || 0) & 3;
     this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
+    this.correctTimeDrift = Boolean(correctTimeDrift);
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
@@ -340,6 +342,7 @@ export class UpstreamWorkerAdapter {
       fastSoftwareRaster: this.fastSoftwareRaster,
       softwareTevHotCaseMode: this.softwareTevHotCaseMode,
       xfbFastPaths: this.xfbFastPaths,
+      correctTimeDrift: this.correctTimeDrift,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
