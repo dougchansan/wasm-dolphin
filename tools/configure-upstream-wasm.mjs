@@ -91,6 +91,20 @@ const cmakeArgs = [
   `-DCMAKE_CXX_FLAGS:STRING=${wasmCompileFlags}`
 ];
 
+// The vendored CMakeLists needs this project's root to locate the Naga
+// staticlib and the jit-cache pre-js. CMAKE_SOURCE_DIR there is the vendored
+// Dolphin tree, not this repo. It can derive the root from the core source
+// path, but pass it explicitly so a clone at any path links correctly.
+cmakeArgs.push(`-DDOLPHIN_WASM_PROJECT_ROOT=${root.replace(/\\/g, "/")}`);
+
+// PROFILING_FUNCS=1 adds a wasm name section to the core so CPU profiles show
+// real symbols instead of wasm-function[N]. Name section only — no codegen or
+// optimisation change, so timings stay representative. Off by default.
+if (process.env.PROFILING_FUNCS === "1") {
+  cmakeArgs.push("-DDOLPHIN_WASM_PROFILING_FUNCS=ON");
+  console.log("PROFILING_FUNCS=1 -> core will be built with a wasm name section");
+}
+
 if (existsSync(bridgeSource)) {
   cmakeArgs.push(`-DDOLPHIN_WASM_BRIDGE_SOURCE=${bridgeSource}`);
   cmakeArgs.push(`-DDOLPHIN_WASM_OUTPUT_DIR=${outputDir}`);

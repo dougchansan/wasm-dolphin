@@ -15,6 +15,8 @@
     "build:upstream:full-core": "node tools/build-upstream-target.mjs dolphin_web_core",
     "build:core": "node tools/build-native-core.mjs",
     "check": "node --check src/app.js && node --check src/audio.js && node --check src/core-host.js && node --check src/dol.js && node --check src/dolphin-adapter.js && node --check src/input.js && node --check src/settings.js && node --check src/upstream-discio-worker.js && node --check src/upstream-main-thread-adapter.js && node --check src/upstream-worker-adapter.js && node --check src/upstream-worker-protocol.js && node --check src/wasm/demo-core.js && node --check tools/build-native-core.mjs && node --check tools/build-upstream-target.mjs && node --check tools/check-deps.mjs && node --check tools/configure-upstream-wasm.mjs && node --check tools/fetch-dolphin.mjs && node --check tools/patch-upstream-wasm.mjs && node --check tools/perf-regression-gate.mjs && node --check tools/serve.mjs",
+    "profile:capture": "node tools/cpu-profile-capture.mjs",
+    "profile:analyze": "node tools/cpu-profile-analyze.mjs",
     "perf:gate": "node tools/perf-regression-gate.mjs",
     "perf:guard": "node tools/perf-regression-gate.mjs --target-mode warn --require-baseline",
     "build:prebuilt-cache": "node tools/build-prebuilt-jit-cache.mjs",
