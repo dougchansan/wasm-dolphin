@@ -1,7 +1,6 @@
 node_modules/
 build/
 .omx/
-vendor/dolphin/
 cores/dolphin/dolphin.js
 cores/dolphin/dolphin.wasm
 cores/dolphin/dolphin-upstream.js
@@ -15,3 +14,30 @@ cores/dolphin/*.data
 # documented `cargo +nightly build` step.
 tools/naga-spirv-wgsl/target/
 tools/naga-spirv-wgsl/Cargo.lock
+
+# ---------------------------------------------------------------
+# Game-derived artifacts. NEVER commit or publish these.
+#
+# The prebuilt JIT cache contains compiled translations of the
+# game's own PowerPC code, and save states contain game memory
+# images. Both are derivative works of a copyrighted commercial
+# title. They are build/runtime conveniences, regenerable locally,
+# and must not appear in a public repository.
+# ---------------------------------------------------------------
+cores/dolphin/prebuilt-jit-cache.bin
+*.sav
+*.gci
+*.raw
+*.iso
+*.gcm
+*.ciso
+*.rvz
+
+# Local research/scratch trees and harness output. Not part of the
+# distributable project.
+logs/
+scratch-backlog/
+uber-test/
+.claude/
+*.patch
+!patches/**/*.patch

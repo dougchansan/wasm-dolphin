@@ -298,8 +298,26 @@ Standard browser gamepads are also polled.
 
 ## License
 
+**wasm-dolphin is licensed under the GNU General Public License, version 2 or
+later (GPLv2+).** The full text is in [LICENSE](LICENSE).
+
 This project builds on [Dolphin](https://github.com/dolphin-emu/dolphin), which
-is licensed **GPLv2+**. The vendored sources and any distributed combined build
-(including the core `.wasm`) are subject to GPLv2+. The Rust `naga-spirv-wgsl`
-crate depends on `naga` (MIT/Apache-2.0). Provide your own game ISOs — none are
-included.
+is GPLv2+. The core `.wasm` is compiled from patched Dolphin sources, and the
+JavaScript host in `src/` is combined with it into a single running program, so
+the combined work is GPLv2+ in its entirety — not just the vendored C++.
+
+Because the built core is distributed in this repository, GPLv2 §3 requires the
+complete corresponding source for it. That is satisfied by three pinned inputs
+together, documented in [the reproducible build guide](docs/repro-build.md):
+
+- `vendor/dolphin` — submodule pinned to a fixed upstream revision
+- `patches/dolphin-wasm/wasm-dolphin-full.patch` — the complete delta
+- `patches/dolphin-wasm/nested/*.patch` — changes inside Dolphin's own submodules
+
+The Rust `naga-spirv-wgsl` crate depends on `naga` (MIT/Apache-2.0), which is
+GPL-compatible.
+
+**No game data is included or distributed.** Provide your own GameCube ISO,
+dumped from a disc you own. Save states, memory-card files, and the prebuilt
+JIT cache contain or derive from copyrighted game code and are gitignored —
+do not commit or publish them.
