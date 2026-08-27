@@ -18,9 +18,9 @@ Raw results, per-game samples, and screenshots land in `.omx/boot-matrix/<stamp>
 | --- | --- |
 | Discs tested | 45 |
 | Mount failures | **0** |
-| Reached a real rendered screen | **44** |
+| Reached a real rendered screen | 43-44 (Animal Crossing is intermittent) |
 | Still on a boot logo at 45 s | 1 |
-| Rendering defects found | 1 |
+| Rendering defects found | 2 |
 
 Every disc mounted. `.iso`, `.rvz`, `.ciso`, and `.nkit.iso` all work — RVZ and
 CISO are decompressed inside the core, so no host-side conversion is needed.
@@ -45,11 +45,15 @@ title screens, menus, and in several cases live gameplay:
 
 ## Defects found
 
+**Animal Crossing renders black on roughly one run in six** — see the section
+below; the presenter fix reduced but did not eliminate it.
+
 **Yu-Gi-Oh! The Falsebound Kingdom has corrupted menu text.** The scene renders
 correctly, but the "NEW GAME" / "LOAD GAME" labels carry heavy blue and magenta
 fringing. Geometry and textures elsewhere are clean, so this points at a
 specific text/overlay blend path rather than a general rasterizer fault.
-Reproduces identically across runs.
+Reproduces identically across runs, and pixel-for-pixel on `main` too, so it is
+long-standing in both lines rather than a recent regression.
 
 Two games end the run on a blank frame but are **not** defects — Naruto and
 Paper Mario are mid-FMV transition at 45 s and render correctly at earlier
@@ -74,13 +78,34 @@ recording because both would have been easy to believe:
   1.36 GB disc. The FST holds 11 entries totalling ~26 MB with in-range
   offsets: the game really is that small, and RVZ/NKit strip the padding.
 
-What actually localised it was running the same disc on `presenter=webgl`,
-which rendered it correctly — moving the fault off the core, the disc and the
-VI and onto the WebGPU presenter. Fixed; the table above is the post-fix sweep.
+What localised it was running the same disc on `presenter=webgl`, which
+rendered it correctly — moving the fault off the core, the disc and the VI and
+onto the WebGPU presenter.
+
+### That fix was reported as complete. It was not.
+
+The fix was called done on three consecutive good runs. Repeating it properly,
+six consecutive 25 s runs on the fixed build:
+
+  5/6 render, 1/6 black
+
+So Animal Crossing is **intermittent here, not fixed**. The presenter fix moved
+it from failing every time to failing occasionally, which means a second,
+independent cause is still outstanding. Three good runs was never enough
+evidence for a flaky failure, and the sweep that reported 44/45 caught the good
+side of the coin; a later sweep of the same build caught the bad side and
+reported 43/45.
+
+For contrast, on `main` the same game is black **0/6** — deterministic. Whatever
+the remaining cause is, it reproduces reliably there and is cheaper to debug on
+that branch than on this one.
 
 The general lesson for this harness: a breadth sweep is as likely to find a bug
 in the emulator's own presentation path as in any game, and only a game whose
-XFB is not 640x480 could have exposed this one. Melee never would have.
+XFB is not 640x480 could have exposed this one — Melee never would have. The
+matching lesson for the fix: a defect that appears intermittently needs a
+repeat count before it can be called fixed, and a single sweep cannot supply
+one.
 
 ## Speed: why one number would lie
 
