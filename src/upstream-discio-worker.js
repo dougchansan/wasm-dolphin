@@ -2436,25 +2436,19 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       topology: "triangle-list"
     }
   });
-  // Day-34: size the canvas to the GameCube backbuffer BEFORE configuring.
+  // Day-34: the backbuffer size is asserted in the hardware path's backbuffer
+  // pass, NOT here.
   //
-  // The canvas arrives at the host's demo size (320x240, core-host.js
-  // DEMO_WIDTH/HEIGHT); only the OGL path and the software blit
-  // (drawFrameBytesToWebGpu, which resizes per frame) ever corrected it. The
-  // hardware path never did, so `video=wgpu` rendered into a 320x240
-  // backbuffer while Dolphin reported 640x480 and emitted 640x480 viewports.
-  // The consumer clamps a viewport to the pass size, so every pass was
-  // silently halved in each dimension — no validation error, no device error,
-  // just a wrong image. That is the whole "renders black/garbage on some GPUs"
-  // symptom; it is not GPU-dependent.
+  // createWebGpuPresenter is shared: `presenter=webgpu` (the shipping
+  // software hybrid) and `video=wgpu` (the hardware renderer) both build their
+  // presenter through it. Forcing the canvas to 640x480 here therefore imposes
+  // the hardware path's backbuffer geometry on the software hybrid, whose
+  // frames are whatever size the game's XFB happens to be — and that is not
+  // always 640x480. Animal Crossing presents 608x464 and rendered black for a
+  // whole run with this in place, at 100% game speed and ~7000 draws a frame,
+  // with no validation or device error to show for it.
   //
-  // Harmless for the software hybrid: drawFrameBytesToWebGpu still resizes to
-  // each frame's dimensions as before.
-  if (canvas.width !== GC_BACKBUFFER_WIDTH || canvas.height !== GC_BACKBUFFER_HEIGHT) {
-    canvas.width = GC_BACKBUFFER_WIDTH;
-    canvas.height = GC_BACKBUFFER_HEIGHT;
-  }
-
+  // Sizing per frame is drawFrameBytesToWebGpu's job and it already does it.
   const context = canvas.getContext("webgpu");
   if (!context) {
     throw new Error("OffscreenCanvas could not create a WebGPU context");
