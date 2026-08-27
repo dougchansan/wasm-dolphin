@@ -17,6 +17,11 @@ let api = null;
 let mounted = false;
 let inputMask = 0;
 let workerOwnsCanvas = false;
+// Native GameCube framebuffer. This is what Dolphin reports as its backbuffer
+// (g_presenter->GetBackbufferWidth/Height) on the browser build, so the WebGPU
+// canvas must match it or every viewport the core emits gets clamped down.
+const GC_BACKBUFFER_WIDTH = 640;
+const GC_BACKBUFFER_HEIGHT = 480;
 let renderCanvas = null;
 let renderContext = null;
 let renderImageData = null;
@@ -2431,6 +2436,25 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
       topology: "triangle-list"
     }
   });
+  // Day-34: size the canvas to the GameCube backbuffer BEFORE configuring.
+  //
+  // The canvas arrives at the host's demo size (320x240, core-host.js
+  // DEMO_WIDTH/HEIGHT); only the OGL path and the software blit
+  // (drawFrameBytesToWebGpu, which resizes per frame) ever corrected it. The
+  // hardware path never did, so `video=wgpu` rendered into a 320x240
+  // backbuffer while Dolphin reported 640x480 and emitted 640x480 viewports.
+  // The consumer clamps a viewport to the pass size, so every pass was
+  // silently halved in each dimension — no validation error, no device error,
+  // just a wrong image. That is the whole "renders black/garbage on some GPUs"
+  // symptom; it is not GPU-dependent.
+  //
+  // Harmless for the software hybrid: drawFrameBytesToWebGpu still resizes to
+  // each frame's dimensions as before.
+  if (canvas.width !== GC_BACKBUFFER_WIDTH || canvas.height !== GC_BACKBUFFER_HEIGHT) {
+    canvas.width = GC_BACKBUFFER_WIDTH;
+    canvas.height = GC_BACKBUFFER_HEIGHT;
+  }
+
   const context = canvas.getContext("webgpu");
   if (!context) {
     throw new Error("OffscreenCanvas could not create a WebGPU context");
@@ -3882,6 +3906,37 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // landing after the clear but before/without draws showed black → flicker.
 // The XFB (tex#47) carries content every frame. Restored to normal present.
 const DIAG_EFB_TO_CANVAS = false;
+// §pass-readback: PASS-SCOPED EFB readback (Day-34).
+//
+// The present-path probe ([webgpu-DIAG-cpy]) encodes its tex#14 copy during
+// present handling, but the EFB is loadOp=clear'd at each pass start. An
+// all-zero result there therefore cannot distinguish:
+//   (a) the draws genuinely write nothing, from
+//   (b) the copy sampled the EFB after a clear had already run.
+// That ambiguity is the same one that made DIAG_EFB_TO_CANVAS show black and
+// produce the §28cx flicker, so it must not be used to conclude (a).
+//
+// This probe encodes copyTextureToBuffer at EFB-PASS-END instead (in
+// flushPassDiag, after pass.end(), on the still-live frame encoder), where the
+// pass's own writes are guaranteed visible to a later copy in the same
+// encoder. It only fires for passes that actually issued draws, so a zero
+// result here means those draws produced no pixels — which is the real
+// question. Mapped after submitEnc(); mapAsync cannot precede submit.
+const DIAG_EFB_PASS_READBACK = false;
+// §pass-rects: log the viewport/scissor actually applied to the EFB pass and
+// to the EFB-copy passes, reported at pass end next to that pass's readback.
+//
+// Motivation: the pass-scoped readback shows the EFB DOES receive draws, but
+// content sits in small off-centre regions with the centre black — one sample
+// being exactly 65536 px (256x256) with RGB set and alpha zero. Round numbers
+// like that mean a region/addressing bug, not shading. These are the rects
+// that decide where a draw lands, so they are the first thing to compare
+// against where the pixels actually landed.
+//
+// Note the SET_SCISSOR handler clamps sw/sh with no zero guard: if sx >= passW
+// it produces a zero-width scissor that clips every fragment silently. This
+// probe reports the post-clamp values so that case is visible if it occurs.
+const DIAG_PASS_RECTS = false;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT depth (still dark with depth bypassed) ⇒ blend/TEV/material/texture construct
@@ -4109,6 +4164,79 @@ function drainWebGpuCmdRing() {
       console.log(`[s28k-fbdraws] p=${webGpuExecStats.present} ` +
         `efbId=${self._wgEfbColorId} ${rows}`);
     }
+    // §pass-rects: report the rects that governed this pass, for the EFB pass
+    // and the EFB-copy targets. Logged at pass end so it can be read directly
+    // against the same pass's readback line.
+    if (DIAG_PASS_RECTS && passFbId >= 0 && (pd.draw + pd.drawIdx) > 0) {
+      const isEfb = self._wgEfbColorId && passFbId === self._wgEfbColorId;
+      const isCpy = self._wgCopyTargets && self._wgCopyTargets.has(passFbId);
+      // The XFB pass was excluded here, which is why its rects were never
+      // seen. It is a single full-screen draw into the 2560x1024 XFB, and it
+      // populates only 320 of 640 columns — so its viewport/scissor is the
+      // remaining unmeasured input to the one stage known to be wrong.
+      const isXfb = self._wgXfbId && passFbId === self._wgXfbId;
+      if (isEfb || isCpy || isXfb) {
+        const _qn = Date.now();
+        self._wgRectT0 = self._wgRectT0 || _qn;
+        const _qt = Math.floor((_qn - self._wgRectT0) / 4000);
+        const key = isEfb ? "_wgRectTickEfb" : isXfb ? "_wgRectTickXfb" : "_wgRectTickCpy";
+        self[key] = (self[key] == null) ? -1 : self[key];
+        if (_qt !== self[key] && _qt < 25) {
+          self[key] = _qt;
+          const vp = self._wgLastVp, sc = self._wgLastSc;
+          console.log(`[webgpu-DIAG-rect] ${isEfb ? "EFB" : isXfb ? "XFB" : "CPY"} ` +
+            `fb=${passFbId} pass=${passW}x${passH} ` +
+            `drew=${pd.draw}/${pd.drawIdx} ` +
+            `vp=${vp ? `${vp.x},${vp.y} ${vp.w}x${vp.h} d[${vp.mn},${vp.mx}]` +
+              ` raw=${vp.rawX?.toFixed(1)},${vp.rawY?.toFixed(1)} ` +
+              `${vp.rawW?.toFixed(1)}x${vp.rawH?.toFixed(1)}` : "none"} ` +
+            `sc=${sc ? `${sc.x},${sc.y} ${sc.w}x${sc.h}` +
+              ` raw=${sc.rawX},${sc.rawY} ${sc.rawW}x${sc.rawH}` +
+              (sc.zero ? " ZERO-SIZED" : "") : "none"} ` +
+            `srcTex=${self._wgCpySrc != null ? "tex#" + self._wgCpySrc : "?"}`);
+        }
+      }
+    }
+    // §pass-readback: copy the EFB colour target immediately at pass end,
+    // while this pass's writes are still the newest thing in the encoder.
+    // Gated to passes that DREW, so an all-zero result is evidence about the
+    // draws rather than about clear/readback ordering.
+    // Gate on a MAIN-SCENE pass, not merely "drew something". The EFB target
+    // also hosts small 256x256 render-to-texture passes (9 draws); a
+    // wall-clock tick alone caught only those, and their correct 256x256
+    // output was misread as the scene rendering into a small region. The
+    // main scene passes carry 300+ indexed draws at a full 640x480 viewport.
+    const _isMainScene = (pd.draw + pd.drawIdx) >= 100 && passW >= 512;
+    if (DIAG_EFB_PASS_READBACK && self._wgEfbColorId &&
+        passFbId === self._wgEfbColorId && _isMainScene && enc) {
+      const _rn = Date.now();
+      self._wgEfbRbT0 = self._wgEfbRbT0 || _rn;
+      const _rt = Math.floor((_rn - self._wgEfbRbT0) / 4000);
+      self._wgEfbRbTick = (self._wgEfbRbTick == null) ? -1 : self._wgEfbRbTick;
+      if (_rt !== self._wgEfbRbTick && _rt < 25) {
+        self._wgEfbRbTick = _rt;
+        const ct = webGpuObjects.textures.get(passFbId);
+        if (ct && !ct.format.startsWith("depth")) {
+          try {
+            const w = ct.tex.width, h = ct.tex.height;
+            const bpr = Math.ceil(w * 4 / 256) * 256;
+            const rb = dev.createBuffer({ size: bpr * h, usage: 0x1 | 0x8 });
+            enc.copyTextureToBuffer(
+              { texture: ct.tex },
+              { buffer: rb, bytesPerRow: bpr, rowsPerImage: h },
+              { width: w, height: h, depthOrArrayLayers: 1 });
+            (self._wgEfbRbPending = self._wgEfbRbPending || []).push({
+              rb, bpr, w, h,
+              tag: `p=${webGpuExecStats.present} n=${n} tex#${passFbId} ` +
+                `${w}x${h} drew=${pd.draw}/${pd.drawIdx} ` +
+                `pipeOk=${pd.pipeOk} bgOk=${pd.bgOk}`
+            });
+          } catch (e) {
+            console.log(`[webgpu-DIAG-efbrb] enc threw ${e?.message || e}`);
+          }
+        }
+      }
+    }
     passFbId = -1;
     pd = { pipeOk: 0, pipeMiss: 0, bgOk: 0, bgMiss: 0, draw: 0, drawIdx: 0 };
   };
@@ -4124,6 +4252,39 @@ function drainWebGpuCmdRing() {
     if (!enc) return;
     try { q.submit([enc.finish()]); } catch (e) {}
     enc = null;
+    // §pass-readback: drain EFB copies encoded at pass end. mapAsync is only
+    // legal after the submit that carried the copy, hence draining here.
+    if (self._wgEfbRbPending && self._wgEfbRbPending.length) {
+      const drain = self._wgEfbRbPending;
+      self._wgEfbRbPending = [];
+      for (const p of drain) {
+        p.rb.mapAsync(0x1).then(() => {
+          const a = new Uint8Array(p.rb.getMappedRange());
+          let nz = 0, mx = 0, firstNz = -1;
+          for (let i = 0; i < a.length; i++) {
+            if (a[i]) {
+              nz++;
+              if (a[i] > mx) mx = a[i];
+              if (firstNz < 0) firstNz = i;
+            }
+          }
+          // Report where the first nonzero byte lands: content confined to a
+          // sub-rect (a viewport/scissor bug) looks very different from
+          // content spread across the surface.
+          const px = firstNz < 0 ? -1 : Math.floor(firstNz / 4);
+          const row = firstNz < 0 ? -1 : Math.floor(firstNz / p.bpr);
+          const col = firstNz < 0 ? -1 : Math.floor((firstNz % p.bpr) / 4);
+          const cy = p.h >> 1, cx = p.w >> 1;
+          const o = cy * p.bpr + cx * 4;
+          console.log(`[webgpu-DIAG-efbrb] ${p.tag} ` +
+            `nz=${nz}/${a.length} max=${mx} ` +
+            `firstNz=px${px}@(${col},${row}) ` +
+            `ctr=${a[o]},${a[o + 1]},${a[o + 2]},${a[o + 3]}`);
+          p.rb.unmap(); p.rb.destroy();
+        }).catch((e) => console.log(
+          `[webgpu-DIAG-efbrb] map ${p.tag} err ${e?.message || e}`));
+      }
+    }
     if (errScope) {
       errScope = false;
       dev.popErrorScope().then((er) => {
@@ -4443,6 +4604,22 @@ function drainWebGpuCmdRing() {
           let colorView;
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
+            // Day-34: re-assert the backbuffer size every backbuffer pass.
+            //
+            // Sizing the canvas once at presenter creation is not enough: the
+            // software blit path (drawFrameBytesToWebGpu) resizes the canvas to
+            // each frame's dimensions, and the boot frames are 320x240, so by
+            // the time the hardware renderer takes over the canvas is half
+            // size in each dimension. Dolphin still reports a 640x480
+            // backbuffer and emits 640x480 viewports; the SET_VIEWPORT handler
+            // clamps them to the pass, so every pass silently rendered at half
+            // scale with no validation or device error to show for it.
+            if (renderCanvas &&
+                (renderCanvas.width !== GC_BACKBUFFER_WIDTH ||
+                 renderCanvas.height !== GC_BACKBUFFER_HEIGHT)) {
+              renderCanvas.width = GC_BACKBUFFER_WIDTH;
+              renderCanvas.height = GC_BACKBUFFER_HEIGHT;
+            }
             const cur = renderGpu.context.getCurrentTexture();
             colorView = cur.createView();
             passW = cur.width;
@@ -4653,6 +4830,16 @@ function drainWebGpuCmdRing() {
             // below) since the viewport sense cannot carry it.
             if (mn > mx) { const t = mn; mn = mx; mx = t; }
             pass.setViewport(vx, vy, vw, vh, mn, mx);
+            if (DIAG_PASS_RECTS) {
+              // Keep both raw and post-clamp: a clamp that moves the rect is
+              // itself the bug signature.
+              self._wgLastVp = {
+                x: vx, y: vy, w: vw, h: vh, mn, mx,
+                rawX: f32[recWord + 1], rawY: f32[recWord + 2],
+                rawW: f32[recWord + 3], rawH: f32[recWord + 4],
+                n: (self._wgLastVp?.n || 0) + 1
+              };
+            }
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
@@ -4664,6 +4851,15 @@ function drainWebGpuCmdRing() {
             sw = Math.min(sw, passW - sx);
             sh = Math.min(sh, passH - sy);
             pass.setScissorRect(sx, sy, sw, sh);
+            if (DIAG_PASS_RECTS) {
+              self._wgLastSc = {
+                x: sx, y: sy, w: sw, h: sh,
+                rawX: u32[recWord + 1], rawY: u32[recWord + 2],
+                rawW: u32[recWord + 3], rawH: u32[recWord + 4],
+                zero: (sw === 0 || sh === 0) ? 1 : 0,
+                n: (self._wgLastSc?.n || 0) + 1
+              };
+            }
           }
           break;
         case WGPU_CMD_OP_DRAW:
@@ -5204,6 +5400,67 @@ function drainWebGpuCmdRing() {
                     `ctr=${a[o]},${a[o+1]},${a[o+2]},${a[o+3]} ` +
                     `q=${a[o2]},${a[o2+1]},${a[o2+2]},${a[o2+3]} ` +
                     `s200x150=${a[o3]},${a[o3+1]},${a[o3+2]},${a[o3+3]}`);
+                  // §row-hist: the XFB holds exactly half the bytes a 640x480
+                  // region should (614400 = 640*240*4), with all 4 channels
+                  // nonzero where sampled. Three patterns explain "half", and
+                  // they mean different bugs — so measure per-row occupancy
+                  // over the 640x480 sub-rect rather than infer:
+                  //   alternating full/empty rows -> interlaced field handling
+                  //   every row ~50% full         -> horizontal/stride issue
+                  //   contiguous full block       -> wrong copy rect/offset
+                  if (/\(XFB\)/.test(p.tag)) {
+                    const RW = Math.min(640, p.w), RH = Math.min(480, p.h);
+                    const rowNz = new Array(RH);
+                    let fullRows = 0, emptyRows = 0, partRows = 0;
+                    for (let y = 0; y < RH; y++) {
+                      let c = 0;
+                      const base = y * p.bpr;
+                      for (let x = 0; x < RW * 4; x++) if (a[base + x]) c++;
+                      rowNz[y] = c;
+                      if (c === 0) emptyRows++;
+                      else if (c >= RW * 4 * 0.95) fullRows++;
+                      else partRows++;
+                    }
+                    // First 12 rows verbatim: alternation is obvious by eye
+                    // and cannot be faked by the summary counts.
+                    const head = rowNz.slice(0, 12).join(",");
+                    const evens = rowNz.filter((_, i) => i % 2 === 0)
+                      .reduce((s, v) => s + v, 0);
+                    const odds = rowNz.filter((_, i) => i % 2 === 1)
+                      .reduce((s, v) => s + v, 0);
+                    // Every row is exactly 50% populated, which two different
+                    // bugs both produce: alternate pixel COLUMNS zero (a
+                    // stride-2 write), or the left half populated and the
+                    // right half empty (a wrong copy width/rect). Separate
+                    // them by where the set pixels sit within one row.
+                    const my = Math.min(150, RH - 1);
+                    const mb = my * p.bpr;
+                    let leftPx = 0, rightPx = 0, evenPx = 0, oddPx = 0;
+                    let firstZeroPx = -1, firstNzPx = -1;
+                    for (let x = 0; x < RW; x++) {
+                      const q = mb + x * 4;
+                      const set = a[q] || a[q + 1] || a[q + 2] || a[q + 3];
+                      if (set) {
+                        if (firstNzPx < 0) firstNzPx = x;
+                        if (x < RW / 2) leftPx++; else rightPx++;
+                        if (x % 2 === 0) evenPx++; else oddPx++;
+                      } else if (firstZeroPx < 0 && firstNzPx >= 0) {
+                        firstZeroPx = x;
+                      }
+                    }
+                    console.log(`[webgpu-DIAG-rowhist] ${p.tag} ` +
+                      `rows=${RH}x${RW} full=${fullRows} empty=${emptyRows} ` +
+                      `partial=${partRows} evenSum=${evens} oddSum=${odds} ` +
+                      `head=[${head}]`);
+                    console.log(`[webgpu-DIAG-colhist] ${p.tag} row${my}: ` +
+                      `setPx=${leftPx + rightPx}/${RW} ` +
+                      `left=${leftPx} right=${rightPx} ` +
+                      `evenCol=${evenPx} oddCol=${oddPx} ` +
+                      `firstNzPx=${firstNzPx} firstZeroAfter=${firstZeroPx} ` +
+                      `=> ${evenPx > 0 && oddPx === 0 ? "STRIDE-2 (alt columns)"
+                        : rightPx === 0 ? "LEFT-HALF ONLY (copy rect/width)"
+                        : "other"}`);
+                  }
                   p.rb.unmap(); p.rb.destroy();
                 }).catch((e) => console.log(
                   `[webgpu-DIAG-cpy] map ${p.tag} err ${e?.message || e}`));
