@@ -1,0 +1,549 @@
+diff --git a/Source/Core/Core/WasmCpuBudget.h b/Source/Core/Core/WasmCpuBudget.h
+index 27f274c..217da5a 100644
+--- a/Source/Core/Core/WasmCpuBudget.h
++++ b/Source/Core/Core/WasmCpuBudget.h
+@@ -11,6 +11,8 @@
+ #include <cstdint>
+ #include <sstream>
+ #include <string>
++#include <type_traits>
++#include <utility>
+ 
+ #include "Common/WasmConservedBudget.h"
+ 
+@@ -69,6 +71,7 @@ struct CompositionContext
+   std::uint64_t root_count = 0;
+   std::uint64_t sampled_root_count = 0;
+   std::array<std::uint64_t, static_cast<std::size_t>(CompositionEvent::Count)> event_counts{};
++  std::array<std::uint64_t, static_cast<std::size_t>(CompositionEvent::Count)> event_total_ns{};
+ };
+ 
+ inline std::atomic<bool> s_composition_enabled{false};
+@@ -78,6 +81,8 @@ inline std::atomic<std::uint64_t> s_composition_root_count{0};
+ inline std::atomic<std::uint64_t> s_composition_sampled_root_count{0};
+ inline std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(CompositionEvent::Count)>
+     s_composition_event_counts{};
++inline std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(CompositionEvent::Count)>
++    s_composition_event_total_ns{};
+ inline thread_local CompositionContext s_composition_context{};
+ 
+ inline void PublishComposition()
+@@ -91,6 +96,8 @@ inline void PublishComposition()
+   {
+     s_composition_event_counts[index].store(s_composition_context.event_counts[index],
+                                             std::memory_order_relaxed);
++    s_composition_event_total_ns[index].store(s_composition_context.event_total_ns[index],
++                                              std::memory_order_relaxed);
+   }
+ }
+ 
+@@ -138,6 +145,11 @@ inline void RecordCompositionEvent(CompositionEvent event, std::uint64_t count =
+   s_composition_context.event_counts[static_cast<std::size_t>(event)] += count;
+ }
+ 
++inline void RecordCompositionElapsed(CompositionEvent event, std::uint64_t elapsed_ns)
++{
++  s_composition_context.event_total_ns[static_cast<std::size_t>(event)] += elapsed_ns;
++}
++
+ inline void SetCompositionEnabled(bool enabled)
+ {
+   if (s_composition_enabled.exchange(enabled, std::memory_order_relaxed) == enabled)
+@@ -157,6 +169,68 @@ inline std::uint64_t NowNs()
+       std::chrono::steady_clock::now().time_since_epoch()).count());
+ }
+ 
++template <bool TrackComposition, typename Function>
++decltype(auto) MeasureCompositionEvent(CompositionEvent event, Function&& function)
++{
++  if constexpr (!TrackComposition)
++  {
++    return std::forward<Function>(function)();
++  }
++  else
++  {
++    RecordCompositionEvent(event);
++    const std::uint64_t start_ns = NowNs();
++    if constexpr (std::is_void_v<std::invoke_result_t<Function>>)
++    {
++      std::forward<Function>(function)();
++      RecordCompositionElapsed(event, NowNs() - start_ns);
++      return;
++    }
++    else
++    {
++      auto result = std::forward<Function>(function)();
++      RecordCompositionElapsed(event, NowNs() - start_ns);
++      return result;
++    }
++  }
++}
++
++template <bool TrackComposition, typename Function>
++decltype(auto) MeasureCompositionEventOverlap(CompositionEvent primary_event,
++                                              CompositionEvent secondary_event,
++                                              bool secondary_active, Function&& function)
++{
++  if constexpr (!TrackComposition)
++  {
++    return std::forward<Function>(function)();
++  }
++  else
++  {
++    RecordCompositionEvent(primary_event);
++    if (secondary_active)
++      RecordCompositionEvent(secondary_event);
++    const std::uint64_t start_ns = NowNs();
++    if constexpr (std::is_void_v<std::invoke_result_t<Function>>)
++    {
++      std::forward<Function>(function)();
++      const std::uint64_t elapsed_ns = NowNs() - start_ns;
++      RecordCompositionElapsed(primary_event, elapsed_ns);
++      if (secondary_active)
++        RecordCompositionElapsed(secondary_event, elapsed_ns);
++      return;
++    }
++    else
++    {
++      auto result = std::forward<Function>(function)();
++      const std::uint64_t elapsed_ns = NowNs() - start_ns;
++      RecordCompositionElapsed(primary_event, elapsed_ns);
++      if (secondary_active)
++        RecordCompositionElapsed(secondary_event, elapsed_ns);
++      return result;
++    }
++  }
++}
++
+ inline void SetEnabled(bool enabled) { s_budget.SetEnabled(enabled); }
+ inline void NotifyAppliedLoad()
+ {
+@@ -254,6 +328,12 @@ inline std::string FormatJson()
+     out << (event ? "," : "")
+         << s_composition_event_counts[event].load(std::memory_order_relaxed);
+   }
++  out << "],\"eventTotalNs\":[";
++  for (std::size_t event = 0; event < s_composition_event_total_ns.size(); ++event)
++  {
++    out << (event ? "," : "")
++        << s_composition_event_total_ns[event].load(std::memory_order_relaxed);
++  }
+   out << "]}}";
+   return out.str();
+ }
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index 3d29b63..d13a444 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -88,6 +88,9 @@
+       DolphinWeb::WasmCpuBudget::RecordCompositionEvent(                                \
+           DolphinWeb::WasmCpuBudget::CompositionEvent::event);                           \
+   } while (false)
++#define DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(event, expression)                            \
++  DolphinWeb::WasmCpuBudget::MeasureCompositionEvent<TrackComposition>(                   \
++      DolphinWeb::WasmCpuBudget::CompositionEvent::event, [&]() { return expression; })
+ #define DOLPHIN_WEB_CPU_BUDGET_HELPER_SCOPE()                                            \
+   DolphinWeb::WasmCpuBudget::ScopedPhase cpu_budget_helper_phase(                        \
+       DolphinWeb::WasmCpuBudget::Phase::JitHelper)
+@@ -7748,6 +7751,7 @@ bool NearlyEqualForWasmBlockTest(double lhs, double rhs)
+ 
+ #ifndef __EMSCRIPTEN__
+ #define DOLPHIN_WEB_CPU_COMPOSITION_EVENT(event) ((void)0)
++#define DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(event, expression) (expression)
+ #endif
+ 
+ // Per-helper disable bitmask setter. Wired from the JS host via
+@@ -7798,8 +7802,7 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+   const u8* normal_entry = m_block_cache.Dispatch();
+   if (!normal_entry)
+   {
+-    DOLPHIN_WEB_CPU_COMPOSITION_EVENT(CacheMissJit);
+-    Jit(m_ppc_state.pc);
++    DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(CacheMissJit, Jit(m_ppc_state.pc));
+     return;
+   }
+ 
+@@ -7847,8 +7850,9 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+     // Direct dispatch to the most commonly used callbacks for better performance
+     if (callback == AnyCallbackCast(Interpret<false>)) [[likely]]
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(Interpret);
+-      Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          Interpret,
++          Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload)));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
+ #if DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
+@@ -7857,11 +7861,11 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+       ExistingHelperSnapshot helper_before{};
+       if constexpr (TrackComposition)
+       {
+-        DOLPHIN_WEB_CPU_COMPOSITION_EVENT(JitGuest);
+         helper_before = CaptureExistingHelperSnapshot();
+       }
+-      const auto distance =
+-          RunWasmBlock(ppc_state, *reinterpret_cast<const WasmBlockOperands*>(payload));
++      const auto distance = DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          JitGuest,
++          RunWasmBlock(ppc_state, *reinterpret_cast<const WasmBlockOperands*>(payload)));
+       if constexpr (TrackComposition)
+       {
+         DolphinWeb::WasmCpuBudget::RecordCompositionEvent(
+@@ -7878,66 +7882,78 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+     // DOLPHIN_WEB_HOT_DISPATCH_ORDER_BEGIN
+     else if (callback == AnyCallbackCast(FastInteger))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastInteger);
+-      if (FastInteger(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastInteger,
++              FastInteger(ppc_state,
++                          *reinterpret_cast<const FastInstructionOperands*>(payload))))
+         normal_entry = payload + sizeof(FastInstructionOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastBranch);
+-      FastBranch(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastBranch,
++          FastBranch(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastFloat))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastFloat);
+-      if (FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastFloat,
++              FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload))))
+         normal_entry = payload + sizeof(FastInstructionOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastBranchBdnz))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastBranch);
+-      FastBranchBdnz(ppc_state, *reinterpret_cast<const FastBranchBdnzOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastBranch,
++          FastBranchBdnz(ppc_state,
++                         *reinterpret_cast<const FastBranchBdnzOperands*>(payload)));
+       normal_entry = payload + sizeof(FastBranchBdnzOperands);
+     }
+     else if (callback == AnyCallbackCast(Interpret<true>))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(Interpret);
+-      Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          Interpret,
++          Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload)));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMfmsr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMfmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMfmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMtmsr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMtmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMtmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMfspr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMfspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMfspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMtspr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMtspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMtspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastSystemNoop))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastSystemNoop(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastSystemNoop(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     // DOLPHIN_WEB_HOT_DISPATCH_ORDER_END
+@@ -7945,64 +7961,76 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+     // DOLPHIN_WEB_LEGACY_DISPATCH_ORDER_BEGIN
+     else if (callback == AnyCallbackCast(Interpret<true>))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(Interpret);
+-      Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          Interpret,
++          Interpret<true>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload)));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMfmsr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMfmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMfmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMtmsr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMtmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMtmsr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMfspr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMfspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMfspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMtspr))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastMtspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastMtspr(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastSystemNoop))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastSystem);
+-      FastSystemNoop(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastSystem,
++          FastSystemNoop(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastInteger))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastInteger);
+-      if (FastInteger(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastInteger,
++              FastInteger(ppc_state,
++                          *reinterpret_cast<const FastInstructionOperands*>(payload))))
+         normal_entry = payload + sizeof(FastInstructionOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastBranch);
+-      FastBranch(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastBranch,
++          FastBranch(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastBranchBdnz))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastBranch);
+-      FastBranchBdnz(ppc_state, *reinterpret_cast<const FastBranchBdnzOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastBranch,
++          FastBranchBdnz(ppc_state,
++                         *reinterpret_cast<const FastBranchBdnzOperands*>(payload)));
+       normal_entry = payload + sizeof(FastBranchBdnzOperands);
+     }
+     else if (callback == AnyCallbackCast(FastFloat))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastFloat);
+-      if (FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastFloat,
++              FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload))))
+         normal_entry = payload + sizeof(FastInstructionOperands);
+       else
+         break;
+@@ -8011,99 +8039,116 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+ #endif
+     else if (callback == AnyCallbackCast(FastMeleeIdlePollLoop))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      if (FastMeleeIdlePollLoop(ppc_state,
+-                                *reinterpret_cast<const MeleeIdlePollLoopOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastMelee,
++              FastMeleeIdlePollLoop(
++                  ppc_state, *reinterpret_cast<const MeleeIdlePollLoopOperands*>(payload))))
+         normal_entry = payload + sizeof(MeleeIdlePollLoopOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastMeleeTitleLoop))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      if (FastMeleeTitleLoop(ppc_state,
+-                             *reinterpret_cast<const MeleeTitleLoopOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastMelee,
++              FastMeleeTitleLoop(
++                  ppc_state, *reinterpret_cast<const MeleeTitleLoopOperands*>(payload))))
+         normal_entry = payload + sizeof(MeleeTitleLoopOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastOsInterruptFunction))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      if (FastOsInterruptFunction(ppc_state,
+-                                  *reinterpret_cast<const OsInterruptFunctionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastMelee,
++              FastOsInterruptFunction(
++                  ppc_state, *reinterpret_cast<const OsInterruptFunctionOperands*>(payload))))
+         normal_entry = payload + sizeof(OsInterruptFunctionOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastOsInterruptCallBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      if (FastOsInterruptCallBranch(
+-              ppc_state, *reinterpret_cast<const OsInterruptFunctionOperands*>(payload)))
++      if (DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++              FastMelee,
++              FastOsInterruptCallBranch(
++                  ppc_state, *reinterpret_cast<const OsInterruptFunctionOperands*>(payload))))
+         normal_entry = payload + sizeof(OsInterruptFunctionOperands);
+       else
+         break;
+     }
+     else if (callback == AnyCallbackCast(FastMeleeInputStatusCallBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      FastMeleeInputStatusCallBranch(
+-          ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastMelee,
++          FastMeleeInputStatusCallBranch(
++              ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMeleeStatusFunctionCallBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      FastMeleeStatusFunctionCallBranch(
+-          ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastMelee,
++          FastMeleeStatusFunctionCallBranch(
++              ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMeleeSiPollNoEventCallBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      FastMeleeSiPollNoEventCallBranch(
+-          ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastMelee,
++          FastMeleeSiPollNoEventCallBranch(
++              ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastMeleeInputPollNoChangeCallBranch))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastMelee);
+-      FastMeleeInputPollNoChangeCallBranch(
+-          ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastMelee,
++          FastMeleeInputPollNoChangeCallBranch(
++              ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastDcbx))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastDcbx);
+-      FastDcbx(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastDcbx,
++          FastDcbx(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)));
+       normal_entry = payload + sizeof(FastInstructionOperands);
+     }
+     else if (callback == AnyCallbackCast(FastDcbxLoop))
+     {
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(FastDcbx);
+-      FastDcbxLoop(ppc_state, *reinterpret_cast<const DcbxLoopOperands*>(payload));
++      DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(
++          FastDcbx,
++          FastDcbxLoop(ppc_state, *reinterpret_cast<const DcbxLoopOperands*>(payload)));
+       normal_entry = payload + sizeof(DcbxLoopOperands);
+     }
+     else
+     {
+ #ifdef __EMSCRIPTEN__
+       ExistingHelperSnapshot helper_before{};
++      const bool is_jit_guest = callback == AnyCallbackCast(RunWasmBlock);
+       if constexpr (TrackComposition)
+       {
+-        if (callback == AnyCallbackCast(RunWasmBlock))
+-        {
+-          DOLPHIN_WEB_CPU_COMPOSITION_EVENT(JitGuest);
++        if (is_jit_guest)
+           helper_before = CaptureExistingHelperSnapshot();
+-        }
+       }
+ #endif
+-      DOLPHIN_WEB_CPU_COMPOSITION_EVENT(GenericCallback);
++#ifdef __EMSCRIPTEN__
++      // When direct Wasm block dispatch is disabled, a RunWasmBlock callback belongs to both
++      // generic_callback and jit_guest. Both totals intentionally receive the same elapsed body
++      // time so consumers can preserve that overlap instead of treating categories as disjoint.
++      const auto distance = DolphinWeb::WasmCpuBudget::MeasureCompositionEventOverlap<
++          TrackComposition>(DolphinWeb::WasmCpuBudget::CompositionEvent::GenericCallback,
++                            DolphinWeb::WasmCpuBudget::CompositionEvent::JitGuest,
++                            is_jit_guest, [&]() { return callback(ppc_state, payload); });
++#else
+       const auto distance = callback(ppc_state, payload);
++#endif
+ #ifdef __EMSCRIPTEN__
+       if constexpr (TrackComposition)
+       {
+-        if (callback == AnyCallbackCast(RunWasmBlock))
++        if (is_jit_guest)
+         {
+           DolphinWeb::WasmCpuBudget::RecordCompositionEvent(
+               DolphinWeb::WasmCpuBudget::CompositionEvent::JitHelper,
+@@ -8124,8 +8169,7 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+       const u8* const next = m_block_cache.Dispatch();
+       if (!next)
+       {
+-        DOLPHIN_WEB_CPU_COMPOSITION_EVENT(CacheMissJit);
+-        Jit(m_ppc_state.pc);
++        DOLPHIN_WEB_CPU_COMPOSITION_MEASURE(CacheMissJit, Jit(m_ppc_state.pc));
+         return;
+       }
+       DOLPHIN_WEB_HOT_COUNT(++s_wasm_redispatch_iter_count);

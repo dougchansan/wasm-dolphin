@@ -59,8 +59,8 @@ from the one that built the committed `.wasm`.
 
 | Property | Value |
 | --- | --- |
-| `cores/dolphin/dolphin-core-upstream.wasm` size | `12800745` bytes |
-| SHA-256 | `0db4f08abed065679b38373045aa03efbe2247931887ecbe6cecd323f4d6f3dc` |
+| `cores/dolphin/dolphin-core-upstream.wasm` size | `14977143` bytes |
+| SHA-256 | `af7048b163d08b1ef35823cb1ed3c767713003daa248afde7e557c28d84de89c` |
 
 ## Commands
 
