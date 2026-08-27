@@ -18,9 +18,9 @@ Raw results, per-game samples, and screenshots land in `.omx/boot-matrix/<stamp>
 | --- | --- |
 | Discs tested | 45 |
 | Mount failures | **0** |
-| Reached a real rendered screen | **43** |
-| Still on a boot logo at 45 s | 2 |
-| Rendering defects found | 2 |
+| Reached a real rendered screen | **44** |
+| Still on a boot logo at 45 s | 1 |
+| Rendering defects found | 1 |
 
 Every disc mounted. `.iso`, `.rvz`, `.ciso`, and `.nkit.iso` all work — RVZ and
 CISO are decompressed inside the core, so no host-side conversion is needed.
@@ -29,7 +29,7 @@ CISO are decompressed inside the core, so no host-side conversion is needed.
 ## Verified by screenshot
 
 Each game's canvas was read and compared against the screen it should be
-showing. 43 of 45 rendered correctly — publisher logos, memory-card dialogs,
+showing. 44 of 45 rendered correctly — publisher logos, memory-card dialogs,
 title screens, menus, and in several cases live gameplay:
 
 - **In-game/gameplay verified:** Luigi's Mansion (mansion interior, HUD intact),
@@ -45,28 +45,50 @@ title screens, menus, and in several cases live gameplay:
 
 ## Defects found
 
-**Animal Crossing (RVZ) renders nothing.** The core is healthy — 93–101 % game
-speed, 60 core fps, thousands of draws submitted per frame (`7221/259 draw`) —
-but the canvas is black for the entire run and unique visual fps reads exactly
-`0.0`. Emulation is fine and the presentation path produces no frames at all.
-This is the cleanest "renders nothing while the core is perfectly alive" repro
-in the library and the best case to debug the XFB/present path against.
-
 **Yu-Gi-Oh! The Falsebound Kingdom has corrupted menu text.** The scene renders
 correctly, but the "NEW GAME" / "LOAD GAME" labels carry heavy blue and magenta
 fringing. Geometry and textures elsewhere are clean, so this points at a
 specific text/overlay blend path rather than a general rasterizer fault.
+Reproduces identically across runs.
 
-Two other games end the run on a blank frame but are **not** defects — Naruto
-and Paper Mario are mid-FMV transition at 45 s and render correctly at earlier
+Two games end the run on a blank frame but are **not** defects — Naruto and
+Paper Mario are mid-FMV transition at 45 s and render correctly at earlier
 checkpoints.
+
+## The first sweep found a bug in this repo, not in the games
+
+The initial run reported Animal Crossing rendering nothing while its core ran
+at 100 % game speed with ~7000 draws a frame. That was not a game problem. It
+was a regression in `createWebGpuPresenter`, which had been made to force the
+canvas to 640x480 for the hardware renderer's benefit — on a function the
+shipping software hybrid shares. Animal Crossing presents 608x464, so it went
+black, silently, with no validation or device error.
+
+Two plausible-looking theories were tested and killed first, which is worth
+recording because both would have been easy to believe:
+
+- **VI field mode.** Animal Crossing runs `halfline=1030`. So do Mario Kart
+  Double Dash, Twilight Princess, Pikmin 2 and Wario World, all rendering
+  correctly. Not the discriminator.
+- **Truncated dumps.** Both Animal Crossing images are 19-26 MB against a
+  1.36 GB disc. The FST holds 11 entries totalling ~26 MB with in-range
+  offsets: the game really is that small, and RVZ/NKit strip the padding.
+
+What actually localised it was running the same disc on `presenter=webgl`,
+which rendered it correctly — moving the fault off the core, the disc and the
+VI and onto the WebGPU presenter. Fixed; the table above is the post-fix sweep.
+
+The general lesson for this harness: a breadth sweep is as likely to find a bug
+in the emulator's own presentation path as in any game, and only a game whose
+XFB is not 640x480 could have exposed this one. Melee never would have.
 
 ## Speed: why one number would lie
 
-Two games never left the boot logo inside the window — Animal Crossing
-(`.nkit.iso`) and Pikmin 2 (`.iso`), both ~7 %. Both have a sibling dump of the
-same game ID that booted to full speed, so this is boot-phase variance, not a
-per-title limit.
+One disc never left the boot logo inside the window — Animal Crossing
+(`.nkit.iso`) at ~7 %. Its RVZ sibling of the same game ID reaches the title
+screen at 98-103 %, so this is boot-phase variance, not a per-title limit.
+Pikmin 2 (`.iso`) was in the same state before the presenter fix and now
+progresses at ~54 %.
 
 For everything else, the window average and the steady-state tail disagree in
 **both** directions, so neither is a compatibility grade:
