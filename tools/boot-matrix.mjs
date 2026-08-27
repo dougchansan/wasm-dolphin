@@ -142,6 +142,16 @@ async function runOne(disc, index) {
       if (panel?.hidden) document.querySelector("#debugToggle")?.click();
     });
 
+    // The page must have finished wiring its own event listeners before the
+    // ROM goes in. index.html loads src/bootstrap.js, which reaches app.js
+    // through a top-level await, so app.js evaluates AFTER domcontentloaded
+    // and wireFileMounting() has not yet attached the #romInput change
+    // handler when the navigation resolves. Uploading into that gap fires a
+    // change event at no listener: the input holds the file, nothing reads it,
+    // and the run dies 120s later on a mount timeout with an empty console and
+    // "No file" still on screen.
+    await waitForAppReady(page);
+
     const t0 = Date.now();
     await page.setInputFiles("#romInput", disc.file);
     await page.click("#screen");
@@ -255,6 +265,25 @@ function buildUrl(disc) {
   return url;
 }
 
+// Wait until the page's own scripts have run. index.html ships #statusPill as
+// the literal text "Booting"; app.js replaces it once it evaluates, so a pill
+// that still says Booting means the file-mount listener is not attached yet.
+// Falling through after the timeout is deliberate — a page that never reports
+// ready should fail as a mount timeout with its console captured, not as a
+// separate error here.
+async function waitForAppReady(page, timeoutSeconds = 30) {
+  for (let attempt = 0; attempt < timeoutSeconds * 4; attempt++) {
+    const ready = await page.evaluate(() => {
+      const pill = document.querySelector("#statusPill")?.textContent?.trim() ?? "";
+      const input = document.querySelector("#romInput");
+      return Boolean(input) && pill !== "" && pill !== "Booting";
+    }).catch(() => false);
+    if (ready) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
 async function waitForMount(page, timeoutSeconds) {
   for (let second = 0; second <= timeoutSeconds; second++) {
     const state = await page.evaluate(() => ({
@@ -305,7 +334,18 @@ async function isBright(page) {
 
 async function readSample(page, elapsedSeconds) {
   return page.evaluate((elapsed) => {
-    const read = (sel) => document.querySelector(sel)?.textContent?.trim() ?? "";
+    // The HUD ids are not stable across branches: the counters were renamed
+    // from "<metric>Counter" to "hud<Metric>". Read whichever exists so one
+    // harness measures both and the comparison stays apples-to-apples.
+    // Missing ids read as "" and become 0, which silently reports a running
+    // game as a dead core — that is exactly what a stale id looks like.
+    const read = (...sels) => {
+      for (const sel of sels) {
+        const text = document.querySelector(sel)?.textContent?.trim();
+        if (text) return text;
+      }
+      return "";
+    };
     const screen = document.querySelector("#screen");
     const state = (window.__bootMatrixState ??= { canvas: document.createElement("canvas"), context: null });
     state.canvas.width = 64;
@@ -323,15 +363,26 @@ async function readSample(page, elapsedSeconds) {
       }
       visibleHash = h | 0;
     } catch { visibleHash = 0; }
+    // app.js publishes the same numbers it renders into the HUD on
+    // window.__lastFrameInfo, as structured values rather than formatted text.
+    // Prefer it: it survives HUD markup changes, and it is the field the
+    // existing menu-progress validator already reads.
+    const info = window.__lastFrameInfo || {};
+    const pick = (value, ...sels) =>
+      (value == null || value === "" ? read(...sels) : String(value));
+
     return {
       elapsedSeconds: elapsed,
-      frame: read("#frameCounter"),
-      coreFps: read("#coreFpsCounter"),
-      visualFps: read("#visualFpsCounter"),
-      gameSpeed: read("#gameSpeedCounter"),
+      frame: pick(info.frame, "#frameCounter", "#hudFrame"),
+      coreFps: pick(info.coreFps, "#coreFpsCounter", "#hudCoreFps"),
+      visualFps: pick(info.visualChangeFps, "#visualFpsCounter", "#hudVisualFps"),
+      gameSpeed: pick(info.gameSpeed, "#gameSpeedCounter", "#hudSpeed"),
+      presentFps: pick(info.presentationFps ?? info.fps, "#fpsCounter", "#hudFps"),
+      hasFrameInfo: Boolean(window.__lastFrameInfo),
+      infoKeys: Object.keys(info).slice(0, 40),
       gameTitle: read("#gameTitle"),
       mountNote: read("#mountNote"),
-      statusPill: read("#statusPill"),
+      statusPill: read("#statusPill", "#hudStatus"),
       visibleHash,
     };
   }, elapsedSeconds);
