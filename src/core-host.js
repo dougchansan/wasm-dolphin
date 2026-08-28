@@ -100,6 +100,7 @@ export class EmulatorHost {
     this.softwareTevHotCaseMode = requestedSoftwareTevHotCaseMode(window.location.search);
     this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
     this.correctTimeDrift = requestedCorrectTimeDrift();
+    this.coreLog = requestedCoreLog();
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
@@ -373,6 +374,7 @@ export class EmulatorHost {
             softwareTevHotCaseMode: this.softwareTevHotCaseMode,
             xfbFastPaths: this.xfbFastPaths,
             correctTimeDrift: this.correctTimeDrift,
+            coreLog: this.coreLog,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
@@ -1304,6 +1306,13 @@ function requestedFastSoftwareRaster() {
 // §28cz play-speed sync: opt-in ?timedrift=1 flips Dolphin's MAIN_CORRECT_TIME_DRIFT
 // so the throttle recovers time lost to heavy-scene CPU stalls (game clock tracks a
 // real stopwatch) instead of conceding it. Default off = stock throttle behavior.
+// ?corelog=1 forwards Dolphin's own ERROR/WARN output to the browser console.
+// Off by default: the volume is large enough to distort timing, and the
+// shipping page load should stay unchanged.
+function requestedCoreLog() {
+  return new URLSearchParams(window.location.search).get("corelog") === "1";
+}
+
 function requestedCorrectTimeDrift() {
   return new URLSearchParams(window.location.search).get("timedrift") === "1";
 }

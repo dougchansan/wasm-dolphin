@@ -442,6 +442,33 @@ bool s_runtime_initialized = false;
 std::string s_core_status = "Not initialized";
 std::string s_core_title;
 std::string s_video_backend = "Software Renderer";
+
+// Dolphin's own ERROR_LOG_FMT / WARN_LOG_FMT output is otherwise discarded in
+// this build: Emscripten's print is routed to postStatus and no LogListener is
+// ever registered, so the emulator's diagnostics never reach the browser
+// console. That silence has real cost -- the software rasterizer emits an
+// "unsupported pixel format" warning that nobody has been able to see.
+//
+// Opt-in via ?corelog=1 (Module['dolphinCoreLog']), because the volume is
+// large enough to distort timing. Default off leaves the shipping page
+// byte-identical in behaviour.
+class BrowserLogListener final : public Common::Log::LogListener
+{
+public:
+  void Log(Common::Log::LogLevel level, const char* msg) override
+  {
+    if (msg == nullptr)
+      return;
+    const int severity = static_cast<int>(level);
+    EM_ASM({
+      var text = "[dolphin] " + UTF8ToString($1);
+      if ($0 <= 1) { console.error(text); }
+      else if ($0 == 2) { console.warn(text); }
+      else { console.log(text); }
+    }, severity, msg);
+  }
+};
+
 PowerPC::CPUCore s_cpu_core = PowerPC::CPUCore::CachedInterpreter;
 bool s_cpu_thread = false;
 float s_cpu_overclock = 1.0f;
@@ -521,6 +548,21 @@ void EnsureRuntime()
   SConfig::Init();
   g_Config.Init();
   Common::Log::LogManager::Init();
+  // ?corelog=1 forwards Dolphin's log output to the browser console.
+  if (EM_ASM_INT({ return (typeof Module !== 'undefined' &&
+                           Module['dolphinCoreLog']) ? 1 : 0; }) != 0)
+  {
+    auto* log_manager = Common::Log::LogManager::GetInstance();
+    if (log_manager != nullptr)
+    {
+      log_manager->RegisterListener(Common::Log::LogListener::CONSOLE_LISTENER,
+                                    std::make_unique<BrowserLogListener>());
+      log_manager->EnableListener(Common::Log::LogListener::CONSOLE_LISTENER, true);
+      log_manager->SetConfigLogLevel(Common::Log::LogLevel::LWARNING);
+      for (int i = 0; i < static_cast<int>(Common::Log::LogType::NUMBER_OF_LOGS); ++i)
+        log_manager->SetEnable(static_cast<Common::Log::LogType>(i), true);
+    }
+  }
   Common::RegisterMsgAlertHandler(&BrowserMsgHandler);
   Statistics::Init();
 

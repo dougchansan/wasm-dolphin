@@ -880,6 +880,8 @@ async function handleMessage(type, payload) {
         fastSoftwareRaster: payload.fastSoftwareRaster,
         softwareTevHotCaseMode: payload.softwareTevHotCaseMode,
         xfbFastPaths: payload.xfbFastPaths,
+        correctTimeDrift: payload.correctTimeDrift,
+        coreLog: payload.coreLog,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
@@ -1370,6 +1372,8 @@ async function loadCore({
   fastSoftwareRaster = 0,
   softwareTevHotCaseMode: requestedSoftwareTevHotCaseMode = 0,
   xfbFastPaths = 0,
+  correctTimeDrift = false,
+  coreLog = false,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
   reportedCoreSelection = null,
@@ -1819,6 +1823,10 @@ async function loadCore({
     dolphinOglTestClear: Boolean(oglTestClear),
     dolphinFastSoftwareRaster: Math.min(3, Math.max(0, Number(fastSoftwareRaster) || 0)),
     dolphinXfbFastPaths: (Number(xfbFastPaths) || 0) & 3,
+    // Read by dolphin_web_core.cpp at CoreInit. Both are opt-in and default
+    // false, so the shipping page load is unchanged.
+    dolphinCorrectTimeDrift: Boolean(correctTimeDrift),
+    dolphinCoreLog: Boolean(coreLog),
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
