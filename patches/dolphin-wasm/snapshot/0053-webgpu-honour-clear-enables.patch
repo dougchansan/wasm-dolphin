@@ -1,0 +1,103 @@
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1226,7 +1226,7 @@
+ }
+ 
+ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& /* target_rc */, bool color_enable,
+-                            bool /* alpha_enable */, bool /* z_enable */, u32 color, u32 /* z */)
++                            bool alpha_enable, bool z_enable, u32 color, u32 /* z */)
+ {
+   // Day-33 Phase C: the game's BP clear-screen. Without this the EFB
+   // depth buffer is never initialised, so every drawn primitive fails
+@@ -1239,19 +1239,25 @@
+   if (!m_cmd_stream.ready())
+     return;
+   EndPassIfOpen();
++  // color_enable/z_enable used to be ignored: a depth-only clear still set a
++  // colour clear (to black), which wiped a fully-rendered 3D EFB before the
++  // XFB copy was taken. The scene rendered correctly and was then destroyed,
++  // leaving only the 2D overlay -- issue #8. Honour both enables instead.
+   if (color_enable)
+   {
+     m_clear_col[0] = static_cast<float>((color >> 16) & 0xff) / 255.0f;
+     m_clear_col[1] = static_cast<float>((color >> 8) & 0xff) / 255.0f;
+     m_clear_col[2] = static_cast<float>(color & 0xff) / 255.0f;
+-    m_clear_col[3] = static_cast<float>((color >> 24) & 0xff) / 255.0f;
++    m_clear_col[3] = alpha_enable ? static_cast<float>((color >> 24) & 0xff) / 255.0f : 1.0f;
+   }
+-  else
++  m_pending_clear_color = color_enable;
++  m_pending_clear_depth = z_enable;
++  m_pending_clear = color_enable || z_enable;
++  if (!m_pending_clear)
+   {
+-    m_clear_col[0] = m_clear_col[1] = m_clear_col[2] = 0.0f;
+-    m_clear_col[3] = 1.0f;
++    BeginPassIfNeeded();
++    return;
+   }
+-  m_pending_clear = true;
+   BeginPassIfNeeded();
+ }
+ 
+@@ -1417,6 +1423,8 @@
+   if (committed)
+   {
+     m_pending_clear = false;
++    m_pending_clear_color = false;
++    m_pending_clear_depth = false;
+     return true;
+   }
+   m_cmd_stream.AbortPass();
+@@ -1426,6 +1434,23 @@
+   return false;
+ }
+ 
++
++// Clear intent, packed into the existing 32-bit load_op word of BEGIN_PASS.
++// bit0 keeps its original meaning (clear vs load) so an older consumer still
++// reads a correct clear/no-clear decision; bits 1 and 2 carry which
++// attachments the game actually asked to clear. No record widening needed --
++// the word already had 31 spare bits.
++u32 WebGPUGfx::PendingClearMask() const
++{
++  if (!m_pending_clear)
++    return 0u;
++  u32 mask = 1u;
++  if (m_pending_clear_color)
++    mask |= 2u;
++  if (m_pending_clear_depth)
++    mask |= 4u;
++  return mask;
++}
+ bool WebGPUGfx::BeginPassIfNeeded()
+ {
+   if (m_pass_open)
+@@ -1437,7 +1462,7 @@
+   }
+   if (!m_cmd_stream.PushBeginPass(m_fb_color_id, m_clear_col[0], m_clear_col[1],
+                                   m_clear_col[2], m_clear_col[3],
+-                                  m_pending_clear ? 1u : 0u, m_fb_depth_id))
++                                  PendingClearMask(), m_fb_depth_id))
+   {
+     AbortRecordedPass();
+     return false;
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -162,6 +162,7 @@
+   // (lazy — VideoCommon binds the FB then draws). Re-emits viewport/
+   // scissor since a new WebGPU pass resets them.
+   bool BeginPassIfNeeded();
++  u32 PendingClearMask() const;
+   bool EndPassIfOpen();
+   void AbortRecordedPass();
+   void DiscardOrAbortPendingGeometryRange();
+@@ -202,6 +203,8 @@
+   u32 m_fb_color_id = 0;  // 0 = backbuffer
+   u32 m_fb_depth_id = 0;
+   bool m_pending_clear = false;
++  bool m_pending_clear_color = false;
++  bool m_pending_clear_depth = false;
+   float m_clear_col[4] = {0.f, 0.f, 0.f, 1.f};
+ 
+   u32 m_cur_pipeline_id = 0;

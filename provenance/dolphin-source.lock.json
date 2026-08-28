@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "02dd06048d197c4390d47b7112b3e3da65f7d3b937876397171790127b42a8ad",
+  "patchSeriesSha256": "c88a4f5a107a99c9da5e8a14c1a3591adba6e620171285dcb2c09f89dfba8b02",
   "patches": [
     {
       "order": 1,
@@ -429,6 +429,14 @@
     },
     {
       "order": 51,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0053-webgpu-honour-clear-enables.patch",
+      "size": 3656,
+      "sha256": "e88a4cda7612e11051c1a0560fc816893f6b24005c9a53175e15cadabb217e75"
+    },
+    {
+      "order": 52,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -436,7 +444,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 52,
+      "order": 53,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

@@ -9522,7 +9522,23 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           ensureEnc();
           const fbId = u32[recWord + 1];
-          const loadOp = u32[recWord + 6] === 1 ? "clear" : "load";
+          // Clear intent is a bitmask packed into the load_op word by
+          // WebGPUGfx::PendingClearMask(): bit0 = clear at all, bit1 = clear
+          // colour, bit2 = clear depth. Older cores only ever wrote 0 or 1,
+          // and bit0 keeps that meaning, so a pre-bitmask core still decodes
+          // correctly -- it simply reports "clear both", which is what it did.
+          //
+          // Before this, a single bit drove BOTH attachments, so a depth-only
+          // clear also wiped colour. On Wario World that destroyed a fully
+          // rendered 3D EFB right before the XFB copy, leaving only the 2D
+          // overlay on black (issue #8).
+          const clearMask = u32[recWord + 6];
+          const clearAny = (clearMask & 1) !== 0;
+          const legacyClear = clearMask === 1;
+          const clearColor = clearAny && (legacyClear || (clearMask & 2) !== 0);
+          const clearDepth = clearAny && (legacyClear || (clearMask & 4) !== 0);
+          const loadOp = clearColor ? "clear" : "load";
+          const depthLoadOpResolved = clearDepth ? "clear" : "load";
           const depthId = u32[recWord + 7];
           passDepthId = depthId;
           passLoadOp = loadOp;
@@ -9639,11 +9655,12 @@ function drainWebGpuCmdRing(source = "presentation") {
               // GEQUAL compare); normal-Z menu/UI passes clear to
               // far=1.0 with the unflipped GX compare — the §28ad
               // global 0.0 wrongly killed the normal-Z menu draws.
-              depthClearValue: dcv, depthLoadOp: loadOp, depthStoreOp: "store"
+              depthClearValue: dcv, depthLoadOp: depthLoadOpResolved,
+              depthStoreOp: "store"
             };
             if (dt.format.indexOf("stencil") >= 0) {
               ds.stencilClearValue = 0;
-              ds.stencilLoadOp = loadOp;
+              ds.stencilLoadOp = depthLoadOpResolved;
               ds.stencilStoreOp = "store";
             }
             desc.depthStencilAttachment = ds;
