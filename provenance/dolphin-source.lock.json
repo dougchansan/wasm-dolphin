@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "c88a4f5a107a99c9da5e8a14c1a3591adba6e620171285dcb2c09f89dfba8b02",
+  "patchSeriesSha256": "e7943c7fdbbf5176d90332cc545c8fc536e49aca24bcf150f266daafa5cfb86e",
   "patches": [
     {
       "order": 1,
@@ -432,8 +432,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0053-webgpu-honour-clear-enables.patch",
-      "size": 3656,
-      "sha256": "e88a4cda7612e11051c1a0560fc816893f6b24005c9a53175e15cadabb217e75"
+      "size": 4505,
+      "sha256": "cab4544859a9255a231ae6e0e9303d3856c9ac81da4a8ef55af3212354334b4c"
     },
     {
       "order": 52,
