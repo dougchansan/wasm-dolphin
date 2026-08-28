@@ -2014,11 +2014,28 @@ async function loadCore({
   console.log(`[boot-phase] api.coreInit() took ${(performance.now() - _t_coreinit).toFixed(1)}ms`);
   startPresentationLoop();
 
-  if (!moduleInstance.FS?.filesystems?.WORKERFS) {
+  if (!resolveWorkerFs(moduleInstance)) {
     throw new Error("Upstream Dolphin bundle was not built with WORKERFS");
   }
   _bootMark("loadCore-return");
   return moduleInstance;
+}
+
+// WORKERFS lookup, with a fallback that current Emscripten requires.
+//
+// Emscripten registers a filesystem into FS.filesystems only when its JS
+// library was linked, and it decides that from an internal library_map in
+// tools/link.py. That map has no entry for workerfs.js or nodefs.js any more,
+// so `-lworkerfs.js` in the vendored CMake is accepted, silently mapped to
+// nothing, and FS.filesystems comes out as {MEMFS} alone. Naming WORKERFS in
+// EXPORTED_RUNTIME_METHODS still publishes the same filesystem object on the
+// Module, so prefer FS.filesystems (older cores, including the committed one)
+// and fall back to the Module export (cores built with current Emscripten).
+//
+// Without this, a freshly built core boots, runs frames and engages the JIT
+// but throws before loadCore returns, so no disc ever mounts.
+function resolveWorkerFs(moduleInstance) {
+  return moduleInstance?.FS?.filesystems?.WORKERFS ?? moduleInstance?.WORKERFS ?? null;
 }
 
 function bindApi(module) {
@@ -2304,7 +2321,7 @@ async function mountFile(file) {
   }
 
   const _t_workerfs = performance.now();
-  fs.mount(fs.filesystems.WORKERFS, { blobs: [{ name: safeName, data: file }] }, WORKERFS_MOUNT_DIR);
+  fs.mount(resolveWorkerFs(moduleInstance), { blobs: [{ name: safeName, data: file }] }, WORKERFS_MOUNT_DIR);
   mounted = true;
   console.log(`[boot-phase] fs.mount(WORKERFS) took ${(performance.now() - _t_workerfs).toFixed(1)}ms (${(file.size / 1048576).toFixed(1)}MiB image)`);
 
