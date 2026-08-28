@@ -248,6 +248,8 @@ const WGPU_FAST_STAGE_ACCEPTED = Object.freeze({ ok: true, reason: null });
 let wgpuMappedDrainCoalescingEnabled = false;
 let wgpuRendererWorkerProbe = "off";
 let wgpuVisualCadenceEnabled = false;
+// Mirrors the loaded core's videoBackend for code outside loadCore's scope.
+let hardwareVideoBackend = false;
 let wgpuVisualCadenceResources = null;
 let wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(false);
 let wgpuVisualCadenceSequence = 0;
@@ -1571,6 +1573,7 @@ async function loadCore({
     throw new Error("wgpuvisual=1 requires video=wgpu");
   }
   destroyWgpuVisualCadenceResources();
+  hardwareVideoBackend = videoBackend === "WebGPU-Real";
   wgpuVisualCadenceEnabled = Boolean(requestedWgpuVisualCadence);
   wgpuVisualCadenceTelemetry = createWgpuVisualCadenceTelemetry(
     wgpuVisualCadenceEnabled
@@ -2803,7 +2806,11 @@ function framePayload({ forceCausalTelemetry = false } = {}) {
     }
     oglGlError = oglStats.glError;
   } else if (!wgpuVisualCadenceEnabled) {
-    visualSampleSource = "xfb-hash";
+    // The hardware WebGPU path never reaches DolphinWeb_OnXfb, so there is no
+    // XFB hash to read here — saying "xfb-hash" claimed a measurement that was
+    // not taken, and visualChangeFps stayed 0 forever. Only the software
+    // presenters actually hash an XFB.
+    visualSampleSource = hardwareVideoBackend ? "unsampled" : "xfb-hash";
   }
   const causalTelemetry = maybeCreateCausalTelemetry(videoStats, { force: forceCausalTelemetry });
   let frameBuffer = null;

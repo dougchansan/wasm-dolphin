@@ -150,7 +150,9 @@ export class EmulatorHost {
       window.location.search
     );
     this.wgpuRendererWorkerProbe = requestedWgpuRendererWorkerProbe(window.location.search);
-    this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search);
+    this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search, {
+      hardwareVideo: this.videoBackend === "WebGPU-Real"
+    });
     this.gpuCompletionDiagnostics = requestedGpuCompletionDiagnostics(window.location.search);
     this.wgpuDirtyRangeProjection = requestedWgpuDirtyRangeProjection(window.location.search);
     this.wgpuPassPackageProjection = requestedWgpuPassPackageProjection(

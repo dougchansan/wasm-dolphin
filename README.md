@@ -169,13 +169,22 @@ is visible. This does not isolate which individual draw first changed the EFB.
 Replay still averages only about 68% game speed and 30 presents/s in the
 retained JIT-off runs, so it is **not** the default.
 
-`?video=wgpu&wgpuvisual=1` enables a hardware-output cadence diagnostic. Each
-submitted canvas frame is downsampled on the GPU to 96x72 with the existing
-fullscreen presenter, then hashed after asynchronous readback through a fixed
-three-buffer ring. The public visual FPS/source fields and
-`visualCadenceTelemetry` report completed unique samples and any ring-busy
-drops. This flag is intentionally off by default: its GPU pass, mapped
-readback, and hashing overhead are diagnostic, not part of normal playback.
+`?video=wgpu` measures its own unique-visual-frame rate. Each submitted
+backbuffer is downsampled on the GPU to 96x72 with the existing fullscreen
+presenter, then hashed after asynchronous readback through a fixed three-buffer
+ring. The public visual FPS/source fields and `visualCadenceTelemetry` report
+completed unique samples and any ring-busy drops.
+
+This used to be opt-in behind `wgpuvisual=1` and off by default, which meant the
+HUD's `visual` field read a flat `0.0` on the hardware path — the software
+presenters derive it from an XFB hash, and the hardware path never produces one.
+That made the hardware renderer's whole premise, beating the software
+rasterizer's unique-frame ceiling, unmeasurable on the path meant to beat it.
+The readback now follows the video path: on for `?video=wgpu`, off for the
+software hybrid, and `?wgpuvisual=0` opts a hardware run back out for
+perf-attribution work that must not pay the GPU pass and mapped readback. With
+the readback off, the hardware path reports its sample source as `unsampled`
+rather than claiming an `xfb-hash` it never took.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.

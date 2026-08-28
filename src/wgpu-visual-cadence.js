@@ -9,10 +9,24 @@ export const WGPU_VISUAL_BYTES_PER_ROW = alignTo(
 export const WGPU_VISUAL_READBACK_BYTES =
   WGPU_VISUAL_BYTES_PER_ROW * WGPU_VISUAL_SAMPLE_HEIGHT;
 
+// Tri-state. `wgpuvisual=1` and `wgpuvisual=0` are explicit; with the flag
+// absent the sampler follows the video path, which means it is ON for
+// `?video=wgpu`.
+//
+// It used to default off everywhere, and that made the HUD lie: the hardware
+// path never hashes an XFB, so `visual` read a flat 0.0 on the one path whose
+// entire justification is beating the software rasterizer's unique-frame
+// ceiling (issue #7). A number nobody can measure is worse than a readback
+// nobody asked for. Perf-attribution runs that must not pay the per-present
+// downsample + copyTextureToBuffer opt out with `wgpuvisual=0`.
 export function requestedWgpuVisualCadence(
-  search = globalThis.location?.search ?? ""
+  search = globalThis.location?.search ?? "",
+  { hardwareVideo = false } = {}
 ) {
-  return new URLSearchParams(search).get("wgpuvisual") === "1";
+  const requested = new URLSearchParams(search).get("wgpuvisual");
+  if (requested === "1") return true;
+  if (requested === "0") return false;
+  return Boolean(hardwareVideo);
 }
 
 export function hashWgpuVisualSample(

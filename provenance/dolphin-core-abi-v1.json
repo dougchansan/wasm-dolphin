@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 61638,
-      "sha256": "3898cf155f562ad7026ad4ff1938888ba6f03a81489ea395b38eacfa54f06a47"
+      "size": 61704,
+      "sha256": "f518219bebc7a48ae9b661e30616933ec6ab06fe28b3eabe0a170b96ba6f3502"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 495738,
-      "sha256": "b3ecf56f268cb5181ab10c92e914531e7dc90055db287c0daca385f64703debd"
+      "size": 496218,
+      "sha256": "84b2375f7c26f8b094d0c3d70cf05130c76cc7635fc18a4ed9397ce34d193335"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -272,8 +272,8 @@
     {
       "path": "src/wgpu-visual-cadence.js",
       "hashMode": "lf-normalized",
-      "size": 2589,
-      "sha256": "f0100e086fc770f36ea71bdaf6f40be276870c081045425e911c9ee6e0f70893"
+      "size": 3353,
+      "sha256": "6774b6d4bac85aba2fdf4d3f85bde36c44b1b696eed538dc341bb82e3c4bc676"
     },
     {
       "path": "src/wgpu-sparse-ubo-copy-forward.js",
