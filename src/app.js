@@ -244,6 +244,7 @@ wireDiagnostics();
 wirePanelToggle();
 wireVolumeDial();
 wireAspectSelect();
+wireScreenFit();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
@@ -682,6 +683,43 @@ function wireAspectSelect() {
     apply(select.value);
     try { localStorage.setItem("wasmDolphinAspect", select.value); } catch {}
   });
+}
+
+
+// The CRT fits itself with a CSS min() against the available height, but that
+// needs to know how much vertical space the non-picture chrome takes -- the
+// page header, the LCD strip, the footer and the paddings. That was a magic
+// 210px, which overflowed by a few pixels in short windows because the real
+// value changes with the layout. Measure it instead and publish it as
+// --crt-chrome; the CSS keeps doing the fitting.
+function wireScreenFit() {
+  const set = elements.dropZone;
+  const viewport = document.querySelector(".screen-viewport");
+  if (!set || !viewport) return;
+
+  let lastChrome = -1;
+  const measure = () => {
+    if (document.fullscreenElement) return;  // fullscreen has its own rule
+    const setBox = set.getBoundingClientRect();
+    const vpBox = viewport.getBoundingClientRect();
+    // Everything above the console, plus the console's own non-picture parts,
+    // plus the gap left below it.
+    const above = setBox.top + window.scrollY;
+    const withinSet = setBox.height - vpBox.height;
+    const chrome = Math.max(0, Math.round(above + withinSet + 24));
+    // Writing this property resizes the console, which retriggers the
+    // ResizeObserver. Only write on a real change, or the two feed each other
+    // forever.
+    if (Math.abs(chrome - lastChrome) <= 1) return;
+    lastChrome = chrome;
+    document.documentElement.style.setProperty("--crt-chrome", `${chrome}px`);
+  };
+
+  measure();
+  window.addEventListener("resize", measure, { passive: true });
+  document.addEventListener("fullscreenchange", measure);
+  // The panel toggle and aspect changes both reflow the console.
+  if (window.ResizeObserver) new ResizeObserver(measure).observe(set);
 }
 
 function wireFileMounting() {

@@ -222,8 +222,15 @@ h1 {
   position: relative;
   align-self: start;
   justify-self: center;
-  width: min(100%, calc((100vh - 210px) * 1.32));
-  max-width: 980px;
+  /* Fit to whichever dimension runs out first, live: the width the available
+     height allows at the chosen ratio, or the column width. Both terms are
+     relative units, so dragging the window resizes the console continuously
+     with no JS. The 1.32 fudge this replaced was 4:3 baked in, which meant
+     16:9 could not use the extra width. --crt-chrome is the header, LCD strip
+     and footer that sit outside the picture. */
+  width: min(100%, calc((100dvh - var(--crt-chrome, 210px)) * var(--aspect-w, 4) / var(--aspect-h, 3)));
+  /* No fixed cap: at 16:9 the console should be free to fill a wide window. */
+  max-width: 100%;
   min-width: min(100%, 360px);
   border: 1px solid #56503f;
   border-radius: 8px;
