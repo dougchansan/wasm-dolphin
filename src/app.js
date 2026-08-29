@@ -25,6 +25,8 @@ import {
 } from "./wgpu-replay-diagnostics.js";
 
 const elements = {
+  settingsCollapse: document.querySelector("#settingsCollapse"),
+  settingsBody: document.querySelector("#settingsBody"),
   adapterStatus: document.querySelector("#adapterStatus"),
   audioStatus: document.querySelector("#audioStatus"),
   bootApploader: document.querySelector("#bootApploader"),
@@ -235,6 +237,7 @@ window.__loadStateFileFs = async (fsPath) => {
 renderControlGrid();
 wireSettings();
 wireDiagnostics();
+wireSettingsCollapse();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
@@ -282,10 +285,14 @@ function handleFrame(info) {
 
 function updateRuntimeControls(info) {
   elements.coreMode.textContent = info.mode === "dolphin" ? "Dolphin" : "Demo";
-  elements.runButton.textContent = info.running ? "Pause" : "Run";
+  setTransportGlyph(elements.runButton, info.running ? GLYPH.pause : GLYPH.play,
+                    info.running ? "Pause" : "Run",
+                    info.running ? "Pause emulation" : "Resume emulation");
   elements.statusPill.classList.toggle("paused", !info.running);
   audio.update(info.buttonMask, info.running);
-  elements.muteButton.textContent = audio.label();
+  setTransportGlyph(elements.muteButton,
+                    /unmut/i.test(audio.label()) ? GLYPH.sound : GLYPH.muted,
+                    audio.label(), "Mute or unmute audio");
 }
 
 function updateDebugMetrics(info) {
@@ -416,7 +423,9 @@ function wireTransport() {
     const muted = !audio.muted;
     host.setAudioMuted(muted);
     await audio.setMuted(muted);
-    elements.muteButton.textContent = audio.label();
+    setTransportGlyph(elements.muteButton,
+                      /unmut/i.test(audio.label()) ? GLYPH.sound : GLYPH.muted,
+                      audio.label(), "Mute or unmute audio");
   });
 
   elements.fullscreenButton.addEventListener("click", async () => {
@@ -572,6 +581,50 @@ function setOverlayVisible(visible) {
   localStorage.setItem(OSD_PREF_KEY, visible ? "1" : "0");
 }
 
+
+// Transport buttons are icons, so state changes swap the glyph and the
+// accessible name. Writing textContent would delete the icon markup and leave
+// a bare word inside a 44px key. Code points are numeric to keep this ASCII.
+const GLYPH = {
+  pause: String.fromCodePoint(0x23F8),
+  play: String.fromCodePoint(0x25B6),
+  muted: String.fromCodePoint(0x1F507),
+  sound: String.fromCodePoint(0x1F50A)
+};
+
+function setTransportGlyph(button, glyph, label, tip) {
+  if (!button) return;
+  const span = button.querySelector(".glyph");
+  if (span) span.textContent = glyph;
+  else button.textContent = glyph;
+  button.setAttribute("aria-label", label);
+  if (tip) button.setAttribute("data-tip", tip);
+}
+
+// Collapse the settings panel. Presentational only: the form and its values
+// stay in the DOM, so nothing that reads a setting cares whether it is shown.
+// localStorage can throw (private windows, blocked site data) and must never
+// stop the page loading, hence the guards at both ends.
+function wireSettingsCollapse() {
+  const toggle = elements.settingsCollapse;
+  const body = elements.settingsBody;
+  if (!toggle || !body) return;
+  const apply = (open) => {
+    body.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "Collapse settings" : "Expand settings");
+    toggle.classList.toggle("collapsed", !open);
+  };
+  let open = true;
+  try { open = localStorage.getItem("wasmDolphinSettingsOpen") !== "0"; } catch {}
+  apply(open);
+  toggle.addEventListener("click", () => {
+    open = !open;
+    apply(open);
+    try { localStorage.setItem("wasmDolphinSettingsOpen", open ? "1" : "0"); } catch {}
+  });
+}
+
 function wireFileMounting() {
   elements.romInput.addEventListener("change", async (event) => {
     const [file] = event.target.files;
@@ -689,7 +742,9 @@ async function mountFile(file) {
     // plays. Users can still mute via the button.
     if (audio.muted) {
       await audio.setMuted(false);
-      elements.muteButton.textContent = audio.label();
+      setTransportGlyph(elements.muteButton,
+                        /unmut/i.test(audio.label()) ? GLYPH.sound : GLYPH.muted,
+                        audio.label(), "Mute or unmute audio");
     }
     host.setAudioMuted(audio.muted);
     syncGameInfo(game);

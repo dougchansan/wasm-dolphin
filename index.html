@@ -70,18 +70,26 @@
           </div>
 
           <div class="transport" aria-label="Playback controls">
-            <label class="file-button">
-              Open disc
+            <label class="file-button tip" data-tip="Open a GameCube disc image">
+              <span class="glyph" aria-hidden="true">&#x23CF;</span>
+              <span class="btn-text">Open disc</span>
               <input id="romInput" type="file" accept=".iso,.gcm,.rvz,.wbfs,.wad,.dol,.elf">
             </label>
-            <button id="runButton" type="button">Pause</button>
-            <button id="resetButton" type="button">Reset</button>
-            <button id="muteButton" type="button">Muted</button>
-            <button id="saveButton" type="button">Save</button>
-            <button id="loadButton" type="button">Load</button>
-            <button id="dlStateButton" type="button">DL State</button>
-            <label class="file-button">
-              UL State
+            <button id="runButton" class="tip" type="button" data-tip="Pause or resume emulation" aria-label="Pause">
+              <span class="glyph" aria-hidden="true">&#x23F8;</span></button>
+            <button id="resetButton" class="tip" type="button" data-tip="Reset the console" aria-label="Reset">
+              <span class="glyph" aria-hidden="true">&#x21BB;</span></button>
+            <button id="muteButton" class="tip" type="button" data-tip="Mute or unmute audio" aria-label="Muted">
+              <span class="glyph" aria-hidden="true">&#x1F507;</span></button>
+            <span class="transport-sep" aria-hidden="true"></span>
+            <button id="saveButton" class="tip" type="button" data-tip="Save state to a slot" aria-label="Save state">
+              <span class="glyph" aria-hidden="true">&#x1F4BE;</span></button>
+            <button id="loadButton" class="tip" type="button" data-tip="Load state from a slot" aria-label="Load state">
+              <span class="glyph" aria-hidden="true">&#x21BA;</span></button>
+            <button id="dlStateButton" class="tip" type="button" data-tip="Download the current save state" aria-label="Download state">
+              <span class="glyph" aria-hidden="true">&#x2B07;</span></button>
+            <label class="file-button tip" data-tip="Upload a save state file" aria-label="Upload state">
+              <span class="glyph" aria-hidden="true">&#x2B06;</span>
               <input id="ulStateInput" type="file" accept=".sav">
             </label>
           </div>
@@ -115,7 +123,13 @@
             <div class="section-heading">
               <h2>Settings</h2>
               <span id="settingsSummary">Startup</span>
+              <button class="collapse-toggle tip" id="settingsCollapse" type="button"
+                      data-tip="Show or hide settings" aria-expanded="true"
+                      aria-controls="settingsBody" aria-label="Collapse settings">
+                <span class="glyph" aria-hidden="true">&#x25BE;</span>
+              </button>
             </div>
+            <div id="settingsBody">
 
             <div class="setting-grid">
               <label>
@@ -239,6 +253,7 @@
             <div class="settings-actions">
               <button id="settingsApplyButton" type="submit">Apply restart</button>
               <button id="settingsPresetButton" type="button">Melee preset</button>
+            </div>
             </div>
           </form>
 
