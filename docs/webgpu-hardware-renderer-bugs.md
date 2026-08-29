@@ -43,13 +43,33 @@ best.
 | Soulcalibur II | static | **not a defect** - parked on its autosave dialog, rendering correctly |
 | Super Mario Sunshine | boots | menu renders, background still black |
 
-Sunshine proves at least one more frame-destroying path exists. The leading
-candidate is the `target_rc` defect deliberately left in place: `ClearRegion`
-still ignores the rect, so a partial-rect clear becomes full-screen. The
-principled fix is to defer to `AbstractGfx::ClearRegion`, which implements
-clears as a quad draw that honours the rect natively -- but there is no
-evidence yet that Sunshine issues partial clears, so that needs instrumenting
-before it is worth changing.
+Sunshine proves at least one more frame-destroying path exists. Three
+hypotheses have been raised and measured away, so do not re-run them:
+
+1. **`target_rc` partial clears.** Falsified. `ClearRegion` does still ignore
+   the rect, but the EFB is 640x528 while games clear to 448 high, so EVERY
+   clear is partial in every game -- Wario World issues 7,800 of them and
+   renders correctly.
+2. **The XFB copy is taken too early.** Falsified. The EFB passes before each
+   copy use `loadOp=load`, so content accumulates ACROSS the backbuffer
+   present. Re-aligning a frame as the span between XFB copies, Sunshine's
+   copy captures ~196 draws including its largest batch. The backbuffer
+   present is not the GX frame boundary; draw counts split across it look
+   discarded and are not.
+3. **The renderer cannot draw the scene.** Falsified. `DIAG_EFB_TO_CANVAS`
+   (JS-only, no rebuild) blits the EFB straight to the canvas and shows
+   Sunshine's complete file-select screen -- beach, palm tree, ocean,
+   seagulls, Mario, file boxes, OPTIONS sign.
+
+What remains is downstream of the copy: the **XFB blit source rect** (XFB#47
+is a 2560x1024 atlas and the backbuffer is 320x240, so which region is sampled
+matters) or the **copy's own source rect** (Sunshine copies 640x448 where
+Wario copies 512x448, against a 640x528 EFB).
+
+Methodological note, learned twice on this bug: **pass sizes and draw counts
+cannot show what region is copied.** Both wrong readings above were built from
+them. Instrument the actual source and destination rects of the CPY -> XFB and
+XFB -> BACK draws.
 
 ---
 
