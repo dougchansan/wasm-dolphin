@@ -66,10 +66,10 @@ is a 2560x1024 atlas and the backbuffer is 320x240, so which region is sampled
 matters) or the **copy's own source rect** (Sunshine copies 640x448 where
 Wario copies 512x448, against a 640x528 EFB).
 
-Methodological note, learned twice on this bug: **pass sizes and draw counts
-cannot show what region is copied.** Both wrong readings above were built from
-them. Instrument the actual source and destination rects of the CPY -> XFB and
-XFB -> BACK draws.
+Methodological note, learned five times on this bug: **structure does not show
+content.** Sizes, rects, bind targets and draw counts each produced a confident
+wrong reading. The only probe that read actual pixels contradicted the
+structural inference immediately. Measure output, not description.
 
 ---
 
@@ -158,9 +158,13 @@ Recorded so they are not re-investigated:
 Bugs 1, 2 and 4 are resolved. What remains, in order:
 
 1. **Super Mario Sunshine's missing background.** The one open rendering
-   defect with a clear repro. Instrument `ClearRegion` to log `target_rc`
-   against the full EFB size first -- confirm partial clears actually occur
-   before changing anything.
+   defect with a clear repro, but FIVE hypotheses have now been measured and
+   rejected (see above, plus "presentation reads the EFB" -- Wario World
+   renders correctly with a 0%-lit EFB at present time). Do NOT continue
+   instrumenting the pipeline's description. Every wrong reading so far came
+   from inferring content from structure: sizes, rects, bind targets, draw
+   counts. Read back the BACKBUFFER TEXTURE itself after present, and bisect
+   by suppressing individual passes to see which removal changes the image.
 2. **Animal Crossing (#11).** Fails on both backends, so it is not a hardware-
    path bug. The EFB receives 178-188M colour writes and the presented buffer
    is still exactly zero, so the fault is in the EFB -> XFB copy.
