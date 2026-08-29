@@ -21,6 +21,9 @@
           <span class="status-pill" id="statusPill">Booting</span>
           <button class="icon-button" id="overlayToggle" type="button" title="Toggle FPS overlay" aria-pressed="true">FPS</button>
           <button class="icon-button" id="debugToggle" type="button" title="Toggle diagnostics" aria-expanded="false" aria-controls="debugPanel">DBG</button>
+          <button class="icon-button tip" id="panelToggle" type="button"
+                  data-tip="Show or hide the side panel" aria-expanded="true"
+                  aria-controls="controlPanel" aria-label="Hide side panel">PANEL</button>
           <button class="icon-button" id="fullscreenButton" type="button" title="Fullscreen" aria-label="Fullscreen">[]</button>
         </div>
       </header>
@@ -28,6 +31,13 @@
       <main class="workspace">
         <section class="play-area" aria-label="Emulator">
           <div class="crt-set" id="dropZone">
+            <!-- LCD strip in the bezel. Carries the game identity that used to
+                 live in the side panel, so the panel can be hidden entirely
+                 without losing what is loaded. -->
+            <div class="lcd-strip" aria-hidden="true">
+              <span class="lcd-title" id="lcdTitle">NO DISC</span>
+              <span class="lcd-meta" id="lcdMeta"></span>
+            </div>
             <div class="crt-bezel">
               <div class="screen-viewport">
                 <canvas id="screen" width="640" height="480" aria-label="Emulator screen"></canvas>
@@ -59,12 +69,13 @@
                 <div class="scanlines" aria-hidden="true"></div>
               </div>
             </div>
-            <div class="crt-footer" aria-hidden="true">
+            <div class="crt-footer">
               <span class="power-light"></span>
               <span class="speaker-grille"></span>
-              <span class="control-knobs">
-                <i></i>
-                <i></i>
+              <span class="volume-dial tip" data-tip="Volume">
+                <input id="volumeDial" type="range" min="0" max="100" value="100"
+                       aria-label="Volume" orient="vertical">
+                <span class="dial-face" aria-hidden="true"><i></i></span>
               </span>
             </div>
           </div>
@@ -109,7 +120,7 @@
           <p class="keyboard-hint">Keyboard controls: X = GameCube A, Z = B, Enter = Start, WASD = stick.</p>
         </section>
 
-        <aside class="control-panel" aria-label="Emulator controls">
+        <aside class="control-panel" id="controlPanel" aria-label="Emulator controls">
           <section class="panel-block game-block">
             <div class="section-heading">
               <h2>Game</h2>
@@ -123,13 +134,7 @@
             <div class="section-heading">
               <h2>Settings</h2>
               <span id="settingsSummary">Startup</span>
-              <button class="collapse-toggle tip" id="settingsCollapse" type="button"
-                      data-tip="Show or hide settings" aria-expanded="true"
-                      aria-controls="settingsBody" aria-label="Collapse settings">
-                <span class="glyph" aria-hidden="true">&#x25BE;</span>
-              </button>
             </div>
-            <div id="settingsBody">
 
             <div class="setting-grid">
               <label>
@@ -253,7 +258,6 @@
             <div class="settings-actions">
               <button id="settingsApplyButton" type="submit">Apply restart</button>
               <button id="settingsPresetButton" type="button">Melee preset</button>
-            </div>
             </div>
           </form>
 

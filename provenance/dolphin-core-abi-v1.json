@@ -44,14 +44,14 @@
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 43006,
-      "sha256": "79a06577a0b4e6132c5d39016d846fb91de0bc55949fc163ae5cc662810fd2d1"
+      "size": 44687,
+      "sha256": "fa25e44e3c8e90c5631309cac37d28a4eeb1dc19ffd155aba67598832fa6270d"
     },
     {
       "path": "src/audio.js",
       "hashMode": "lf-normalized",
-      "size": 12579,
-      "sha256": "f944d24d654cf8d0c433dac66a9f287e87671eafa3862380450918e892859935"
+      "size": 13055,
+      "sha256": "66a0273c05c49987cb20bf9801e0605a6b56b708aae8e27331049145eac7a943"
     },
     {
       "path": "src/audio-pcm-ring.js",

@@ -9,6 +9,9 @@ export class AudioController {
     this.gain = null;
     this.source = null;
     this.muted = true;
+    // 0..1, driven by the volume dial. Mute is kept separate so the dial
+    // position survives a mute/unmute round trip.
+    this.volume = 1;
     this.available = false;
     this.pumpTimer = 0;
     this.pumpPending = false;
@@ -123,7 +126,7 @@ export class AudioController {
       this.context = new AudioContext();
     }
     this.gain = this.context.createGain();
-    this.gain.gain.value = this.muted ? 0 : 1;
+    this.gain.gain.value = this.muted ? 0 : this.volume;
     this.gain.connect(this.context.destination);
     if (this.requestedTransport === "worklet") {
       await this.tryEnableWorkletTransport();
@@ -201,7 +204,7 @@ export class AudioController {
     }
 
     const now = this.context.currentTime;
-    this.gain.gain.setTargetAtTime(this.muted ? 0 : 1, now, 0.01);
+    this.gain.gain.setTargetAtTime(this.muted ? 0 : this.volume, now, 0.01);
   }
 
   startPump() {
@@ -328,6 +331,16 @@ export class AudioController {
     this.available = true;
     this.stats = chunk.stats || `audio:frames:${usableFrames}`;
     return true;
+  }
+
+  setVolume(value) {
+    const next = Math.min(1, Math.max(0, Number(value) || 0));
+    this.volume = next;
+    // Turning the dial up from silence implies wanting sound.
+    if (next > 0 && this.muted) this.muted = false;
+    if (next === 0) this.muted = true;
+    this.update();
+    return this.volume;
   }
 
   label() {

@@ -25,8 +25,11 @@ import {
 } from "./wgpu-replay-diagnostics.js";
 
 const elements = {
-  settingsCollapse: document.querySelector("#settingsCollapse"),
-  settingsBody: document.querySelector("#settingsBody"),
+  panelToggle: document.querySelector("#panelToggle"),
+  controlPanel: document.querySelector("#controlPanel"),
+  volumeDial: document.querySelector("#volumeDial"),
+  lcdTitle: document.querySelector("#lcdTitle"),
+  lcdMeta: document.querySelector("#lcdMeta"),
   adapterStatus: document.querySelector("#adapterStatus"),
   audioStatus: document.querySelector("#audioStatus"),
   bootApploader: document.querySelector("#bootApploader"),
@@ -237,7 +240,8 @@ window.__loadStateFileFs = async (fsPath) => {
 renderControlGrid();
 wireSettings();
 wireDiagnostics();
-wireSettingsCollapse();
+wirePanelToggle();
+wireVolumeDial();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
@@ -601,30 +605,60 @@ function setTransportGlyph(button, glyph, label, tip) {
   if (tip) button.setAttribute("data-tip", tip);
 }
 
-// Collapse the settings panel. Presentational only: the form and its values
-// stay in the DOM, so nothing that reads a setting cares whether it is shown.
+// Hide the entire side panel, not just the settings block. The game identity
+// it used to carry now lives on the LCD strip in the bezel, so nothing is lost
+// when it is hidden and the screen gets the width back.
+//
 // localStorage can throw (private windows, blocked site data) and must never
 // stop the page loading, hence the guards at both ends.
-function wireSettingsCollapse() {
-  const toggle = elements.settingsCollapse;
-  const body = elements.settingsBody;
-  if (!toggle || !body) return;
+function wirePanelToggle() {
+  const toggle = elements.panelToggle;
+  const panel = elements.controlPanel;
+  if (!toggle || !panel) return;
   const apply = (open) => {
-    body.hidden = !open;
+    panel.hidden = !open;
+    document.body.classList.toggle("panel-hidden", !open);
     toggle.setAttribute("aria-expanded", String(open));
-    toggle.setAttribute("aria-label", open ? "Collapse settings" : "Expand settings");
-    toggle.classList.toggle("collapsed", !open);
+    toggle.setAttribute("aria-label", open ? "Hide side panel" : "Show side panel");
+    toggle.classList.toggle("active", open);
   };
   let open = true;
-  try { open = localStorage.getItem("wasmDolphinSettingsOpen") !== "0"; } catch {}
+  try { open = localStorage.getItem("wasmDolphinPanelOpen") !== "0"; } catch {}
   apply(open);
   toggle.addEventListener("click", () => {
     open = !open;
     apply(open);
-    try { localStorage.setItem("wasmDolphinSettingsOpen", open ? "1" : "0"); } catch {}
+    try { localStorage.setItem("wasmDolphinPanelOpen", open ? "1" : "0"); } catch {}
   });
 }
 
+// The dial is a range input under a drawn face: real keyboard and screen-reader
+// behaviour for free, with the knob rotation driven off its value.
+function wireVolumeDial() {
+  const dial = elements.volumeDial;
+  if (!dial) return;
+  const face = dial.parentElement?.querySelector(".dial-face");
+  const apply = () => {
+    const pct = Number(dial.value) / 100;
+    // -135deg (silent) to +135deg (full), the usual travel for a physical pot.
+    if (face) face.style.setProperty("--angle", `${-135 + pct * 270}deg`);
+    dial.parentElement?.setAttribute("data-tip", `Volume ${dial.value}%`);
+  };
+  dial.addEventListener("input", () => {
+    audio.setVolume(Number(dial.value) / 100);
+    apply();
+    setTransportGlyph(elements.muteButton,
+                      /unmut/i.test(audio.label()) ? GLYPH.sound : GLYPH.muted,
+                      audio.label(), "Mute or unmute audio");
+  });
+  apply();
+}
+
+// Mirror the game identity onto the bezel LCD.
+function updateLcd(title, meta) {
+  if (elements.lcdTitle) elements.lcdTitle.textContent = (title || "NO DISC").toUpperCase();
+  if (elements.lcdMeta) elements.lcdMeta.textContent = (meta || "").toUpperCase();
+}
 function wireFileMounting() {
   elements.romInput.addEventListener("change", async (event) => {
     const [file] = event.target.files;
@@ -758,6 +792,10 @@ function syncGameInfo(game) {
   elements.gameTitle.textContent = game.name;
   elements.gameSize.textContent = game.size ? formatBytes(game.size) : "No file";
   const coreDetail = [game.gameId, game.platform, game.region].filter(Boolean).join(" / ");
+  // Feed the bezel LCD the same identity, so hiding the side panel loses
+  // nothing. Size sits next to the id/platform/region the panel showed.
+  updateLcd(game.name, [coreDetail, game.size ? formatBytes(game.size) : ""]
+    .filter(Boolean).join("  ·  "));
   elements.mountNote.textContent =
     host.mode === "dolphin"
       ? `${game.core || "Dolphin core"} active${coreDetail ? `: ${coreDetail}` : ""}`

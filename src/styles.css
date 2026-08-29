@@ -410,7 +410,9 @@ canvas {
 
 .file-button {
   position: relative;
-  overflow: hidden;
+  /* No overflow:hidden -- it clipped the hover tooltip, which is why the
+     upload-state key had no bubble. The file input inside is already
+     absolutely positioned at opacity 0, so nothing needs clipping. */
   white-space: nowrap;
 }
 
@@ -949,4 +951,108 @@ h2 {
 .collapse-toggle:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* ---- Bezel LCD strip ------------------------------------------------ */
+
+/* Segment-display readout moulded into the top of the bezel. Carries the
+   game identity so the side panel can be hidden entirely. Monospace with
+   wide tracking reads as a calculator/VCR display; the faint underlay is the
+   unlit-segment glow those panels always have. */
+.lcd-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin: 0 auto 10px;
+  padding: 6px 14px;
+  max-width: calc(100% - 24px);
+  border: 1px solid #0c0f0a;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #14180f, #0d1009);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-family: "DSEG14", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+}
+
+.lcd-title {
+  color: #9fe6a6;
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  text-shadow: 0 0 7px rgba(159, 230, 166, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lcd-meta {
+  margin-left: auto;
+  color: #5f8f64;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+}
+
+/* ---- Volume dial ---------------------------------------------------- */
+
+/* A real range input under a drawn face: keyboard, screen-reader and drag
+   behaviour come free, and the knob rotation is driven from its value. The
+   input is transparent rather than display:none so it stays focusable. */
+.volume-dial {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+}
+
+.volume-dial input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ns-resize;
+  z-index: 2;
+}
+
+.dial-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #4a5044, #23271f 62%, #171a14);
+  border: 1px solid #0e110b;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: rotate(var(--angle, 135deg));
+  transition: transform 90ms ease;
+}
+
+/* The pointer line. */
+.dial-face i {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 2px;
+  height: 11px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--amber);
+  box-shadow: 0 0 5px rgba(231, 183, 90, 0.6);
+}
+
+.volume-dial input:focus-visible + .dial-face {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+/* ---- Panel hidden --------------------------------------------------- */
+
+/* With the panel gone the workspace collapses to a single column so the CRT
+   takes the reclaimed width. */
+body.panel-hidden .workspace {
+  grid-template-columns: 1fr;
+}
+
+#panelToggle.active {
+  border-color: var(--green);
+  color: var(--green);
 }
