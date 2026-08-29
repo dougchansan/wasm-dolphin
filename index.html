@@ -101,7 +101,14 @@
                   <input id="ulStateInput" type="file" accept=".sav">
                 </label>
               </div>
-                            <span class="volume-dial tip" data-tip="Volume">
+                            <label class="aspect-select tip" data-tip="Screen aspect ratio">
+                <span class="sr-only">Aspect ratio</span>
+                <select id="aspectSelect">
+                  <option value="4:3">4:3</option>
+                  <option value="16:9">16:9</option>
+                </select>
+              </label>
+              <span class="volume-dial tip" data-tip="Volume">
                             <input id="volumeDial" type="range" min="0" max="100" value="100"
                             aria-label="Volume" orient="vertical">
                             <span class="dial-face" aria-hidden="true"><i></i></span>
@@ -121,7 +128,6 @@
                             <button data-touch-button="A" aria-label="A">A</button>
                             </div>
                             </div>
-                            <p class="keyboard-hint">Keyboard controls: X = GameCube A, Z = B, Enter = Start, WASD = stick.</p>
                             </section>
                             
                             <aside class="control-panel" id="controlPanel" aria-label="Emulator controls">

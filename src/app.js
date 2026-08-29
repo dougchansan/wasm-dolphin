@@ -28,6 +28,7 @@ const elements = {
   panelToggle: document.querySelector("#panelToggle"),
   controlPanel: document.querySelector("#controlPanel"),
   volumeDial: document.querySelector("#volumeDial"),
+  aspectSelect: document.querySelector("#aspectSelect"),
   lcdTitle: document.querySelector("#lcdTitle"),
   lcdMeta: document.querySelector("#lcdMeta"),
   adapterStatus: document.querySelector("#adapterStatus"),
@@ -242,6 +243,7 @@ wireSettings();
 wireDiagnostics();
 wirePanelToggle();
 wireVolumeDial();
+wireAspectSelect();
 wireFileMounting();
 wireTransport();
 wireKeyboard();
@@ -659,6 +661,29 @@ function updateLcd(title, meta) {
   if (elements.lcdTitle) elements.lcdTitle.textContent = (title || "NO DISC").toUpperCase();
   if (elements.lcdMeta) elements.lcdMeta.textContent = (meta || "").toUpperCase();
 }
+
+// Screen aspect. The ratio is published as two CSS custom properties rather
+// than a single "4 / 3" string so the fullscreen rule can do arithmetic with
+// it -- fitting the picture to the real display instead of assuming 16:9.
+function wireAspectSelect() {
+  const select = elements.aspectSelect;
+  if (!select) return;
+  const apply = (value) => {
+    const [w, h] = String(value).split(":");
+    const root = document.documentElement;
+    root.style.setProperty("--aspect-w", String(Number(w) || 4));
+    root.style.setProperty("--aspect-h", String(Number(h) || 3));
+  };
+  let saved = null;
+  try { saved = localStorage.getItem("wasmDolphinAspect"); } catch {}
+  if (saved && [...select.options].some((o) => o.value === saved)) select.value = saved;
+  apply(select.value);
+  select.addEventListener("change", () => {
+    apply(select.value);
+    try { localStorage.setItem("wasmDolphinAspect", select.value); } catch {}
+  });
+}
+
 function wireFileMounting() {
   elements.romInput.addEventListener("change", async (event) => {
     const [file] = event.target.files;

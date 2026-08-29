@@ -1,4 +1,6 @@
 :root {
+  --aspect-w: 4;
+  --aspect-h: 3;
   color-scheme: dark;
   --bg: #111312;
   --surface: #1d201b;
@@ -252,7 +254,9 @@ h1 {
 
 .screen-viewport {
   position: relative;
-  aspect-ratio: 4 / 3;
+  /* Driven by the aspect selector; fullscreen reuses the same numbers to
+     compute a fit against the real display. */
+  aspect-ratio: var(--aspect-w, 4) / var(--aspect-h, 3);
   border: 2px solid #080908;
   border-radius: 8px;
   background: var(--glass);
@@ -357,7 +361,8 @@ canvas {
 .crt-footer {
   min-height: 42px;
   display: grid;
-  grid-template-columns: 18px 1fr auto;
+  /* power light | transport (flexes) | aspect | volume dial */
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   padding-top: 11px;
@@ -1101,4 +1106,88 @@ body.panel-hidden .workspace {
 
 .crt-footer .transport-sep {
   margin: 2px;
+}
+
+/* ---- Aspect selector ------------------------------------------------ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.aspect-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.aspect-select select {
+  min-height: 30px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid #14170f;
+  background: linear-gradient(180deg, #3c4137, #2b2f27);
+  color: var(--amber);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.aspect-select select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---- Fullscreen ----------------------------------------------------- */
+
+/* The bezel fills the display and the screen is fitted inside it rather than
+   stretched: width is the smaller of the display width and the width implied
+   by the display height at the chosen ratio, so it letterboxes or pillarboxes
+   correctly on any monitor instead of assuming 16:9. dvh, not vh, so mobile
+   browser chrome does not push the bottom off-screen. */
+.crt-set:fullscreen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100dvh;
+  padding: 0;
+  border-radius: 0;
+  background: #000;
+}
+
+.crt-set:fullscreen .crt-bezel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+  box-shadow: none;
+}
+
+.crt-set:fullscreen .screen-viewport {
+  width: min(100vw, calc(100dvh * var(--aspect-w) / var(--aspect-h)));
+  height: auto;
+  max-width: 100vw;
+  max-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Chrome is hidden in fullscreen so the picture gets the whole display. */
+.crt-set:fullscreen .lcd-strip,
+.crt-set:fullscreen .crt-footer {
+  display: none;
 }
