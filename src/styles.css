@@ -351,12 +351,15 @@ canvas {
   pointer-events: none;
 }
 
+/* The transport now lives in this row, between the power light and the volume
+   dial, so the keys read as part of the console rather than a toolbar parked
+   under it. The speaker grille is gone -- the keys occupy that span. */
 .crt-footer {
   min-height: 42px;
   display: grid;
   grid-template-columns: 18px 1fr auto;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   padding-top: 11px;
 }
 
@@ -1055,4 +1058,47 @@ body.panel-hidden .workspace {
 #panelToggle.active {
   border-color: var(--green);
   color: var(--green);
+}
+
+/* ---- Transport condensed into the console footer -------------------- */
+
+/* Inside the footer the transport loses its own well and border: the bezel is
+   already the container. Keys shrink to icon size and the row scrolls rather
+   than wrapping, so the footer stays one line at narrow widths. */
+.crt-footer .transport {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.crt-footer .transport::-webkit-scrollbar { display: none; }
+
+.crt-footer .transport button,
+.crt-footer .transport .file-button {
+  min-width: 34px;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+}
+
+.crt-footer .transport .glyph {
+  font-size: 14px;
+}
+
+/* The disc key keeps its word; at narrow widths the icon alone is enough. */
+.crt-footer .transport .btn-text {
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .crt-footer .transport .btn-text { display: none; }
+}
+
+.crt-footer .transport-sep {
+  margin: 2px;
 }
