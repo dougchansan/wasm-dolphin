@@ -1,3 +1,4 @@
+import { lookupGameProfile, readGameId } from "./game-profiles.js";
 import { AudioController } from "./audio.js";
 import { EmulatorHost } from "./core-host.js";
 import { startMainThreadProfiler } from "./main-profiler.js";
@@ -29,6 +30,7 @@ const elements = {
   controlPanel: document.querySelector("#controlPanel"),
   volumeDial: document.querySelector("#volumeDial"),
   aspectSelect: document.querySelector("#aspectSelect"),
+  autoProfile: document.querySelector("#settingAutoProfile"),
   lcdTitle: document.querySelector("#lcdTitle"),
   lcdMeta: document.querySelector("#lcdMeta"),
   adapterStatus: document.querySelector("#adapterStatus"),
@@ -830,8 +832,36 @@ function updateScreenHud(info) {
   }
 }
 
+
+// Pick the renderer from measured per-game results before the core loads.
+//
+// The id is read straight from the disc file rather than from the mounted core,
+// because by the time the core can report it the backend is already fixed --
+// changing it then would mean a restart, and the file selection is gone.
+//
+// Only applies when the user has not chosen a renderer explicitly, either by
+// URL flag or in the settings panel. A measured default is a good guess, not a
+// reason to override someone who has already decided.
+async function applyGameProfile(file) {
+  if (!elements.autoProfile?.checked) return;
+  if (new URLSearchParams(window.location.search).has("video")) return;
+  let gameId = null;
+  try {
+    gameId = await readGameId(file);
+  } catch {
+    return;  // unreadable header is not a reason to fail the mount
+  }
+  const profile = lookupGameProfile(gameId);
+  if (!profile) return;
+  const backend = profile.renderer === "hardware" ? "WebGPU-Real" : "Software Renderer";
+  if (host.applyVideoBackend(backend)) {
+    setStatus(`${gameId}: ${profile.renderer} renderer (${profile.why})`);
+  }
+}
+
 async function mountFile(file) {
   try {
+    await applyGameProfile(file);
     const game = await host.mountFile(file);
     // Auto-unmute on disc boot. AudioController defaults to muted because
     // the AudioContext can only be created after a user gesture; the disc

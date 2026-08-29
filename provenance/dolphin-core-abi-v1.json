@@ -44,8 +44,8 @@
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 47416,
-      "sha256": "34c6fdbc141e8f63fb9005b2a2327ac2195e6b9a1dd39aa5d295965245c24e9c"
+      "size": 48697,
+      "sha256": "0a6c2ffeda21cf0966b37292c39848848198127b83e059c61bb4d03d9e9e6cfc"
     },
     {
       "path": "src/audio.js",
@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 61704,
-      "sha256": "f518219bebc7a48ae9b661e30616933ec6ab06fe28b3eabe0a170b96ba6f3502"
+      "size": 63434,
+      "sha256": "c48ef51cf81649b87e7b8e4312203f995c9d0742d7272784e2f2da492146ec09"
     },
     {
       "path": "src/diagnostic-log-filter.js",

@@ -486,6 +486,40 @@ export class EmulatorHost {
     this.start();
   }
 
+  // Switch the video backend before the core loads. Safe only up to that
+  // point: the worker is spawned on first mount and the backend is baked into
+  // its load payload, so after that a change means a restart -- and the disc
+  // selection is gone.
+  //
+  // Several settings are DERIVED from the backend (cpu thread, JIT engagement
+  // and warmup, pacing), so they are recomputed rather than left at values
+  // chosen for the previous one. Each requested* helper reads the URL first,
+  // so an explicit user flag still wins; only the defaults follow the backend.
+  applyVideoBackend(backend) {
+    if (!backend || backend === this.videoBackend) return false;
+    if (this.adapter?.loaded) return false;
+    this.videoBackend = backend;
+    this.cpuThread = requestedCpuThread(backend);
+    this.ppcWasmJit = requestedPpcWasmJit(backend);
+    this.ppcWasmJitWarmupFrames = requestedPpcWasmJitWarmupFrames(backend);
+    this.presentationPacing = requestedPresentationPacing(backend);
+    // Unique-frame sampling follows the video path too. Missing this left the
+    // hardware renderer reporting 0 visual fps after a profile switch -- the
+    // exact metric the switch is meant to improve.
+    this.wgpuVisualCadence = requestedWgpuVisualCadence(window.location.search, {
+      hardwareVideo: backend === "WebGPU-Real"
+    });
+    if (this.adapter) {
+      this.adapter.videoBackend = backend;
+      this.adapter.cpuThread = this.cpuThread;
+      this.adapter.ppcWasmJit = this.ppcWasmJit;
+      this.adapter.ppcWasmJitWarmupFrames = this.ppcWasmJitWarmupFrames;
+      this.adapter.presentationPacing = this.presentationPacing;
+      this.adapter.wgpuVisualCadence = this.wgpuVisualCadence;
+    }
+    return true;
+  }
+
   async mountFile(file) {
     this.game = {
       name: file.name,
