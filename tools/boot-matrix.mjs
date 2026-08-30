@@ -299,7 +299,13 @@ async function waitForMount(page, timeoutSeconds) {
       status: document.querySelector("#statusPill")?.textContent?.trim() ?? "",
     }));
     if (state.coreMode === "Dolphin" && state.mountNote.includes("Dolphin")) return;
-    if (/failed|error|unsupported/i.test(state.status)) {
+    // "jit-cache: ..." is an optional prewarm step reporting on itself; the
+    // worker already returns 0 and boots without it. Its text contains
+    // "failed"/"unsupported", which used to abort the run as a mount
+    // failure -- intermittently, since it depends on sampling that brief
+    // status window. That is the "mount flakiness" in issue #10.
+    if (!/^jit-cache:/i.test(state.status) &&
+        /failed|error|unsupported/i.test(state.status)) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);

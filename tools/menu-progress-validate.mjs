@@ -1520,7 +1520,9 @@ async function waitForMount(page) {
       status: document.querySelector("#statusPill")?.textContent?.trim() ?? "",
     }));
     if (state.coreMode === "Dolphin" && state.mountNote.includes("Dolphin")) return;
-    if (/failed|error/i.test(state.status)) {
+    // See the note in boot-matrix.mjs: the optional jit-cache prewarm
+    // reports "failed" in its own status text and must not abort the run.
+    if (!/^jit-cache:/i.test(state.status) && /failed|error/i.test(state.status)) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);

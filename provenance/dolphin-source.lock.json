@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "9e7a66de9b28800f17f4b0716441107b4f7b41778fb5fcfa637300d7ca9cdabf",
+  "patchSeriesSha256": "843507cfc8a345a6629c381bad10f35722518f85b749987a0e7042f51c566686",
   "patches": [
     {
       "order": 1,
@@ -448,8 +448,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0055-wgpu-clear-rect-probe-and-subrect-experiment.patch",
-      "size": 5608,
-      "sha256": "0f9fdeb1fd113d64f2c976df4261d85b920e4bfdfc4c67cf4cb098a0e4717d7e"
+      "size": 6306,
+      "sha256": "33dcf4346c6f3872b430bf8ebcab017158f30133b2a7ad1460db6a37773ee098"
     },
     {
       "order": 54,

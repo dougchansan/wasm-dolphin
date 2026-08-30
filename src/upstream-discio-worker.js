@@ -9773,6 +9773,18 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
           if (passFbId === 0 && bgSlot === 1 && self._wgBgTex) {
             currentBackbufferSourceTextureId = self._wgBgTex[bgId] >>> 0;
+            // DIAG: what does the backbuffer blit actually sample? Mario Kart
+            // Wii presents what looks like its minimap scaled to full frame,
+            // so the question is whether this is the EFB colour texture at all
+            // and what size it is. Capped: first few, then occasional, so a
+            // long run still shows the in-race state.
+            self._wgBbSrcN = (self._wgBbSrcN || 0) + 1;
+            if (self._wgBbSrcN <= 6 || (self._wgBbSrcN % 600) === 0) {
+              const _t = webGpuObjects.textures.get(currentBackbufferSourceTextureId);
+              console.log(`[bbsrc] n=${self._wgBbSrcN} src=tex#${currentBackbufferSourceTextureId}` +
+                ` ${_t ? _t.width + "x" + _t.height : "?"}` +
+                ` efbColor=tex#${self._wgEfbColorId || 0} xfb=tex#${self._wgXfbId || 0}`);
+            }
           }
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
               self._wgBgTex[bgId] != null &&

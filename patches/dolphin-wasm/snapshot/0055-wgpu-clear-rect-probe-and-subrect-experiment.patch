@@ -77,31 +77,42 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
    // Day-33 Phase C: the game's BP clear-screen. Without this the EFB
    // depth buffer is never initialised, so every drawn primitive fails
    // the depth test and only the load-cleared background shows (the
-@@ -1242,6 +1292,27 @@
-   // also clears depth to 1.0 on a clear pass). Subsequent draws then
+@@ -1243,6 +1293,38 @@
    // render into the freshly-cleared EFB.
    if (!m_cmd_stream.ready())
-+    return;
+     return;
 +
-+  // EXPERIMENT (not shippable): skip small sub-rect clears instead of realising
-+  // them as full-EFB clears. Delegating to AbstractGfx::ClearRegion (the
-+  // scissored quad) was tried twice and renders black in this backend, so this
-+  // isolates the question it was meant to answer: is the destructive
-+  // over-clear what produces the patchwork race frame?
++  // Sub-rect clears cannot be expressed as a WebGPU loadOp:clear -- loadOp
++  // clears the whole attachment and is not affected by setScissorRect. Route
++  // them through VideoCommon's scissored-quad fallback instead.
 +  //
-+  // Skipping leaves those offscreen targets holding stale content, which is
-+  // also wrong -- but wrong in a way that does not destroy the main scene. If
-+  // the race frame becomes coherent, over-clearing is the cause and the real
-+  // fix is a working scissored clear. If it does not, the hypothesis is dead.
++  // Only the SMALL rects take that path. Attempt 1 sent the whole-frame clear
++  // (0,0)+608x456 through it as well and the screen went black, which is what
++  // a black quad painted over the entire visible frame looks like. A clear
++  // anchored at the origin and spanning most of the EFB is the whole-frame
++  // clear; over-clearing its margin is harmless, so it keeps the cheap loadOp
++  // path, which also initialises EFB depth -- what patch 0053 relies on.
 +  //
-+  // A clear anchored at the origin spanning most of the EFB is the whole-frame
-+  // clear; over-clearing its margin is harmless, so it keeps the fast path.
++  // Measured on Mario Kart Wii: the race frame goes from a patchwork of stale
++  // rectangles with no kart visible to a coherent track. NOT finished --
++  // rectangular seams remain, so over-clearing is not the only fault, and the
++  // quad path costs speed (43% -> 33% in race).
 +  const bool whole_frame_clear = target_rc.left <= 0 && target_rc.top <= 0 &&
 +                                 static_cast<u32>(std::max(0, target_rc.GetWidth())) * 4 >=
 +                                     efb_w * 3 &&
 +                                 static_cast<u32>(std::max(0, target_rc.GetHeight())) * 4 >=
 +                                     efb_h * 3;
 +  if (!covers_efb && !whole_frame_clear && efb_w != 0 && efb_h != 0)
-     return;
++  {
++    // Route ONLY the small offscreen-target clears through VideoCommon's
++    // scissored-quad fallback. Attempt 1 sent the whole-frame clear
++    // (0,0)+608x456 down this path too and the screen went black, which is
++    // what a black quad over the entire visible frame looks like. Keeping the
++    // whole-frame clear on the loadOp path separates "the quad path is broken"
++    // from "the quad path was being asked to paint the entire screen".
++    AbstractGfx::ClearRegion(target_rc, color_enable, alpha_enable, z_enable, color, z);
++    return;
++  }
  
    EndPassIfOpen();
+   // color_enable/z_enable used to be ignored: a depth-only clear still set a
