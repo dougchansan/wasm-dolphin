@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-30T12:14:54.833Z",
+  "createdAt": "2026-08-30T12:46:03.273Z",
   "coreId": "sha256:55bde16b437cc2fab7766307bcd2e636db82f29467343af68af8fb46f89828a6",
   "repository": {
-    "commit": "7d8bbe1a3ab5064eaacad927fd74cfc26273d74e",
-    "status": "M cores/dolphin/dolphin-core-upstream.wasm\n?? page_view.png"
+    "commit": "df8a050ff648591ea49476be97c3e71d78d3ec7f",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "843507cfc8a345a6629c381bad10f35722518f85b749987a0e7042f51c566686",
+    "patchSeriesSha256": "3f7f96c0576d486c1ff0fccb5dbd94897697507ff7bfd17c989f7d7d8c1aada3",
     "vendorResultTree": "e550aecf0d9194ae37f0428ae3b6f10ae11cf5db",
-    "sourceLockSha256": "103d24e329185ba2bc3f66cc4d3ab0643da96924bbceafe39cd92693c21573cb",
+    "sourceLockSha256": "11899fc7de0b10703cdf35a3d67acef2d816808a28ff766340e392e10f05bd08",
     "vendorSnapshotSha256": "b32e049935daa9509633cbfc663e26c5c397d6432daa19844101c080813705ca",
     "localInputsSha256": "a8faec6f53bdb623203b9ba834a4040d8bb61fb7d3974ff1f7d7d4ba02da1b77",
     "localInputs": [

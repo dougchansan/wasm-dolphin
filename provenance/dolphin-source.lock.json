@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "3f7f96c0576d486c1ff0fccb5dbd94897697507ff7bfd17c989f7d7d8c1aada3",
+  "patchSeriesSha256": "8acff387fd296c7358b8b116cf933a8b3653f751f3fa79d4ed815e01605415bd",
   "patches": [
     {
       "order": 1,
@@ -453,6 +453,14 @@
     },
     {
       "order": 54,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0056-webgpu-implement-efb-to-vram-copy.patch",
+      "size": 2012,
+      "sha256": "6daaa2fd83b67671a8bc28e946ba6c6cb281830a65478d03fbaebb0402f901ac"
+    },
+    {
+      "order": 55,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -460,7 +468,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 55,
+      "order": 56,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
