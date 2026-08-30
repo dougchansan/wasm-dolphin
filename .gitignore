@@ -46,3 +46,6 @@ uber-test/
 # output, not source, and committing it as a gitlink breaks the provenance
 # flow that expects to manage the checkout itself.
 vendor/dolphin/
+
+# Release artifacts (GPL corresponding-source archives are built, not tracked)
+dist/

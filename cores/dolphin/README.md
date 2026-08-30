@@ -1,5 +1,12 @@
 # Dolphin Web Core Slot
 
+> **License:** `dolphin-core-upstream.wasm` and `dolphin-core-upstream.js` in
+> this directory are compiled from [Dolphin](https://github.com/dolphin-emu/dolphin)
+> (© the Dolphin Emulator Project, GPLv2-or-later) and are therefore covered by
+> the GPL. If you redistribute either file, you must also make its corresponding
+> source available — see **License and attribution** in the top-level
+> [README](../../README.md), and `npm run dist:source` to build the archive.
+
 The local native core build writes a browser/Emscripten bundle in this directory:
 
 ```text

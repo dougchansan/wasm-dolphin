@@ -1,6 +1,6 @@
 # wasm-dolphin
 
-[![License: GPLv2+](https://img.shields.io/badge/license-GPLv2%2B-blue.svg)](#license)
+[![License: GPLv2+](https://img.shields.io/badge/license-GPLv2%2B-blue.svg)](#license-and-attribution)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](package.json)
 [![Browser: Chrome](https://img.shields.io/badge/browser-Chrome%20(WebGPU%20%2B%20SAB)-4285F4.svg)](#requirements)
@@ -19,7 +19,7 @@ real-time play possible inside the browser sandbox.
 
 > **License note:** Dolphin is GPLv2+. Any distributed combined build that
 > includes the vendored Dolphin sources or the built core `.wasm` must comply
-> with GPLv2+. See [License](#license). Bring your own game images — none are
+> with GPLv2+. See [License and attribution](#license-and-attribution). Bring your own game images — none are
 > included.
 
 ---
@@ -450,10 +450,42 @@ tests/                   Node unit tests
 
 ---
 
-## License
+## License and attribution
 
-This project builds on [Dolphin](https://github.com/dolphin-emu/dolphin), which
-is licensed **GPLv2+**. The vendored sources and any distributed combined build
-(including the core `.wasm`) are subject to GPLv2+. The Rust `naga-spirv-wgsl`
-crate depends on `naga` (MIT/Apache-2.0). Provide your own game images — none
-are included.
+This project builds on **[Dolphin](https://github.com/dolphin-emu/dolphin)**,
+the GameCube and Wii emulator, © the Dolphin Emulator Project and contributors,
+licensed **GPLv2-or-later**. wasm-dolphin is not affiliated with or endorsed by
+that project. The combined work here — including the prebuilt core at
+`cores/dolphin/dolphin-core-upstream.wasm` — is a derivative of Dolphin and is
+distributed under the same terms; the full text is in [LICENSE](LICENSE).
+
+The Rust `naga-spirv-wgsl` crate depends on `naga` (MIT/Apache-2.0). Provide
+your own game images — none are included, and none of the save states or discs
+used for validation are distributed.
+
+### Corresponding source
+
+Distributing a compiled GPL work obliges us to distribute the source it was
+built from. The core `.wasm` in this repository is built from:
+
+- upstream Dolphin at commit
+  [`e22551ea`](https://github.com/dolphin-emu/dolphin/commit/e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1),
+- plus the 54 patches in [`patches/dolphin-wasm/snapshot/`](patches/dolphin-wasm/snapshot),
+- plus the C-ABI shim in [`core/upstream/`](core/upstream) and the build driver
+  in [`tools/`](tools).
+
+Every one of those is pinned and hash-verified by
+[`provenance/dolphin-source.lock.json`](provenance/dolphin-source.lock.json);
+`npm run verify:provenance` checks the checkout against it.
+
+A single archive containing all of it — the patched tree, ready to build — is
+attached to each release. To produce it yourself:
+
+```bash
+npm run fetch:dolphin && npm run patch:upstream
+npm run dist:source
+```
+
+That writes `dist/wasm-dolphin-corresponding-source-v<version>.tar.gz`, and
+refuses to write anything if provenance disagrees that the tree is the pinned
+commit plus the locked patch series.
