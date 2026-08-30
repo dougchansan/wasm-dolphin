@@ -132,7 +132,15 @@ The clearest repro in the library, and the one to start from.
 
 - **Wario World** — near-empty frame with two small tan rectangles. The software
   path renders a fully detailed castle throne room from the same scene. 97% game
-  speed, `132/381 draw`, so draws are being submitted and mostly not landing.
+  speed, `132/381 draw`.
+
+  **Correction:** that figure was long read as "draws submitted and mostly not
+  landing". It is not a landed-vs-submitted ratio. The HUD field is
+  `prim/draw` -- `g_stats.this_frame.num_prims` over
+  `num_draw_calls` (core/upstream/dolphin_web_discio.cpp) -- both counted at
+  SUBMISSION by Dolphin. It carries no information about what reached the EFB.
+  Wario World reads 136/379 when rendering correctly and 124/380 when rendering
+  a near-black frame, so the metric does not even separate working from broken.
 - **Super Mario Sunshine** — the "File created." dialog renders correctly on
   pure black. The entire beach scene behind it is absent.
 

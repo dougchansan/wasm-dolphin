@@ -909,6 +909,7 @@ async function handleMessage(type, payload) {
         xfbFastPaths: payload.xfbFastPaths,
         correctTimeDrift: payload.correctTimeDrift,
         coreLog: payload.coreLog,
+        efbDiag: payload.efbDiag,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
@@ -1401,6 +1402,7 @@ async function loadCore({
   xfbFastPaths = 0,
   correctTimeDrift = false,
   coreLog = false,
+  efbDiag = false,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
   reportedCoreSelection = null,
@@ -1855,6 +1857,7 @@ async function loadCore({
     // false, so the shipping page load is unchanged.
     dolphinCorrectTimeDrift: Boolean(correctTimeDrift),
     dolphinCoreLog: Boolean(coreLog),
+    dolphinEfbDiag: (DIAG_EFB_TO_CANVAS = Boolean(efbDiag)),
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
@@ -7885,7 +7888,7 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // The EFB is loadOp=clear'd to (0,0,0,0) at each frame start, so presents
 // landing after the clear but before/without draws showed black → flicker.
 // The XFB (tex#47) carries content every frame. Restored to normal present.
-const DIAG_EFB_TO_CANVAS = false;
+let DIAG_EFB_TO_CANVAS = false;
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT depth (still dark with depth bypassed) ⇒ blend/TEV/material/texture construct

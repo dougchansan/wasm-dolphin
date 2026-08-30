@@ -191,6 +191,10 @@ Learned the expensive way, and worth keeping:
   another reads 95% then 24.5% once it reaches an FMV. Neither number is a
   compatibility grade, and a 2-3 point difference in a 45-game mean is noise.
 - **Verdicts plus screenshots** carry the signal. Counters alone do not.
+- **Know what a counter counts.** The HUD's `prim/draw` badge is primitives
+  over draw calls, both counted at submission. It was read for months as
+  "submitted vs landed" and used as evidence that draws were being dropped. It
+  reads 136/379 on a correct Wario World frame and 124/380 on a broken one.
 - **Check the title that could falsify you, not the one that shows the win.**
   A scissored-clear change was reported as working after being checked only on
   Mario Kart Wii, whose frame was already broken, so "less broken" read as

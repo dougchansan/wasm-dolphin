@@ -60,6 +60,7 @@ export class UpstreamWorkerAdapter {
     xfbFastPaths = 0,
     correctTimeDrift = false,
     coreLog = false,
+    efbDiag = false,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
@@ -150,6 +151,7 @@ export class UpstreamWorkerAdapter {
     this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.correctTimeDrift = Boolean(correctTimeDrift);
     this.coreLog = Boolean(coreLog);
+    this.efbDiag = Boolean(efbDiag);
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
@@ -346,6 +348,7 @@ export class UpstreamWorkerAdapter {
       xfbFastPaths: this.xfbFastPaths,
       correctTimeDrift: this.correctTimeDrift,
       coreLog: this.coreLog,
+      efbDiag: this.efbDiag,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
