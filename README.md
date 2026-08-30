@@ -456,6 +456,23 @@ tests/                   Node unit tests
 
 ---
 
+## Contributing
+
+Help is welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The two things this project most needs are **a faster, more correct WebGPU
+hardware backend** and **smooth frame rates across more games**. The most
+useful contribution is often not code at all: the per-game renderer table comes
+from two 45-disc sweeps on a *single* machine, so every title benchmarked on
+different hardware makes it less of a one-machine artifact.
+
+If you do measure something, the standard is headed Chrome, the complete URL
+saved with the result, your GPU named, and a screenshot for anything visual —
+a wrong frame can be fast. Negative results are worth submitting; most of this
+project's history is a record of optimizations that did not work.
+
+---
+
 ## License and attribution
 
 This project builds on **[Dolphin](https://github.com/dolphin-emu/dolphin)**,
