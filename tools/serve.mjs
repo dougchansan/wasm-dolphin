@@ -1,10 +1,14 @@
+import { spawn } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const args = process.argv.slice(2);
+const shouldOpen = args.includes("--open");
+const portArgument = args.find((argument) => /^\d+$/.test(argument));
 const root = resolve(process.cwd());
-const preferredPort = Number(process.env.PORT || process.argv[2] || 8080);
+const preferredPort = Number(process.env.PORT || portArgument || 8080);
 const host = process.env.HOST || "127.0.0.1";
 
 const mimeTypes = new Map([
@@ -58,6 +62,25 @@ const server = createServer((request, response) => {
   createReadStream(filePath).pipe(response);
 });
 
+// Open the page in the user's browser. Best effort by design: a failure here
+// must not take the server down, because the printed URL still works.
+function openInBrowser(url) {
+  const command =
+    process.platform === "win32"
+      ? { file: "cmd", args: ["/c", "start", "", url] }
+      : process.platform === "darwin"
+        ? { file: "open", args: [url] }
+        : { file: "xdg-open", args: [url] };
+
+  try {
+    const child = spawn(command.file, command.args, { stdio: "ignore", detached: true });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // No launcher available; the URL above is the fallback.
+  }
+}
+
 function listen(port) {
   server.once("error", (error) => {
     if (error.code === "EADDRINUSE") {
@@ -69,7 +92,12 @@ function listen(port) {
 
   server.listen(port, host, () => {
     const address = server.address();
-    console.log(`wasm-dolphin running at http://${host}:${address.port}/`);
+    const url = `http://${host}:${address.port}/`;
+    console.log(`wasm-dolphin running at ${url}`);
+    console.log("Open it in Chrome, then drag a disc image onto the page.");
+    if (shouldOpen) {
+      openInBrowser(url);
+    }
   });
 }
 

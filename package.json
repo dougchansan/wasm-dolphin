@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node tools/serve.mjs",
+    "play": "node tools/serve.mjs --open",
     "check:deps": "node tools/check-deps.mjs",
     "fetch:dolphin": "node tools/fetch-dolphin.mjs",
     "patch:upstream": "node tools/patch-upstream-wasm.mjs",
