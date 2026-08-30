@@ -1,9 +1,15 @@
 # wasm-dolphin
 
+[![License: GPLv2+](https://img.shields.io/badge/license-GPLv2%2B-blue.svg)](#license)
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](https://nodejs.org/)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](package.json)
+[![Browser: Chrome](https://img.shields.io/badge/browser-Chrome%20(WebGPU%20%2B%20SAB)-4285F4.svg)](#requirements)
+[![Built with Emscripten](https://img.shields.io/badge/built%20with-Emscripten-654FF0.svg)](https://emscripten.org/)
+[![Status: research prototype](https://img.shields.io/badge/status-research%20prototype-orange.svg)](docs/current-status.md)
+
 Run the **Dolphin** GameCube/Wii emulator in a Chrome tab, compiled to
-WebAssembly. The current focus and best-supported title is **Super Smash Bros.
-Melee**, which can approach 100% game speed on a modern desktop browser, with
-visual smoothness limited by the software rasterizer on the default path.
+WebAssembly. The best-supported title is **Super Smash Bros. Melee**, which can
+approach 100% game speed on a modern desktop browser.
 
 Under the hood this is the upstream [Dolphin](https://github.com/dolphin-emu/dolphin)
 C++ codebase cross-compiled with Emscripten, driven by a small JavaScript host
@@ -13,12 +19,61 @@ real-time play possible inside the browser sandbox.
 
 > **License note:** Dolphin is GPLv2+. Any distributed combined build that
 > includes the vendored Dolphin sources or the built core `.wasm` must comply
-> with GPLv2+. See [License](#license).
+> with GPLv2+. See [License](#license). Bring your own game images — none are
+> included.
 
-**Project references:** [current status](docs/current-status.md) ·
-[rendering modes](docs/rendering-modes.md) · [JIT flags](docs/jit-flags.md) ·
-[reproducible build](docs/repro-build.md) · [latest audit](docs/performance-audit-2026-07-10.md) ·
-[validation evidence](docs/perf-results/melee-performance-evidence-2026-07-10.md)
+---
+
+## Quick start
+
+A prebuilt core `.wasm` is committed and the project has **zero npm
+dependencies**, so there is nothing to install or build before playing:
+
+```bash
+git clone https://github.com/dougchansan/wasm-dolphin && cd wasm-dolphin && npm run play
+```
+
+`npm run play` starts the local dev server (which sends the COOP/COEP headers
+SharedArrayBuffer needs) and opens the page in your default browser. Then
+**drag a disc image onto the page**.
+
+That is the whole setup. Two variants if you need them:
+
+```bash
+npm start            # same server, but don't open a browser
+PORT=9000 npm start  # pick the port (default 8080; it steps up if taken)
+```
+
+<details>
+<summary>Requirements</summary>
+
+- **Node.js 18+** — only to run the dev server and tooling. No packages are
+  installed; `npm install` is a no-op and can be skipped.
+- **Chrome (or another Chromium browser) on desktop** — WebGPU and
+  SharedArrayBuffer are both required. The dev server sends the
+  `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` headers that
+  enable SharedArrayBuffer; opening `index.html` from the filesystem will not
+  work.
+- **Your own disc images** — `.iso`, `.nkit.iso`, `.rvz`, `.ciso`, and the
+  containers Dolphin's DiscIO accepts.
+
+</details>
+
+<details>
+<summary>Serving it yourself (any other static server)</summary>
+
+Any static file server works as long as it sends these two headers on every
+response:
+
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without them the page loads but the core cannot allocate the shared memory it
+needs, and boot fails. `tools/serve.mjs` exists mostly to get this right.
+
+</details>
 
 ---
 
@@ -27,42 +82,29 @@ real-time play possible inside the browser sandbox.
 | Area | State |
 |------|-------|
 | Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
+| Broader GameCube library | ✅ Boots widely; per-game renderer defaults from two 45-disc sweeps |
+| Wii discs | ⚠️ Boot and run on the software path; no Wii Remote input yet |
 | PPC→WASM JIT with GPR register cache | ⚠️ Default-on; old `addzex` failures are fixed, benefit remains scene-dependent |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
 | Audio | ✅ Worker-fed/tuned audio buffering |
-| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Fixed battle visible on one validation GPU; still slow and experimental |
-| Wii / broader GameCube compatibility | 🔬 Not a focus; unverified |
+| WebGPU **hardware** renderer (`video=wgpu`) | ⚠️ Correct and much faster on some titles, broken on others; opt-in per game |
 
-The default configuration is the recommended, locally validated
-software-hybrid path. Experimental renderers and correctness-sensitive JIT
-levers remain behind opt-in URL flags.
+The default configuration is the locally validated software-hybrid path:
+`video=software&presenter=webgpu`. The true hardware WebGPU renderer is
+`video=wgpu` and remains experimental — but see
+[per-game renderer defaults](#per-game-renderer-defaults), which switches
+individual titles onto it automatically where that was measured *and* checked
+by eye.
 
-The recommended playable path is `video=software&presenter=webgpu`. The true
-hardware WebGPU renderer is `video=wgpu` and remains experimental.
+**Project references:** [current status](docs/current-status.md) ·
+[rendering modes](docs/rendering-modes.md) · [JIT flags](docs/jit-flags.md) ·
+[reproducible build](docs/repro-build.md) · [latest audit](docs/performance-audit-2026-07-10.md) ·
+[validation evidence](docs/perf-results/melee-performance-evidence-2026-07-10.md)
 
----
+### Recommended explicit URL
 
-## Quick start
-
-Requires Node.js (for the dev server and tooling). A prebuilt core `.wasm` is
-committed, so you do **not** need to build anything to play.
-
-```powershell
-npm install
-npm test          # optional: unit tests
-npm start         # serves the app; prints a local URL
-```
-
-Open the printed URL in **Chrome** (WebGPU + SharedArrayBuffer required — the
-dev server sends the necessary COOP/COEP headers). Drag a Melee ISO onto the
-page to boot. After the configured warmup, the status pill may announce
-*"Experimental WASM JIT enabled after N stable video frames"*. Game speed and
-visual cadence remain scene-, cache-, browser-, and machine-dependent.
-
-### Recommended playable URL
-
-The default settings already select the software-hybrid path. This explicit URL
-pins every knob for reproducibility:
+The defaults already select the software-hybrid path. This URL pins every knob,
+for reproducible measurements:
 
 ```text
 /?core=upstream&video=software&presenter=webgpu&cpu=dual&speed=1&wasmjit=1&jitwarmup=700&oc=1&pacing=tick&fastsw=1&metrics=1
@@ -70,10 +112,28 @@ pins every knob for reproducibility:
 
 - `video=software` + `presenter=webgpu` — software rasterizer, presented to the
   canvas through a WebGPU blit (the "software hybrid").
-- `wasmjit=1` — request guarded PPC→WASM JIT; verify each run's metrics.
+- `wasmjit=1` — request the guarded PPC→WASM JIT; verify each run's metrics.
 - `pacing=tick` — repaint the canvas on a steady tick for smoother scrolling
   (default for software paths).
 - `fastsw=1` — balanced/crisp fast software mode (see [Raster quality](#raster-quality-fastsw)).
+
+After the configured warmup the status pill may announce *"Experimental WASM JIT
+enabled after N stable video frames"*. Game speed and visual cadence remain
+scene-, cache-, browser-, and machine-dependent.
+
+---
+
+## Controls
+
+| Input | Keys |
+|-------|------|
+| A / B / X / Y | `X`, `Z`, `S`, `A` |
+| Start | `Enter` |
+| L / R / Z | `Q`, `E`, `C` |
+| D-pad | Arrow keys |
+| Main stick | `W`, `A`, `S`, `D` |
+
+Standard browser gamepads are also polled. Wii Remote input is not implemented.
 
 ---
 
@@ -121,31 +181,30 @@ and the dynamic PPC JIT does not yet emit SIMD. See
 ### Rendering: the software hybrid (default)
 
 The default path uses Dolphin's **software rasterizer** for correctness, then
-**presents** the framebuffer to the page via WebGPU (or WebGL/Canvas fallback).
-The pipeline is:
+**presents** the framebuffer to the page via WebGPU (or WebGL/Canvas fallback):
 
 ```
 software rasterizer → EFB → XFB (YUV encode) → WebGPU presenter → <canvas>
 ```
 
-The main measured smoothness limit on the default path is the software GPU:
-game timing can approach its target while the rasterizer produces relatively
-few distinct frames. Three profiler runs averaged about 59.7 presentation FPS
-but only 12.8 unique visual FPS, with 78.3% sampled stale-source reuse. Raster,
-TEV, texture, FIFO, and XFB phase counters now identify where to optimize
-without changing correctness. Two knobs expose the tradeoff:
+The main measured smoothness limit on this path is the software GPU: game
+timing can approach its target while the rasterizer produces relatively few
+distinct frames. Three profiler runs averaged about 59.7 presentation FPS but
+only 12.8 unique visual FPS, with 78.3% sampled stale-source reuse. Raster,
+TEV, texture, FIFO, and XFB phase counters identify where to optimize without
+changing correctness. Two knobs expose the tradeoff.
 
 #### Pacing
 
-`?pacing=` controls how the canvas is refreshed:
-`tick` (default; immediate fresh frames plus duplicate re-paints), `smooth`
-(paced queue), or `direct` (immediate fresh frames only). WebGPU hardware uses
-`smooth`; `legacytickqueue=1` restores the old queued `tick` route for rollback.
+`?pacing=` controls how the canvas is refreshed: `tick` (default; immediate
+fresh frames plus duplicate re-paints), `smooth` (paced queue), or `direct`
+(immediate fresh frames only). WebGPU hardware uses `smooth`;
+`legacytickqueue=1` restores the old queued `tick` route for rollback.
 
 #### Raster quality (`fastsw`)
 
-`?fastsw=` thins the software raster and XFB encode. Aggressive modes can
-raise unique-frame cadence, but are not guaranteed to raise game speed:
+`?fastsw=` thins the software raster and XFB encode. Aggressive modes can raise
+unique-frame cadence, but are not guaranteed to raise game speed:
 
 | `fastsw` | What it does | Quality |
 |:--:|------|------|
@@ -157,37 +216,48 @@ raise unique-frame cadence, but are not guaranteed to raise game speed:
 `fastsw=3` reconstructs the rows that `fastsw=2` duplicates by interpolating
 between neighbors. Mode 1 shades one sample per 2×2 cell; modes 2 and 3 shade
 one per 4×4 cell. None is literal full quality; `fastsw=1` remains the crisp
-default. Results are scene-dependent—see the
+default. Results are scene-dependent — see the
 [measured performance audit](docs/performance-audit-2026-07-10.md).
 
 ### Rendering: WebGPU hardware backend (experimental)
 
 `?video=wgpu` selects the true WebGPU hardware renderer command path, intended
-to bypass the software-raster unique-frame ceiling. On the validation GPU, the
-first completed 108-draw EFB pass contains nonzero color and the fixed battle
-is visible. This does not isolate which individual draw first changed the EFB.
-Replay still averages only about 68% game speed and 30 presents/s in the
-retained JIT-off runs, so it is **not** the default.
+to bypass the software-raster unique-frame ceiling. It is dramatically faster on
+some titles (60 vs 7–10 unique visual FPS) and visibly wrong or non-progressing
+on others, which is why it is opt-in rather than the global default.
+
+For Melee specifically: on the validation GPU the first completed 108-draw EFB
+pass contains nonzero color and the fixed battle is visible, but replay still
+averages only about 68% game speed and 30 presents/s in the retained JIT-off
+runs.
 
 `?video=wgpu` measures its own unique-visual-frame rate. Each submitted
 backbuffer is downsampled on the GPU to 96x72 with the existing fullscreen
 presenter, then hashed after asynchronous readback through a fixed three-buffer
 ring. The public visual FPS/source fields and `visualCadenceTelemetry` report
-completed unique samples and any ring-busy drops.
-
-This used to be opt-in behind `wgpuvisual=1` and off by default, which meant the
-HUD's `visual` field read a flat `0.0` on the hardware path — the software
-presenters derive it from an XFB hash, and the hardware path never produces one.
-That made the hardware renderer's whole premise, beating the software
-rasterizer's unique-frame ceiling, unmeasurable on the path meant to beat it.
-The readback now follows the video path: on for `?video=wgpu`, off for the
-software hybrid, and `?wgpuvisual=0` opts a hardware run back out for
-perf-attribution work that must not pay the GPU pass and mapped readback. With
-the readback off, the hardware path reports its sample source as `unsampled`
-rather than claiming an `xfb-hash` it never took.
+completed unique samples and any ring-busy drops. `?wgpuvisual=0` opts a
+hardware run back out for perf-attribution work that must not pay the GPU pass
+and mapped readback; with the readback off, the path reports its sample source
+as `unsampled` rather than claiming an `xfb-hash` it never took.
 
 This path needs Dolphin's shaders in WGSL. Dolphin generates GLSL → glslang
 compiles it to SPIR-V (in C++) → the Rust crate below does the final hop.
+
+### Per-game renderer defaults
+
+The two video paths differ enormously per title, so the shipping default is
+chosen **per game** from measured evidence. [`src/game-profiles.js`](src/game-profiles.js)
+holds the table, built from two full 45-disc sweeps on the same machine and
+harness. When you drop a disc in, the host reads the 6-character game id
+straight out of the file (before the core loads, since the video backend is
+fixed at worker start) and applies the profile, announcing it in the status
+line.
+
+The rule for entering a game is deliberately strict: a *hardware*
+recommendation needs the frame checked by eye against the software render **and**
+a material speed win — a wrong frame can be fast. Titles with a big FPS win but
+no verified screenshot are left out. Anything absent from the table keeps the
+shipping default. See [the hardware renderer bug log](docs/webgpu-hardware-renderer-bugs.md).
 
 ### Rust: `tools/naga-spirv-wgsl`
 
@@ -220,12 +290,11 @@ result.
 
 ## Building the core
 
-A prebuilt core is committed; build only when changing the C++/Rust core.
+A prebuilt core is committed; build only when changing the C++/Rust core. Full
+prerequisites, version record, assumptions, outputs, and the release checklist
+are in [the reproducible build guide](docs/repro-build.md).
 
-The full prerequisites, version record, assumptions, outputs, and release
-checklist are in [the reproducible build guide](docs/repro-build.md).
-
-```powershell
+```bash
 # One-time: fetch and patch upstream Dolphin into vendor/dolphin
 npm run fetch:dolphin
 npm run patch:upstream
@@ -247,7 +316,7 @@ changes to the rasterizer, JIT, or shaders are baked into the committed core
 
 ## Testing & validation
 
-```powershell
+```bash
 npm test          # Node unit tests (tests/*.test.mjs)
 npm run check     # syntax-check all JS entry points
 npm run perf:gate # perf regression gate
@@ -274,6 +343,7 @@ non-qualifying for renderer claims.
 src/                     Browser host (main thread + worker)
   app.js                 UI, settings wiring
   core-host.js           Flag parsing, core lifecycle, presentation pacing
+  game-profiles.js       Per-game renderer defaults + disc-id probing
   upstream-discio-worker.js  Worker that owns the core + ISO mount + present
   settings.js input.js audio.js …
 core/
@@ -283,7 +353,7 @@ cores/dolphin/           Committed prebuilt core (.js/.wasm) the host loads
 vendor/dolphin/          Upstream Dolphin sources (gitignored; fetched+patched)
 patches/dolphin-wasm/    Build gates + browser-platform patches + session notes
 tools/
-  serve.mjs              Dev server (COOP/COEP)
+  serve.mjs              Dev server (COOP/COEP, --open)
   build-upstream-target.mjs   Emscripten build driver
   perf-regression-gate.mjs    Direct-save headed-Chrome qualification harness
   naga-spirv-wgsl/       Rust SPIR-V→WGSL transpiler (WebGPU path)
@@ -294,27 +364,19 @@ tests/                   Node unit tests
 
 ---
 
-## Controls
-
-- GameCube A / B / X / Y: `X`, `Z`, `S`, `A`
-- Start: `Enter`
-- L / R / Z: `Q`, `E`, `C`
-- D-pad: arrow keys
-- Main stick: `W`, `A`, `S`, `D`
-
-Standard browser gamepads are also polled.
-
----
-
 ## Known limitations
 
 - **Crisp *and* smooth is not yet achieved on the software path.** The balanced
   raster (`fastsw=1`) is capped at the rasterizer's unique-frame rate during
   heavy motion; the fast modes buy smoothness by reducing image quality. The
-  main routes to both are fixing hardware WGPU or optimizing, vectorizing, or
+  routes to both are fixing hardware WGPU or optimizing, vectorizing, or
   parallelizing the measured hot software-raster phases.
-- **WebGPU hardware renderer is GPU-dependent** — verify on the target GPU
-  before relying on it; it can render black on some Windows GPUs.
+- **The WebGPU hardware renderer is GPU- and title-dependent** — verify on your
+  target GPU before relying on it; it renders black or misplaces viewports on
+  some combinations.
+- **Wii support is partial.** Discs boot and run on the software path, but there
+  is no Wii Remote input yet, and the hardware path misplaces in-race viewports
+  in the titles that were checked.
 - In-browser structural limits (no fastmem trap and no SIMD emission in the
   dynamic PPC JIT) bound how close the JIT can get to native speed.
 
@@ -325,5 +387,5 @@ Standard browser gamepads are also polled.
 This project builds on [Dolphin](https://github.com/dolphin-emu/dolphin), which
 is licensed **GPLv2+**. The vendored sources and any distributed combined build
 (including the core `.wasm`) are subject to GPLv2+. The Rust `naga-spirv-wgsl`
-crate depends on `naga` (MIT/Apache-2.0). Provide your own game ISOs — none are
-included.
+crate depends on `naga` (MIT/Apache-2.0). Provide your own game images — none
+are included.
