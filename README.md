@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="wasm-dolphin" width="168">
+  <img src="icon.png" alt="wasm-dolphin" width="168">
 </p>
 
 <h1 align="center">wasm-dolphin</h1>
