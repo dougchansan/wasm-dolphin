@@ -1,0 +1,107 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -16,6 +16,7 @@
+ #include "Core/System.h"
+ 
+ #include "VideoCommon/AbstractFramebuffer.h"
++#include "VideoCommon/FramebufferManager.h"
+ #include "VideoCommon/ConstantManager.h"
+ #include "VideoCommon/GeometryShaderManager.h"
+ #include "VideoCommon/PixelShaderManager.h"
+@@ -38,6 +39,8 @@
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+ #include <algorithm>
++#include <array>
++#include <set>
+ #include <atomic>
+ #include <cstdint>
+ #include <cstring>
+@@ -1230,9 +1233,56 @@
+   m_show_image_seen = true;
+ }
+ 
+-void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& /* target_rc */, bool color_enable,
+-                            bool alpha_enable, bool z_enable, u32 color, u32 /* z */)
+-{
++void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool color_enable,
++                            bool alpha_enable, bool z_enable, u32 color, u32 z)
++{
++  const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
++  const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
++  const bool covers_efb = target_rc.left <= 0 && target_rc.top <= 0 &&
++                          static_cast<u32>(std::max(0, target_rc.GetWidth())) >= efb_w &&
++                          static_cast<u32>(std::max(0, target_rc.GetHeight())) >= efb_h;
++
++  if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled())
++  {
++    // DIAG (rect probe): this function drops target_rc and clears the WHOLE
++    // EFB. Harmless for a game that clears one viewport covering the frame --
++    // the extra rows hold nothing -- and destructive for a game that clears
++    // panes, because clearing pane 2 also wipes pane 1. The docs dismissed
++    // this using Wario World, which is single-viewport; that does not settle
++    // it for a game like Mario Kart Wii.
++    //
++    // Log each DISTINCT (rect, enables) tuple once, so a whole race produces a
++    // handful of lines rather than thousands. What matters is whether any rect
++    // is SMALLER than the EFB, and whether several distinct rects appear.
++    static std::set<std::array<int, 7>> s_seen;
++    const std::array<int, 7> key{target_rc.left,       target_rc.top,
++                                 target_rc.GetWidth(), target_rc.GetHeight(),
++                                 color_enable ? 1 : 0, alpha_enable ? 1 : 0,
++                                 z_enable ? 1 : 0};
++    if (s_seen.size() < 64 && s_seen.insert(key).second)
++    {
++      NOTICE_LOG_FMT(VIDEO,
++                     "[cleardiag] rect=({},{})+{}x{} efb={}x{} {} col={} a={} z={} "
++                     "scissor=({},{})+{}x{}",
++                     target_rc.left, target_rc.top, target_rc.GetWidth(), target_rc.GetHeight(),
++                     efb_w, efb_h, covers_efb ? "full" : "PARTIAL", color_enable,+
++                     alpha_enable,
++                     z_enable, m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]);
++    }
++  }
++
++  // A WebGPU loadOp:clear clears the WHOLE attachment and is NOT affected by
++  // setScissorRect, so a sub-rect clear cannot be expressed as a clear pass at
++  // all. Mario Kart Wii clears 128x128 and 256x256 offscreen targets mid-frame;
++  // realising those as full-EFB clears destroys everything drawn up to that
++  // point, which is what leaves a race frame as a patchwork of stale regions.
++  //
++  // VideoCommon already has the correct fallback: draw a quad through the clear
++  // pipeline with the rect as viewport+scissor. Use it whenever the requested
++  // rect does not cover the EFB. The covering case keeps the loadOp path below,
++  // which is cheaper and also initialises EFB depth -- the behaviour patch 0053
++  // relies on.
+   // Day-33 Phase C: the game's BP clear-screen. Without this the EFB
+   // depth buffer is never initialised, so every drawn primitive fails
+   // the depth test and only the load-cleared background shows (the
+@@ -1242,6 +1292,27 @@
+   // also clears depth to 1.0 on a clear pass). Subsequent draws then
+   // render into the freshly-cleared EFB.
+   if (!m_cmd_stream.ready())
++    return;
++
++  // EXPERIMENT (not shippable): skip small sub-rect clears instead of realising
++  // them as full-EFB clears. Delegating to AbstractGfx::ClearRegion (the
++  // scissored quad) was tried twice and renders black in this backend, so this
++  // isolates the question it was meant to answer: is the destructive
++  // over-clear what produces the patchwork race frame?
++  //
++  // Skipping leaves those offscreen targets holding stale content, which is
++  // also wrong -- but wrong in a way that does not destroy the main scene. If
++  // the race frame becomes coherent, over-clearing is the cause and the real
++  // fix is a working scissored clear. If it does not, the hypothesis is dead.
++  //
++  // A clear anchored at the origin spanning most of the EFB is the whole-frame
++  // clear; over-clearing its margin is harmless, so it keeps the fast path.
++  const bool whole_frame_clear = target_rc.left <= 0 && target_rc.top <= 0 &&
++                                 static_cast<u32>(std::max(0, target_rc.GetWidth())) * 4 >=
++                                     efb_w * 3 &&
++                                 static_cast<u32>(std::max(0, target_rc.GetHeight())) * 4 >=
++                                     efb_h * 3;
++  if (!covers_efb && !whole_frame_clear && efb_w != 0 && efb_h != 0)
+     return;
+ 
+   EndPassIfOpen();

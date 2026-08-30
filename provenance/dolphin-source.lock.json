@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "e02ac8bf047b940e1ec77c4f4d897c12351791d281af1ef6bc96a88feb748cea",
+  "patchSeriesSha256": "9e7a66de9b28800f17f4b0716441107b4f7b41778fb5fcfa637300d7ca9cdabf",
   "patches": [
     {
       "order": 1,
@@ -445,6 +445,14 @@
     },
     {
       "order": 53,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0055-wgpu-clear-rect-probe-and-subrect-experiment.patch",
+      "size": 5608,
+      "sha256": "0f9fdeb1fd113d64f2c976df4261d85b920e4bfdfc4c67cf4cb098a0e4717d7e"
+    },
+    {
+      "order": 54,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -452,7 +460,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 54,
+      "order": 55,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

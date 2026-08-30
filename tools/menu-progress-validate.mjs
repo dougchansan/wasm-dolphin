@@ -222,6 +222,7 @@ for (const [environmentName, queryName] of [
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
+  ["CORELOG", "corelog"],
   ["WGPUATOMIC", "wgpuatomic"],
   ["WGPUUPLOADMB", "wgpuuploadmb"],
   ["WGPUSTAGINGSLOTS", "wgpustagingslots"],
