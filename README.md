@@ -50,8 +50,8 @@ PORT=9000 npm start  # pick the port (default 8080; it steps up if taken)
 You do not need git, and you do not need to build anything — the core `.wasm`
 is committed, so the ZIP is a complete, runnable copy.
 
-1. Download **[the v0.1.0 source ZIP](https://github.com/dougchansan/wasm-dolphin/archive/refs/tags/v0.1.0.zip)**
-   (or the latest code from *Code → Download ZIP* on the repository page).
+1. Download **[the current source ZIP](https://github.com/dougchansan/wasm-dolphin/archive/refs/heads/main.zip)**
+   (the same thing as *Code → Download ZIP* on the repository page).
 2. Unzip it anywhere.
 3. Open a terminal **in the unzipped folder** and run:
 
