@@ -30,14 +30,6 @@ export const GAME_PROFILES = {
   GLME01: { renderer: "hardware", why: "20.5 vs 6 fps; full colour verified (was sepia pre-fix)" },
   GALE01: { renderer: "hardware", why: "60 vs 22 fps; character select verified" },
 
-  // Wii. Measured separately from the GameCube sweeps above, on the three-disc
-  // Wii library, after the Sys-directory fix that let these boot at all. Both
-  // are large wins because nothing here was ever tuned for the software path's
-  // unique-frame ceiling -- the emulated CPU keeps ~100% on both paths, so the
-  // whole difference is how many distinct frames reach the canvas.
-  RMCE01: { renderer: "hardware", why: "50 vs 9 fps; Select License verified against software" },
-  SOUE01: { renderer: "hardware", why: "20.6 vs 1.6 fps; health-and-safety screen verified" },
-
   // --- software: hardware path broken or worse -----------------------------
   GMSE01: { renderer: "software", why: "background missing on hardware (issue #8)" },
   GCDE08: { renderer: "software", why: "renders black on hardware" },
@@ -45,7 +37,17 @@ export const GAME_PROFILES = {
   GHAE08: { renderer: "software", why: "2 vs 17 fps; hardware is much worse" },
   D43E01: { renderer: "software", why: "0 vs 4 fps; hardware is much worse" },
   G4SE01: { renderer: "software", why: "12 vs 17 fps; hardware is worse" },
-  GAFE01: { renderer: "software", why: "renders black on both paths (issue #11); stay on the shipping path" }
+  GAFE01: { renderer: "software", why: "renders black on both paths (issue #11); stay on the shipping path" },
+
+  // Wii. These were briefly defaulted to hardware on a 50-vs-9 fps win with the
+  // menus checked by eye. That was wrong: in an actual race the hardware path
+  // misplaces the viewports -- a black band above the scene, the HUD and
+  // minimap drawn into the wrong regions, the player kart not visible. Menus
+  // render correctly on the hardware path and gameplay does not, which is the
+  // same 2D-survives/3D-does-not split as issue #8. A frame rate measured on a
+  // menu is not evidence about a race.
+  RMCE01: { renderer: "software", why: "hardware misplaces in-race viewports (see docs)" },
+  SOUE01: { renderer: "software", why: "hardware unverified in gameplay; no Wii Remote input yet" }
 };
 
 // Where the GameCube disc header (and so the 6-character game id) sits in each
