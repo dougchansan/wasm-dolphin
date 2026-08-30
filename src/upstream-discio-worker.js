@@ -380,6 +380,31 @@ let ppcWasmJitEnabledAtFrame = 0;
 // regressed materially below this baseline (i.e. the JIT itself hurt),
 // not merely because the renderer is slow.
 let ppcWasmJitPreEngageFps = 0;
+// Core-fps (emulation throughput) baseline captured just before the JIT
+// engages. presentationFps cannot serve this role: it tracks how expensive the
+// SCENE is to draw, so a menu-time baseline compared against an in-game frame
+// reads as a huge "regression" that the JIT had nothing to do with. Observed on
+// Mario Kart Wii as "fps:15 baseline:29" and "fps:6 baseline:46" -- the JIT was
+// switched off on entering a race, i.e. exactly when it was needed.
+let ppcWasmJitPreEngageCoreFps = 0;
+let ppcWasmJitCoreSampleFrame = -1;
+let ppcWasmJitCoreSampleTime = 0;
+let ppcWasmJitCoreFpsRolling = 0;
+function sampleCoreFpsRolling(coreFrame) {
+  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const cf = coreFrame >>> 0;
+  if (ppcWasmJitCoreSampleFrame < 0) {
+    ppcWasmJitCoreSampleFrame = cf;
+    ppcWasmJitCoreSampleTime = now;
+    return;
+  }
+  const dt = now - ppcWasmJitCoreSampleTime;
+  if (dt >= 1000) {
+    ppcWasmJitCoreFpsRolling = (((cf - ppcWasmJitCoreSampleFrame) >>> 0) * 1000) / dt;
+    ppcWasmJitCoreSampleFrame = cf;
+    ppcWasmJitCoreSampleTime = now;
+  }
+}
 // §28s: renderer-agnostic core-liveness tracker for the JIT fuse.
 // presentationFps is structurally ~0 in the WebGPU-presenter path
 // (it counts the legacy canvas-blit, not DIAG_EFB_TO_CANVAS), so the
@@ -3391,6 +3416,10 @@ function runPresentationLoop() {
 }
 
 function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
+  // Keep a pre-engage core-fps estimate warm. This runs every tick while the
+  // JIT is still off, which is the only window in which an honest "before"
+  // baseline can be taken.
+  sampleCoreFpsRolling(coreFrame);
   if (
     !ppcWasmJitRequested ||
     ppcWasmJitActive ||
@@ -3435,6 +3464,7 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // cooldown). Record the baseline so we only fuse when the JIT
   // itself made presentation worse.
   ppcWasmJitPreEngageFps = presentationFps;
+  ppcWasmJitPreEngageCoreFps = ppcWasmJitCoreFpsRolling;
 
   console.log(`[s28-jittier] ENGAGE: setPpcWasmJitEnabled(${ppcWasmJitTier === "mixed" ? 2 : 1}) ` +
     `(ppcWasmJitTier=${ppcWasmJitTier}) @frame ${coreFrame}`);
@@ -3496,10 +3526,12 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   // genuine freeze, not just a heavy renderer). The 5s post-activation
   // stall check above already handles compile-burst freezes.
   // §28bq: REVERTED §28bp `regressed` gating (see above).
-  const baseline = ppcWasmJitPreEngageFps;
-  const regressed =
-    baseline >= WASM_JIT_REGRESSION_MIN_BASELINE_FPS &&
-    presentationFps < baseline * WASM_JIT_REGRESSION_FRACTION;
+  // Judge the JIT by EMULATION THROUGHPUT, not presentation rate. The JIT
+  // affects how fast PowerPC executes; it does not make a scene cheaper to
+  // draw. Comparing a light-screen presentation baseline against a heavy scene
+  // fused the JIT off on every menu->gameplay transition. Core fps is the same
+  // signal the catastrophic check below already uses, measured over one shared
+  // window.
 
   // §28s: "catastrophic" = the JIT genuinely FROZE emulation, judged
   // by the core frame counter vs wall-clock — NOT presentationFps
@@ -3512,12 +3544,16 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
                  : Date.now());
   const cf = coreFrame >>> 0;
   let catastrophic = false;
+  let regressed = false;
   if (ppcWasmJitFuseLastFrame >= 0) {
     const dtMs = nowMs - ppcWasmJitFuseLastTime;
     if (dtMs >= 1500) {
       const dFrames = (cf - ppcWasmJitFuseLastFrame) >>> 0;
       const coreFps = (dFrames * 1000) / dtMs;
       catastrophic = coreFps < WASM_JIT_ABSOLUTE_FLOOR_FPS;
+      regressed =
+        ppcWasmJitPreEngageCoreFps >= WASM_JIT_REGRESSION_MIN_BASELINE_FPS &&
+        coreFps < ppcWasmJitPreEngageCoreFps * WASM_JIT_REGRESSION_FRACTION;
       ppcWasmJitFuseLastFrame = cf;
       ppcWasmJitFuseLastTime = nowMs;
     }
