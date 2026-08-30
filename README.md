@@ -77,6 +77,49 @@ needs, and boot fails. `tools/serve.mjs` exists mostly to get this right.
 
 ---
 
+## What you get on the page
+
+The header carries the status pill and the `FPS` / `DBG` / `PANEL` toggles; the
+console shows a `NO DISC` bezel until you drop one in, with the metrics strip
+across the top and the transport row along the footer (open disc, pause, reset,
+mute, save/load state, aspect). `PANEL` opens the settings side panel on the
+right.
+
+Nothing has to be configured — every control below already sits on the
+validated software-hybrid path, and **Auto per-game** overrides the renderer
+for titles with a measured profile. Change something and **Apply restart**
+reboots the core with it; **Melee preset** restores the tuned Melee
+configuration.
+
+| Setting | Default | URL flag |
+|---------|---------|----------|
+| Core | Upstream | `core=upstream` |
+| Renderer | Software | `video=software` |
+| GPU path | Direct worker GL | `oglproxy=worker` |
+| Resolution | Full 640x480 | `present=full` |
+| Speed | 1x | `speed=1` |
+| CPU | Dual core | `cpu=dual` |
+| Presenter | WebGPU | `presenter=webgpu` |
+| Frame queue | 2 frames | `queue=2` |
+| Pacing | Direct * | `pacing=` |
+| Raster quality | Balanced | `fastsw=1` |
+| JIT tier | Guarded | `jittier=guarded` |
+| WASM JIT | on | `wasmjit=1` |
+| Force JIT | off | `forcejit=0` |
+| Collect Metrics | off | `metrics=1` to enable |
+| Auto per-game | on | — |
+
+\* The panel's pacing selector offers only `direct` and `smooth`, so it reads
+*Direct* — but the **effective** default on the software paths is `tick`, which
+the core host selects itself and which `?pacing=tick` also names. The selector
+and the runtime disagree here; the runtime is what actually paints.
+
+Every setting is also a URL parameter, so any configuration is a shareable
+link. See [rendering modes](docs/rendering-modes.md) and
+[JIT flags](docs/jit-flags.md) for the full flag surface.
+
+---
+
 ## Status at a glance
 
 | Area | State |
