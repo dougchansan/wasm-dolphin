@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "e7943c7fdbbf5176d90332cc545c8fc536e49aca24bcf150f266daafa5cfb86e",
+  "patchSeriesSha256": "e02ac8bf047b940e1ec77c4f4d897c12351791d281af1ef6bc96a88feb748cea",
   "patches": [
     {
       "order": 1,
@@ -437,6 +437,14 @@
     },
     {
       "order": 52,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0054-emscripten-sys-directory-and-wii-nand-seed.patch",
+      "size": 2111,
+      "sha256": "4fd5808e7aff7e0779b489bb4523ce5fd009fdc9bf6321c172b2c96a59395d79"
+    },
+    {
+      "order": 53,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -444,7 +452,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 53,
+      "order": 54,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

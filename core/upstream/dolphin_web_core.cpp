@@ -543,6 +543,26 @@ void EnsureRuntime()
   CreateDirectoryIfNeeded(File::GetUserPath(D_STATESAVES_IDX));
   CreateDirectoryIfNeeded(File::GetUserPath(D_DUMP_IDX));
 
+  // Wii NAND. SetUserPath(D_USER_IDX) derives D_WIIROOT_IDX as <user>/Wii/,
+  // and BootManager calls Core::InitializeWiiRoot for Wii discs -- but that
+  // only POINTS the session root at this path, it does not create it. Nothing
+  // else did either, because the rest of this list is GameCube-oriented, so
+  // IOS HLE had no filesystem to open and every Wii title reported "Could not
+  // write to/read from Wii system memory" while otherwise emulating fine.
+  //
+  // The top-level directories are the standard NAND layout; IOS creates files
+  // beneath them but expects the roots to exist.
+  CreateDirectoryIfNeeded(File::GetUserPath(D_WIIROOT_IDX));
+  CreateDirectoryIfNeeded(File::GetUserPath(D_WIISYSCONF_IDX));
+  for (const char* nand_dir :
+       {"import", "meta", "shared1", "shared2", "sys", "ticket", "title", "tmp"})
+  {
+    CreateDirectoryIfNeeded(File::GetUserPath(D_WIIROOT_IDX) + nand_dir);
+  }
+  // Core::InitializeWiiRoot(use_temporary=true) puts the session NAND here
+  // instead; create it so a deterministic run has somewhere to go too.
+  CreateDirectoryIfNeeded(File::GetUserPath(D_USER_IDX) + "WiiSession");
+
   Config::Init();
   Config::AddLayer(ConfigLoaders::GenerateBaseConfigLoader());
   SConfig::Init();

@@ -1,0 +1,34 @@
+diff --git a/Source/Core/Common/FileUtil.cpp b/Source/Core/Common/FileUtil.cpp
+--- a/Source/Core/Common/FileUtil.cpp
++++ b/Source/Core/Common/FileUtil.cpp
+@@ -778,6 +778,12 @@
+ #elif defined ANDROID
+   const std::string sys_directory = s_android_sys_directory + DIR_SEP;
+   ASSERT_MSG(COMMON, !s_android_sys_directory.empty(), "Sys directory has not been set");
++#elif defined(__EMSCRIPTEN__)
++  // DATA_DIR points at the emsdk sysroot on disk, which does not exist inside
++  // the wasm filesystem, so the default path resolves to nothing at runtime.
++  // The Sys data games actually need is embedded at this fixed path instead --
++  // see the --embed-file link option in Source/Core/Core/CMakeLists.txt.
++  const std::string sys_directory = "/dolphin-sys" DIR_SEP;
+ #else
+   const std::string sys_directory = SYSDATA_DIR DIR_SEP;
+ #endif
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -945,6 +945,14 @@
+     # WORKERFS" in upstream-discio-worker.js before load completes, so no disc
+     # ever mounts. MEMFS survives only because it is the default.
+     "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap','UTF8ToString','HEAPU8','PThread','WORKERFS','NODEFS']"
++    # Wii NAND seed data. Core::InitializeWiiFileSystemContents() copies
++    # Data/Sys/Wii into every fresh NAND because some games -- Mario Kart Wii
++    # is the one called out in that function -- assume the WiiConnect24 files
++    # the System Menu would normally have created are already present, and
++    # fail with "Could not write to/read from Wii system memory" when they are
++    # not. The copy reads File::GetSysDirectory(), which this build fixes at
++    # /dolphin-sys (see Source/Core/Common/FileUtil.cpp). Embedding is ~183KB.
++    "SHELL:--embed-file ${CMAKE_SOURCE_DIR}/Data/Sys/Wii@/dolphin-sys/Wii"
+     # Day-7 persistent JIT cache: this pre-js installs a pthread-side
+     # message receiver for "dolphin-jit-cache" payloads. Each pthread
+     # stashes the cache map (Map<hashHex, WebAssembly.Module>) on its

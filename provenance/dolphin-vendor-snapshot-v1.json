@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "66715e7ffdd38fd93c14436263583136e6fc4ad9",
-    "changedPathCount": 108,
+    "resultTree": "e550aecf0d9194ae37f0428ae3b6f10ae11cf5db",
+    "changedPathCount": 109,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -68,6 +68,15 @@
         "resultBlob": "1fbe54675a39f5312e97e83e4538f88f7b15a143",
         "size": 8410,
         "sha256": "23e80777a440f6252f81f4850b646301c076c29cc2c270697ed5bb46bae6d790"
+      },
+      {
+        "path": "Source/Core/Common/FileUtil.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "9f17a586752286440c8524752d99a89046133ef7",
+        "resultBlob": "f83cd74856d2ec64df84c55218cbdb1b3fb1b373",
+        "size": 34625,
+        "sha256": "3f083b03df8ab102ebc4a302927679d08ca261dac834c6e263063594dc03fe5e"
       },
       {
         "path": "Source/Core/Common/FilesystemWatcher.cpp",
@@ -155,9 +164,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "e411239d1774c945782e599ee48c375db65ee5c6",
-        "resultBlob": "b7acc07e2aadc7fe516e785c726c9a501f9b9b58",
-        "size": 30451,
-        "sha256": "853e34ba82d0774472e0421a2f62600225ed5e51517843b2814ba9559422e58d"
+        "resultBlob": "a36d60d81d2f1e4485eaf930e1e175efc2730de9",
+        "size": 31065,
+        "sha256": "cce98b6314ea778923b60c3b7b8e3c5088e8b90a3232e5d2bfa9df796f569dae"
       },
       {
         "path": "Source/Core/Core/Core.cpp",
@@ -1014,5 +1023,5 @@
       ]
     }
   ],
-  "contentSha256": "37e101f4ae56b5197c1c8df6b95ee42be2ee00cf9fad94344b64099f4c8bd706"
+  "contentSha256": "ea646e22cf8db00f31c7c21f42d9ac1a05cb578747ef765f7c467c9130118155"
 }
