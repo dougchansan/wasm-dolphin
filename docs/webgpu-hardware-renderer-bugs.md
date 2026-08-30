@@ -20,11 +20,28 @@ remains.
 
 ### Measured after the fix, all 45 discs
 
-| | software hybrid | `video=wgpu` |
-| --- | ---: | ---: |
-| mean unique visual fps | 7.1 | **23.2** |
-| games with higher visual fps | - | 32 of 45 |
-| boots | 43 | 41 |
+**Every speed number recorded before 2026-08-30 is understated.** The JIT
+disable guard judged the JIT by presentation rate against a baseline captured
+when it engaged, so entering any heavy scene fused the JIT off -- exactly when
+it mattered. Fixed by judging on core fps instead. Boot counts before that date
+are also suspect: both harnesses read the optional JIT-cache prewarm status as a
+fatal mount failure, producing phantom `mount-fail` verdicts (see issue #10).
+
+Current baseline, `video=wgpu`, 45 discs, after both fixes:
+
+| | value |
+| --- | ---: |
+| boots | 41 (2 static, 2 black) |
+| titles at >=95% game speed | 13 |
+| titles at >=80% | 17 |
+| mean unique visual fps | 28.4 |
+
+Verified by eye at full speed: Melee (99.5%, character select), Wario World
+(100%, throne room), F-Zero GX (99%). Speed is genuinely per-title, not
+measurement drift -- mean by sweep position is 69/42/46/54/74%, with no trend.
+
+Previous figures, kept for comparison: mean unique visual fps 7.1 software vs
+23.2 hardware, 32 of 45 higher on hardware, 43 vs 41 boots.
 
 Eight titles hold a locked 60 unique fps at ~100% game speed, each
 screenshot-verified: F-Zero GX (8 -> 60 fps, 23% -> 101% speed), Wario World,
@@ -43,13 +60,25 @@ best.
 | Soulcalibur II | static | **not a defect** - parked on its autosave dialog, rendering correctly |
 | Super Mario Sunshine | boots | menu renders, background still black |
 
-Sunshine proves at least one more frame-destroying path exists. Three
-hypotheses have been raised and measured away, so do not re-run them:
+Sunshine proves at least one more frame-destroying path exists. Of the three
+hypotheses previously "measured away", the first was wrong -- see below.
 
-1. **`target_rc` partial clears.** Falsified. `ClearRegion` does still ignore
-   the rect, but the EFB is 640x528 while games clear to 448 high, so EVERY
-   clear is partial in every game -- Wario World issues 7,800 of them and
-   renders correctly.
+1. **`target_rc` partial clears. NOT falsified; the original reasoning was too
+   broad.** The old argument was that the EFB is 640x528 while games clear to
+   448 high, so every clear is already partial and Wario World issues 7,800 of
+   them and renders correctly. That holds only for a game with ONE viewport,
+   where over-clearing empty rows costs nothing. Instrumenting `ClearRegion`
+   (patch 0055, `WGPUDEEPDIAG=1`) shows Mario Kart Wii issuing clears of
+   128x128 at (0,0), 256x256 at (176,100), 192x96 at (208,180) and 32x32 at
+   (0,456) -- small rects at non-zero offsets, each of which currently wipes
+   the whole 640x528 EFB. The game sets a matching scissor on most of them.
+   The defect is real (issue #17).
+
+   No fix exists yet. Routing partial clears to VideoCommon's scissored-quad
+   fallback was tried and reverted: it ends and restarts a render pass per
+   clear, and Wario World's ~7,800 clears a frame drop it to a near-black
+   frame at 2.0 visual fps. A working fix needs a clear that does not tear
+   down the pass.
 2. **The XFB copy is taken too early.** Falsified. The EFB passes before each
    copy use `loadOp=load`, so content accumulates ACROSS the backbuffer
    present. Re-aligning a frame as the span between XFB copies, Sunshine's

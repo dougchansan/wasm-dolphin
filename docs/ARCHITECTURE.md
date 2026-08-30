@@ -191,3 +191,18 @@ Learned the expensive way, and worth keeping:
   another reads 95% then 24.5% once it reaches an FMV. Neither number is a
   compatibility grade, and a 2-3 point difference in a 45-game mean is noise.
 - **Verdicts plus screenshots** carry the signal. Counters alone do not.
+- **Check the title that could falsify you, not the one that shows the win.**
+  A scissored-clear change was reported as working after being checked only on
+  Mario Kart Wii, whose frame was already broken, so "less broken" read as
+  "fixed". A 45-disc sweep then found it had dropped Wario World from a
+  detailed throne room at 60 fps to a near-black frame. The same mistake -- a
+  frame rate measured on a menu with no 3D content -- shipped a wrong per-game
+  renderer default earlier the same day.
+- **Two long-standing "renderer" problems were tooling.** The ~50% Melee mount
+  flakiness (issue #10) was both harnesses classifying the optional JIT-cache
+  prewarm status as a fatal mount failure, because its text contains "failed";
+  whether a run died depended on whether the 1 Hz poll landed in that window.
+  And every speed number recorded before 2026-08-30 was understated, because
+  the JIT disable guard compared presentation fps against a baseline captured
+  on a lighter scene and fused the JIT off on entering gameplay. Suspect the
+  harness before the renderer.
