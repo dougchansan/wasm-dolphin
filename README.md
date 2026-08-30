@@ -91,28 +91,35 @@ for titles with a measured profile. Change something and **Apply restart**
 reboots the core with it; **Melee preset** restores the tuned Melee
 configuration.
 
-| Setting | Default | URL flag |
-|---------|---------|----------|
-| Core | Upstream | `core=upstream` |
-| Renderer | Software | `video=software` |
-| GPU path | Direct worker GL | `oglproxy=worker` |
-| Resolution | Full 640x480 | `present=full` |
-| Speed | 1x | `speed=1` |
-| CPU | Dual core | `cpu=dual` |
-| Presenter | WebGPU | `presenter=webgpu` |
-| Frame queue | 2 frames | `queue=2` |
-| Pacing | Direct * | `pacing=` |
-| Raster quality | Balanced | `fastsw=1` |
-| JIT tier | Guarded | `jittier=guarded` |
-| WASM JIT | on | `wasmjit=1` |
-| Force JIT | off | `forcejit=0` |
-| Collect Metrics | off | `metrics=1` to enable |
-| Auto per-game | on | — |
+| Setting | Default | What it does | URL flag |
+|---------|---------|--------------|----------|
+| Core | Upstream | Which core the host loads. **Upstream** is the Emscripten build of Dolphin; *Native* is the from-scratch scaffold under `core/native`. | `core=upstream` |
+| Renderer | Software | Which Dolphin video backend runs. **Software** is the rasterizer everything is validated against; *WebGPU hardware* is the experimental GPU path, and *Null* draws nothing. | `video=software` |
+| GPU path | Direct worker GL | How the OpenGL backend's context reaches the canvas — only meaningful for *Renderer: OpenGL*. **Direct worker GL** keeps the context in the worker and posts a frame back per present. | `oglproxy=worker` |
+| Resolution | Full 640x480 | Scale of the presented image. Lower settings cut **presentation** cost only; the core still emulates at full resolution. | `present=full` |
+| Speed | 1x | Emulation speed target. *Unlimited* removes the throttle and runs as fast as the machine allows. | `speed=1` |
+| CPU | Dual core | Whether the core runs its CPU and GPU threads separately (**Dual core**) or folded onto one. | `cpu=dual` |
+| Presenter | WebGPU | Which browser API blits the finished frame onto the canvas. Falls back to *WebGL* / *Canvas 2D* where WebGPU is unavailable. | `presenter=webgpu` |
+| Frame queue | 2 frames † | How many frames the paced presenter buffers before painting. Deeper is smoother but adds latency. | `queue=` |
+| Pacing | Direct * | When the canvas repaints — on each new frame, or on a steady tick that also re-paints the last good frame. | `pacing=` |
+| Raster quality | Balanced | How much the software rasterizer and XFB encode are thinned. **Balanced** shades one sample per 2×2 cell; see [Raster quality](#raster-quality-fastsw). | `fastsw=1` |
+| JIT tier | Guarded | Which PPC→WASM blocks the JIT is allowed to emit. **Guarded** is the conservative set; *Mixed experimental* widens it (same as `wasmjit=2`). | `jittier=guarded` |
+| WASM JIT | on | The PPC→WASM JIT itself. Off falls back to Dolphin's `CachedInterpreter`. | `wasmjit=1` |
+| Force JIT | off | Bypasses the JIT's safety gates — the warmup-frame floor, and the JIT-off default on the OpenGL path. | `forcejit=1` to enable |
+| Collect Metrics | off | Turns on the telemetry counters behind the HUD and profiler. Off by default because the counting itself costs time. | `metrics=1` to enable |
+| Auto per-game | on | Picks the renderer from measured per-game results — see [per-game renderer defaults](#per-game-renderer-defaults). | — |
 
 \* The panel's pacing selector offers only `direct` and `smooth`, so it reads
 *Direct* — but the **effective** default on the software paths is `tick`, which
-the core host selects itself and which `?pacing=tick` also names. The selector
-and the runtime disagree here; the runtime is what actually paints.
+the core host selects itself and which `?pacing=tick` also names.
+
+† Likewise the panel shows *2 frames*, while a URL with no `queue=` parameter
+gets a depth of 4 from the core host. Settings equal to their panel default are
+stripped from the URL, so the runtime never sees the value the panel is
+displaying.
+
+In both cases the selector and the runtime disagree, and the runtime is what
+actually paints. Set the flag explicitly if you need to be certain.
 
 Every setting is also a URL parameter, so any configuration is a shareable
 link. See [rendering modes](docs/rendering-modes.md) and
