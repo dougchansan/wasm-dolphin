@@ -330,11 +330,7 @@ Goal: if Day 3 hits a Chrome/Emscripten wall, make readback 2× faster.
    bitmap from a `Module.canvas` accessed via Emscripten pthread? Earlier
    attempt returned 0×0 dimensions even though the canvas reported 640×480.
 
-## Contact context
+## Where the diagnostics live
 
-The session that produced commits 1e05b65 and 21636b4 was Claude Opus 4.7
-1M-context, working alone with the user (douglaswhittingham@gmail.com).
-The full conversation log is at
-`C:\Users\douglaswhittingham\.claude\projects\C--Users-douglaswhittingham-wasm-dolphin\5ed56347-3cf4-491a-82d0-142c0e7b48e2.jsonl`.
-Task list spans tasks #4–#49. Most of the diagnostic value is in
-distinct-hash screenshot trees under `.omx/menu-progress/<name>/`.
+Most of the diagnostic value from this investigation is in the distinct-hash
+screenshot trees under `.omx/menu-progress/<name>/`.

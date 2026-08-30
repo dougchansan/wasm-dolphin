@@ -98,11 +98,8 @@ rasteriser. Keep `?video=webgpu` hybrid intact.
   `patches/dolphin-wasm/SESSION-*-NOTES.md`. Never commit `.claude/`,
   `logs/`, `.bottleneck-01-rebased.patch`,
   `tools/naga-spirv-wgsl/target/` or `Cargo.lock` (gitignored).
-- **Stay on branch `webgpu-hardware-renderer`** (not main). Commit
-  protocol: end commit messages with
-  `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
-  Commit a checkpoint after every verified increment (the user
-  explicitly wants frequent checkpoints before risky steps).
+- **Stay on branch `webgpu-hardware-renderer`** (not main). Commit a
+  checkpoint after every verified increment, before risky steps.
 - **Build:** `npm run build:upstream:full-core` (~5-8 min; redirect
   to a tmp log and grep, the tail scrolls). If you change the Rust
   crate: `cd tools/naga-spirv-wgsl && cargo +nightly build --release
