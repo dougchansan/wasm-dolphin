@@ -1,11 +1,17 @@
-# wasm-dolphin
+<p align="center">
+  <img src="docs/images/logo.png" alt="wasm-dolphin" width="168">
+</p>
 
-[![License: GPLv2+](https://img.shields.io/badge/license-GPLv2%2B-blue.svg)](#license-and-attribution)
-[![Node.js](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](https://nodejs.org/)
-[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](package.json)
-[![Browser: Chrome](https://img.shields.io/badge/browser-Chrome%20(WebGPU%20%2B%20SAB)-4285F4.svg)](#requirements)
-[![Built with Emscripten](https://img.shields.io/badge/built%20with-Emscripten-654FF0.svg)](https://emscripten.org/)
-[![Status: research prototype](https://img.shields.io/badge/status-research%20prototype-orange.svg)](docs/current-status.md)
+<h1 align="center">wasm-dolphin</h1>
+
+<p align="center">
+  <a href="#license-and-attribution"><img alt="License: GPLv2+" src="https://img.shields.io/badge/license-GPLv2%2B-blue.svg"></a>
+  <a href="https://nodejs.org/"><img alt="Node.js" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg"></a>
+  <a href="package.json"><img alt="Dependencies" src="https://img.shields.io/badge/dependencies-none-brightgreen.svg"></a>
+  <a href="#requirements"><img alt="Browser: Chrome" src="https://img.shields.io/badge/browser-Chrome%20(WebGPU%20%2B%20SAB)-4285F4.svg"></a>
+  <a href="https://emscripten.org/"><img alt="Built with Emscripten" src="https://img.shields.io/badge/built%20with-Emscripten-654FF0.svg"></a>
+  <a href="docs/current-status.md"><img alt="Status: research prototype" src="https://img.shields.io/badge/status-research%20prototype-orange.svg"></a>
+</p>
 
 Run the **Dolphin** GameCube/Wii emulator in a Chrome tab, compiled to
 WebAssembly. The best-supported title is **Super Smash Bros. Melee**, which can
