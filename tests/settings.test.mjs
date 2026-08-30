@@ -16,12 +16,12 @@ test("uses the playable startup profile when no URL settings are present", () =>
     speed: "1",
     present: "full",
     presenter: "webgpu",
-    pacing: "direct",
+    pacing: "tick",
     oglproxy: "worker",
     wasmjit: "1",
     jittier: "guarded",
     forcejit: "0",
-    queue: "2",
+    queue: "4",
     fastsw: "1",
     metrics: "0"
   });
@@ -62,12 +62,12 @@ test("falls back to supported startup settings for unknown values", () => {
     speed: "1",
     present: "full",
     presenter: "webgpu",
-    pacing: "direct",
+    pacing: "tick",
     oglproxy: "worker",
     wasmjit: "1",
     jittier: "guarded",
     forcejit: "0",
-    queue: "2",
+    queue: "4",
     fastsw: "1",
     metrics: "0"
   });
@@ -81,12 +81,12 @@ test("builds a minimal href by omitting playable default settings", () => {
     speed: "1",
     present: "full",
     presenter: "webgpu",
-    pacing: "direct",
+    pacing: "tick",
     oglproxy: "worker",
     wasmjit: "1",
     jittier: "guarded",
     forcejit: "0",
-    queue: "2",
+    queue: "4",
     fastsw: "1",
     metrics: "0"
   });
@@ -107,7 +107,7 @@ test("writes explicit params when settings differ from playable defaults", () =>
     wasmjit: "0",
     jittier: "mixed",
     forcejit: "0",
-    queue: "4",
+    queue: "8",
     fastsw: "0",
     metrics: "0"
   });
@@ -116,12 +116,12 @@ test("writes explicit params when settings differ from playable defaults", () =>
   assert.equal(url.searchParams.get("core"), "native");
   assert.equal(url.searchParams.get("cpu"), "auto");
   assert.equal(url.searchParams.get("presenter"), "webgl");
-  assert.equal(url.searchParams.get("pacing"), null);
+  assert.equal(url.searchParams.get("pacing"), "direct");
   assert.equal(url.searchParams.get("oglproxy"), "readback");
   assert.equal(url.searchParams.get("wasmjit"), "0");
   assert.equal(url.searchParams.get("jittier"), "mixed");
   assert.equal(url.searchParams.get("forcejit"), null);
-  assert.equal(url.searchParams.get("queue"), "4");
+  assert.equal(url.searchParams.get("queue"), "8");
   assert.equal(url.searchParams.get("fastsw"), "0");
 });
 

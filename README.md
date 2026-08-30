@@ -45,6 +45,30 @@ PORT=9000 npm start  # pick the port (default 8080; it steps up if taken)
 ```
 
 <details>
+<summary>No git? Download the ZIP instead</summary>
+
+You do not need git, and you do not need to build anything — the core `.wasm`
+is committed, so the ZIP is a complete, runnable copy.
+
+1. Download **[the v0.1.0 source ZIP](https://github.com/dougchansan/wasm-dolphin/archive/refs/tags/v0.1.0.zip)**
+   (or the latest code from *Code → Download ZIP* on the repository page).
+2. Unzip it anywhere.
+3. Open a terminal **in the unzipped folder** and run:
+
+```bash
+npm run play
+```
+
+Node.js 18+ is the only prerequisite. If you would rather not go through npm at
+all, the server is one plain Node command:
+
+```bash
+node tools/serve.mjs --open
+```
+
+</details>
+
+<details>
 <summary>Requirements</summary>
 
 - **Node.js 18+** — only to run the dev server and tooling. No packages are
@@ -79,6 +103,9 @@ needs, and boot fails. `tools/serve.mjs` exists mostly to get this right.
 
 ## What you get on the page
 
+![The wasm-dolphin console, showing the metrics strip, the transport row, and
+the settings panel](docs/images/console.png)
+
 The header carries the status pill and the `FPS` / `DBG` / `PANEL` toggles; the
 console shows a `NO DISC` bezel until you drop one in, with the metrics strip
 across the top and the transport row along the footer (open disc, pause, reset,
@@ -100,8 +127,8 @@ configuration.
 | Speed | 1x | Emulation speed target. *Unlimited* removes the throttle and runs as fast as the machine allows. | `speed=1` |
 | CPU | Dual core | Whether the core runs its CPU and GPU threads separately (**Dual core**) or folded onto one. | `cpu=dual` |
 | Presenter | WebGPU | Which browser API blits the finished frame onto the canvas. Falls back to *WebGL* / *Canvas 2D* where WebGPU is unavailable. | `presenter=webgpu` |
-| Frame queue | 2 frames † | How many frames the paced presenter buffers before painting. Deeper is smoother but adds latency. | `queue=` |
-| Pacing | Direct * | When the canvas repaints — on each new frame, or on a steady tick that also re-paints the last good frame. | `pacing=` |
+| Frame queue | 4 frames | How many frames the paced presenter buffers before painting. Deeper is smoother but adds latency. | `queue=4` |
+| Pacing | Tick | When the canvas repaints. **Tick** paints each new frame immediately *and* re-paints the last good frame on a steady 16.7ms tick, so the canvas keeps refreshing while the rasterizer repeats frames. | `pacing=tick` |
 | Raster quality | Balanced | How much the software rasterizer and XFB encode are thinned. **Balanced** shades one sample per 2×2 cell; see [Raster quality](#raster-quality-fastsw). | `fastsw=1` |
 | JIT tier | Guarded | Which PPC→WASM blocks the JIT is allowed to emit. **Guarded** is the conservative set; *Mixed experimental* widens it (same as `wasmjit=2`). | `jittier=guarded` |
 | WASM JIT | on | The PPC→WASM JIT itself. Off falls back to Dolphin's `CachedInterpreter`. | `wasmjit=1` |
@@ -109,17 +136,8 @@ configuration.
 | Collect Metrics | off | Turns on the telemetry counters behind the HUD and profiler. Off by default because the counting itself costs time. | `metrics=1` to enable |
 | Auto per-game | on | Picks the renderer from measured per-game results — see [per-game renderer defaults](#per-game-renderer-defaults). | — |
 
-\* The panel's pacing selector offers only `direct` and `smooth`, so it reads
-*Direct* — but the **effective** default on the software paths is `tick`, which
-the core host selects itself and which `?pacing=tick` also names.
-
-† Likewise the panel shows *2 frames*, while a URL with no `queue=` parameter
-gets a depth of 4 from the core host. Settings equal to their panel default are
-stripped from the URL, so the runtime never sees the value the panel is
-displaying.
-
-In both cases the selector and the runtime disagree, and the runtime is what
-actually paints. Set the flag explicitly if you need to be certain.
+Settings left at their default are stripped from the URL rather than written
+into it, so a bare `/` and the values above are the same run.
 
 Every setting is also a URL parameter, so any configuration is a shareable
 link. See [rendering modes](docs/rendering-modes.md) and
