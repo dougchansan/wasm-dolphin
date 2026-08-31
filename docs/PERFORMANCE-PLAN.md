@@ -105,6 +105,44 @@ frequency. The histogram infrastructure exists
 counts direct-tier rejects, not prefix terminations. Add the equivalent
 histogram at the `break` sites in the prefix loop, then rank.
 
+### Prefix-termination ranking (2026-08-31) -- corrects the entry above
+
+Instrumented every exit from the prefix loop. Metroid Prime, 50s:
+
+| reason | warm=700 | warm=60 |
+| --- | ---: | ---: |
+| HLE replace | 0 | 0 |
+| breakpoint | 0 | 0 |
+| idle loop | 0 | 0 |
+| FP off | 0 | 2 |
+| unsupported instruction | 1 | 10 |
+| block end (`canEndBlock`) | 0 | 0 |
+| loop exhausted (implied) | ~168 | ~3,696 |
+
+Of 3,708 attempts, **12** prefixes stopped on an instruction the JIT could not
+emit. The rest ran out of block.
+
+**So `pre:5` is not truncation -- it is the block length.** The
+"silently truncated at the first unsupported instruction" conclusion recorded
+above is WRONG, and `reject:0` was telling the truth all along. Emitter breadth
+is genuinely not the lever; this is now measured rather than inferred, twice.
+
+**What this leaves.** Blocks average ~5 instructions and every one returns to
+the dispatcher, because WASM has no cross-module direct jumps. Per-block
+dispatch overhead is therefore amortised over ~5 instructions, which is why
+59.7M block executions bought 2 points: JIT'd code is barely faster than
+interpreting once dispatch is paid.
+
+**The lever is per-block dispatch cost**, i.e. block chaining or packing several
+guest blocks into one wasm module so control stays inside compiled code. That is
+the one remaining explanation consistent with every measurement: CPU-bound
+(underclock scales speed), not emitter-limited (12 terminations), not coverage-
+gated by admission (reject:0), not renderer, pacing, tier or thread-sync.
+
+Before attempting it, read
+`G:\dolrecompwned\DolRecomp\docsegister-cache-design.md` -- four reverted
+attempts at the adjacent problem.
+
 ## 2. Ship the JIT warmup fix
 
 **Hypothesis.** `jitwarmup` counts *stable video frames*, so at 20fps the JIT

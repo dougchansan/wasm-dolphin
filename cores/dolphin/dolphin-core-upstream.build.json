@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-31T03:42:55.367Z",
-  "coreId": "sha256:87335c51cc4134655f9491f42629f0caf42da6939a23985f85705c3d748ba66b",
+  "createdAt": "2026-08-31T17:48:16.878Z",
+  "coreId": "sha256:d7192040d625dcf08c0df9babe7d9ce95dbe48344d4c350efb89c3926ca01583",
   "repository": {
-    "commit": "fe4e571ef34d6104f5f5caaf413c7777ee807d1b",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-worker-protocol.js\n?? page_view.png"
+    "commit": "44e812a7c74cd45f2304407b0aa28d6b4140d1f5",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
@@ -132,13 +132,13 @@
     "js": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.js",
       "size": 266772,
-      "sha256": "a29db4b8bbc55e9bceeafdd8ab247a877a03f519e3419d152d6d6399e6b59c85",
+      "sha256": "7e627e3d34edc6559f8d422633eb9ad5e7a4409e2b67eb3b75918ec76c987829",
       "hashMode": "lf-normalized"
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12942164,
-      "sha256": "87335c51cc4134655f9491f42629f0caf42da6939a23985f85705c3d748ba66b",
+      "size": 12942432,
+      "sha256": "d7192040d625dcf08c0df9babe7d9ce95dbe48344d4c350efb89c3926ca01583",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -165,7 +165,7 @@
       {
         "id": 6,
         "size": 49,
-        "sha256": "0470a75d0d45a85f1e8a164729bdc611f156bee994ef2ff05f7202609e307788"
+        "sha256": "c6b0e02dd709421c38036b5861c2c13208289397f4ab34c2fe0d2d233f66cc2f"
       },
       {
         "id": 7,
@@ -189,13 +189,13 @@
       },
       {
         "id": 10,
-        "size": 10452035,
-        "sha256": "2ae84aa1d2fbfa7efffdcf60983beea972387106a1defd49c1731ac89dbac245"
+        "size": 10452256,
+        "sha256": "366ef6b906a666bbc3e0551f675d21587ea9dd713b1f8ff6639c6ccbbe6f4d25"
       },
       {
         "id": 11,
-        "size": 2449556,
-        "sha256": "92d1fbe6b0ae966950e491dd549aa0e2f39aca01ded0c34d7991ccc1ba05fc8d"
+        "size": 2449603,
+        "sha256": "52a9abffea42815d5b7a76d9e17aa5aa0bfbd0dc75af8f259788179f0e07b047"
       }
     ]
   }
