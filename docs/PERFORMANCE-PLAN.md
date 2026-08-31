@@ -233,6 +233,53 @@ Metroid Prime, warm, JIT engaged (202 block modules), named build. Shares only
 **Do not** target the JIT: 4.6%, and raising its coverage measurably does not
 help (see the chaining gate above).
 
+### Interpreter optimisation, attempt 1: dispatch reorder -- no gain
+
+`ExecuteOneBlock` dispatches through a linear if-else chain of up to 32
+function-pointer comparisons. `RunWasmBlock` (4.6% of time) was tested before
+`FastInteger` (15.3%), so every FastInteger dispatch paid an extra comparison.
+Moving it changed nothing:
+
+| title | reordered | control |
+| --- | ---: | ---: |
+| Metroid Prime | 27.5% | 27.5% |
+| Star Fox | 24% | 23% |
+| Paper Mario | 28% | 27% |
+
+Reverted. The chain is not where the 28% goes.
+
+**Where it does go.** `FastInteger` appears in the profile as its own frame, so
+it is a real call; `Interpret<false>` does not, so it is inlined into
+`ExecuteOneBlock`. That 28% is therefore mostly the *generic interpreter path*
+doing actual work, not dispatch overhead. Speeding it up means moving
+instructions off the generic path onto specialised fast callbacks -- real
+emitter work, not a reordering.
+
+Best-identified target: paired-singles. `ps_add`, `ps_sub`, `psq_st` and
+`Helper_Quantize` are ~7% combined and run generic. GameCube titles lean on
+them heavily.
+
+### And the JIT does not make code faster at all
+
+At warmup 0, Metroid Prime: 85.3M block runs at ~5 instructions each is ~427M
+instructions in 50s, about 8.5M/s. The guest at 37% of 486MHz executes on the
+order of 180M/s. So JIT'd code is **~4.7% of instructions consuming 4.6% of
+time** -- the same cost per instruction as interpreting it.
+
+That is the root explanation for every null result in this plan. The JIT is not
+slow to engage or narrow in coverage; the code it emits is simply not faster,
+because a 5-instruction block pays a module call plus guest-state sync
+(`stateu32:14521ld/13794st`) around it. Fixing that is an architectural change
+to how state is held across block boundaries, and DolRecomp's
+`register-cache-design.md` records four reverted attempts at exactly that.
+
+## MEASUREMENT DRIFT -- read before comparing anything
+
+Over one session the same titles measured 32-35% early and 27-28% late, on
+byte-identical builds. Absolute numbers are only comparable within a
+back-to-back A/B in the same session. Several hours of this plan's early
+numbers cannot be compared to its later ones.
+
 ## 2. Ship the JIT warmup fix
 
 **Hypothesis.** `jitwarmup` counts *stable video frames*, so at 20fps the JIT
