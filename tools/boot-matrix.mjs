@@ -393,6 +393,13 @@ async function readSample(page, elapsedSeconds) {
       presentFps: pick(info.presentationFps ?? info.fps, "#fpsCounter", "#hudFps"),
       hasFrameInfo: Boolean(window.__lastFrameInfo),
       infoKeys: Object.keys(info).slice(0, 40),
+      // JIT engagement. The slow titles turn out to compile almost no blocks
+      // and run interpreted, so these belong in every sample, not just in a
+      // one-off probe.
+      jitCompiled: info.ppcWasmBlockCompileCount ?? null,
+      jitBlockRuns: info.ppcWasmBlockRunCount ?? null,
+      jitHelper: typeof info.ppcWasmHelperStats === "string"
+        ? info.ppcWasmHelperStats.slice(0, 900) : null,
       gameTitle: read("#gameTitle"),
       mountNote: read("#mountNote"),
       statusPill: read("#statusPill", "#hudStatus"),

@@ -37,6 +37,7 @@ export const GAME_PROFILES = {
   GHAE08: { renderer: "software", why: "2 vs 17 fps; hardware is much worse" },
   D43E01: { renderer: "software", why: "0 vs 4 fps; hardware is much worse" },
   G4SE01: { renderer: "software", why: "12 vs 17 fps; hardware is worse" },
+  GSAE01: { renderer: "software", why: "79% vs 30% game speed; hardware is 2.6x slower" },
   GAFE01: { renderer: "software", why: "renders black on both paths (issue #11); stay on the shipping path" },
 
   // Wii. These were briefly defaulted to hardware on a 50-vs-9 fps win with the
