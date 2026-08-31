@@ -61,6 +61,7 @@ export class UpstreamWorkerAdapter {
     correctTimeDrift = false,
     coreLog = false,
     efbDiag = false,
+    jitVerbose = false,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
@@ -152,6 +153,7 @@ export class UpstreamWorkerAdapter {
     this.correctTimeDrift = Boolean(correctTimeDrift);
     this.coreLog = Boolean(coreLog);
     this.efbDiag = Boolean(efbDiag);
+    this.jitVerbose = Boolean(jitVerbose);
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
@@ -349,6 +351,7 @@ export class UpstreamWorkerAdapter {
       correctTimeDrift: this.correctTimeDrift,
       coreLog: this.coreLog,
       efbDiag: this.efbDiag,
+      jitVerbose: this.jitVerbose,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,

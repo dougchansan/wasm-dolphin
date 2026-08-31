@@ -910,6 +910,7 @@ async function handleMessage(type, payload) {
         correctTimeDrift: payload.correctTimeDrift,
         coreLog: payload.coreLog,
         efbDiag: payload.efbDiag,
+        jitVerbose: payload.jitVerbose,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
@@ -1403,6 +1404,7 @@ async function loadCore({
   correctTimeDrift = false,
   coreLog = false,
   efbDiag = false,
+  jitVerbose = false,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
   reportedCoreSelection = null,
@@ -1857,6 +1859,8 @@ async function loadCore({
     // false, so the shipping page load is unchanged.
     dolphinCorrectTimeDrift: Boolean(correctTimeDrift),
     dolphinCoreLog: Boolean(coreLog),
+    // Ranks the instructions that block JIT compilation (?jitverbose=1).
+    dolphinWebVerbosePpcJit: Boolean(jitVerbose),
     dolphinEfbDiag: (DIAG_EFB_TO_CANVAS = Boolean(efbDiag)),
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,

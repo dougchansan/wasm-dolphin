@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-31T01:05:14.608Z",
-  "coreId": "sha256:e8982fb37af6f8ccfeccdc732692d7d54c2dfeaa26b8c8c2cb9a92ff075ecdd5",
+  "createdAt": "2026-08-31T03:13:12.920Z",
+  "coreId": "sha256:87335c51cc4134655f9491f42629f0caf42da6939a23985f85705c3d748ba66b",
   "repository": {
-    "commit": "be4229d9f44332ea0dce3d3b95ad7253df78922b",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-discio-worker.js\n?? page_view.png"
+    "commit": "1365639cef947daaa81d193cfceeebdfc9da4d42",
+    "status": "M cores/dolphin/dolphin-core-upstream.wasm\n M src/core-host.js\n M src/upstream-discio-worker.js\n M src/upstream-worker-adapter.js\n M tools/boot-matrix.mjs\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
@@ -137,8 +137,8 @@
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12942156,
-      "sha256": "e8982fb37af6f8ccfeccdc732692d7d54c2dfeaa26b8c8c2cb9a92ff075ecdd5",
+      "size": 12942164,
+      "sha256": "87335c51cc4134655f9491f42629f0caf42da6939a23985f85705c3d748ba66b",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -189,8 +189,8 @@
       },
       {
         "id": 10,
-        "size": 10452027,
-        "sha256": "45b7fd0c601add28af1d528e291dc1d88b8b3b13370f3da7ea01cda484c2a318"
+        "size": 10452035,
+        "sha256": "2ae84aa1d2fbfa7efffdcf60983beea972387106a1defd49c1731ac89dbac245"
       },
       {
         "id": 11,

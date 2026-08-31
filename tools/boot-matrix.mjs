@@ -266,6 +266,7 @@ function buildUrl(disc) {
   // which the renderer bug notes rely on; FASTSW selects the software
   // rasteriser quality tier and is meaningless on video=wgpu.
   if (process.env.CORELOG) url.searchParams.set("corelog", process.env.CORELOG);
+  if (process.env.JITVERBOSE) url.searchParams.set("jitverbose", process.env.JITVERBOSE);
   if (process.env.NOJITCACHE) url.searchParams.set("nojitcache", process.env.NOJITCACHE);
   if (process.env.WGPUVISUAL) url.searchParams.set("wgpuvisual", process.env.WGPUVISUAL);
   url.searchParams.set("probe", `boot-matrix-${safeSlug(disc.name)}`);
@@ -399,7 +400,7 @@ async function readSample(page, elapsedSeconds) {
       jitCompiled: info.ppcWasmBlockCompileCount ?? null,
       jitBlockRuns: info.ppcWasmBlockRunCount ?? null,
       jitHelper: typeof info.ppcWasmHelperStats === "string"
-        ? info.ppcWasmHelperStats.slice(0, 900) : null,
+        ? info.ppcWasmHelperStats.slice(0, 6000) : null,
       gameTitle: read("#gameTitle"),
       mountNote: read("#mountNote"),
       statusPill: read("#statusPill", "#hudStatus"),

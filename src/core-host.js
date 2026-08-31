@@ -102,6 +102,7 @@ export class EmulatorHost {
     this.correctTimeDrift = requestedCorrectTimeDrift();
     this.coreLog = requestedCoreLog();
     this.efbDiag = requestedEfbDiag();
+    this.jitVerbose = new URLSearchParams(window.location.search).get("jitverbose") === "1";
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
@@ -379,6 +380,7 @@ export class EmulatorHost {
             correctTimeDrift: this.correctTimeDrift,
             coreLog: this.coreLog,
             efbDiag: this.efbDiag,
+            jitVerbose: this.jitVerbose,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
