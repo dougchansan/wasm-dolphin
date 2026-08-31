@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-31T17:48:16.878Z",
+  "createdAt": "2026-08-31T18:40:24.145Z",
   "coreId": "sha256:d7192040d625dcf08c0df9babe7d9ce95dbe48344d4c350efb89c3926ca01583",
   "repository": {
-    "commit": "44e812a7c74cd45f2304407b0aa28d6b4140d1f5",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n?? page_view.png"
+    "commit": "391e7690c555839602c4b30200736aea1ccdab3b",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-worker-protocol.js\n M tools/cpu-profile-capture.mjs\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",

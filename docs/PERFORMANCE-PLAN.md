@@ -188,6 +188,51 @@ is interpreter dispatch, the software rasteriser, FIFO handling, or memory
 helpers. Optimising the interpreter blind would repeat today's mistake of
 committing to a lever before measuring its ceiling.
 
+### Split measurement: where the 95% actually goes (2026-08-31)
+
+Metroid Prime, warm, JIT engaged (202 block modules), named build. Shares only
+-- that build is ~20% slower, so absolute numbers are not comparable.
+
+| function | self time |
+| --- | ---: |
+| `CachedInterpreter::ExecuteOneBlock` | **28.0%** |
+| `CachedInterpreter::FastInteger` | **15.3%** |
+| `JitBaseBlockCache::Dispatch` | **10.3%** |
+| `TryFastRamWordLoadStore` | 6.6% |
+| JIT'd block bodies (all 202 modules) | 4.6% |
+| `TryFastRamByteHalfLoadStore` | 3.3% |
+| `MMU::WriteToHardware` (two variants) | 3.9% |
+| `DolphinWeb_OnXfb` | 2.4% |
+| `Interpreter::ps_add` / `ps_sub` / `psq_st` | 5.0% |
+| `Helper_Quantize` | 1.7% |
+
+**Grouped:**
+
+| area | share |
+| --- | ---: |
+| cached interpreter execution (`ExecuteOneBlock` + `FastInteger`) | **43%** |
+| per-block dispatch (`Dispatch`) | **10%** |
+| guest memory helpers (fast-RAM paths + MMU writes) | **14%** |
+| paired-single interpreter ops (`ps_*`, quantize) | **~7%** |
+| JIT'd code | 4.6% |
+| video (`DolphinWeb_OnXfb`) | 2.4% |
+
+**Three real levers, in order:**
+
+1. **The cached interpreter itself, 43%.** `ExecuteOneBlock` and `FastInteger`
+   are where the time is. This is the target.
+2. **Per-block dispatch, 10%.** `JitBaseBlockCache::Dispatch` is paid per block
+   regardless of whether the block is JIT'd, so at ~5 instructions per block it
+   is pure overhead on *every* path -- not just the JIT'd 4.6%. Longer blocks
+   or a cheaper dispatch helps everything. Note this is a better argument for
+   block work than chaining was, because it is not capped by the JIT's share.
+3. **Paired-single ops interpreted, ~7%.** `ps_add`, `ps_sub`, `psq_st` and
+   `Helper_Quantize` run interpreted. Gekko paired-singles are heavily used by
+   GameCube titles; emitters for these would move real time.
+
+**Do not** target the JIT: 4.6%, and raising its coverage measurably does not
+help (see the chaining gate above).
+
 ## 2. Ship the JIT warmup fix
 
 **Hypothesis.** `jitwarmup` counts *stable video frames*, so at 20fps the JIT
