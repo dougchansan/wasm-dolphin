@@ -7889,8 +7889,30 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // landing after the clear but before/without draws showed black → flicker.
 // The XFB (tex#47) carries content every frame. Restored to normal present.
 let DIAG_EFB_TO_CANVAS = false;
+// How far into the frame is the XFB copy taken? The EFB holds the correct
+// scene at PRESENT time, but the XFB entry that is actually presented holds
+// only ground. If the copy runs after a few hundred EFB draws while the frame
+// issues thousands, it is capturing a half-drawn EFB.
+let diagEfbDrawsThisFrame = 0;
+function diagNoteXfbCopy(fbId) {
+  if (!DIAG_EFB_TO_CANVAS) return;
+  self._wgXfbCopyN = (self._wgXfbCopyN || 0) + 1;
+  if (self._wgXfbCopyN <= 8 || (self._wgXfbCopyN % 900) === 0) {
+    console.log(`[xfbtime] copy#${self._wgXfbCopyN} into fb#${fbId} after ` +
+                `${diagEfbDrawsThisFrame} EFB draws this frame`);
+  }
+}
+function diagFrameEnd() {
+  if (!DIAG_EFB_TO_CANVAS) return;
+  self._wgFrameN = (self._wgFrameN || 0) + 1;
+  if (self._wgFrameN <= 4 || (self._wgFrameN % 400) === 0) {
+    console.log(`[xfbtime] frame#${self._wgFrameN} total EFB draws=${diagEfbDrawsThisFrame}`);
+  }
+  diagEfbDrawsThisFrame = 0;
+}
 function diagTallyDrawTarget(passFbId) {
   if (!DIAG_EFB_TO_CANVAS) return;
+  if (passFbId === (self._wgEfbColorId || -1)) diagEfbDrawsThisFrame++;
   self._wgDrawByFb = self._wgDrawByFb || new Map();
   self._wgDrawByFb.set(passFbId, (self._wgDrawByFb.get(passFbId) || 0) + 1);
   self._wgDrawTally = (self._wgDrawTally || 0) + 1;
@@ -9742,6 +9764,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             drawState.scissor = null;
           }
           passFbId = fbId;
+          // Every non-EFB, non-backbuffer target, with how many EFB draws have
+          // executed this frame at that moment. The copy's source rect is
+          // correct and the EFB is correct at present time, so if the copy
+          // runs early in the frame it captures a half-drawn EFB.
+          if (fbId !== 0 && fbId !== (self._wgEfbColorId || -1))
+            diagNoteXfbCopy(fbId);
           // The EFB colour pass is the only one with a depth
           // attachment (the fb=47 XFB has none) — track its id so the
           // DIAG path can blit it straight to the canvas.
@@ -9834,9 +9862,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgBbSrcN = (self._wgBbSrcN || 0) + 1;
             if (self._wgBbSrcN <= 6 || (self._wgBbSrcN % 600) === 0) {
               const _t = webGpuObjects.textures.get(currentBackbufferSourceTextureId);
+              const _e = webGpuObjects.textures.get(self._wgEfbColorId || 0);
+              const _dim = (o) => (o && o.tex) ? `${o.tex.width}x${o.tex.height}` : "?";
               console.log(`[bbsrc] n=${self._wgBbSrcN} src=tex#${currentBackbufferSourceTextureId}` +
-                ` ${_t ? _t.width + "x" + _t.height : "?"}` +
-                ` efbColor=tex#${self._wgEfbColorId || 0} xfb=tex#${self._wgXfbId || 0}`);
+                ` ${_dim(_t)} fmt=${_t ? _t.format : "?"}` +
+                ` | efb=tex#${self._wgEfbColorId || 0} ${_dim(_e)}` +
+                ` xfb=tex#${self._wgXfbId || 0}`);
             }
           }
           if (u32[recWord + 1] === 1 && self._wgBgTex &&
@@ -10481,6 +10512,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           endPass("explicit", read);
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
+          diagFrameEnd();
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
           if (!endPass("submit-present", read) && wgpuDirtyRangeProjectionActive) {
             wgpuDirtyRangeProjection.recordSegmentBoundary({

@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-30T12:46:03.273Z",
-  "coreId": "sha256:55bde16b437cc2fab7766307bcd2e636db82f29467343af68af8fb46f89828a6",
+  "createdAt": "2026-08-31T01:05:14.608Z",
+  "coreId": "sha256:e8982fb37af6f8ccfeccdc732692d7d54c2dfeaa26b8c8c2cb9a92ff075ecdd5",
   "repository": {
-    "commit": "df8a050ff648591ea49476be97c3e71d78d3ec7f",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n?? page_view.png"
+    "commit": "be4229d9f44332ea0dce3d3b95ad7253df78922b",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-discio-worker.js\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "3f7f96c0576d486c1ff0fccb5dbd94897697507ff7bfd17c989f7d7d8c1aada3",
+    "patchSeriesSha256": "8acff387fd296c7358b8b116cf933a8b3653f751f3fa79d4ed815e01605415bd",
     "vendorResultTree": "e550aecf0d9194ae37f0428ae3b6f10ae11cf5db",
-    "sourceLockSha256": "11899fc7de0b10703cdf35a3d67acef2d816808a28ff766340e392e10f05bd08",
+    "sourceLockSha256": "bfacc7e2aba09c1af19a72001656ab2932d10126c24a6306d86328784852de96",
     "vendorSnapshotSha256": "b32e049935daa9509633cbfc663e26c5c397d6432daa19844101c080813705ca",
     "localInputsSha256": "a8faec6f53bdb623203b9ba834a4040d8bb61fb7d3974ff1f7d7d4ba02da1b77",
     "localInputs": [
@@ -132,13 +132,13 @@
     "js": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.js",
       "size": 266772,
-      "sha256": "b34cf83136ff7fe8c693ad8c0c1f5b67887cc1953019cde5e289cf2836a34d80",
+      "sha256": "a29db4b8bbc55e9bceeafdd8ab247a877a03f519e3419d152d6d6399e6b59c85",
       "hashMode": "lf-normalized"
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12941786,
-      "sha256": "55bde16b437cc2fab7766307bcd2e636db82f29467343af68af8fb46f89828a6",
+      "size": 12942156,
+      "sha256": "e8982fb37af6f8ccfeccdc732692d7d54c2dfeaa26b8c8c2cb9a92ff075ecdd5",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -165,7 +165,7 @@
       {
         "id": 6,
         "size": 49,
-        "sha256": "23d52b51f4cba65e0f7db15730a4e8f8ff254ff9710be79d6b7221a286242981"
+        "sha256": "0470a75d0d45a85f1e8a164729bdc611f156bee994ef2ff05f7202609e307788"
       },
       {
         "id": 7,
@@ -185,17 +185,17 @@
       {
         "id": 12,
         "size": 2,
-        "sha256": "a4438912409a344e6b3ade1a04255566e23c39fa24934fc62e3e1394f39b86cb"
+        "sha256": "c2b07439d99f328f52b8d07bc4a0bf83bccb4ad91386cbb128163fc56cd04297"
       },
       {
         "id": 10,
-        "size": 10451744,
-        "sha256": "05bdb157405424daa7d0a30c90a581f5292397884666a405a3b0f90261a223d8"
+        "size": 10452027,
+        "sha256": "45b7fd0c601add28af1d528e291dc1d88b8b3b13370f3da7ea01cda484c2a318"
       },
       {
         "id": 11,
-        "size": 2449469,
-        "sha256": "dd516d4f37d8fb1fd791892a6a82183e24991869e418ce1aa9be06fed8a5b186"
+        "size": 2449556,
+        "sha256": "92d1fbe6b0ae966950e491dd549aa0e2f39aca01ded0c34d7991ccc1ba05fc8d"
       }
     ]
   }
