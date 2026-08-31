@@ -7910,6 +7910,56 @@ function diagFrameEnd() {
   }
   diagEfbDrawsThisFrame = 0;
 }
+// Read back the EFB and the texture actually presented, at the same instant,
+// and reduce each to a 4x3 grid of mean RGB. If the grids agree, the XFB entry
+// holds the right picture and the fault is downstream of it. If they disagree,
+// the copy's CONTENT is wrong -- which is where the evidence points, since its
+// source rect, destination size and binding all measure correct.
+function diagGridSignature(bytes, bpr, w, h) {
+  const cells = [];
+  for (let gy = 0; gy < 3; gy++) {
+    for (let gx = 0; gx < 4; gx++) {
+      const x0 = Math.floor(gx * w / 4), x1 = Math.floor((gx + 1) * w / 4);
+      const y0 = Math.floor(gy * h / 3), y1 = Math.floor((gy + 1) * h / 3);
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let y = y0; y < y1; y += 4) {
+        for (let x = x0; x < x1; x += 4) {
+          const o = y * bpr + x * 4;
+          r += bytes[o]; g += bytes[o + 1]; b += bytes[o + 2]; n++;
+        }
+      }
+      cells.push(n ? `${(r / n) | 0},${(g / n) | 0},${(b / n) | 0}` : "-");
+    }
+  }
+  return cells.join(" | ");
+}
+function diagReadTexture(dev, encoder, entry, label, tag) {
+  if (!entry || !entry.tex || String(entry.format || "").startsWith("depth")) return;
+  const w = entry.tex.width, h = entry.tex.height;
+  const bpr = Math.ceil(w * 4 / 256) * 256;
+  let buf;
+  try {
+    buf = dev.createBuffer({ size: bpr * h, usage: 0x1 | 0x8 });
+    encoder.copyTextureToBuffer({ texture: entry.tex },
+      { buffer: buf, bytesPerRow: bpr, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 });
+  } catch (e) { return; }
+  self._wgGridPending = self._wgGridPending || [];
+  self._wgGridPending.push({ buf, bpr, w, h, label, tag });
+}
+function diagDrainGrids() {
+  const pend = self._wgGridPending;
+  if (!pend || !pend.length) return;
+  self._wgGridPending = [];
+  for (const p of pend) {
+    p.buf.mapAsync(0x1).then(() => {
+      const bytes = new Uint8Array(p.buf.getMappedRange());
+      console.log(`[grid] ${p.tag} ${p.label} ${p.w}x${p.h} :: ` +
+                  diagGridSignature(bytes, p.bpr, p.w, p.h));
+      try { p.buf.unmap(); p.buf.destroy(); } catch (e) {}
+    }).catch(() => {});
+  }
+}
 function diagTallyDrawTarget(passFbId) {
   if (!DIAG_EFB_TO_CANVAS) return;
   if (passFbId === (self._wgEfbColorId || -1)) diagEfbDrawsThisFrame++;
@@ -8767,6 +8817,28 @@ function drainWebGpuCmdRing(source = "presentation") {
         wgpuLastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
       }
       try { pass.end(); } catch (e) {}
+      // Read the copy destination AND the EFB immediately after the copy pass
+      // ends, so both reads sit adjacent in the command stream. Reading at
+      // present time instead was confounded by encoder batching: several
+      // frames can share one encoder, so the EFB read executed after a later
+      // frame's clear and came back all zeros.
+      if (DIAG_EFB_TO_CANVAS && endedFramebufferId !== 0 &&
+          endedFramebufferId !== (self._wgEfbColorId || -1)) {
+        const dst = webGpuObjects.textures.get(endedFramebufferId);
+        if (dst && dst.tex && dst.tex.width === 608 && dst.tex.height === 456) {
+          self._wgGridN = (self._wgGridN || 0) + 1;
+          if ((self._wgGridN % 300) === 0) {
+            try {
+              const enc = ensureEnc();
+              diagReadTexture(dev, enc, dst, `COPYDST(tex#${endedFramebufferId})`,
+                              `n=${self._wgGridN}`);
+              diagReadTexture(dev, enc,
+                              webGpuObjects.textures.get(self._wgEfbColorId || 0),
+                              `EFB(tex#${self._wgEfbColorId || 0})`, `n=${self._wgGridN}`);
+            } catch (e) {}
+          }
+        }
+      }
       wgpuReplayClassifier?.recordPassEnd({ reason, recordIndex });
       if (causalMetricsEnabled) {
         if (reason === "explicit" || reason === "submit-present") {
@@ -10513,6 +10585,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           diagFrameEnd();
+
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
           if (!endPass("submit-present", read) && wgpuDirtyRangeProjectionActive) {
             wgpuDirtyRangeProjection.recordSegmentBoundary({
@@ -10825,6 +10898,8 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (!presentAlreadySubmitted) applyHardwareInputMarker();
           const submittedPresent = presentAlreadySubmitted || submitEnc("present");
+          // Buffers copied above are only mappable once the encoder is submitted.
+          diagDrainGrids();
           mapWgpuVisualCadenceSlot(visualCadenceSlot, submittedPresent);
           if (!submittedPresent) {
             const rejectionReason = lastSubmitFailureReason ||
