@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-31T03:13:12.920Z",
+  "createdAt": "2026-08-31T03:42:55.367Z",
   "coreId": "sha256:87335c51cc4134655f9491f42629f0caf42da6939a23985f85705c3d748ba66b",
   "repository": {
-    "commit": "1365639cef947daaa81d193cfceeebdfc9da4d42",
-    "status": "M cores/dolphin/dolphin-core-upstream.wasm\n M src/core-host.js\n M src/upstream-discio-worker.js\n M src/upstream-worker-adapter.js\n M tools/boot-matrix.mjs\n?? page_view.png"
+    "commit": "fe4e571ef34d6104f5f5caaf413c7777ee807d1b",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-worker-protocol.js\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",

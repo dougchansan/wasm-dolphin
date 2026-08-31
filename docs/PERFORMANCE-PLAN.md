@@ -55,6 +55,56 @@ raster, FIFO, memory helper, sync) is stated with evidence.
 eliminated. Something else dominates and nobody has named it. Every further
 performance decision is guesswork until this is answered.
 
+### Item 1 result (2026-08-31)
+
+`wasm-function[1026]` was never named, and the attempt to name it produced two
+warnings worth keeping:
+
+- Wasm function indices are **build-specific**. Resolving the old profile's
+  index against a freshly built binary gave `File::Rename` -- a confident,
+  meaningless answer. Never map an index across builds.
+- `--profiling-funcs` (needed for a name section, since the shipping wasm is
+  stripped) costs about **20% speed**: Metroid Prime 32% plain vs 25.5% named.
+  Nothing measured on a named build is comparable to the baseline.
+
+On the named build every thread was dominated by `_do_futex_wait`, which looked
+like a synchronisation bottleneck. It is not:
+
+| test | result |
+| --- | --- |
+| pacing / queue depth (tick-4, direct-1, smooth-8) | 25.5 / 24 / 25.5 -- no effect |
+| single vs dual core | 32% vs 30.5% -- no effect |
+
+**What the bottleneck actually is: PPC execution throughput.** Underclocking the
+emulated CPU scales speed almost proportionally:
+
+| `oc` | speed |
+| ---: | ---: |
+| 1 | 30% |
+| 0.5 | 34% |
+| 0.25 | **78%** |
+
+So these titles are CPU-bound, and JIT coverage is the right lever after all.
+
+**Why coverage is ~8%: compiled prefixes are ~6 instructions long.** The helper
+stat `pre:6/74` is `s_wasm_prefix_instruction_sum / s_wasm_block_attempt_count`
+-- the average number of instructions compiled per attempted block, against a
+max of 74. The admission loop walks a block and `break`s at the first
+instruction it cannot emit, compiling only the prefix before it. With warmup
+fixed, Metroid Prime runs 59.7M block executions, but at ~6 instructions each
+that is roughly 8% of the instruction stream.
+
+This revises the "emitter breadth is dead" entry above. `reject:0` is true --
+whole blocks are not rejected -- but blocks are silently **truncated** at the
+first unsupported instruction, which has the same effect and is invisible in
+the reject counter. **Raising `pre:` is the performance lever.**
+
+Next: find which instructions terminate prefixes most often, ranked by
+frequency. The histogram infrastructure exists
+(`s_wasm_direct_reject_key_counts`, emitted as `| rejOPCD/SUBOP:count`) but only
+counts direct-tier rejects, not prefix terminations. Add the equivalent
+histogram at the `break` sites in the prefix loop, then rank.
+
 ## 2. Ship the JIT warmup fix
 
 **Hypothesis.** `jitwarmup` counts *stable video frames*, so at 20fps the JIT
