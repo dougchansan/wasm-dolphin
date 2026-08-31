@@ -7889,6 +7889,20 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
 // landing after the clear but before/without draws showed black → flicker.
 // The XFB (tex#47) carries content every frame. Restored to normal present.
 let DIAG_EFB_TO_CANVAS = false;
+function diagTallyDrawTarget(passFbId) {
+  if (!DIAG_EFB_TO_CANVAS) return;
+  self._wgDrawByFb = self._wgDrawByFb || new Map();
+  self._wgDrawByFb.set(passFbId, (self._wgDrawByFb.get(passFbId) || 0) + 1);
+  self._wgDrawTally = (self._wgDrawTally || 0) + 1;
+  if ((self._wgDrawTally % 4000) === 0) {
+    const top = [...self._wgDrawByFb.entries()]
+      .sort((a, b) => b[1] - a[1]).slice(0, 6)
+      .map(([fb, n]) => `fb#${fb}:${n}`).join(' ');
+    console.log(`[drawfb] efbColor=tex#${self._wgEfbColorId || 0} ` +
+                `xfb=tex#${self._wgXfbId || 0} | ${top}`);
+  }
+}
+
 // DIAGNOSTIC (revertible): force depthCompare "always" on every
 // pipeline (see resolvePipeline) to bisect the black-EFB cause.
 const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT depth (still dark with depth bypassed) ⇒ blend/TEV/material/texture construct
@@ -10022,6 +10036,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
               (!passNeedsVertexBuffer || vertexBufferValid)) {
+            diagTallyDrawTarget(passFbId);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
@@ -10048,6 +10063,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               (!passNeedsVertexBuffer || vertexBufferValid) && indexBufferValid)) {
             webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
           } else if (pass) {
+            diagTallyDrawTarget(passFbId);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
