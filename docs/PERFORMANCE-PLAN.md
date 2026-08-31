@@ -143,6 +143,51 @@ Before attempting it, read
 `G:\dolrecompwned\DolRecomp\docsegister-cache-design.md` -- four reverted
 attempts at the adjacent problem.
 
+### Block chaining: REJECTED by the repo's own gate (2026-08-31)
+
+`cpu-profile-capture.mjs` states the dispatch-vs-block-body ratio "is the
+ceiling on what JIT block-linking could ever win, and it must be known before
+committing to that (HIGH-risk) core rebuild". That ratio had never been
+obtained -- every prior run reported `0 block modules` because the JIT was not
+engaged, which the warmup finding explains.
+
+Measured with the JIT engaged (172 block modules), emulation thread:
+
+| bucket | time | share |
+| --- | ---: | ---: |
+| JIT block bodies | 754ms | **3.7%** |
+| core module | 19,515ms | 96.3% |
+
+**3.7% is the ceiling.** Chaining optimises the boundaries around JIT'd code;
+it cannot win more than the time spent in JIT'd code. Do not build it.
+
+Confirmed independently by raising coverage instead of reducing dispatch:
+
+| warmup | attempts | compiled | block runs | speed |
+| ---: | ---: | ---: | ---: | ---: |
+| 60 | 2,495 | 1,352 | 68.4M | 36% |
+| 0 | 5,989 | 3,080 | 82.6M | 35% |
+
+2.3x the compiled blocks and 20% more executions for no gain -- exactly what a
+3.7% share predicts.
+
+**The JIT is not the performance lever on this workload, in any form**: not
+tier, not admission, not emitter breadth, not coverage, not dispatch. It
+executes ~4% of the time and making it execute more does not help.
+
+### The actual target: the cached interpreter
+
+The 96.3% "core module" bucket is where the time goes. Note the analyser's own
+caveat -- that bucket is not purely interpreter dispatch; it also holds video,
+FIFO and everything else compiled into the core.
+
+**Next measurement, before any optimisation:** split that 96.3%. A named build
+(`--profiling-funcs`) can attribute it by function, at the cost of ~20% speed --
+fine for shares, useless for absolute numbers. That tells us whether the target
+is interpreter dispatch, the software rasteriser, FIFO handling, or memory
+helpers. Optimising the interpreter blind would repeat today's mistake of
+committing to a lever before measuring its ceiling.
+
 ## 2. Ship the JIT warmup fix
 
 **Hypothesis.** `jitwarmup` counts *stable video frames*, so at 20fps the JIT
