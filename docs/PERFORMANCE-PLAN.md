@@ -299,7 +299,47 @@ self time and specialisation removes only the generic dispatch around them, not
 the arithmetic, so the expected effect is 1-2% -- far below a noise floor of
 about +/-9 points. **No optimisation of that size can be validated on this rig.**
 
-## NEXT: fix the measurement rig before optimising further
+## The measurement rig: `tools/perf-ab.mjs`
+
+Built 2026-08-31. Use it for every performance claim from now on.
+
+```bash
+node tools/perf-ab.mjs --filter "Metroid Prime (USA)"   --a "" --b "DISABLE=0x800000" --pairs 5
+```
+
+**Paired, not grouped.** A and B run back-to-back as a pair and are compared
+WITHIN the pair; the median of those differences is the result. Session drift
+moves both halves of a pair together and cancels. Group means do not have this
+property, which is why the earlier A/B tables in this document were misleading.
+
+**Alternating order** inside each pair, so cache warmth or thermal ramp cannot
+bias one arm systematically.
+
+**A verdict, not a number.** If the pairs disagree in sign it prints
+`NOT RESOLVED` rather than a difference, so a 1-point median cannot be dressed
+up as a win.
+
+**Failed runs are discarded, never scored.** A mount failure previously read as
+0% game speed, which would show as a 30-point regression. It now retries, then
+drops the pair and says so.
+
+Validated against the paired-single change (patch 0057): `NOT RESOLVED`,
+matching the hand-run conclusion.
+
+### Known gap: fixed-scene mode is not working
+
+`--save-state` fails with `Save-state load failed: Failed to fetch` from
+`window.__loadStateFile`, although the dev server returns 200 for the same path
+(checked with curl for `/__mkdd-race.sav` and `/__battle.sav`). The server is
+fine; the page's fetch is not. Check the COOP/COEP headers set for
+SharedArrayBuffer, and whether the 44MB response is truncated.
+
+Until that works, run-to-run scene variance remains the dominant noise source:
+paired differences on Metroid Prime still range -4..+3, so effects below about
+4 points stay unresolvable. Fixing it is the single highest-value tooling task
+left, because it unblocks every micro-optimisation.
+
+## OLD NOTE: fix the measurement rig before optimising further
 
 Required before any further perf work is meaningful:
 
