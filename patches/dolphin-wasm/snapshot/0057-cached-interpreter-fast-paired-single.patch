@@ -1,0 +1,181 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
+@@ -145,6 +145,9 @@
+   static s32 FastFloat(PowerPC::PowerPCState& ppc_state,
+                        const FastInstructionOperands& operands);
+   static s32 FastFloat(std::ostream& stream, const FastInstructionOperands& operands);
++  static s32 FastPairedSingle(PowerPC::PowerPCState& ppc_state,
++                              const FastInstructionOperands& operands);
++  static s32 FastPairedSingle(std::ostream& stream, const FastInstructionOperands& operands);
+   static s32 FastMeleeIdlePollLoop(PowerPC::PowerPCState& ppc_state,
+                                    const MeleeIdlePollLoopOperands& operands);
+   static s32 FastMeleeIdlePollLoop(std::ostream& stream,
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -267,6 +267,7 @@
+ constexpr u32 DOLPHIN_WEB_DISABLE_REGALLOC    = 1u << 20; // §28by GPR regalloc / dead-store-skip (default-off)
+ constexpr u32 DOLPHIN_WEB_DISABLE_SHORT_PREFIX = 1u << 21; // §28ca lower JIT min-prefix 4→2 (default-off)
+ constexpr u32 DOLPHIN_WEB_DISABLE_COMPILE_THROTTLE = 1u << 22;  // §28ce cap JIT compiles/slice (default-off)
++constexpr u32 DOLPHIN_WEB_DISABLE_FASTPS      = 1u << 23;  // FastPairedSingle emit path
+ // §28cz fastmem bounds-check HOIST. ENABLE polarity (NOT a disable bit): the
+ // per-block range-check hoist is emitted ONLY when this bit is SET. Default
+ // mask 0 → feature OFF → byte-identical codegen to today. ?fastmemhoist=1 opts
+@@ -7824,6 +7825,13 @@
+       else
+         break;
+     }
++    else if (callback == AnyCallbackCast(FastPairedSingle))
++    {
++      if (FastPairedSingle(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++        normal_entry = payload + sizeof(FastInstructionOperands);
++      else
++        break;
++    }
+     else if (callback == AnyCallbackCast(FastBranchBdnz))
+     {
+       FastBranchBdnz(ppc_state, *reinterpret_cast<const FastBranchBdnzOperands*>(payload));
+@@ -7912,6 +7920,13 @@
+     else if (callback == AnyCallbackCast(FastFloat))
+     {
+       if (FastFloat(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
++        normal_entry = payload + sizeof(FastInstructionOperands);
++      else
++        break;
++    }
++    else if (callback == AnyCallbackCast(FastPairedSingle))
++    {
++      if (FastPairedSingle(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
+         normal_entry = payload + sizeof(FastInstructionOperands);
+       else
+         break;
+@@ -8311,6 +8326,21 @@
+   return inst.OPCD == 19 && (inst.SUBOP10 == 16 || inst.SUBOP10 == 528);
+ }
+ 
++// Paired-single arithmetic. ps_add/ps_sub/ps_mul measured ~5% of emulation
++// self time on Metroid Prime running through the generic interpreter path
++// (Interpreter::ps_add / ps_sub, plus Helper_Quantize for psq_st). GameCube
++// titles lean on these heavily.
++//
++// Rc==0 only: the Rc form has to UpdateCR1, which the fast path does not do.
++// SUBOP5 values are from s_table4_2 in Interpreter_Tables.cpp -- 20 ps_sub,
++// 21 ps_add, 25 ps_mul.
++static bool IsFastPairedSingleInstruction(UGeckoInstruction inst)
++{
++  if (inst.OPCD != 4 || inst.Rc)
++    return false;
++  return inst.SUBOP5 == 20 || inst.SUBOP5 == 21 || inst.SUBOP5 == 25;
++}
++
+ static bool IsFastFloatInstruction(UGeckoInstruction inst)
+ {
+   switch (inst.OPCD)
+@@ -8719,6 +8749,14 @@
+     }
+ 
+     Write(FastBranch, {power_pc, op.address, op.inst});
++    return true;
++  }
++
++  if (IsFastPairedSingleInstruction(op.inst))
++  {
++    if ((disable_mask & DOLPHIN_WEB_DISABLE_FASTPS) != 0)
++      return false;
++    Write(FastPairedSingle, {power_pc, op.address, op.inst});
+     return true;
+   }
+ 
+@@ -9480,6 +9518,64 @@
+   }
+ 
+   return true;
++}
++
++s32 CachedInterpreter::FastPairedSingle(PowerPC::PowerPCState& ppc_state,
++                                        const FastInstructionOperands& operands)
++{
++  const auto& [power_pc, current_pc, inst] = operands;
++  if (!FastCheckFpuAvailable(ppc_state, power_pc, current_pc))
++  {
++    ppc_state.pc = current_pc;
++    power_pc.CheckExceptions();
++    return 0;
++  }
++
++  // ps_sub(20) / ps_add(21) / ps_mul(25), Rc==0 only. Mirrors
++  // Interpreter::ps_sub/ps_add/ps_mul exactly, including ps_mul's Force25Bit on
++  // the FC operand, but takes plain double arithmetic when the FPSCR invalid
++  // enable is clear and all four operands are finite -- the same shape as
++  // FastFloat's fadds/fsubs path. Anything else goes through NI_* unchanged.
++  const bool is_mul = inst.SUBOP5 == 25;
++  const bool is_add = inst.SUBOP5 == 21;
++  const auto& a = ppc_state.ps[inst.FA];
++  const auto& b = is_mul ? ppc_state.ps[inst.FC] : ppc_state.ps[inst.FB];
++
++  const double a0 = a.PS0AsDouble();
++  const double a1 = a.PS1AsDouble();
++  double b0 = b.PS0AsDouble();
++  double b1 = b.PS1AsDouble();
++  if (is_mul)
++  {
++    b0 = Force25Bit(b0);
++    b1 = Force25Bit(b1);
++  }
++
++  float ps0;
++  float ps1;
++  if (ppc_state.fpscr.VE == 0 && IsFiniteFastFloatOperand(a.PS0AsU64()) &&
++      IsFiniteFastFloatOperand(a.PS1AsU64()) && IsFiniteFastFloatOperand(b.PS0AsU64()) &&
++      IsFiniteFastFloatOperand(b.PS1AsU64()))
++  {
++    const double r0 = is_mul ? a0 * b0 : (is_add ? a0 + b0 : a0 - b0);
++    const double r1 = is_mul ? a1 * b1 : (is_add ? a1 + b1 : a1 - b1);
++    ps0 = ForceSingle(ppc_state.fpscr, r0);
++    ps1 = ForceSingle(ppc_state.fpscr, r1);
++  }
++  else
++  {
++    const FPResult r0 = is_mul ? NI_mul(ppc_state, a0, b0) :
++                                 (is_add ? NI_add(ppc_state, a0, b0) : NI_sub(ppc_state, a0, b0));
++    const FPResult r1 = is_mul ? NI_mul(ppc_state, a1, b1) :
++                                 (is_add ? NI_add(ppc_state, a1, b1) : NI_sub(ppc_state, a1, b1));
++    ps0 = ForceSingle(ppc_state.fpscr, r0.value);
++    ps1 = ForceSingle(ppc_state.fpscr, r1.value);
++  }
++
++  ppc_state.ps[inst.FD].SetBoth(ps0, ps1);
++  ppc_state.UpdateFPRFSingle(ps0);
++
++  return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+ s32 CachedInterpreter::FastFloat(PowerPC::PowerPCState& ppc_state,
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
+@@ -145,6 +145,15 @@
+   const auto& [power_pc, current_pc, target_pc] = operands;
+   fmt::println(stream, "FastBranchBdnz(current_pc=0x{:08x}, target_pc=0x{:08x})", current_pc,
+                target_pc);
++  return sizeof(AnyCallback) + sizeof(operands);
++}
++
++s32 CachedInterpreter::FastPairedSingle(std::ostream& stream,
++                                        const FastInstructionOperands& operands)
++{
++  const auto& [power_pc, current_pc, inst] = operands;
++  fmt::println(stream, "FastPairedSingle(current_pc=0x{:08x}, inst=0x{:08x})", current_pc,
++               inst.hex);
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -309,6 +318,7 @@
+       LOOKUP_KV(CachedInterpreter::FastBranch),
+       LOOKUP_KV(CachedInterpreter::FastBranchBdnz),
+       LOOKUP_KV(CachedInterpreter::FastFloat),
++      LOOKUP_KV(CachedInterpreter::FastPairedSingle),
+       LOOKUP_KV(CachedInterpreter::FastMeleeIdlePollLoop),
+       LOOKUP_KV(CachedInterpreter::FastMeleeTitleLoop),
+       LOOKUP_KV(CachedInterpreter::FastOsInterruptFunction),

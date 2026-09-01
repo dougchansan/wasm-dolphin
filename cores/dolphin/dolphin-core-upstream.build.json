@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-08-31T20:20:01.409Z",
-  "coreId": "sha256:d7192040d625dcf08c0df9babe7d9ce95dbe48344d4c350efb89c3926ca01583",
+  "createdAt": "2026-09-01T05:23:59.574Z",
+  "coreId": "sha256:4bde9f193af0d808ae2a99222493fd5cb0c7344866aa6ee2bfd8dc48b0a49e90",
   "repository": {
-    "commit": "fca11ee54af751016966c2ca7a19844086f894af",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-worker-protocol.js\n?? page_view.png"
+    "commit": "104126c2612b4c3e4a8cb54f7fb82a161357e236",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-core-abi-v1.json\n M provenance/dolphin-source.lock.json\n M src/upstream-worker-protocol.js\n M tools/boot-matrix.mjs\n?? page_view.png\n?? patches/dolphin-wasm/snapshot/0057-cached-interpreter-fast-paired-single.patch"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "8acff387fd296c7358b8b116cf933a8b3653f751f3fa79d4ed815e01605415bd",
+    "patchSeriesSha256": "ceaba40bf7c4eae85afcc4ae0128224609825161f952e9e76ed8e5985949ecd7",
     "vendorResultTree": "e550aecf0d9194ae37f0428ae3b6f10ae11cf5db",
-    "sourceLockSha256": "bfacc7e2aba09c1af19a72001656ab2932d10126c24a6306d86328784852de96",
+    "sourceLockSha256": "b950e27daa09d805861c8c7825b964ad3d9c08143a09aff253b83fd0b8747663",
     "vendorSnapshotSha256": "b32e049935daa9509633cbfc663e26c5c397d6432daa19844101c080813705ca",
     "localInputsSha256": "a8faec6f53bdb623203b9ba834a4040d8bb61fb7d3974ff1f7d7d4ba02da1b77",
     "localInputs": [
@@ -137,8 +137,8 @@
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12942432,
-      "sha256": "d7192040d625dcf08c0df9babe7d9ce95dbe48344d4c350efb89c3926ca01583",
+      "size": 12946013,
+      "sha256": "4bde9f193af0d808ae2a99222493fd5cb0c7344866aa6ee2bfd8dc48b0a49e90",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -154,13 +154,13 @@
       },
       {
         "id": 3,
-        "size": 12428,
-        "sha256": "e10b0e0cca2faf66e00539eaadaefa8ce9afe4ba331b6cf901dbd4f6da9a88df"
+        "size": 12430,
+        "sha256": "f3f678f4720122187ec1268a5b94ff558edf971034816a33555a0ac793d9fffe"
       },
       {
         "id": 4,
         "size": 5,
-        "sha256": "0acc3f6bce7ac99b9cc92f1cb3ed9fe909743d212794c05cd0b5d5cef65b1ca3"
+        "sha256": "b931348f9ec142a740f4a2ccd82f984718093ddf402f54bb2aed4b3cc0e0fe53"
       },
       {
         "id": 6,
@@ -170,32 +170,32 @@
       {
         "id": 7,
         "size": 1057,
-        "sha256": "1bd791a872c2bf3c234999f4d8bfd180aa2bcf724b249cde7ad4cf192536be42"
+        "sha256": "c7d26778bd88eb2a86c318dc7c547b8e4caf51a1975ac14242513f374e8a4dbd"
       },
       {
         "id": 8,
         "size": 2,
-        "sha256": "1d1d107f53423f4eebd82daf12d2923e6a1acc151fea33a7e1d47cd0c18f9c1b"
+        "sha256": "08150a13712c111870b4594e52255399630c44ba19c1a5ae90acfea3bc5a3989"
       },
       {
         "id": 9,
-        "size": 22563,
-        "sha256": "b6d8f38ad4a97611f1bb13d6ec9d0aba904fcd3467b3866476480562ba501aa2"
+        "size": 22567,
+        "sha256": "3fa44ab06eb2b87d2653b59931dd46f101e071a7721832a81cd52a2afedaa131"
       },
       {
         "id": 12,
         "size": 2,
-        "sha256": "c2b07439d99f328f52b8d07bc4a0bf83bccb4ad91386cbb128163fc56cd04297"
+        "sha256": "a4438912409a344e6b3ade1a04255566e23c39fa24934fc62e3e1394f39b86cb"
       },
       {
         "id": 10,
-        "size": 10452256,
-        "sha256": "366ef6b906a666bbc3e0551f675d21587ea9dd713b1f8ff6639c6ccbbe6f4d25"
+        "size": 10455784,
+        "sha256": "f4e45145ee6b5b49bcc60f72cabdcb9bce0c9c091633159fe3a8abdab8195044"
       },
       {
         "id": 11,
-        "size": 2449603,
-        "sha256": "52a9abffea42815d5b7a76d9e17aa5aa0bfbd0dc75af8f259788179f0e07b047"
+        "size": 2449650,
+        "sha256": "e5d3731cd290a297b1a64de6c82e53031dad811a1a29ca79aabade4f0a11570c"
       }
     ]
   }

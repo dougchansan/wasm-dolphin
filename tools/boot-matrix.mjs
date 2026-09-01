@@ -267,6 +267,7 @@ function buildUrl(disc) {
   // rasteriser quality tier and is meaningless on video=wgpu.
   if (process.env.CORELOG) url.searchParams.set("corelog", process.env.CORELOG);
   if (process.env.JITVERBOSE) url.searchParams.set("jitverbose", process.env.JITVERBOSE);
+  if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
   if (process.env.NOJITCACHE) url.searchParams.set("nojitcache", process.env.NOJITCACHE);
   if (process.env.WGPUVISUAL) url.searchParams.set("wgpuvisual", process.env.WGPUVISUAL);
   url.searchParams.set("probe", `boot-matrix-${safeSlug(disc.name)}`);

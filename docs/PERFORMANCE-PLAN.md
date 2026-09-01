@@ -273,6 +273,48 @@ because a 5-instruction block pays a module call plus guest-state sync
 to how state is held across block boundaries, and DolRecomp's
 `register-cache-design.md` records four reverted attempts at exactly that.
 
+### Interpreter optimisation, attempt 2: paired-single specialisation
+
+Implemented `FastPairedSingle` (patch 0057) for ps_sub/ps_add/ps_mul, Rc==0,
+mirroring `FastFloat`'s shape: plain double arithmetic when FPSCR.VE is clear
+and all four operands are finite, otherwise the exact `NI_*` path. Semantics
+follow `Interpreter::ps_*` exactly, including ps_mul's `Force25Bit` on FC.
+Behind `DOLPHIN_WEB_DISABLE_FASTPS` (bit 23) so it can be A/B'd on one binary.
+
+**Correct**: Wario World renders its throne room at 96%, Melee 100%, all titles
+boot with normal hash counts.
+
+**No measurable gain.** Interleaved A/B on the same binary via `?disable=`:
+
+| run | FastPS on | off |
+| ---: | ---: | ---: |
+| 1 | 35% | 31% |
+| 2 | 33% | 34% |
+| 3 | 26% | 26% |
+
+Mean 31.3% vs 30.3%, against a within-config spread of 26-35%.
+
+**The real blocker is now measurement, not optimisation.** ps ops were ~5% of
+self time and specialisation removes only the generic dispatch around them, not
+the arithmetic, so the expected effect is 1-2% -- far below a noise floor of
+about +/-9 points. **No optimisation of that size can be validated on this rig.**
+
+## NEXT: fix the measurement rig before optimising further
+
+Required before any further perf work is meaningful:
+
+- **Fixed scene.** Boot to a save state rather than a timed window, so the
+  workload is identical run to run. `menu-progress-validate.mjs` already
+  supports `SAVE_STATE_URL` / `SAVE_STATE_AT`.
+- **Repeat and take the median**, not a single run.
+- **Interleave A/B** on one binary via `?disable=`, never across builds or
+  across time.
+- **Report a spread**, not a point value.
+
+Until that exists, only effects larger than ~10 points are real: the underclock
+scaling (30/34/78%), the JIT warmup engagement change, and Star Fox's
+renderer difference (30 vs 79%).
+
 ## MEASUREMENT DRIFT -- read before comparing anything
 
 Over one session the same titles measured 32-35% early and 27-28% late, on
