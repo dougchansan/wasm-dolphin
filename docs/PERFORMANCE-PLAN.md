@@ -326,18 +326,25 @@ drops the pair and says so.
 Validated against the paired-single change (patch 0057): `NOT RESOLVED`,
 matching the hand-run conclusion.
 
-### Known gap: fixed-scene mode is not working
+### Fixed-scene mode
 
-`--save-state` fails with `Save-state load failed: Failed to fetch` from
-`window.__loadStateFile`, although the dev server returns 200 for the same path
-(checked with curl for `/__mkdd-race.sav` and `/__battle.sav`). The server is
-fine; the page's fetch is not. Check the COOP/COEP headers set for
-SharedArrayBuffer, and whether the 44MB response is truncated.
+`--save-state __mkdd-race.sav` pins the workload so every run measures the same
+frames, with input disabled and only the post-load tail scored. Pass the served
+NAME, not a path.
 
-Until that works, run-to-run scene variance remains the dominant noise source:
-paired differences on Metroid Prime still range -4..+3, so effects below about
-4 points stay unresolvable. Fixing it is the single highest-value tooling task
-left, because it unblocks every micro-optimisation.
+The earlier `Save-state load failed: Failed to fetch` was not the server, the
+COEP headers or the 44MB size -- all of which were suspected. Git Bash (MSYS)
+rewrites a leading-slash argument into a Windows path before node sees it, so
+`--save-state /__mkdd-race.sav` arrived as
+`C:/Program Files/Git/__mkdd-race.sav` and the page dutifully failed to fetch
+that. Proving it took reproducing the fetch inside the page, where all three
+URLs including the 44MB state returned 200 -- which showed the problem was the
+URL, not the fetching. The tool now builds the URL from `--base-url` and rejects
+a local-looking path with an explanatory error.
+
+Save states are build-specific. `window.__downloadSaveState()` in the devtools
+console captures one from the current core; a state from an older core will
+load-fail rather than fetch-fail.
 
 ## OLD NOTE: fix the measurement rig before optimising further
 

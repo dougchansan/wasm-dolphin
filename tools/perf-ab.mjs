@@ -48,6 +48,25 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 
+// Git Bash (MSYS) rewrites a leading-slash argument into a Windows path before
+// node ever sees it, so `--save-state /__mkdd-race.sav` silently arrived as
+// "C:/Program Files/Git/__mkdd-race.sav". The page then fetched that string and
+// reported "Failed to fetch", which looked like a server or COEP problem and
+// was neither. Accept a bare name and build the URL here.
+let saveStateUrl = "";
+if (args.saveState) {
+  if (/^[A-Za-z]:[\/]/.test(args.saveState)) {
+    throw new Error(
+      `--save-state looks like a local path (${args.saveState}). Pass just the ` +
+      `served name, e.g. --save-state __mkdd-race.sav (no leading slash: Git ` +
+      `Bash rewrites it into a Windows path).`
+    );
+  }
+  const base = args.baseUrl || "http://127.0.0.1:8082/";
+  saveStateUrl = new URL(args.saveState.replace(/^\/+/, ""), base).href;
+  console.log(`[perf-ab] save state: ${saveStateUrl}`);
+}
+
 function envFrom(spec) {
   const env = { ...process.env, VIDEO: args.video || "wgpu" };
   if (args.baseUrl) env.BASE_URL = args.baseUrl;
@@ -59,18 +78,7 @@ function envFrom(spec) {
   return env;
 }
 
-// Fixed-scene measurement. NOT WORKING YET -- see the note below; prefer the
-// default (boot-matrix) backend until it is fixed.
-//
-// STATUS 2026-08-31: passing --save-state fails with
-//   Save-state load failed: Failed to fetch
-// from window.__loadStateFile inside the page, even though the dev server
-// returns 200 for the same path (verified with curl for /__mkdd-race.sav and
-// /__battle.sav). So the server is fine and the failure is in the page's own
-// fetch. Worth checking next: the COOP/COEP headers the server sets for
-// SharedArrayBuffer, and whether a 44MB response is being cut off.
-//
-// A save state pins the workload: every run measures
+// Fixed-scene measurement. A save state pins the workload: every run measures
 // the SAME frames, which removes the dominant variance source. Without it each
 // run samples whatever the attract mode happened to be showing, which is why
 // within-config spread was 26-35% even on one binary. Input is disabled so the
@@ -80,7 +88,7 @@ function measureFixedScene(spec) {
   try {
     const env = envFrom(spec);
     env.ROM = args.rom;
-    env.SAVE_STATE_URL = args.saveState;
+    env.SAVE_STATE_URL = saveStateUrl;
     env.SAVE_STATE_AT = args.stateAt || "35";
     env.INPUT_SCRIPT = "none";
     env.DURATION = String(args.duration);
