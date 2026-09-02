@@ -62,6 +62,7 @@ export class UpstreamWorkerAdapter {
     coreLog = false,
     efbDiag = false,
     jitVerbose = false,
+    frameCap = 0,
     cachedInterpreterDisableMask = 0,
     noJitCache = false,
     collectMetrics = false,
@@ -154,6 +155,7 @@ export class UpstreamWorkerAdapter {
     this.coreLog = Boolean(coreLog);
     this.efbDiag = Boolean(efbDiag);
     this.jitVerbose = Boolean(jitVerbose);
+    this.frameCap = Number(frameCap) || 0;
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
@@ -352,6 +354,7 @@ export class UpstreamWorkerAdapter {
       coreLog: this.coreLog,
       efbDiag: this.efbDiag,
       jitVerbose: this.jitVerbose,
+      frameCap: this.frameCap,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,

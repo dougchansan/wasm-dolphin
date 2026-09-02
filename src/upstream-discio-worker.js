@@ -927,6 +927,7 @@ async function handleMessage(type, payload) {
         coreLog: payload.coreLog,
         efbDiag: payload.efbDiag,
         jitVerbose: payload.jitVerbose,
+        frameCap: payload.frameCap,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
@@ -1421,6 +1422,7 @@ async function loadCore({
   coreLog = false,
   efbDiag = false,
   jitVerbose = false,
+  frameCap = 0,
   cachedInterpreterDisableMask = 0,
   noJitCache = false,
   reportedCoreSelection = null,
@@ -1877,6 +1879,7 @@ async function loadCore({
     dolphinCoreLog: Boolean(coreLog),
     // Ranks the instructions that block JIT compilation (?jitverbose=1).
     dolphinWebVerbosePpcJit: Boolean(jitVerbose),
+    dolphinFrameCap: (frameCapTarget = Number(frameCap) || 0),
     dolphinEfbDiag: (DIAG_EFB_TO_CANVAS =
       (String(efbDiag) === "2" ? 2 : (efbDiag ? 1 : 0))),
     preinitializedWebGPUDevice,
@@ -7914,6 +7917,36 @@ let DIAG_EFB_TO_CANVAS = false;
 // scene at PRESENT time, but the XFB entry that is actually presented holds
 // only ground. If the copy runs after a few hundred EFB draws while the frame
 // issues thousands, it is capturing a half-drawn EFB.
+// ---- single-frame capture -------------------------------------------------
+// Every pass, render target, viewport, scissor, bound source texture and draw
+// for ONE frame, in ring order. Piecewise probes produced two mutually
+// inconsistent pictures of the present path -- the XFB entry holds correct 3D
+// and no HUD, while the presented frame has a HUD and broken 3D, which a single
+// blit of that entry cannot produce. That is the signature of measuring the
+// wrong thing, so this records the whole frame instead of sampling parts.
+//
+// ?framecap=N captures the Nth present after boot. Off by default and costs
+// nothing when off.
+let frameCapTarget = 0;
+let frameCapRows = [];
+let frameCapDone = false;
+const FRAME_CAP_MAX_ROWS = 600;
+function frameCapActive() {
+  return frameCapTarget > 0 && !frameCapDone &&
+         (self._wgPresentCount || 0) === frameCapTarget;
+}
+function frameCapPush(row) {
+  if (!frameCapActive()) return;
+  if (frameCapRows.length < FRAME_CAP_MAX_ROWS) frameCapRows.push(row);
+}
+function frameCapFinish() {
+  if (frameCapTarget <= 0 || frameCapDone) return;
+  if ((self._wgPresentCount || 0) !== frameCapTarget) return;
+  frameCapDone = true;
+  console.log(`[framecap] present #${frameCapTarget}, ${frameCapRows.length} records`);
+  for (const r of frameCapRows) console.log(`[framecap] ${r}`);
+  console.log("[framecap] END");
+}
 let diagEfbDrawsThisFrame = 0;
 let diagLastCopyDst = 0;
 let diagLastCopyFrame = -1;
@@ -9840,6 +9873,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = cur.width;
             passH = cur.height;
             passColorFmt = renderGpu.format;
+            frameCapPush(`BEGINPASS fb#0 BACKBUFFER ${passW}x${passH}`);
           } else {
             webGpuExecStats.beginFbN++;
             const ct = webGpuObjects.textures.get(fbId);
@@ -9851,6 +9885,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = ct.tex.width;
             passH = ct.tex.height;
             passColorFmt = ct.format;
+            frameCapPush(`BEGINPASS fb#${fbId} ${passW}x${passH} fmt=${ct.format}` +
+              `${fbId === (self._wgEfbColorId || -1) ? " (EFB)" : ""}`);
             // DIAG: which texture ids are ever render targets (+size).
             // Cross-ref with tex#69 (640x480 green, sampled at b1
             // everywhere): if 640x480 ids never appear here, they're
@@ -10030,6 +10066,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             drawState.dynamicOffsetCounts[bgSlot] = u32[recWord + 3];
           }
           if (u32[recWord + 1] === 1) self._wgCurBg1 = bgId;
+          if (bgSlot === 1 && self._wgBgTex) {
+            const _bt = self._wgBgTex[bgId];
+            const _bo = _bt != null ? webGpuObjects.textures.get(_bt) : null;
+            frameCapPush(`  BINDTEX  fb#${passFbId} tex#${_bt != null ? _bt : "?"}` +
+              `${_bo && _bo.tex ? " " + _bo.tex.width + "x" + _bo.tex.height : ""}`);
+          }
           if (passFbId === 0 && bgSlot === 1 && self._wgBgTex) {
             currentBackbufferSourceTextureId = self._wgBgTex[bgId] >>> 0;
             // DIAG: what does the backbuffer blit actually sample? Mario Kart
@@ -10170,6 +10212,9 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastVp = `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
               `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`;
           }
+          frameCapPush(`  VIEWPORT fb#${passFbId} ` +
+            `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
+            `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbVpN = (self._wgBbVpN || 0) + 1;
             if (self._wgBbVpN <= 4 || (self._wgBbVpN % 600) === 0) {
@@ -10251,6 +10296,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastSc = `${u32[recWord + 1]},${u32[recWord + 2]}` +
               `+${u32[recWord + 3]}x${u32[recWord + 4]}`;
           }
+          frameCapPush(`  SCISSOR  fb#${passFbId} ${u32[recWord + 1]},${u32[recWord + 2]}` +
+            `+${u32[recWord + 3]}x${u32[recWord + 4]}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbScN = (self._wgBbScN || 0) + 1;
             if (self._wgBbScN <= 4 || (self._wgBbScN % 600) === 0) {
@@ -10280,6 +10327,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
+            frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
@@ -10307,6 +10355,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
           } else if (pass) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
+            frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
@@ -10724,6 +10773,9 @@ function drainWebGpuCmdRing(source = "presentation") {
           endPass("explicit", read);
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
+          frameCapPush("PRESENT");
+          frameCapFinish();
+          self._wgPresentCount = (self._wgPresentCount || 0) + 1;
           diagFrameEnd();
 
           wgpuReplayClassifier?.recordPresentCommand({ recordIndex: read });
