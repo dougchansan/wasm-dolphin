@@ -124,6 +124,53 @@ slower, mean 69.8% -> 61.2%. Large wins (F-Zero GX 23 -> 98) sit beside large
 losses (Shadow the Hedgehog 101 -> 31). Both are scene-dependent; see the
 measurement note in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Wii / Mario Kart Wii: presentation is exonerated (2026-09-01)
+
+Mario Kart Wii renders 2D correctly and 3D as flat rectangles. A whole-frame
+capture (`?framecap=N`) settles where that comes from.
+
+One frame, present #4000, 586 records:
+
+```
+BEGINPASS fb#14 (EFB 640x528)      game renders, ~540 draws
+BEGINPASS fb#93 608x456            EFB->XFB copy, binds tex#14
+BEGINPASS fb#47 2560x1024          vp 0,0+304x456, binds tex#14
+BEGINPASS fb#0 BACKBUFFER 640x480
+  VIEWPORT 0,65+640x350            correct widescreen letterbox
+  BINDTEX  tex#93 608x456          the XFB entry
+  DRAW x1
+PRESENT
+```
+
+**The EFB viewed directly in-race shows the same breakage as the screen.**
+Everything after the EFB carries a defect that already exists in it, so this is
+issue #8 and not a presentation bug.
+
+Ruled out with evidence: backbuffer size (was 320x240 against a 640x480
+request — real, fixed, symptom persists), the XFB->backbuffer blit's geometry
+and buffer choice, the EFB->XFB copy and its source rect, XFB entry population,
+and the XFB RAM fallback (104 cache hits, 0 misses). #15's half-width blit is
+real but targets fb#47, which nothing samples for presentation.
+
+### Diagnostics available
+
+| flag | what it shows |
+| --- | --- |
+| `?efbdiag=1` | blits the EFB colour texture straight to the canvas |
+| `?efbdiag=2` | blits the XFB entry last presented |
+| `?framecap=N` | dumps the Nth present as an ordered pass/draw trace |
+| `?jitverbose=1` | ranks instructions that block JIT compilation |
+
+### Method note
+
+Three separate single-sample readings during this investigation were wrong:
+"the EFB does not contain the 3D world" (the measurement never ran), "presented
+entries are sometimes empty" (a readback artifact from encoder batching), and
+"the XFB entry has no HUD" (a pre-race intro frame compared against an in-race
+one). Each looked decisive. The whole-frame capture exists because piecewise
+probes kept producing mutually inconsistent pictures — which is the signature
+of measuring the wrong thing, not of a subtle bug.
+
 ## Bugs
 
 ### 1. 3D geometry missing while 2D overlays draw — FIXED (patch 0053)
