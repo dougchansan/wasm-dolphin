@@ -9,6 +9,7 @@
 
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createWriteStream, existsSync } from "node:fs";
+import { reapStaleBrowsers } from "./reap-stale-browsers.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createGzip } from "node:zlib";
@@ -267,6 +268,7 @@ const chromiumLaunchArgs = [
   "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
 ];
 
+reapStaleBrowsers();
 const browser = persistBrowserData
   ? await chromium.launchPersistentContext(persistBrowserData, {
       channel: process.env.BROWSER_CHANNEL || "chrome",

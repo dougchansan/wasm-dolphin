@@ -25,6 +25,7 @@
 
 import { mkdir, readdir, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { reapStaleBrowsers } from "./reap-stale-browsers.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -62,6 +63,7 @@ await mkdir(outDir, { recursive: true });
 console.log(`[boot-matrix] ${selected.length} disc(s) · ${durationSeconds}s each · outDir=${outDir}`);
 
 const { chromium } = await importPlaywright();
+reapStaleBrowsers();
 const browser = await chromium.launch({
   channel: process.env.BROWSER_CHANNEL || "chrome",
   headless: !headed,
