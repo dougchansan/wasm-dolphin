@@ -154,6 +154,22 @@ let mounted = false;
 let inputMask = 0;
 let workerOwnsCanvas = false;
 let renderCanvas = null;
+// Desired backbuffer size for the hardware (command-ring) path, learned from
+// the game's own SET_VIEWPORT on fb#0.
+//
+// createWebGpuPresenter is shared by the software and hardware paths, and
+// drawFrameBytesToWebGpu resizes renderCanvas to the FRAME size. Before a disc
+// mounts, the built-in demo scene runs at 320x240 and sizes the canvas to that;
+// the hardware path then renders into the stale 320x240 backbuffer forever,
+// because it never calls drawFrameBytesToWebGpu. The viewport handler clamps
+// the game's 640x480 request down to the pass, so it fails silently at quarter
+// resolution instead of erroring.
+// Dolphin's backbuffer target. index.html declares the visible canvas at this
+// size; the demo scene shrinks it to 320x240 via the shared presenter and the
+// hardware path never restores it.
+const WGPU_BACKBUFFER_W = 640;
+const WGPU_BACKBUFFER_H = 480;
+let wgpuBackbufferSized = false;
 let renderContext = null;
 let renderImageData = null;
 let renderGpu = null;
@@ -9737,6 +9753,40 @@ function drainWebGpuCmdRing(source = "presentation") {
           let colorView;
           if (fbId === 0) {
             webGpuExecStats.beginFb0++;
+            // Grow the backbuffer to what the game actually asked for. Only
+            // ever grows, and only when the size differs, so a game that
+            // legitimately renders small is not disturbed every frame.
+            // ONE-SHOT, and only upward. Driving this from per-frame viewport
+            // requests was tried and reverted: extents reached 944x756, and
+            // resizing the swapchain repeatedly blanked the output entirely
+            // (0.0 visual fps). The size must be stable, so take the page
+            // canvas's intended size once and leave it alone.
+            if (!wgpuBackbufferSized && renderCanvas &&
+                (renderCanvas.width < WGPU_BACKBUFFER_W ||
+                 renderCanvas.height < WGPU_BACKBUFFER_H)) {
+              wgpuBackbufferSized = true;
+              const newW = WGPU_BACKBUFFER_W;
+              const newH = WGPU_BACKBUFFER_H;
+              try {
+                renderCanvas.width = newW;
+                renderCanvas.height = newH;
+                renderGpu.context.configure({
+                  device: renderGpu.device,
+                  format: renderGpu.format,
+                  alphaMode: "opaque",
+                  usage: self.GPUTextureUsage.RENDER_ATTACHMENT |
+                    ((wgpuReplayClassifier || inputReadbackDiagnostics) ?
+                      self.GPUTextureUsage.COPY_SRC : 0) |
+                    (wgpuVisualCadenceEnabled ? self.GPUTextureUsage.TEXTURE_BINDING : 0)
+                });
+                renderGpu.canvasWidth = newW;
+                renderGpu.canvasHeight = newH;
+                console.log(`[bbresize] backbuffer ${newW}x${newH} (game viewport extent)`);
+                postStatus(`wgpu backbuffer resized to ${newW}x${newH}`);
+              } catch (e) {
+                recordRendererError("validation", `backbuffer resize: ${e?.message || e}`);
+              }
+            }
             const cur = renderGpu.context.getCurrentTexture();
             lastBackbufferTexture = cur;
             currentBackbufferSourceTextureId = 0;
@@ -10060,6 +10110,24 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         }
         case WGPU_CMD_OP_SET_VIEWPORT:
+          // DIAG (?efbdiag=1): the backbuffer blit. EFB, the EFB->XFB copy and
+          // the presented entry all verify correct, so the remaining suspect is
+          // how this pass samples that entry. Record the raw requested viewport
+          // for fb#0 against the pass size.
+          if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
+            self._wgBbVpN = (self._wgBbVpN || 0) + 1;
+            if (self._wgBbVpN <= 4 || (self._wgBbVpN % 600) === 0) {
+              const _cv = renderGpu && renderGpu.context && renderGpu.context.canvas;
+              console.log(`[bbcanvas] ctxCanvas=${_cv ? _cv.width + "x" + _cv.height : "?"}` +
+                ` renderCanvas=${typeof renderCanvas !== "undefined" && renderCanvas ?
+                   renderCanvas.width + "x" + renderCanvas.height : "?"}` +
+                ` gpuCfg=${renderGpu ? renderGpu.canvasWidth + "x" + renderGpu.canvasHeight : "?"}`);
+              console.log(`[bbvp] n=${self._wgBbVpN} raw vp=(${f32[recWord + 1].toFixed(1)},` +
+                `${f32[recWord + 2].toFixed(1)})+${f32[recWord + 3].toFixed(1)}x` +
+                `${f32[recWord + 4].toFixed(1)} pass=${passW}x${passH} ` +
+                `src=tex#${currentBackbufferSourceTextureId || 0}`);
+            }
+          }
           if (pass && passW > 0) {
             // WebGPU: x,y>=0; x+w<=W; y+h<=H; 0<=minD<=maxD<=1.
             let vx = f32[recWord + 1], vy = f32[recWord + 2];
@@ -10123,6 +10191,14 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
+          if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
+            self._wgBbScN = (self._wgBbScN || 0) + 1;
+            if (self._wgBbScN <= 4 || (self._wgBbScN % 600) === 0) {
+              console.log(`[bbsc] n=${self._wgBbScN} raw sc=(${u32[recWord + 1]},` +
+                `${u32[recWord + 2]})+${u32[recWord + 3]}x${u32[recWord + 4]} ` +
+                `pass=${passW}x${passH}`);
+            }
+          }
           if (pass && passW > 0 && !DIAG_RASTER_OPEN) {
             let sx = u32[recWord + 1], sy = u32[recWord + 2];
             let sw = u32[recWord + 3], sh = u32[recWord + 4];
