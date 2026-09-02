@@ -7914,6 +7914,8 @@ let DIAG_EFB_TO_CANVAS = false;
 // only ground. If the copy runs after a few hundred EFB draws while the frame
 // issues thousands, it is capturing a half-drawn EFB.
 let diagEfbDrawsThisFrame = 0;
+let diagLastCopyDst = 0;
+let diagLastCopyFrame = -1;
 function diagNoteXfbCopy(fbId) {
   if (!DIAG_EFB_TO_CANVAS) return;
   self._wgXfbCopyN = (self._wgXfbCopyN || 0) + 1;
@@ -7929,6 +7931,7 @@ function diagFrameEnd() {
     console.log(`[xfbtime] frame#${self._wgFrameN} total EFB draws=${diagEfbDrawsThisFrame}`);
   }
   diagEfbDrawsThisFrame = 0;
+  diagBbDrawsThisFrame = 0;
 }
 // Read back the EFB and the texture actually presented, at the same instant,
 // and reduce each to a 4x3 grid of mean RGB. If the grids agree, the XFB entry
@@ -7980,8 +7983,29 @@ function diagDrainGrids() {
     }).catch(() => {});
   }
 }
-function diagTallyDrawTarget(passFbId) {
+// Every draw that lands in the backbuffer, with what it samples and where it
+// puts it. The race frame is composed of mismatched rectangles, which is what
+// several draws sampling different XFB entries into different sub-rects looks
+// like -- Dolphin stitches XFB containers from multiple copies.
+let diagBbDrawsThisFrame = 0;
+function diagNoteBackbufferDraw(srcId, vp, sc) {
   if (!DIAG_EFB_TO_CANVAS) return;
+  diagBbDrawsThisFrame++;
+  self._wgBbDrawN = (self._wgBbDrawN || 0) + 1;
+  if (self._wgBbDrawN <= 12 || (self._wgBbDrawN % 900) === 0) {
+    console.log(`[bbdraw] #${diagBbDrawsThisFrame} src=tex#${srcId || 0} ` +
+                `vp=${vp} sc=${sc} lastCopyDst=tex#${diagLastCopyDst} ` +
+                `${srcId === diagLastCopyDst ? "FRESH" : "STALE"} ` +
+                `copyFrame=${diagLastCopyFrame} nowFrame=${self._wgFrameN || 0}`);
+  }
+}
+// srcId is passed in: currentBackbufferSourceTextureId lives inside the
+// executor closure, and referencing it from this module-level function threw a
+// ReferenceError on every backbuffer draw, swallowed by the executor.
+function diagTallyDrawTarget(passFbId, srcId) {
+  if (!DIAG_EFB_TO_CANVAS) return;
+  if (passFbId === 0)
+    diagNoteBackbufferDraw(srcId, self._wgLastVp || "?", self._wgLastSc || "?");
   if (passFbId === (self._wgEfbColorId || -1)) diagEfbDrawsThisFrame++;
   self._wgDrawByFb = self._wgDrawByFb || new Map();
   self._wgDrawByFb.set(passFbId, (self._wgDrawByFb.get(passFbId) || 0) + 1);
@@ -9787,6 +9811,27 @@ function drainWebGpuCmdRing(source = "presentation") {
                 recordRendererError("validation", `backbuffer resize: ${e?.message || e}`);
               }
             }
+            // Content check on the texture actually about to be presented,
+            // read adjacent to the EFB in the command stream. Triple buffering
+            // means the presented entry legitimately differs from the newest
+            // one, so identity proves nothing -- only content does.
+            if (DIAG_EFB_TO_CANVAS) {
+              self._wgPresGridN = (self._wgPresGridN || 0) + 1;
+              if ((self._wgPresGridN % 240) === 0) {
+                const _src = wgpuLastBackbufferSourceTextureId || 0;
+                if (_src) {
+                  try {
+                    const _enc = ensureEnc();
+                    diagReadTexture(dev, _enc, webGpuObjects.textures.get(_src),
+                                    `PRESENTED(tex#${_src})`, `n=${self._wgPresGridN}`);
+                    diagReadTexture(dev, _enc,
+                                    webGpuObjects.textures.get(self._wgEfbColorId || 0),
+                                    `EFB(tex#${self._wgEfbColorId || 0})`,
+                                    `n=${self._wgPresGridN}`);
+                  } catch (e) {}
+                }
+              }
+            }
             const cur = renderGpu.context.getCurrentTexture();
             lastBackbufferTexture = cur;
             currentBackbufferSourceTextureId = 0;
@@ -9894,8 +9939,14 @@ function drainWebGpuCmdRing(source = "presentation") {
           // executed this frame at that moment. The copy's source rect is
           // correct and the EFB is correct at present time, so if the copy
           // runs early in the frame it captures a half-drawn EFB.
-          if (fbId !== 0 && fbId !== (self._wgEfbColorId || -1))
+          if (fbId !== 0 && fbId !== (self._wgEfbColorId || -1)) {
+            const _d = webGpuObjects.textures.get(fbId);
+            if (_d && _d.tex && _d.tex.width === 608 && _d.tex.height === 456) {
+              diagLastCopyDst = fbId;
+              diagLastCopyFrame = self._wgFrameN || 0;
+            }
             diagNoteXfbCopy(fbId);
+          }
           // The EFB colour pass is the only one with a depth
           // attachment (the fb=47 XFB has none) — track its id so the
           // DIAG path can blit it straight to the canvas.
@@ -10114,6 +10165,10 @@ function drainWebGpuCmdRing(source = "presentation") {
           // the presented entry all verify correct, so the remaining suspect is
           // how this pass samples that entry. Record the raw requested viewport
           // for fb#0 against the pass size.
+          if (passFbId === 0) {
+            self._wgLastVp = `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
+              `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`;
+          }
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbVpN = (self._wgBbVpN || 0) + 1;
             if (self._wgBbVpN <= 4 || (self._wgBbVpN % 600) === 0) {
@@ -10191,6 +10246,10 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           break;
         case WGPU_CMD_OP_SET_SCISSOR:
+          if (passFbId === 0) {
+            self._wgLastSc = `${u32[recWord + 1]},${u32[recWord + 2]}` +
+              `+${u32[recWord + 3]}x${u32[recWord + 4]}`;
+          }
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbScN = (self._wgBbScN || 0) + 1;
             if (self._wgBbScN <= 4 || (self._wgBbScN % 600) === 0) {
@@ -10219,7 +10278,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
               (!passNeedsVertexBuffer || vertexBufferValid)) {
-            diagTallyDrawTarget(passFbId);
+            diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
@@ -10246,7 +10305,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               (!passNeedsVertexBuffer || vertexBufferValid) && indexBufferValid)) {
             webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
           } else if (pass) {
-            diagTallyDrawTarget(passFbId);
+            diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
