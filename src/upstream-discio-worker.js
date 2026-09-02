@@ -1877,7 +1877,8 @@ async function loadCore({
     dolphinCoreLog: Boolean(coreLog),
     // Ranks the instructions that block JIT compilation (?jitverbose=1).
     dolphinWebVerbosePpcJit: Boolean(jitVerbose),
-    dolphinEfbDiag: (DIAG_EFB_TO_CANVAS = Boolean(efbDiag)),
+    dolphinEfbDiag: (DIAG_EFB_TO_CANVAS =
+      (String(efbDiag) === "2" ? 2 : (efbDiag ? 1 : 0))),
     preinitializedWebGPUDevice,
     locateFile: (path) => new URL(path, coreUrl).href,
     print: (message) => postStatus(message),
@@ -10758,8 +10759,17 @@ function drainWebGpuCmdRing(source = "presentation") {
           const visualCadenceSlot = wgpuVisualCadenceEnabled && lastBackbufferTexture
             ? encodeWgpuVisualCadence(ensureEnc(), lastBackbufferTexture)
             : null;
-          if (DIAG_EFB_TO_CANVAS && self._wgEfbColorId) {
-            const efb = webGpuObjects.textures.get(self._wgEfbColorId);
+          // ?efbdiag=1 blits the EFB; ?efbdiag=2 blits the XFB entry the game
+          // last presented. The second answers whether that entry holds the
+          // scene WITHOUT a readback -- readbacks in this pipeline have already
+          // produced one confirmed artifact (an all-zero EFB caused by encoder
+          // batching, not by an empty EFB), so a visual check is worth more
+          // than another grid comparison here.
+          const _diagSrcId = DIAG_EFB_TO_CANVAS === 2
+            ? (wgpuLastBackbufferSourceTextureId || 0)
+            : (self._wgEfbColorId || 0);
+          if (DIAG_EFB_TO_CANVAS && _diagSrcId) {
+            const efb = webGpuObjects.textures.get(_diagSrcId);
             const bs = efb ? ensureBlitState() : null;
             const dpipe = bs ? ensureBlitPipeline(renderGpu.format) : null;
             if (efb && dpipe) {

@@ -1359,7 +1359,9 @@ function requestedCoreLog() {
 // game's real output.
 function requestedEfbDiag() {
   if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("efbdiag") === "1";
+  // "1" blits the EFB to the canvas; "2" blits the XFB entry last presented.
+  const raw = new URLSearchParams(window.location.search).get("efbdiag");
+  return raw === "2" ? 2 : (raw === "1" ? 1 : false);
 }
 
 function requestedCorrectTimeDrift() {
