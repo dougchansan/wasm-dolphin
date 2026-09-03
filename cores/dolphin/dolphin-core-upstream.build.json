@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-09-03T06:38:04.586Z",
-  "coreId": "sha256:4bde9f193af0d808ae2a99222493fd5cb0c7344866aa6ee2bfd8dc48b0a49e90",
+  "createdAt": "2026-09-03T07:34:02.033Z",
+  "coreId": "sha256:af0a05479772d81f78dd37095d1fc15cd4a3c6dbe245b656415c353262f9c47e",
   "repository": {
-    "commit": "2c0ae89513623334c97413d7df2d63907deb9ba6",
-    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M src/upstream-discio-worker.js\n?? page_view.png"
+    "commit": "10a50ec5f5c60d77c9e464b004f22bbe2434f7c7",
+    "status": "M cores/dolphin/dolphin-core-upstream.build.json\n M cores/dolphin/dolphin-core-upstream.wasm\n M provenance/dolphin-core-abi-v1.json\n M src/upstream-discio-worker.js\n M src/upstream-worker-protocol.js\n?? page_view.png"
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
@@ -137,8 +137,8 @@
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12946013,
-      "sha256": "4bde9f193af0d808ae2a99222493fd5cb0c7344866aa6ee2bfd8dc48b0a49e90",
+      "size": 12946268,
+      "sha256": "af0a05479772d81f78dd37095d1fc15cd4a3c6dbe245b656415c353262f9c47e",
       "hashMode": "raw"
     },
     "wasmSections": [
@@ -155,7 +155,7 @@
       {
         "id": 3,
         "size": 12430,
-        "sha256": "f3f678f4720122187ec1268a5b94ff558edf971034816a33555a0ac793d9fffe"
+        "sha256": "30718def610c43f38c338831587e955aaca0de1cfc21029ba36fbb6420a41c73"
       },
       {
         "id": 4,
@@ -180,7 +180,7 @@
       {
         "id": 9,
         "size": 22567,
-        "sha256": "3fa44ab06eb2b87d2653b59931dd46f101e071a7721832a81cd52a2afedaa131"
+        "sha256": "4581440d561e52620a24b37b941e490891b3300eed3942c9516ddf442fdc787d"
       },
       {
         "id": 12,
@@ -189,8 +189,8 @@
       },
       {
         "id": 10,
-        "size": 10455784,
-        "sha256": "f4e45145ee6b5b49bcc60f72cabdcb9bce0c9c091633159fe3a8abdab8195044"
+        "size": 10456039,
+        "sha256": "2c241b1f2a534df4b7fe605c4dcc10d0133631492f8ff3d502f4c4b5879682d6"
       },
       {
         "id": 11,

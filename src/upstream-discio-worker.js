@@ -6160,6 +6160,7 @@ const WGPU_CMD_OP_END_PASS = 21;
 const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
+const WGPU_CMD_OP_CLEAR_RECT = 25;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
 const WGPU_REPLAY_BUDGET_CHECK_RECORDS = 32;
@@ -8043,6 +8044,68 @@ function diagNoteBackbufferDraw(srcId, vp, sc) {
 // srcId is passed in: currentBackbufferSourceTextureId lives inside the
 // executor closure, and referencing it from this module-level function threw a
 // ReferenceError on every backbuffer draw, swallowed by the executor.
+// Scissored clear inside an open render pass.
+//
+// WebGPU's loadOp:clear always clears the whole attachment and ignores
+// setScissorRect, so a sub-rect clear has to be a DRAW. Doing it as a utility
+// draw in the core was tried and reverted -- that path ends and restarts the
+// pass per clear, and Wario World issues ~7,800 a frame. Here the pass stays
+// open: set the scissor, draw one full-screen triangle, restore the scissor.
+//
+// The colour and depth are baked into the shader constant rather than passed in
+// a uniform buffer, so a clear costs no buffer write. Games use very few
+// distinct clear values, so the cache stays small; it is capped regardless.
+const WGPU_CLEAR_PIPELINES = new Map();
+const WGPU_CLEAR_PIPELINE_CAP = 64;
+function ensureClearPipeline(dev, colorFormat, depthFormat, writeColor, writeDepth, rgba, depth) {
+  const key = `${colorFormat}|${depthFormat || "-"}|${writeColor ? 1 : 0}` +
+              `|${writeDepth ? 1 : 0}|${rgba}|${depth.toFixed(6)}`;
+  const hit = WGPU_CLEAR_PIPELINES.get(key);
+  if (hit) return hit;
+  if (WGPU_CLEAR_PIPELINES.size >= WGPU_CLEAR_PIPELINE_CAP) return null;
+  const r = ((rgba >>> 24) & 0xff) / 255;
+  const g = ((rgba >>> 16) & 0xff) / 255;
+  const b = ((rgba >>> 8) & 0xff) / 255;
+  const a = (rgba & 0xff) / 255;
+  const z = Math.min(1, Math.max(0, depth));
+  const wgsl = `
+@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2(-1.0, -3.0), vec2(-1.0, 1.0), vec2(3.0, 1.0));
+  return vec4<f32>(p[i], ${z.toFixed(6)}, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4<f32> {
+  return vec4<f32>(${r.toFixed(6)}, ${g.toFixed(6)}, ${b.toFixed(6)}, ${a.toFixed(6)});
+}`;
+  let pipe = null;
+  try {
+    const mod = dev.createShaderModule({ code: wgsl, label: "dolphin-clearrect" });
+    const desc = {
+      label: "dolphin-clearrect",
+      layout: "auto",
+      vertex: { module: mod, entryPoint: "vs" },
+      primitive: { topology: "triangle-list" }
+    };
+    // Colour must still be written as an attachment even when only depth is
+    // being cleared, otherwise the pipeline is incompatible with the pass.
+    desc.fragment = {
+      module: mod, entryPoint: "fs",
+      targets: [{ format: colorFormat, writeMask: writeColor ? 0xF : 0 }]
+    };
+    if (depthFormat) {
+      desc.depthStencil = {
+        format: depthFormat,
+        depthWriteEnabled: Boolean(writeDepth),
+        depthCompare: "always"
+      };
+    }
+    pipe = dev.createRenderPipeline(desc);
+  } catch (e) {
+    recordRendererError("validation", `clearrect pipeline: ${e?.message || e}`);
+    pipe = null;
+  }
+  WGPU_CLEAR_PIPELINES.set(key, pipe);
+  return pipe;
+}
 function diagTallyDrawTarget(passFbId, srcId) {
   if (!DIAG_EFB_TO_CANVAS) return;
   if (passFbId === 0)
@@ -10298,6 +10361,42 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (drawState) drawState.viewport = [vx, vy, vw, vh, mn, mx];
           }
           break;
+        case WGPU_CMD_OP_CLEAR_RECT: {
+          // Scissored clear inside the open pass: set the scissor, draw one
+          // full-screen triangle with the clear colour/depth baked in, restore
+          // the scissor. The pass is NOT torn down, which is what made the
+          // core-side utility-draw version regress Wario World.
+          if (!pass || passW <= 0) break;
+          const cx = Math.min(u32[recWord + 1], passW - 1);
+          const cy = Math.min(u32[recWord + 2], passH - 1);
+          const cw = Math.max(1, Math.min(u32[recWord + 3], passW - cx));
+          const ch = Math.max(1, Math.min(u32[recWord + 4], passH - cy));
+          const crgba = u32[recWord + 5] >>> 0;
+          const cdepth = f32[recWord + 6];
+          const cflags = u32[recWord + 7] >>> 0;
+          const cpipe = ensureClearPipeline(dev, passColorFmt, passDepthFmt,
+                                            (cflags & 1) !== 0, (cflags & 2) !== 0,
+                                            crgba, cdepth);
+          if (!cpipe) break;
+          try {
+            pass.setScissorRect(cx, cy, cw, ch);
+            pass.setPipeline(cpipe);
+            pass.draw(3, 1, 0, 0);
+            // Restore whatever scissor the game had set, so following draws are
+            // unaffected. Without this the clear's rect leaks into the frame.
+            pass.setScissorRect(0, 0, passW, passH);
+            self._wgClearRectN = (self._wgClearRectN || 0) + 1;
+          } catch (e) {
+            recordRendererError("validation", `clearrect: ${e?.message || e}`);
+          }
+          // The clear replaced the bound pipeline, so the next game draw must
+          // re-issue its own. passHasPipe is the flag the draw path checks;
+          // leaving it set would run that draw with the clear pipeline.
+          passHasPipe = false;
+          passNeedsVertexBuffer = false;
+          self._wgCurPipe = 0;
+          break;
+        }
         case WGPU_CMD_OP_SET_SCISSOR:
           if (passFbId === 0) {
             self._wgLastSc = `${u32[recWord + 1]},${u32[recWord + 2]}` +
@@ -10784,6 +10883,8 @@ function drainWebGpuCmdRing(source = "presentation") {
           if ((self._wgPresentCount || 0) % 600 === 0) {
             const miss = self._wgDummyMissing || 0;
             const fmt = self._wgDummyFormat || 0;
+            const cr = self._wgClearRectN || 0;
+            if (cr) console.log(`[clearrect] executed=${cr} pipelines=${WGPU_CLEAR_PIPELINES.size}`);
             if (miss || fmt) {
               console.log(`[dummytex] missing=${miss} unfilterable=${fmt} ` +
                 `missingIds=${[...(self._wgDummyMissingIds || [])].slice(0, 8).join(",")} ` +
