@@ -7988,6 +7988,29 @@ function vpDiagNoteViewport(near, far) {
   if (vpDiagDone) return;
   vpDiagRaw = [near, far];
 }
+// Raw (producer) vs clamped (WebGPU-legal) viewport rect. WebGPU requires the
+// rect to lie inside the attachment; Vulkan/D3D allow it to hang outside via
+// the guard band, and Dolphin relies on that. The clamp below SHRINKS w/h,
+// which rescales the scene instead of cropping it -- so any draw where raw and
+// clamped differ is rendered at the wrong scale.
+let vpDiagRect = null;
+// Set when the requested viewport did not fit the attachment and the clamp
+// below had to shrink w/h. Upstream (Vulkan/D3D guard band) would render the
+// draw at full scale and let it clip at the framebuffer edge; we instead
+// squeeze the whole draw into the surviving rect, painting a shrunken copy of
+// its content. VP_SKIP_RESCALED omits those draws instead -- strictly less
+// wrong than drawing them at the wrong scale, and it isolates the artifact.
+const VP_SKIP_RESCALED = false;
+let vpRescaled = false;
+function vpDiagNoteRect(rawX, rawY, rawW, rawH, cx, cy, cw, ch, passW, passH) {
+  if (vpDiagDone) return;
+  const same = rawX === cx && rawY === cy && rawW === cw && rawH === ch;
+  vpDiagRect = same
+    ? `vp(${cx.toFixed(0)},${cy.toFixed(0)} ${cw.toFixed(0)}x${ch.toFixed(0)}) fb=${passW}x${passH}`
+    : `vp RAW(${rawX.toFixed(0)},${rawY.toFixed(0)} ${rawW.toFixed(0)}x${rawH.toFixed(0)})` +
+      ` -> CLAMPED(${cx.toFixed(0)},${cy.toFixed(0)} ${cw.toFixed(0)}x${ch.toFixed(0)})` +
+      ` fb=${passW}x${passH}  <-- RESCALED`;
+}
 function vpDiagNoteDraw(fbId, pipelineId) {
   if (vpDiagDone) return;
   vpDiagDraws++;
@@ -8000,7 +8023,7 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     range = `${n.toFixed(6)},${f.toFixed(6)}`;
     cls = Math.abs(n - f) < 1e-6 ? "ZEROWIDTH" : (n > f ? "INVERTED" : "normal");
   }
-  const key = `fb#${fbId} vp(${range}) ${cls} depth=${cmp}`;
+  const key = `fb#${fbId} ${vpDiagRect || "vp?"} z(${range}) ${cls} depth=${cmp}`;
   vpDiagTally.set(key, (vpDiagTally.get(key) || 0) + 1);
 }
 // Called from SUBMIT_PRESENT, before the present counter increments, so the
@@ -10447,7 +10470,11 @@ function drainWebGpuCmdRing(source = "presentation") {
                   `span=${span.toFixed(5)} ${cls}`);
               }
             }
+            vpRescaled = f32[recWord + 3] !== vw || f32[recWord + 4] !== vh;
             vpDiagNoteViewport(f32[recWord + 5], f32[recWord + 6]);
+            vpDiagNoteRect(f32[recWord + 1], f32[recWord + 2],
+                           f32[recWord + 3], f32[recWord + 4],
+                           vx, vy, vw, vh, passW, passH);
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));
@@ -10536,6 +10563,10 @@ function drainWebGpuCmdRing(source = "presentation") {
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (VP_SKIP_RESCALED && vpRescaled) {
+              self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
+              break;
+            }
             frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
@@ -10565,6 +10596,10 @@ function drainWebGpuCmdRing(source = "presentation") {
           } else if (pass) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (VP_SKIP_RESCALED && vpRescaled) {
+              self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
+              break;
+            }
             frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
