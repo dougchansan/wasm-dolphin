@@ -7955,6 +7955,92 @@ function frameCapFinish() {
   for (const r of frameCapRows) console.log(`[framecap] ${r}`);
   console.log("[framecap] END");
 }
+
+// Per-draw viewport depth range, tallied over the one ?framecap=N frame.
+//
+// The question this answers: does a single pass contain draws with DIFFERENT
+// viewport depth ranges? The consumer applies ONE depth convention per frame
+// -- depthClearValue 0.0 plus REVZ_COMPARE_FLIP_ALL -- so if the ranges are
+// uniform that convention can be right for every draw, and if they are mixed
+// it cannot be right for all of them.
+//
+// This must read the values BEFORE the `mn > mx` swap that Dawn forces, since
+// the swap is what destroys the reversal signal.
+//
+// Why it can vary at all: with bSupportsReversedDepthRange=false AND
+// bSupportsDepthClamp=false, VertexShaderManager::UseVertexDepthRange() returns
+// false unconditionally (it bails at the depth-clamp check), so BPFunctions
+// skips the block that would pin min/max to [0, MAX_EFB_DEPTH] and emits the
+// game's own farZ/zRange instead. zRange < 0 then yields near > far.
+//
+// Deliberately NOT gated on ?framecap: that plumbing runs through core-host ->
+// adapter -> worker payload, and a value that fails to arrive makes the probe
+// silently print nothing, which reads identically to "the pass is uniform".
+// The trigger is the consumer's own present counter instead, so the probe
+// cannot no-op without saying so.
+const VPDIAG_EVERY = 500;  // dump a tally every Nth present ...
+const VPDIAG_UNTIL = 6000; // ... up to here, so a scene change can't be missed
+let vpDiagRaw = null;      // [near, far] as the producer sent them
+let vpDiagTally = new Map();
+let vpDiagDraws = 0;
+let vpDiagDone = false;
+function vpDiagNoteViewport(near, far) {
+  if (vpDiagDone) return;
+  vpDiagRaw = [near, far];
+}
+function vpDiagNoteDraw(fbId, pipelineId) {
+  if (vpDiagDone) return;
+  vpDiagDraws++;
+  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
+  const cmp = tpl && tpl.depthBase ? tpl.depthBase.depthCompare : "none";
+  let range = "unset";
+  let cls = "unset";
+  if (vpDiagRaw) {
+    const [n, f] = vpDiagRaw;
+    range = `${n.toFixed(6)},${f.toFixed(6)}`;
+    cls = Math.abs(n - f) < 1e-6 ? "ZEROWIDTH" : (n > f ? "INVERTED" : "normal");
+  }
+  const key = `fb#${fbId} vp(${range}) ${cls} depth=${cmp}`;
+  vpDiagTally.set(key, (vpDiagTally.get(key) || 0) + 1);
+}
+// Called from SUBMIT_PRESENT, before the present counter increments, so the
+// tally holds exactly the draws of the frame being presented.
+function vpDiagPresent() {
+  if (vpDiagDone) return;
+  const n = self._wgPresentCount || 0;
+  if (n === 0) {
+    console.log(`[vpdiag] armed, dumping every ${VPDIAG_EVERY} presents ` +
+                `up to #${VPDIAG_UNTIL}`);
+  }
+  if (n > 0 && n % VPDIAG_EVERY === 0) {
+    vpDiagFinish(n);
+    if (n >= VPDIAG_UNTIL) { vpDiagDone = true; return; }
+  }
+  vpDiagTally.clear();
+  vpDiagDraws = 0;
+}
+function vpDiagFinish(present) {
+  console.log(`[vpdiag] present #${present}: ${vpDiagDraws} draws, ` +
+              `${vpDiagTally.size} distinct (framebuffer, depth range, compare) tuples`);
+  const rows = [...vpDiagTally.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [key, n] of rows) console.log(`[vpdiag] ${String(n).padStart(5)}x  ${key}`);
+  // The headline: is any single pass internally mixed?
+  const byFb = new Map();
+  for (const [key, n] of rows) {
+    const fb = key.slice(0, key.indexOf(" "));
+    if (!byFb.has(fb)) byFb.set(fb, new Map());
+    const cls = key.includes("INVERTED") ? "INVERTED"
+      : (key.includes("ZEROWIDTH") ? "ZEROWIDTH"
+        : (key.includes("unset") ? "unset" : "normal"));
+    byFb.get(fb).set(cls, (byFb.get(fb).get(cls) || 0) + n);
+  }
+  for (const [fb, classes] of byFb) {
+    const parts = [...classes.entries()].map(([c, n]) => `${c}=${n}`).join(" ");
+    console.log(`[vpdiag] ${fb} ${parts}` +
+                (classes.size > 1 ? "   <-- MIXED depth conventions in one pass" : ""));
+  }
+  console.log("[vpdiag] END");
+}
 let diagEfbDrawsThisFrame = 0;
 let diagLastCopyDst = 0;
 let diagLastCopyFrame = -1;
@@ -8146,7 +8232,22 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // applied uniformly via REVZ_COMPARE_FLIP_ALL below). One convention
 // for every draw in every pass ⇒ the §28aq mixed-pass flicker is
 // structurally impossible AND 3D/title renders (matches flag=true).
-const REVZ_COMPARE_FLIP = true;
+// §vpdiag EXPERIMENT: the per-draw viewport tally (vpDiagNoteDraw) shows every
+// EFB viewport in Mario Kart Wii arrives NON-inverted -- (0,0.84), (0.84,0.89),
+// (0.89,0.99) -- never near>far. So every pass is normal-Z, and by the rule
+// stated at the depthClearValue site ("normal-Z => far 1.0") the clear should
+// be 1.0 with the GX compare left alone. The 0.0 + flip-everything convention
+// below is the reverse-Z one, and applying it to normal-Z passes inverts
+// occlusion for exactly the depth-tested (3D) draws while leaving depth=none
+// (2D/HUD/blit) draws correct -- the reported symptom.
+//
+// The earlier "dcv=1.0/unflipped was backwards = black" note rests on
+// [s28at-vp], which (a) reported a TRANSFORMED 1-x viewport for a different
+// producer configuration and (b) carries an `s28` tag, which
+// diagnostic-log-filter.js drops -- so its output never reached the captured
+// console. Retesting under the current flag=false producer.
+const GX_NATIVE_DEPTH = true;
+const REVZ_COMPARE_FLIP = !GX_NATIVE_DEPTH;
 // §28aw: decisive dark-menu experiment — force FS textureSampleBias
 // array-layer to 0 (menu textures are single-layer, bound 2d-array;
 // a non-zero texgen layer ⇒ out-of-range sample ⇒ black). Gated so
@@ -8183,7 +8284,7 @@ const S28BF_SHOW_UV = false;
 // §28at: apply the compare flip uniformly (drop the per-pass `revZ`
 // gate). The single reverse-Z convention is correct for every
 // rzRelevant draw now that flag=false made all viewports uniform.
-const REVZ_COMPARE_FLIP_ALL = true;
+const REVZ_COMPARE_FLIP_ALL = !GX_NATIVE_DEPTH;
 // DIAGNOSTIC (revertible): force cullMode "none" + skip scissor so no
 // primitive is culled/scissored. With EFB→canvas: geometry appears ⇒
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
@@ -9863,7 +9964,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           // compare for ALL rzRelevant draws (uniform — see
           // REVZ_COMPARE_FLIP). dcv=1.0/unflipped was backwards = black;
           // §28as's dcv=0.0-but-unflipped was the half-right mismatch.
-          const dcv = 0.0;
+          const dcv = GX_NATIVE_DEPTH ? 1.0 : 0.0;
           // §28aq DISCRIMINATING PROBE: record the revZ baked into
           // this pass's depthClearValue; the SET_VIEWPORT handler
           // logs when a later viewport in the SAME pass disagrees
@@ -10346,6 +10447,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                   `span=${span.toFixed(5)} ${cls}`);
               }
             }
+            vpDiagNoteViewport(f32[recWord + 5], f32[recWord + 6]);
             let mn = f32[recWord + 5], mx = f32[recWord + 6];
             mn = Math.min(1, Math.max(0, mn));
             mx = Math.min(1, Math.max(0, mx));
@@ -10433,6 +10535,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (pass && passHasPipe && bgValid[0] && bgValid[1] && bgValid[2] &&
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
+            vpDiagNoteDraw(passFbId, self._wgCurPipe);
             frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
@@ -10461,6 +10564,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             webGpuExecStats.skipDraw = (webGpuExecStats.skipDraw || 0) + 1;
           } else if (pass) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
+            vpDiagNoteDraw(passFbId, self._wgCurPipe);
             frameCapPush(`  DRAW     fb#${passFbId}`);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
@@ -10880,6 +10984,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           frameCapPush("PRESENT");
+          vpDiagPresent();
           if ((self._wgPresentCount || 0) % 600 === 0) {
             const miss = self._wgDummyMissing || 0;
             const fmt = self._wgDummyFormat || 0;
