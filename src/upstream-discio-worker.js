@@ -8000,6 +8000,41 @@ let vpDiagRect = null;
 // SAME offset the whole scene renders with one transform, which looks like a
 // handful of giant flat surfaces -- i.e. the reported zoom.
 let vpDiagVsOffsets = new Set();
+// Distinct projection matrices seen in one frame. VertexShaderConstants puts
+// projection[4] at byte 128 (16B header + 6 float4 posnormalmatrix). Reading it
+// at upload answers whether the backend is handed a sane perspective matrix --
+// if it is, the transform inputs are right and the zoom is downstream of them.
+// Tagged [vpdiag] deliberately: the pre-existing dump here is [webgpu-DIAG-ub],
+// which diagnostic-log-filter.js drops, so its output never reaches a captured
+// console.
+const VS_CONSTANTS_PROJ_OFFSET = 128;
+let vpDiagProj = new Map();
+let vpDiagPnm = new Map();
+let vpDiagXf = new Map();
+let vpDiagPcc = new Map();
+function vpDiagNoteUpload(bytes, len) {
+  if (vpDiagDone) return;
+  if (len < 4000 || len > 4200) return;            // VS constants are ~4112 B
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset + VS_CONSTANTS_PROJ_OFFSET, 16);
+  const key = Array.from(f, (v) => v.toFixed(3)).join(",");
+  vpDiagProj.set(key, (vpDiagProj.get(key) || 0) + 1);
+  // posnormalmatrix: 3 float4 rows of the position (modelview) matrix at byte
+  // 32. A correct race camera has a rotation part with magnitudes <= 1 and a
+  // translation in world units; a hugely scaled one magnifies the world, which
+  // is what the zoom would look like given a correct projection.
+  const g = new Float32Array(bytes.buffer, bytes.byteOffset + 32, 12);
+  const pk = Array.from(g, (v) => v.toFixed(2)).join(",");
+  vpDiagPnm.set(pk, (vpDiagPnm.get(pk) || 0) + 1);
+  // transformmatrices[0] at byte 1280 -- what posmtx-indexed geometry (most of
+  // the 3D world) actually transforms through -- plus pixelcentercorrection
+  // (3840) and the VS's own idea of the viewport size (3856).
+  const t = new Float32Array(bytes.buffer, bytes.byteOffset + 1280, 12);
+  vpDiagXf.set(Array.from(t, (v) => v.toFixed(2)).join(","),
+    (vpDiagXf.get(Array.from(t, (v) => v.toFixed(2)).join(",")) || 0) + 1);
+  const c = new Float32Array(bytes.buffer, bytes.byteOffset + 3840, 6);
+  vpDiagPcc.set(Array.from(c, (v) => v.toFixed(3)).join(","),
+    (vpDiagPcc.get(Array.from(c, (v) => v.toFixed(3)).join(",")) || 0) + 1);
+}
 function vpDiagNoteVsOffset(off) {
   if (vpDiagDone) return;
   if (vpDiagVsOffsets.size < 4096) vpDiagVsOffsets.add(off >>> 0);
@@ -8052,10 +8087,43 @@ function vpDiagPresent() {
   vpDiagTally.clear();
   vpDiagDraws = 0;
   vpDiagVsOffsets.clear();
+  vpDiagProj.clear();
+  vpDiagPnm.clear();
+  vpDiagXf.clear();
+  vpDiagPcc.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
               `constant offsets across ${vpDiagDraws} draws`);
+  const projRows = [...vpDiagProj.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  console.log(`[vpdiag] present #${present}: ${vpDiagProj.size} distinct projections`);
+  for (const [k, n] of [...vpDiagPcc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+    const v = k.split(",");
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x pcc[${v.slice(0, 4).join(" ")}]` +
+                ` vsViewport[${v.slice(4, 6).join(" ")}]`);
+  }
+  for (const [k, n] of [...vpDiagXf.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+    const v = k.split(",");
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x xf0` +
+      ` [${v.slice(0, 4).join(" ")}] [${v.slice(4, 8).join(" ")}] [${v.slice(8, 12).join(" ")}]`);
+  }
+  const pnmRows = [...vpDiagPnm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  console.log(`[vpdiag] present #${present}: ${vpDiagPnm.size} distinct modelviews`);
+  for (const [k, n] of pnmRows) {
+    const v = k.split(",");
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x pnm` +
+      ` [${v.slice(0, 4).join(" ")}]` +
+      ` [${v.slice(4, 8).join(" ")}]` +
+      ` [${v.slice(8, 12).join(" ")}]`);
+  }
+  for (const [k, n] of projRows) {
+    const v = k.split(",");
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x proj` +
+      ` [${v.slice(0, 4).join(" ")}]` +
+      ` [${v.slice(4, 8).join(" ")}]` +
+      ` [${v.slice(8, 12).join(" ")}]` +
+      ` [${v.slice(12, 16).join(" ")}]`);
+  }
   console.log(`[vpdiag] present #${present}: ${vpDiagDraws} draws, ` +
               `${vpDiagTally.size} distinct (framebuffer, depth range, compare) tuples`);
   const rows = [...vpDiagTally.entries()].sort((a, b) => b[1] - a[1]);
@@ -9401,6 +9469,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             // @byte128=projection. Zeros here ⇒ upload path broken;
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
+            vpDiagNoteUpload(uploadSource, len);
             const bid = u32[recWord + 1];
             self._wgUbN = (self._wgUbN || 0) + 1;
             // First few + periodic so steady-state UBO uploads are
