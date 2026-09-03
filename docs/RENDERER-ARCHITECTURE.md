@@ -131,7 +131,31 @@ all.
 Ranked by whether the divergence can produce the observed split -- 2D correct,
 3D flat.
 
-### 3.1 MEASURED: the consumer applies the reverse-Z convention to normal-Z passes
+### 3.1 CORRECTION: the reverse-Z convention was right; my reading of it was not
+
+**Two falsifications live here. The first hypothesis (WebGPU cannot express an
+inverted viewport) was wrong, and so was the conclusion I drew from the
+measurement that replaced it.**
+
+The per-draw tally below is accurate: every EFB viewport arrives non-inverted.
+I read that as "these passes are normal-Z, so the consumer's clear-to-0.0 and
+global compare flip are wrong". That inference does not follow.
+
+`BPFunctions` emits `near_depth = 1 - max_depth`, `far_depth = 1 - min_depth`.
+The `1-x` reverses the sense: the game's near plane lands at the viewport's
+*larger* value. Larger depth means nearer -- reverse-Z -- which is precisely
+what clear-to-0.0 plus a flipped compare assumes. A viewport arriving with
+near < far is what reverse-Z looks like *after* that transform, not evidence
+against it.
+
+The measured consequence of inverting it: Mario Kart Wii's world sits at
+`z(0.00,0.84)` and its HUD at `z(0.89,0.99)`, so the HUD is nearer. Under the
+"corrected" convention the world occludes the HUD and the pause menu and
+controller overlay disappear from the frame entirely. Restoring the original
+convention brings them back, matching the software reference. `GX_NATIVE_DEPTH`
+stays in the consumer as a switch, defaulting false.
+
+### The measurement itself (still valid)
 
 **The earlier hypothesis in this section -- that GX programs inverted viewport
 depth ranges which WebGPU cannot express -- was falsified by measurement on

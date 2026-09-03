@@ -8011,6 +8011,19 @@ const VS_CONSTANTS_PROJ_OFFSET = 128;
 let vpDiagProj = new Map();
 let vpDiagPnm = new Map();
 let vpDiagXf = new Map();
+// Vertices/indices actually handed to the GPU in one frame. Dolphin's own
+// prim counter says how much geometry it thinks it submitted; if the consumer
+// draws far fewer than ~3 indices per primitive, the loss is in our path.
+let vpDiagVerts = 0;
+let vpDiagIdx = 0;
+// The last draws of a frame are what ends up on top, so a frame that looks
+// like a few giant flat regions is described by its tail, not its totals.
+let vpDiagTail = [];
+function vpDiagNoteTail(entry) {
+  if (vpDiagDone) return;
+  vpDiagTail.push(entry);
+  if (vpDiagTail.length > 12) vpDiagTail.shift();
+}
 let vpDiagPcc = new Map();
 function vpDiagNoteUpload(bytes, len) {
   if (vpDiagDone) return;
@@ -8069,6 +8082,11 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     cls = Math.abs(n - f) < 1e-6 ? "ZEROWIDTH" : (n > f ? "INVERTED" : "normal");
   }
   const key = `fb#${fbId} ${vpDiagRect || "vp?"} z(${range}) ${cls} depth=${cmp}`;
+  const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
+  const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
+  vpDiagNoteTail(`fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp}` +
+    ` tex#${texId != null ? texId : "?"}` +
+    `${texObj && texObj.tex ? ` ${texObj.tex.width}x${texObj.tex.height}` : ""}`);
   vpDiagTally.set(key, (vpDiagTally.get(key) || 0) + 1);
 }
 // Called from SUBMIT_PRESENT, before the present counter increments, so the
@@ -8090,11 +8108,18 @@ function vpDiagPresent() {
   vpDiagProj.clear();
   vpDiagPnm.clear();
   vpDiagXf.clear();
+  vpDiagVerts = 0;
+  vpDiagIdx = 0;
+  vpDiagTail = [];
   vpDiagPcc.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
               `constant offsets across ${vpDiagDraws} draws`);
+  console.log(`[vpdiag] present #${present}: ${vpDiagVerts} vertices + ` +
+              `${vpDiagIdx} indices drawn (~${Math.round(vpDiagIdx / 3)} indexed tris)`);
+  console.log(`[vpdiag] present #${present}: last ${vpDiagTail.length} draws, in order`);
+  for (const e of vpDiagTail) console.log(`[vpdiag]   ${e}`);
   const projRows = [...vpDiagProj.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   console.log(`[vpdiag] present #${present}: ${vpDiagProj.size} distinct projections`);
   for (const [k, n] of [...vpDiagPcc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
@@ -8336,21 +8361,27 @@ const DIAG_DEPTH_ALWAYS = false;  // §28ag: bisect done — dark 1P menu is NOT
 // applied uniformly via REVZ_COMPARE_FLIP_ALL below). One convention
 // for every draw in every pass ⇒ the §28aq mixed-pass flicker is
 // structurally impossible AND 3D/title renders (matches flag=true).
-// §vpdiag EXPERIMENT: the per-draw viewport tally (vpDiagNoteDraw) shows every
-// EFB viewport in Mario Kart Wii arrives NON-inverted -- (0,0.84), (0.84,0.89),
-// (0.89,0.99) -- never near>far. So every pass is normal-Z, and by the rule
-// stated at the depthClearValue site ("normal-Z => far 1.0") the clear should
-// be 1.0 with the GX compare left alone. The 0.0 + flip-everything convention
-// below is the reverse-Z one, and applying it to normal-Z passes inverts
-// occlusion for exactly the depth-tested (3D) draws while leaving depth=none
-// (2D/HUD/blit) draws correct -- the reported symptom.
+// GX_NATIVE_DEPTH: FALSIFIED, kept as a switch because it is the cheapest way
+// to re-run the experiment.
 //
-// The earlier "dcv=1.0/unflipped was backwards = black" note rests on
-// [s28at-vp], which (a) reported a TRANSFORMED 1-x viewport for a different
-// producer configuration and (b) carries an `s28` tag, which
-// diagnostic-log-filter.js drops -- so its output never reached the captured
-// console. Retesting under the current flag=false producer.
-const GX_NATIVE_DEPTH = true;
+// The per-draw tally showed every EFB viewport arrives non-inverted -- (0,0.84),
+// (0.84,0.89), (0.89,0.99) -- and I read that as "these passes are normal-Z, so
+// clear to 1.0 and leave the GX compare alone". That inference was wrong.
+//
+// BPFunctions emits near_depth = 1 - max_depth and far_depth = 1 - min_depth,
+// so the viewport REVERSES depth: the game's near plane (min_depth) lands at
+// the viewport's LARGER value and its far plane at the smaller one. Larger
+// depth therefore means nearer, which is reverse-Z, which is exactly what the
+// clear-to-0.0-plus-flipped-compare convention below assumes. The viewport
+// arriving with near < far is what reverse-Z looks like after that 1-x, not
+// evidence against it.
+//
+// Measured consequence of getting it backwards: Mario Kart Wii's world sits at
+// z(0.00,0.84) and its HUD at z(0.89,0.99), i.e. the HUD is nearer. With
+// GX_NATIVE_DEPTH the world occludes the HUD and the pause menu and controller
+// overlay vanish entirely; with it false they render and match the software
+// reference frame.
+const GX_NATIVE_DEPTH = false;
 const REVZ_COMPARE_FLIP = !GX_NATIVE_DEPTH;
 // §28aw: decisive dark-menu experiment — force FS textureSampleBias
 // array-layer to 0 (menu textures are single-layer, bound 2d-array;
@@ -10651,6 +10682,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               break;
             }
             frameCapPush(`  DRAW     fb#${passFbId}`);
+            if (!vpDiagDone) vpDiagVerts += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
@@ -10684,6 +10716,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               break;
             }
             frameCapPush(`  DRAW     fb#${passFbId}`);
+            if (!vpDiagDone) vpDiagIdx += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
