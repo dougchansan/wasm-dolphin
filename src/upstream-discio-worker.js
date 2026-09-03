@@ -8030,6 +8030,63 @@ let vpDiagTail = [];
 // this decisive it has to read the batch's declared stride and attribute
 // offsets from the pipeline config instead of assuming them.
 let vpDiagVtx = new Map();
+const vpDiagPipeVtx = new Map();     // pipelineId -> {stride, pos:{format,offset}}
+let vpDiagLastVtxBytes = null;       // head of the most recent vertex upload
+let vpDiagLastVtxLen = 0;
+// Only the FIRST draw after a vertex upload is a sound pairing of that upload
+// with a pipeline: one upload serves many subsequent draws, which read it at
+// their own base-vertex offsets and say nothing about its total length.
+let vpDiagVtxFresh = false;
+const VPDIAG_FMT_READ = {
+  float32: (dv, o) => [dv.getFloat32(o, true)],
+  float32x2: (dv, o) => [dv.getFloat32(o, true), dv.getFloat32(o + 4, true)],
+  float32x3: (dv, o) => [dv.getFloat32(o, true), dv.getFloat32(o + 4, true),
+                         dv.getFloat32(o + 8, true)],
+  float32x4: (dv, o) => [dv.getFloat32(o, true), dv.getFloat32(o + 4, true),
+                         dv.getFloat32(o + 8, true), dv.getFloat32(o + 12, true)]
+};
+let vpDiagStrideBad = 0;
+let vpDiagStrideOk = 0;
+let vpDiagPosBad = 0;
+let vpDiagPosOk = 0;
+// Validate the most recent vertex upload against the layout the bound pipeline
+// actually declares. Two independent checks:
+//   1. the upload length must be a whole number of strides (the producer rounds
+//      vbytes up to 4, so a remainder of 0..3 is expected);
+//   2. the Position attribute, decoded at its declared offset and format, must
+//      be finite and of plausible model-space magnitude.
+// A stride mismatch means the pipeline and the data disagree about the vertex
+// size, which fetches every attribute from the wrong bytes.
+function vpDiagCheckVertex(pipelineId) {
+  if (vpDiagDone || !vpDiagLastVtxBytes) return;
+  const lay = vpDiagPipeVtx.get(pipelineId);
+  if (!lay || !lay.stride) return;
+  const fresh = vpDiagVtxFresh;
+  vpDiagVtxFresh = false;
+  if (!fresh) { /* not this upload's batch; stride says nothing */ }
+  else if (vpDiagLastVtxLen % lay.stride <= 3) vpDiagStrideOk++;
+  else {
+    if (vpDiagStrideBad === 0) {
+      console.log(`[vpdiag] STRIDE MISMATCH pipe=${pipelineId} stride=${lay.stride} ` +
+                  `uploadLen=${vpDiagLastVtxLen} rem=${vpDiagLastVtxLen % lay.stride}`);
+    }
+    vpDiagStrideBad++;
+  }
+  const pos = lay.pos;
+  if (!pos) return;
+  const rd = VPDIAG_FMT_READ[pos.format];
+  if (!rd || pos.offset + 16 > vpDiagLastVtxBytes.byteLength) return;
+  const dv = new DataView(vpDiagLastVtxBytes.buffer, vpDiagLastVtxBytes.byteOffset);
+  const v = rd(dv, pos.offset);
+  if (v.every((x) => Number.isFinite(x) && Math.abs(x) < 1e6)) vpDiagPosOk++;
+  else {
+    if (vpDiagPosBad === 0) {
+      console.log(`[vpdiag] BAD POSITION pipe=${pipelineId} fmt=${pos.format} ` +
+                  `off=${pos.offset} stride=${lay.stride} v=[${v.join(",")}]`);
+    }
+    vpDiagPosBad++;
+  }
+}
 function vpDiagNoteVertexUpload(bytes, len) {
   if (vpDiagDone || len < 12) return;
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, 3);
@@ -8100,6 +8157,7 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     cls = Math.abs(n - f) < 1e-6 ? "ZEROWIDTH" : (n > f ? "INVERTED" : "normal");
   }
   const key = `fb#${fbId} ${vpDiagRect || "vp?"} z(${range}) ${cls} depth=${cmp}`;
+  vpDiagCheckVertex(pipelineId);
   const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
   const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
   vpDiagNoteTail(`fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp}` +
@@ -8130,6 +8188,8 @@ function vpDiagPresent() {
   vpDiagIdx = 0;
   vpDiagTail = [];
   vpDiagVtx.clear();
+  vpDiagStrideOk = 0; vpDiagStrideBad = 0;
+  vpDiagPosOk = 0; vpDiagPosBad = 0;
   vpDiagPcc.clear();
 }
 function vpDiagFinish(present) {
@@ -8139,6 +8199,8 @@ function vpDiagFinish(present) {
               `${vpDiagIdx} indices drawn (~${Math.round(vpDiagIdx / 3)} indexed tris)`);
   const bad = [...vpDiagVtx.entries()].filter(([k]) => k.startsWith("BAD"));
   const badN = bad.reduce((a, [, n]) => a + n, 0);
+  console.log(`[vpdiag] present #${present}: stride ok=${vpDiagStrideOk} ` +
+              `bad=${vpDiagStrideBad} | position ok=${vpDiagPosOk} bad=${vpDiagPosBad}`);
   console.log(`[vpdiag] present #${present}: ${vpDiagVtx.size} distinct first-vertices, ` +
               `${badN} from non-finite/huge batches`);
   for (const [k, n] of [...vpDiagVtx.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
@@ -8451,6 +8513,13 @@ const REVZ_COMPARE_FLIP_ALL = !GX_NATIVE_DEPTH;
 // it was rasterization state (cull/scissor); still black ⇒ VS math /
 // vertex fetch / clip-space.
 const DIAG_RASTER_OPEN = false;  // §28w: cull CONCLUSIVELY ruled out for the 3D region (clean A-only running repro)
+// Cull-only variant. DIAG_RASTER_OPEN also disables the scissor, so it cannot
+// separate the two. The §28w "conclusively ruled out" above was reached by
+// comparing runs driven by the harness's random input script, which diverge
+// into different scenes -- the methodology behind three retractions in
+// docs/webgpu-hardware-renderer-bugs.md. Re-testable now against the
+// deterministic save state.
+const DIAG_CULL_NONE = false;
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
@@ -9527,7 +9596,14 @@ function drainWebGpuCmdRing(source = "presentation") {
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
             vpDiagNoteUpload(uploadSource, len);
-          if (uploadRole === 3) vpDiagNoteVertexUpload(uploadSource, len);
+          if (uploadRole === 3) {
+            vpDiagNoteVertexUpload(uploadSource, len);
+            if (!vpDiagDone) {
+              vpDiagLastVtxBytes = uploadSource.slice(0, Math.min(len, 256));
+              vpDiagLastVtxLen = len;
+              vpDiagVtxFresh = true;
+            }
+          }
             const bid = u32[recWord + 1];
             self._wgUbN = (self._wgUbN || 0) + 1;
             // First few + periodic so steady-state UBO uploads are
@@ -11990,6 +12066,15 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     });
   }
 
+  // Layout-aware vertex validation (see vpDiagCheckVertex). Keep the declared
+  // stride and the Position attribute (ShaderAttrib::Position == 0) so a draw
+  // can be checked against the bytes that were actually uploaded, rather than
+  // assuming a leading float32x3.
+  vpDiagPipeVtx.set(pipelineId, {
+    stride,
+    pos: attributes.find((a) => a.shaderLocation === 0) || null
+  });
+
   // §28ap: cap 24→1200 so the late-created MENU pipelines (id≈16000+,
   // fs#16081) are captured — compare their serialized vertex
   // attributes (esp. the TexCoord0 = @location(8) entry the menu VS
@@ -12051,7 +12136,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
       // for the VS Y-flip so Dolphin's cull semantics are correct;
       // cull-none draws (boot/text/2D UI) are unaffected.
       frontFace: "cw",
-      cullMode: DIAG_RASTER_OPEN ? "none" : (CULL[cullCode] || "none")
+      cullMode: (DIAG_RASTER_OPEN || DIAG_CULL_NONE) ? "none" : (CULL[cullCode] || "none")
     },
     multisample: { count: 1 }
   };
