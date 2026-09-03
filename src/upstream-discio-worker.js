@@ -8019,6 +8019,24 @@ let vpDiagIdx = 0;
 // The last draws of a frame are what ends up on top, so a frame that looks
 // like a few giant flat regions is described by its tail, not its totals.
 let vpDiagTail = [];
+// First vertex of each vertex-buffer upload (BufferUploadRole::Vertex = 3).
+//
+// AMBIGUOUS AS WRITTEN -- read the result with care. It assumes position is a
+// leading float32x3, which is only true for some vertex formats. A batch whose
+// position is float32x2 puts a packed colour where this reads z, and a unorm8x4
+// colour reinterpreted as a float is a huge or denormal value. So the "BAD"
+// rows below (sane x, sane y, |z| ~ 1e38) are exactly what a 2D format looks
+// like through this lens, and are NOT evidence of corrupt geometry. To make
+// this decisive it has to read the batch's declared stride and attribute
+// offsets from the pipeline config instead of assuming them.
+let vpDiagVtx = new Map();
+function vpDiagNoteVertexUpload(bytes, len) {
+  if (vpDiagDone || len < 12) return;
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset, 3);
+  const bad = ![...f].every((v) => Number.isFinite(v) && Math.abs(v) < 1e6);
+  const key = `${bad ? "BAD " : ""}${f[0].toFixed(1)},${f[1].toFixed(1)},${f[2].toFixed(1)}`;
+  vpDiagVtx.set(key, (vpDiagVtx.get(key) || 0) + 1);
+}
 function vpDiagNoteTail(entry) {
   if (vpDiagDone) return;
   vpDiagTail.push(entry);
@@ -8111,6 +8129,7 @@ function vpDiagPresent() {
   vpDiagVerts = 0;
   vpDiagIdx = 0;
   vpDiagTail = [];
+  vpDiagVtx.clear();
   vpDiagPcc.clear();
 }
 function vpDiagFinish(present) {
@@ -8118,6 +8137,13 @@ function vpDiagFinish(present) {
               `constant offsets across ${vpDiagDraws} draws`);
   console.log(`[vpdiag] present #${present}: ${vpDiagVerts} vertices + ` +
               `${vpDiagIdx} indices drawn (~${Math.round(vpDiagIdx / 3)} indexed tris)`);
+  const bad = [...vpDiagVtx.entries()].filter(([k]) => k.startsWith("BAD"));
+  const badN = bad.reduce((a, [, n]) => a + n, 0);
+  console.log(`[vpdiag] present #${present}: ${vpDiagVtx.size} distinct first-vertices, ` +
+              `${badN} from non-finite/huge batches`);
+  for (const [k, n] of [...vpDiagVtx.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x v0(${k})`);
+  }
   console.log(`[vpdiag] present #${present}: last ${vpDiagTail.length} draws, in order`);
   for (const e of vpDiagTail) console.log(`[vpdiag]   ${e}`);
   const projRows = [...vpDiagProj.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
@@ -9501,6 +9527,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
             vpDiagNoteUpload(uploadSource, len);
+          if (uploadRole === 3) vpDiagNoteVertexUpload(uploadSource, len);
             const bid = u32[recWord + 1];
             self._wgUbN = (self._wgUbN || 0) + 1;
             // First few + periodic so steady-state UBO uploads are
