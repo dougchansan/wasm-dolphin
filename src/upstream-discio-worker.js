@@ -7994,6 +7994,16 @@ function vpDiagNoteViewport(near, far) {
 // which rescales the scene instead of cropping it -- so any draw where raw and
 // clamped differ is rendered at the wrong scale.
 let vpDiagRect = null;
+// Distinct VS-constant slices used within one frame. Dolphin re-uploads the
+// vertex-shader constants (projection, position/normal matrices) per draw into
+// a ring and selects them with a dynamic offset. If every draw resolves to the
+// SAME offset the whole scene renders with one transform, which looks like a
+// handful of giant flat surfaces -- i.e. the reported zoom.
+let vpDiagVsOffsets = new Set();
+function vpDiagNoteVsOffset(off) {
+  if (vpDiagDone) return;
+  if (vpDiagVsOffsets.size < 4096) vpDiagVsOffsets.add(off >>> 0);
+}
 // Set when the requested viewport did not fit the attachment and the clamp
 // below had to shrink w/h. Upstream (Vulkan/D3D guard band) would render the
 // draw at full scale and let it clip at the framebuffer edge; we instead
@@ -8041,8 +8051,11 @@ function vpDiagPresent() {
   }
   vpDiagTally.clear();
   vpDiagDraws = 0;
+  vpDiagVsOffsets.clear();
 }
 function vpDiagFinish(present) {
+  console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
+              `constant offsets across ${vpDiagDraws} draws`);
   console.log(`[vpdiag] present #${present}: ${vpDiagDraws} draws, ` +
               `${vpDiagTally.size} distinct (framebuffer, depth range, compare) tuples`);
   const rows = [...vpDiagTally.entries()].sort((a, b) => b[1] - a[1]);
@@ -10295,6 +10308,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             const nOff = u32[recWord + 3];
             for (let k = 0; k < nOff; k++) {
               WGPU_DYN_OFF_SCRATCH[k] = u32[recWord + 4 + k];
+              if (bgSlot === 0) vpDiagNoteVsOffset(u32[recWord + 4 + k]);
             }
             const needsApply = !wgpuConsumerStateCacheEnabled ||
               wgpuPassStateCache.bindGroupNeedsApply(
