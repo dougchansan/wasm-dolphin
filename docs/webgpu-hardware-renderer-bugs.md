@@ -161,6 +161,30 @@ real but targets fb#47, which nothing samples for presentation.
 | `?framecap=N` | dumps the Nth present as an ordered pass/draw trace |
 | `?jitverbose=1` | ranks instructions that block JIT compilation |
 
+### Reference rig for Mario Kart Wii (2026-09-03)
+
+Every earlier MKW comparison in this file compared two runs driven by the
+harness's random input script, which diverge -- so they compared different
+scenes. Three retractions came from that. There is now a deterministic rig:
+
+```bash
+MSYS_NO_PATHCONV=1 BASE_URL="http://127.0.0.1:8080/"   ROM="F:/Emulation/Wii_ISO/Mario Kart Wii (USA) (En,Fr,Es).iso"   VIDEO=wgpu PRESENTER=webgpu   SAVE_STATE_URL="/__mkw-race.sav" SAVE_STATE_AT=40   INPUT_SCRIPT=none DURATION=80   node tools/menu-progress-validate.mjs
+```
+
+`__mkw-race.sav` is an in-race state captured with `SAVE_STATE_CAPTURE_AT`; it
+is gitignored (`*.sav`), so re-capture it if missing. `INPUT_SCRIPT=none` is
+what makes the scene identical across runs. Swap `VIDEO=software` for the
+reference frame: software renders this state correctly, WebGPU does not, which
+is what establishes the remaining defects as backend bugs rather than game
+state.
+
+**`PRESENTER=webgpu` is required with `VIDEO=wgpu`.** The harness defaults the
+presenter to `webgl` for every value of `VIDEO` except `software`. With
+`video=wgpu presenter=webgl` the command ring is never consumed --
+`completedPassCount = 0` -- the canvas stays static, and the run silently
+measures nothing while still reporting fps. Any `video=wgpu` result recorded
+without it is suspect.
+
 ### Method note
 
 Three separate single-sample readings during this investigation were wrong:
