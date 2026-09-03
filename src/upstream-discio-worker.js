@@ -7672,6 +7672,11 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         // Substitute the persistent dummy view so the group stays valid and
         // the draw RENDERS (placeholder texel for the one missing map, not an
         // invisible character). Mirrors the non-filterable substitution below.
+        // DIAG: a missing texture renders with a 1x1 placeholder, which looks
+        // exactly like the flat rectangles Mario Kart Wii shows where its 3D
+        // world should be. Count them, and record which ids.
+        self._wgDummyMissing = (self._wgDummyMissing || 0) + 1;
+        (self._wgDummyMissingIds = self._wgDummyMissingIds || new Set()).add(resId);
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
         continue;
       }
@@ -7685,6 +7690,8 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
       // scene). Filterable-float formats l1 accepts:
       const FILTERABLE = FILTERABLE_TEX_FORMATS;
       if (!FILTERABLE.has(t.format)) {
+        self._wgDummyFormat = (self._wgDummyFormat || 0) + 1;
+        (self._wgDummyFormats = self._wgDummyFormats || new Set()).add(t.format);
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
       } else {
         entries.push({ binding, resource: t.view2dArray ||
@@ -10774,6 +10781,15 @@ function drainWebGpuCmdRing(source = "presentation") {
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
           frameCapPush("PRESENT");
+          if ((self._wgPresentCount || 0) % 600 === 0) {
+            const miss = self._wgDummyMissing || 0;
+            const fmt = self._wgDummyFormat || 0;
+            if (miss || fmt) {
+              console.log(`[dummytex] missing=${miss} unfilterable=${fmt} ` +
+                `missingIds=${[...(self._wgDummyMissingIds || [])].slice(0, 8).join(",")} ` +
+                `formats=${[...(self._wgDummyFormats || [])].join(",")}`);
+            }
+          }
           frameCapFinish();
           self._wgPresentCount = (self._wgPresentCount || 0) + 1;
           diagFrameEnd();
