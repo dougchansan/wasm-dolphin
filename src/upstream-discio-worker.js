@@ -6195,6 +6195,10 @@ const wgpuRendererRuntime = new WgpuRendererRuntime({
 // full AbstractGfx resource set.
 const webGpuObjects = {
   shaders: new Map(),
+  // Fragment-shader variants with the sampled UV pinned to the texture centre.
+  // Selected only for depth-using pipelines, so the 2D overlay -- which samples
+  // glyphs and would collapse to a flat colour -- keeps its real shader.
+  shadersUvForced: new Map(),
   pipelines: new Map(),
   buffers: new Map(),
   textures: new Map(),
@@ -8111,6 +8115,19 @@ function vpDiagCheckVertex(pipelineId) {
     }
     vpDiagStrideBad++;
   }
+  const tc = lay.tc0;
+  if (tc) {
+    const rdt = VPDIAG_FMT_READ[tc.format];
+    if (rdt && tc.offset + 16 <= vpDiagLastVtxBytes.byteLength) {
+      const dvt = new DataView(vpDiagLastVtxBytes.buffer, vpDiagLastVtxBytes.byteOffset);
+      const uv = rdt(dvt, tc.offset);
+      const key = `${tc.format}@${tc.offset} uv=[` +
+        uv.map((x) => (Number.isFinite(x) ? x.toFixed(3) : String(x))).join(",") + "]";
+      vpDiagTc0.set(key, (vpDiagTc0.get(key) || 0) + 1);
+    }
+  } else {
+    vpDiagTc0.set("NO TexCoord0 ATTRIBUTE", (vpDiagTc0.get("NO TexCoord0 ATTRIBUTE") || 0) + 1);
+  }
   const pos = lay.pos;
   if (!pos) return;
   const rd = VPDIAG_FMT_READ[pos.format];
@@ -8139,6 +8156,8 @@ function vpDiagNoteTail(entry) {
   if (vpDiagTail.length > 12) vpDiagTail.shift();
 }
 let vpDiagPcc = new Map();
+let vpDiagTexMtx = new Map();
+let vpDiagTc0 = new Map();
 // PixelShaderConstants: colors[4] int4 at 0, kcolors[4] int4 at 64, alpha int4
 // at 128. These are the TEV registers. If a draw's TEV output is built from
 // registers that are all zero, the fragment is black no matter what texture it
@@ -8216,6 +8235,13 @@ function vpDiagNoteUpload(bytes, len) {
   const t = new Float32Array(bytes.buffer, bytes.byteOffset + 1280, 12);
   vpDiagXf.set(Array.from(t, (v) => v.toFixed(2)).join(","),
     (vpDiagXf.get(Array.from(t, (v) => v.toFixed(2)).join(",")) || 0) + 1);
+  // texmatrices[24] float4 at byte 896 (after materials at 192, lights at 256).
+  // The first three rows are the texgen matrix for texcoord 0. If these are
+  // zero or degenerate the generated UV collapses, and these textures begin
+  // with black rows, so a collapsed UV samples black.
+  const tm = new Float32Array(bytes.buffer, bytes.byteOffset + 896, 12);
+  const tmKey = Array.from(tm, (v) => v.toFixed(2)).join(",");
+  vpDiagTexMtx.set(tmKey, (vpDiagTexMtx.get(tmKey) || 0) + 1);
   const c = new Float32Array(bytes.buffer, bytes.byteOffset + 3840, 6);
   vpDiagPcc.set(Array.from(c, (v) => v.toFixed(3)).join(","),
     (vpDiagPcc.get(Array.from(c, (v) => v.toFixed(3)).join(",")) || 0) + 1);
@@ -8296,6 +8322,8 @@ function vpDiagPresent() {
   vpDiagStrideOk = 0; vpDiagStrideBad = 0;
   vpDiagPosOk = 0; vpDiagPosBad = 0;
   vpDiagPcc.clear();
+  vpDiagTexMtx.clear();
+  vpDiagTc0.clear();
   vpDiagTev.clear();
   vpDiagFog.clear();
   vpDiagTexBind.clear();
@@ -8326,6 +8354,14 @@ function vpDiagFinish(present) {
   }
   console.log(`[vpdiag] shaders by stage ${JSON.stringify(vpDiagShaderStage)} ` +
               `| pixel shaders containing discard: ${vpDiagShaderWithDiscard}`);
+  for (const [k, n] of [...vpDiagTc0.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x tc0 ${k}`);
+  }
+  for (const [k, n] of [...vpDiagTexMtx.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+    const v = k.split(",");
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x texmtx0` +
+      ` [${v.slice(0, 4).join(" ")}] [${v.slice(4, 8).join(" ")}] [${v.slice(8, 12).join(" ")}]`);
+  }
   console.log(`[vpdiag] present #${present}: world draws bind ` +
               `${vpDiagTexBind.size} distinct textures`);
   for (const [k, n] of [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
@@ -8664,6 +8700,15 @@ const DIAG_DUMMY_TINT = false;
 const DIAG_NO_DISCARD = false;
 const DIAG_FORCE_LAYER0 = false;
 const DIAG_FORCE_UV = false;
+function uvForceRewrite(src) {
+  const out = src.replace(
+    /textureSample([A-Za-z]*)\(([^,]+),\s*([^,]+),\s*vec2<f32>\([^)]*\)/g,
+    "textureSample$1($2, $3, vec2<f32>(0.5, 0.5)");
+  if (out !== src && ++vpDiagUvForced <= 1) {
+    console.log("[vpdiag] built UV-forced fragment variants");
+  }
+  return out === src ? null : out;
+}
 let vpDiagUvForced = 0;
 let vpDiagLayerForced = 0;
 let vpDiagDiscardStripped = 0;
@@ -12239,6 +12284,10 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   vpDiagPipeVtx.set(pipelineId, {
     stride,
     pos: attributes.find((a) => a.shaderLocation === 0) || null,
+    // ShaderAttrib::TexCoord0 == 8. With an identity texgen matrix the sampled
+    // UV is this attribute, so a zero/degenerate texcoord samples the black
+    // corner these textures start with.
+    tc0: attributes.find((a) => a.shaderLocation === 8) || null,
     writeMask,
     blendEnable,
     srcF,
@@ -12293,7 +12342,8 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
         : []
     },
     fragment: {
-      module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device) : fs,
+      module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device)
+        : ((DIAG_FORCE_UV && hasDepth && webGpuObjects.shadersUvForced.get(fsId)) || fs),
       targets: [target]
     },
     primitive: {
@@ -12475,6 +12525,7 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     return;
   }
   let wgsl;
+  let uvForcedWgsl = null;
   try {
     // TextDecoder.decode() rejects SharedArrayBuffer-backed views in
     // several engines ("cannot decode from a shared ArrayBuffer"), so
@@ -12522,15 +12573,7 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     // draws bind begin with black rows -- that is what made a head-only scan
     // misread them as empty -- so texcoords stuck near zero would sample that
     // black corner and produce exactly the observed black.
-    if (DIAG_FORCE_UV && stage === 2) {
-      const before = wgsl;
-      wgsl = wgsl.replace(
-        /textureSample([A-Za-z]*)\(([^,]+),\s*([^,]+),\s*vec2<f32>\([^)]*\)/g,
-        "textureSample$1($2, $3, vec2<f32>(0.5, 0.5)");
-      if (before !== wgsl && ++vpDiagUvForced <= 1) {
-        console.log("[vpdiag] forced sampled UV to (0.5, 0.5)");
-      }
-    }
+    if (DIAG_FORCE_UV && stage === 2) uvForcedWgsl = uvForceRewrite(wgsl);
     if (DIAG_NO_DISCARD && stage === 2) {
       const before = wgsl;
       wgsl = wgsl.replace(/discard;/g, "");
@@ -12716,6 +12759,12 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     return;
   }
   webGpuObjects.shaders.set(id, module);
+  if (uvForcedWgsl) {
+    try {
+      webGpuObjects.shadersUvForced.set(id,
+        renderGpu.device.createShaderModule({ label: `uvforced-${id}`, code: uvForcedWgsl }));
+    } catch { /* variant is diagnostic only; fall back to the real module */ }
+  }
   if (webGpuObjects.shaders.size <= 4) {
     console.log(
       `[webgpu-cmd-shader] GPUShaderModule created id=${id} stage=${stage} ` +
