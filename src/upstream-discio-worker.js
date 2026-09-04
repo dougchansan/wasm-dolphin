@@ -8700,6 +8700,40 @@ const DIAG_DUMMY_TINT = false;
 const DIAG_NO_DISCARD = false;
 const DIAG_FORCE_LAYER0 = false;
 const DIAG_FORCE_UV = false;
+const DIAG_UV_FINITE = false;
+// Visualise the UV instead of judging it: red = fract(u), green = fract(v).
+// A healthy surface shows a red/green gradient across it; a UV pinned near zero
+// shows near-black, and a constant UV shows one flat colour.
+const DIAG_UV_VIS = false;
+let vpDiagUvFinite = 0;
+// Replace the sample with a verdict colour instead of a texel: magenta when the
+// sampled UV is finite, green when it is NaN or infinite. WGSL has no isNan, so
+// NaN is caught by (uv != uv) and infinities by abs(uv) > 1e30. The verdict
+// still flows through the TEV maths, so read the HUE, not the exact colour.
+function pickVariantFs(fsId) {
+  const v = webGpuObjects.shadersUvForced.get(fsId);
+  if (v && ++vpDiagVariantUsed <= 1) {
+    console.log("[vpdiag] variant fragment module selected for a depth pipeline");
+  }
+  return v;
+}
+let vpDiagVariantUsed = 0;
+function uvFiniteRewrite(src) {
+  const out = src.replace(
+    // Match the WHOLE call up to its terminating ");", so textureSampleBias --
+    // which carries a trailing bias argument -- is rewritten too. Requiring the
+    // call to end right after the layer matched only plain textureSample, which
+    // is why the first version left the frame untouched.
+    /textureSample[A-Za-z]*\(([^,]+),\s*([^,]+),\s*(vec2<f32>\([^)]*\))[^;]*?\);/g,
+    (DIAG_UV_VIS
+      ? "vec4<f32>(fract($3.x), fract($3.y), 0.0, 1.0);"
+      : "select(vec4<f32>(1.0, 0.0, 1.0, 1.0), vec4<f32>(0.0, 1.0, 0.0, 1.0), " +
+        "any($3 != $3) || any(abs($3) > vec2<f32>(1e30, 1e30)));"));
+  if (out !== src && ++vpDiagUvFinite <= 1) {
+    console.log("[vpdiag] built UV-finiteness probe variants");
+  }
+  return out === src ? null : out;
+}
 function uvForceRewrite(src) {
   const out = src.replace(
     /textureSample([A-Za-z]*)\(([^,]+),\s*([^,]+),\s*vec2<f32>\([^)]*\)/g,
@@ -12343,7 +12377,8 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     },
     fragment: {
       module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device)
-        : ((DIAG_FORCE_UV && hasDepth && webGpuObjects.shadersUvForced.get(fsId)) || fs),
+        : (((DIAG_FORCE_UV || DIAG_UV_FINITE) && hasDepth &&
+            pickVariantFs(fsId)) || fs),
       targets: [target]
     },
     primitive: {
@@ -12573,7 +12608,8 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     // draws bind begin with black rows -- that is what made a head-only scan
     // misread them as empty -- so texcoords stuck near zero would sample that
     // black corner and produce exactly the observed black.
-    if (DIAG_FORCE_UV && stage === 2) uvForcedWgsl = uvForceRewrite(wgsl);
+    if (DIAG_UV_FINITE && stage === 2) uvForcedWgsl = uvFiniteRewrite(wgsl);
+    else if (DIAG_FORCE_UV && stage === 2) uvForcedWgsl = uvForceRewrite(wgsl);
     if (DIAG_NO_DISCARD && stage === 2) {
       const before = wgsl;
       wgsl = wgsl.replace(/discard;/g, "");
