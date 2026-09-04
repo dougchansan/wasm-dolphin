@@ -7994,6 +7994,35 @@ function vpDiagNoteViewport(near, far) {
 // which rescales the scene instead of cropping it -- so any draw where raw and
 // clamped differ is rendered at the wrong scale.
 let vpDiagRect = null;
+// Scissor rect in force for each draw, raw and after the clamp. The frame's
+// hard axis-aligned boundaries look like rectangles, and a scissor that
+// collapses (sx reaching passW makes sw 0) clips a draw away entirely.
+let vpDiagScissor = "sc?";
+// Per frame: how many times the EFB pass is (re)begun, how many of those clear
+// it, and how many draws land after the LAST clear. Anything drawn before a
+// clear is discarded, so "draws after last clear" is the only geometry that can
+// reach the screen.
+let vpDiagEfbPasses = 0;
+let vpDiagEfbClears = 0;
+let vpDiagDrawsSinceClear = 0;
+let vpDiagDrawsTotalEfb = 0;
+function vpDiagNoteEfbPass(cleared) {
+  if (vpDiagDone) return;
+  vpDiagEfbPasses++;
+  if (cleared) { vpDiagEfbClears++; vpDiagDrawsSinceClear = 0; }
+}
+function vpDiagIsDepthAlways(pipelineId) {
+  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
+  return !!(tpl && tpl.depthBase && tpl.depthBase.depthCompare === "always");
+}
+function vpDiagNoteScissor(rx, ry, rw, rh, sx, sy, sw, sh) {
+  if (vpDiagDone) return;
+  const same = rx === sx && ry === sy && rw === sw && rh === sh;
+  vpDiagScissor = (sw === 0 || sh === 0)
+    ? `sc COLLAPSED raw(${rx},${ry} ${rw}x${rh})`
+    : same ? `sc(${sx},${sy} ${sw}x${sh})`
+      : `sc raw(${rx},${ry} ${rw}x${rh})->(${sx},${sy} ${sw}x${sh})`;
+}
 // Distinct VS-constant slices used within one frame. Dolphin re-uploads the
 // vertex-shader constants (projection, position/normal matrices) per draw into
 // a ring and selects them with a dynamic offset. If every draw resolves to the
@@ -8156,7 +8185,12 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     range = `${n.toFixed(6)},${f.toFixed(6)}`;
     cls = Math.abs(n - f) < 1e-6 ? "ZEROWIDTH" : (n > f ? "INVERTED" : "normal");
   }
-  const key = `fb#${fbId} ${vpDiagRect || "vp?"} z(${range}) ${cls} depth=${cmp}`;
+  const lay = vpDiagPipeVtx.get(pipelineId);
+  const blend = lay
+    ? `wm${lay.writeMask}${lay.blendEnable ? ` blend${lay.srcF}/${lay.dstF}` : " noblend"}`
+    : "wm?";
+  const key = `fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp} ${blend}`;
+  if (fbId === self._wgEfbColorId) { vpDiagDrawsTotalEfb++; vpDiagDrawsSinceClear++; }
   vpDiagCheckVertex(pipelineId);
   const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
   const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
@@ -8188,6 +8222,8 @@ function vpDiagPresent() {
   vpDiagIdx = 0;
   vpDiagTail = [];
   vpDiagVtx.clear();
+  vpDiagEfbPasses = 0; vpDiagEfbClears = 0;
+  vpDiagDrawsSinceClear = 0; vpDiagDrawsTotalEfb = 0;
   vpDiagStrideOk = 0; vpDiagStrideBad = 0;
   vpDiagPosOk = 0; vpDiagPosBad = 0;
   vpDiagPcc.clear();
@@ -8199,6 +8235,9 @@ function vpDiagFinish(present) {
               `${vpDiagIdx} indices drawn (~${Math.round(vpDiagIdx / 3)} indexed tris)`);
   const bad = [...vpDiagVtx.entries()].filter(([k]) => k.startsWith("BAD"));
   const badN = bad.reduce((a, [, n]) => a + n, 0);
+  console.log(`[vpdiag] present #${present}: EFB passes=${vpDiagEfbPasses} ` +
+              `clears=${vpDiagEfbClears} | EFB draws=${vpDiagDrawsTotalEfb}, ` +
+              `${vpDiagDrawsSinceClear} after the last clear`);
   console.log(`[vpdiag] present #${present}: stride ok=${vpDiagStrideOk} ` +
               `bad=${vpDiagStrideBad} | position ok=${vpDiagPosOk} bad=${vpDiagPosBad}`);
   console.log(`[vpdiag] present #${present}: ${vpDiagVtx.size} distinct first-vertices, ` +
@@ -8520,6 +8559,11 @@ const DIAG_RASTER_OPEN = false;  // §28w: cull CONCLUSIVELY ruled out for the 3
 // docs/webgpu-hardware-renderer-bugs.md. Re-testable now against the
 // deterministic save state.
 const DIAG_CULL_NONE = false;
+// Skip EFB draws whose pipeline ignores depth. The in-race frame carries ~21
+// full-screen depth=always quads; if one of them is painting over the world,
+// dropping them exposes the scene underneath. Diagnostic only -- these draws
+// are real content upstream draws too.
+const DIAG_SKIP_DEPTH_ALWAYS = false;
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
@@ -10358,6 +10402,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
             desc.depthStencilAttachment = ds;
           }
+          if (fbId === self._wgEfbColorId) vpDiagNoteEfbPass(loadOp === "clear");
           pass = enc.beginRenderPass(desc);
           if (causalMetricsEnabled) wgpuUploadAttribution.recordPassBegin();
           wgpuReplayClassifier?.recordPassBegin({ framebufferId: fbId, recordIndex: read });
@@ -10765,6 +10810,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (sy > passH) sy = passH;
             sw = Math.min(sw, passW - sx);
             sh = Math.min(sh, passH - sy);
+            vpDiagNoteScissor(u32[recWord + 1], u32[recWord + 2],
+                              u32[recWord + 3], u32[recWord + 4], sx, sy, sw, sh);
             pass.setScissorRect(sx, sy, sw, sh);
             if (drawState) drawState.scissor = [sx, sy, sw, sh];
           }
@@ -10780,6 +10827,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (VP_SKIP_RESCALED && vpRescaled) {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
@@ -10814,6 +10862,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           } else if (pass) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (VP_SKIP_RESCALED && vpRescaled) {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
@@ -12072,7 +12121,11 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   // assuming a leading float32x3.
   vpDiagPipeVtx.set(pipelineId, {
     stride,
-    pos: attributes.find((a) => a.shaderLocation === 0) || null
+    pos: attributes.find((a) => a.shaderLocation === 0) || null,
+    writeMask,
+    blendEnable,
+    srcF,
+    dstF
   });
 
   // §28ap: cap 24→1200 so the late-created MENU pipelines (id≈16000+,
