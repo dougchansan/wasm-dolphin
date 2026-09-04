@@ -8145,6 +8145,38 @@ let vpDiagPcc = new Map();
 // samples -- which is what "geometry rasterises but paints nothing" looks like.
 let vpDiagTev = new Map();
 let vpDiagFog = new Map();
+// Which textures the world draws bind, and whether those textures ever
+// received any non-zero pixel data. A draw that samples an all-zero texture
+// renders black through any TEV stage that multiplies by texture colour.
+const vpDiagTexData = new Map();   // texId -> {uploads, nonZero}
+let vpDiagTexBind = new Map();
+function vpDiagNoteTexUpload(texId, bytes, len) {
+  let rec = vpDiagTexData.get(texId);
+  if (!rec) vpDiagTexData.set(texId, (rec = { uploads: 0, nonZero: 0 }));
+  rec.uploads++;
+  // Sample across the WHOLE payload, not just the head: a texture that merely
+  // begins with black rows would otherwise be misreported as empty.
+  const step = Math.max(1, Math.floor(len / 8192));
+  for (let i = 0; i < len; i += step) {
+    if (bytes[i] !== 0) { rec.nonZero++; return; }
+  }
+  // Stride sampling can miss sparse data; confirm a zero verdict exactly.
+  for (let i = 0; i < len; i++) {
+    if (bytes[i] !== 0) { rec.nonZero++; return; }
+  }
+}
+function vpDiagNoteTexBind(fbId, cmp, texId) {
+  if (vpDiagDone || fbId !== self._wgEfbColorId) return;
+  if (cmp === "always" || cmp === "none") return;   // world geometry only
+  const t = texId != null ? webGpuObjects.textures.get(texId) : null;
+  const rec = vpDiagTexData.get(texId);
+  const data = !rec ? "NEVER UPLOADED"
+    : rec.nonZero > 0 ? `data(${rec.nonZero}/${rec.uploads})`
+      : `ALL ZERO (${rec.uploads} uploads)`;
+  const key = `tex#${texId != null ? texId : "none"} ` +
+    `${t && t.tex ? `${t.tex.width}x${t.tex.height} ${t.format}` : "unresolved"} ${data}`;
+  vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
+}
 function vpDiagNotePsUpload(bytes, len) {
   if (vpDiagDone) return;
   if (len < 1500 || len > 1700) return;
@@ -8229,6 +8261,7 @@ function vpDiagNoteDraw(fbId, pipelineId) {
   if (fbId === self._wgEfbColorId) { vpDiagDrawsTotalEfb++; vpDiagDrawsSinceClear++; }
   vpDiagCheckVertex(pipelineId);
   const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
+  vpDiagNoteTexBind(fbId, cmp, texId);
   const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
   vpDiagNoteTail(`fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp}` +
     ` tex#${texId != null ? texId : "?"}` +
@@ -8265,6 +8298,7 @@ function vpDiagPresent() {
   vpDiagPcc.clear();
   vpDiagTev.clear();
   vpDiagFog.clear();
+  vpDiagTexBind.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
@@ -8288,6 +8322,13 @@ function vpDiagFinish(present) {
   const projRows = [...vpDiagProj.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   console.log(`[vpdiag] present #${present}: ${vpDiagProj.size} distinct projections`);
   for (const [k, n] of [...vpDiagFog.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
+  }
+  console.log(`[vpdiag] shaders by stage ${JSON.stringify(vpDiagShaderStage)} ` +
+              `| pixel shaders containing discard: ${vpDiagShaderWithDiscard}`);
+  console.log(`[vpdiag] present #${present}: world draws bind ` +
+              `${vpDiagTexBind.size} distinct textures`);
+  for (const [k, n] of [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
   }
   console.log(`[vpdiag] present #${present}: ${vpDiagTev.size} distinct TEV register sets`);
@@ -8620,6 +8661,10 @@ const DIAG_SKIP_DEPTH_ALWAYS = false;
 // discarded or the primitives never rasterise at all.
 const DIAG_CONST_FS = false;
 const DIAG_DUMMY_TINT = false;
+const DIAG_NO_DISCARD = false;
+let vpDiagDiscardStripped = 0;
+const vpDiagShaderStage = {};
+let vpDiagShaderWithDiscard = 0;
 let diagConstFsModule = null;
 function getConstFsModule(dev) {
   if (!diagConstFsModule) {
@@ -10088,6 +10133,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (!t) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
             }
+            if (!vpDiagDone) vpDiagNoteTexUpload(textureId, uploadSource, uploadBytes);
             const uz = u32[recWord + 7];
             if (t && !t.format.startsWith("depth") && uz < t.layers) {
               const w = u32[recWord + 4];
@@ -12434,6 +12480,27 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     const local = new Uint8Array(blobLen);
     local.set(shared);
     wgsl = webGpuTextDecoder.decode(local);
+    // Strip `discard` from fragment shaders. Dolphin bakes the GX alpha test
+    // into the pixel shader as a discard; if it rejects every world fragment
+    // the EFB keeps its clear colour and the geometry is invisible -- which is
+    // also what the constant-colour FS test bypassed, so it is consistent with
+    // everything measured so far. Diagnostic only: removing it draws fragments
+    // the game intended to throw away.
+    vpDiagShaderStage[stage] = (vpDiagShaderStage[stage] || 0) + 1;
+    if (stage === 2 && /discard/.test(wgsl)) {
+      if (++vpDiagShaderWithDiscard === 1) {
+        const i = wgsl.indexOf("discard");
+        console.log("[vpdiag] discard context: " +
+          JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
+      }
+    }
+    if (DIAG_NO_DISCARD && stage === 2) {
+      const before = wgsl;
+      wgsl = wgsl.replace(/discard;/g, "");
+      if (before !== wgsl && ++vpDiagDiscardStripped <= 1) {
+        console.log("[vpdiag] stripped discard from fragment shaders");
+      }
+    }
   } catch (e) {
     webGpuObjects.shaderFail += 1;
     if (!self._webGpuShaderDecodeErr) {
