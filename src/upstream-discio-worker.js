@@ -7601,6 +7601,16 @@ function getFixedLayouts() {
     size: [1, 1, 1], format: "rgba8unorm",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
   });
+  // The dummy is substituted whenever a bound texture's format is not
+  // filterable (depth32float, r32float, uint...). Created empty it reads as
+  // (0,0,0,0), so any TEV stage that multiplies by texture colour collapses to
+  // black -- indistinguishable from "the geometry never drew". DIAG_DUMMY_TINT
+  // fills it with bright green so substituted draws are visible instead.
+  if (DIAG_DUMMY_TINT) {
+    dev.queue.writeTexture({ texture: dummyTex },
+      new Uint8Array([0, 255, 0, 255]), { bytesPerRow: 4, rowsPerImage: 1 },
+      [1, 1, 1]);
+  }
   const dummyTexView = dummyTex.createView({ dimension: "2d-array" });
   const dummySampler = dev.createSampler({});
   renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout,
@@ -8129,6 +8139,32 @@ function vpDiagNoteTail(entry) {
   if (vpDiagTail.length > 12) vpDiagTail.shift();
 }
 let vpDiagPcc = new Map();
+// PixelShaderConstants: colors[4] int4 at 0, kcolors[4] int4 at 64, alpha int4
+// at 128. These are the TEV registers. If a draw's TEV output is built from
+// registers that are all zero, the fragment is black no matter what texture it
+// samples -- which is what "geometry rasterises but paints nothing" looks like.
+let vpDiagTev = new Map();
+let vpDiagFog = new Map();
+function vpDiagNotePsUpload(bytes, len) {
+  if (vpDiagDone) return;
+  if (len < 1500 || len > 1700) return;
+  const i = new Int32Array(bytes.buffer, bytes.byteOffset, 36);
+  const cols = Array.from(i.slice(0, 16));
+  const kcols = Array.from(i.slice(16, 32));
+  const allZero = cols.every((v) => v === 0) && kcols.every((v) => v === 0);
+  // fogcolor int4 @432, fogi int4 @448, fogf float4 @464 -- offsets follow from
+  // colors(64)+kcolors(64)+alpha(16)+texdims(128)+zbias(32)+indtexscale(32)
+  // +indtexmtx(96) = 432. Saturated fog with a black fog colour turns world
+  // pixels black while leaving fog-disabled HUD draws alone.
+  const fi = new Int32Array(bytes.buffer, bytes.byteOffset + 432, 8);
+  const ff = new Float32Array(bytes.buffer, bytes.byteOffset + 464, 4);
+  const fogKey = `fogcolor[${fi[0]},${fi[1]},${fi[2]},${fi[3]}] ` +
+                 `fogi[${fi[4]},${fi[5]}] fogf[${ff[0].toFixed(2)},${ff[1].toFixed(2)}]`;
+  vpDiagFog.set(fogKey, (vpDiagFog.get(fogKey) || 0) + 1);
+  const key = allZero ? "ALL ZERO"
+    : `c0[${cols.slice(0, 4).join(",")}] k0[${kcols.slice(0, 4).join(",")}] a[${i[32]},${i[33]},${i[34]},${i[35]}]`;
+  vpDiagTev.set(key, (vpDiagTev.get(key) || 0) + 1);
+}
 function vpDiagNoteUpload(bytes, len) {
   if (vpDiagDone) return;
   if (len < 4000 || len > 4200) return;            // VS constants are ~4112 B
@@ -8227,6 +8263,8 @@ function vpDiagPresent() {
   vpDiagStrideOk = 0; vpDiagStrideBad = 0;
   vpDiagPosOk = 0; vpDiagPosBad = 0;
   vpDiagPcc.clear();
+  vpDiagTev.clear();
+  vpDiagFog.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
@@ -8249,6 +8287,13 @@ function vpDiagFinish(present) {
   for (const e of vpDiagTail) console.log(`[vpdiag]   ${e}`);
   const projRows = [...vpDiagProj.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   console.log(`[vpdiag] present #${present}: ${vpDiagProj.size} distinct projections`);
+  for (const [k, n] of [...vpDiagFog.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
+  }
+  console.log(`[vpdiag] present #${present}: ${vpDiagTev.size} distinct TEV register sets`);
+  for (const [k, n] of [...vpDiagTev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x tev ${k}`);
+  }
   for (const [k, n] of [...vpDiagPcc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
     const v = k.split(",");
     console.log(`[vpdiag]   ${String(n).padStart(4)}x pcc[${v.slice(0, 4).join(" ")}]` +
@@ -8564,6 +8609,27 @@ const DIAG_CULL_NONE = false;
 // dropping them exposes the scene underneath. Diagnostic only -- these draws
 // are real content upstream draws too.
 const DIAG_SKIP_DEPTH_ALWAYS = false;
+// Replace the fragment shader of every depth-using pipeline with one that
+// returns a constant colour, keeping the real vertex shader so geometry is
+// still transformed and rasterised normally. Legal because the cfg pipelines
+// use an explicit fixed pipeline layout, not layout:"auto", so a fragment
+// module may declare fewer bindings than the layout provides.
+//
+// If magenta geometry appears, primitives rasterise and the defect is in the
+// TEV/texture path. If the frame stays black, the fragments are being
+// discarded or the primitives never rasterise at all.
+const DIAG_CONST_FS = false;
+const DIAG_DUMMY_TINT = false;
+let diagConstFsModule = null;
+function getConstFsModule(dev) {
+  if (!diagConstFsModule) {
+    diagConstFsModule = dev.createShaderModule({
+      label: "diag-const-fs",
+      code: "@fragment fn main() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }"
+    });
+  }
+  return diagConstFsModule;
+}
 
 // Set true once the WebGPU hardware renderer (cmd-ring executor) has
 // presented a frame; suppresses the legacy CPU-framebuffer canvas blit
@@ -9640,6 +9706,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
             vpDiagNoteUpload(uploadSource, len);
+          vpDiagNotePsUpload(uploadSource, len);
           if (uploadRole === 3) {
             vpDiagNoteVertexUpload(uploadSource, len);
             if (!vpDiagDone) {
@@ -12175,7 +12242,10 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
         ? [{ arrayStride: stride, stepMode: "vertex", attributes }]
         : []
     },
-    fragment: { module: fs, targets: [target] },
+    fragment: {
+      module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device) : fs,
+      targets: [target]
+    },
     primitive: {
       topology: TOPO[topology] || "triangle-list",
       // §28g ROOT-CAUSE FIX: the GX vertex shader negates clip-space Y
