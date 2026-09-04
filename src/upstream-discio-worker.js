@@ -8662,6 +8662,10 @@ const DIAG_SKIP_DEPTH_ALWAYS = false;
 const DIAG_CONST_FS = false;
 const DIAG_DUMMY_TINT = false;
 const DIAG_NO_DISCARD = false;
+const DIAG_FORCE_LAYER0 = false;
+const DIAG_FORCE_UV = false;
+let vpDiagUvForced = 0;
+let vpDiagLayerForced = 0;
 let vpDiagDiscardStripped = 0;
 const vpDiagShaderStage = {};
 let vpDiagShaderWithDiscard = 0;
@@ -12492,6 +12496,39 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
         const i = wgsl.indexOf("discard");
         console.log("[vpdiag] discard context: " +
           JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
+      }
+    }
+    if (stage === 2 && !self._vpDiagFsBindingsLogged) {
+      self._vpDiagFsBindingsLogged = true;
+      const calls = wgsl.match(/textureSample[A-Za-z]*\([^;]*?\);/g) || [];
+      console.log("[vpdiag] FS sample calls: " + JSON.stringify(calls.slice(0, 3)));
+      const decls = wgsl.match(/@group\([0-9]+\)\s*@binding\([0-9]+\)\s*var[^;]*;/g) || [];
+      console.log("[vpdiag] FS bindings: " + JSON.stringify(decls));
+    }
+    // Force the texture-array layer to 0. The translated sampling call is
+    // textureSample(tex, samp, vec2<f32>(uv), i32(coord.z)), so the layer comes
+    // from the third texcoord. Every texture the world binds is single-layer,
+    // so a non-zero layer samples out of range.
+    if (DIAG_FORCE_LAYER0 && stage === 2) {
+      const before = wgsl;
+      wgsl = wgsl.replace(
+        /textureSample([A-Za-z]*)\(([^,]+),\s*([^,]+),\s*(vec2<f32>\([^)]*\)),\s*i32\([^)]*\)/g,
+        "textureSample$1($2, $3, $4, 0i");
+      if (before !== wgsl && ++vpDiagLayerForced <= 1) {
+        console.log("[vpdiag] forced texture array layer to 0");
+      }
+    }
+    // Force the sampled UV to the middle of the texture. The textures these
+    // draws bind begin with black rows -- that is what made a head-only scan
+    // misread them as empty -- so texcoords stuck near zero would sample that
+    // black corner and produce exactly the observed black.
+    if (DIAG_FORCE_UV && stage === 2) {
+      const before = wgsl;
+      wgsl = wgsl.replace(
+        /textureSample([A-Za-z]*)\(([^,]+),\s*([^,]+),\s*vec2<f32>\([^)]*\)/g,
+        "textureSample$1($2, $3, vec2<f32>(0.5, 0.5)");
+      if (before !== wgsl && ++vpDiagUvForced <= 1) {
+        console.log("[vpdiag] forced sampled UV to (0.5, 0.5)");
       }
     }
     if (DIAG_NO_DISCARD && stage === 2) {
