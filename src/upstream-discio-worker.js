@@ -8173,25 +8173,37 @@ function vpDiagNoteTexUpload(texId, bytes, len) {
   let rec = vpDiagTexData.get(texId);
   if (!rec) vpDiagTexData.set(texId, (rec = { uploads: 0, nonZero: 0 }));
   rec.uploads++;
-  // Sample across the WHOLE payload, not just the head: a texture that merely
-  // begins with black rows would otherwise be misreported as empty.
+  // "Some byte is non-zero" is too weak: a texture that is 99% black passes it
+  // while still sampling black almost everywhere. Measure the FRACTION of
+  // non-zero bytes instead, over a strided sample of the whole payload.
   const step = Math.max(1, Math.floor(len / 8192));
-  for (let i = 0; i < len; i += step) {
-    if (bytes[i] !== 0) { rec.nonZero++; return; }
-  }
-  // Stride sampling can miss sparse data; confirm a zero verdict exactly.
-  for (let i = 0; i < len; i++) {
-    if (bytes[i] !== 0) { rec.nonZero++; return; }
-  }
+  let seen = 0;
+  let nz = 0;
+  for (let i = 0; i < len; i += step) { seen++; if (bytes[i] !== 0) nz++; }
+  rec.samples = (rec.samples || 0) + seen;
+  rec.nzBytes = (rec.nzBytes || 0) + nz;
+  if (nz > 0) rec.nonZero++;
 }
 function vpDiagNoteTexBind(fbId, cmp, texId) {
   if (vpDiagDone || fbId !== self._wgEfbColorId) return;
   if (cmp === "always" || cmp === "none") return;   // world geometry only
   const t = texId != null ? webGpuObjects.textures.get(texId) : null;
   const rec = vpDiagTexData.get(texId);
-  const data = !rec ? "NEVER UPLOADED"
-    : rec.nonZero > 0 ? `data(${rec.nonZero}/${rec.uploads})`
-      : `ALL ZERO (${rec.uploads} uploads)`;
+  // A texture with RENDER_ATTACHMENT (16) is drawn into, not uploaded, so an
+  // absent upload says nothing about its contents. Distinguish the two before
+  // reading "no upload data" as "empty".
+  const isRT = !!(t && (t.usage & 16));
+  const pct = rec && rec.samples ? Math.round((100 * rec.nzBytes) / rec.samples) : 0;
+  // Report BOTH: the usage flag alone does not discriminate, because Dolphin
+  // creates every texture-cache entry with RENDER_ATTACHMENT once
+  // bSupportsCopyToVram is on, so "is a render target" is true of all of them.
+  // Absence of upload data therefore does NOT prove a texture is empty -- it
+  // may have been filled by an EFB copy. Showing the upload statistics next to
+  // the flag keeps that distinction visible instead of hiding it.
+  const up = !rec ? "no upload"
+    : rec.nonZero > 0 ? `${pct}% non-zero`
+      : `upload ALL ZERO (${rec.uploads})`;
+  const data = `${up}${isRT ? " [RT-capable]" : ""}`;
   const key = `tex#${texId != null ? texId : "none"} ` +
     `${t && t.tex ? `${t.tex.width}x${t.tex.height} ${t.format}` : "unresolved"} ${data}`;
   vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
@@ -8705,6 +8717,7 @@ const DIAG_UV_FINITE = false;
 // A healthy surface shows a red/green gradient across it; a UV pinned near zero
 // shows near-black, and a constant UV shows one flat colour.
 const DIAG_UV_VIS = false;
+const DIAG_UV_PERTURB = false;
 let vpDiagUvFinite = 0;
 // Replace the sample with a verdict colour instead of a texel: magenta when the
 // sampled UV is finite, green when it is NaN or infinite. WGSL has no isNan, so
@@ -8718,6 +8731,22 @@ function pickVariantFs(fsId) {
   return v;
 }
 let vpDiagVariantUsed = 0;
+// Perturb the sample instead of replacing it: keep the real call, add a
+// constant blue to its result. Every earlier probe substituted the sample, so
+// the verdict always flowed through the TEV maths afterwards and could not tell
+// "the texel is black" from "TEV zeroes a good texel".
+//   blue appears  -> the sample result reaches the output, so the texel is black
+//   stays black   -> TEV discards it regardless of what was sampled
+function uvPerturbRewrite(src) {
+  const out = src.replace(
+    /(textureSample[A-Za-z]*\([^;]*?\));/g,
+    "($1 + vec4<f32>(0.0, 0.0, 0.5, 0.0));");
+  if (out !== src && ++vpDiagUvPerturb <= 1) {
+    console.log("[vpdiag] built sample-perturbation variants");
+  }
+  return out === src ? null : out;
+}
+let vpDiagUvPerturb = 0;
 function uvFiniteRewrite(src) {
   const out = src.replace(
     // Match the WHOLE call up to its terminating ");", so textureSampleBias --
@@ -10190,7 +10219,8 @@ function drainWebGpuCmdRing(source = "presentation") {
               format: fmt, usage: u32[recWord + 5]
             });
             webGpuObjects.textures.set(id,
-              { tex, format: fmt, layers, view2dArray: null });
+              { tex, format: fmt, layers, view2dArray: null,
+                usage: u32[recWord + 5] });
           }
           break;
         }
@@ -12377,7 +12407,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     },
     fragment: {
       module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device)
-        : (((DIAG_FORCE_UV || DIAG_UV_FINITE) && hasDepth &&
+        : (((DIAG_FORCE_UV || DIAG_UV_FINITE || DIAG_UV_PERTURB) && hasDepth &&
             pickVariantFs(fsId)) || fs),
       targets: [target]
     },
@@ -12608,7 +12638,8 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     // draws bind begin with black rows -- that is what made a head-only scan
     // misread them as empty -- so texcoords stuck near zero would sample that
     // black corner and produce exactly the observed black.
-    if (DIAG_UV_FINITE && stage === 2) uvForcedWgsl = uvFiniteRewrite(wgsl);
+    if (DIAG_UV_PERTURB && stage === 2) uvForcedWgsl = uvPerturbRewrite(wgsl);
+    else if (DIAG_UV_FINITE && stage === 2) uvForcedWgsl = uvFiniteRewrite(wgsl);
     else if (DIAG_FORCE_UV && stage === 2) uvForcedWgsl = uvForceRewrite(wgsl);
     if (DIAG_NO_DISCARD && stage === 2) {
       const before = wgsl;
