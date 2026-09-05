@@ -8385,7 +8385,7 @@ function vpDiagPresent() {
   // Persist the frame's most-sampled textures before clearing, so the readback
   // at SUBMIT_PRESENT has something to inspect -- vpDiagPresent() runs first
   // and would otherwise hand it an empty tally.
-  vpDiagLastPicks = [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  vpDiagLastPicks = [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
   vpDiagTexBind.clear();
 }
 function vpDiagFinish(present) {
