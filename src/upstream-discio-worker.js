@@ -8168,6 +8168,12 @@ let vpDiagFog = new Map();
 // received any non-zero pixel data. A draw that samples an all-zero texture
 // renders black through any TEV stage that multiplies by texture colour.
 const vpDiagTexData = new Map();   // texId -> {uploads, nonZero}
+// Textures that are RENDERED INTO (an offscreen BeginPass targets fbId, which
+// is the texture id) and how many draws landed there. This is the other way a
+// texture-cache entry gets filled, and the only way to tell a genuinely empty
+// texture from one an EFB copy populated -- the RENDER_ATTACHMENT usage bit
+// cannot, since every entry carries it.
+const vpDiagRtDraws = new Map();   // texId -> cumulative draws into it
 let vpDiagTexBind = new Map();
 function vpDiagNoteTexUpload(texId, bytes, len) {
   let rec = vpDiagTexData.get(texId);
@@ -8200,10 +8206,11 @@ function vpDiagNoteTexBind(fbId, cmp, texId) {
   // Absence of upload data therefore does NOT prove a texture is empty -- it
   // may have been filled by an EFB copy. Showing the upload statistics next to
   // the flag keeps that distinction visible instead of hiding it.
+  const rt = vpDiagRtDraws.get(texId) || 0;
   const up = !rec ? "no upload"
     : rec.nonZero > 0 ? `${pct}% non-zero`
       : `upload ALL ZERO (${rec.uploads})`;
-  const data = `${up}${isRT ? " [RT-capable]" : ""}`;
+  const data = `${up}, ${rt > 0 ? `RENDERED INTO (${rt} draws)` : "never rendered into"}`;
   const key = `tex#${texId != null ? texId : "none"} ` +
     `${t && t.tex ? `${t.tex.width}x${t.tex.height} ${t.format}` : "unresolved"} ${data}`;
   vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
@@ -8297,6 +8304,7 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     : "wm?";
   const key = `fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp} ${blend}`;
   if (fbId === self._wgEfbColorId) { vpDiagDrawsTotalEfb++; vpDiagDrawsSinceClear++; }
+  if (fbId) vpDiagRtDraws.set(fbId, (vpDiagRtDraws.get(fbId) || 0) + 1);
   vpDiagCheckVertex(pipelineId);
   const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
   vpDiagNoteTexBind(fbId, cmp, texId);
