@@ -1,0 +1,82 @@
+diff --git a/Source/Core/VideoCommon/TextureCacheBase.cpp b/Source/Core/VideoCommon/TextureCacheBase.cpp
+index bbcd1140b4..0eb3be3c38 100644
+--- a/Source/Core/VideoCommon/TextureCacheBase.cpp
++++ b/Source/Core/VideoCommon/TextureCacheBase.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include "VideoCommon/TextureCacheBase.h"
+ 
++#include <cstdio>
++
+ #include <algorithm>
+ #include <chrono>
+ #include <cmath>
+@@ -1700,6 +1702,42 @@ RcTcacheEntry TextureCacheBase::CreateTextureEntry(
+ 
+       CheckTempSize(total_texture_size);
+       dst_buffer = m_temp;
++      // wasm-dolphin DIAGNOSTIC (vendor/ is gitignored; not part of the patch
++      // series). Mario Kart Wii's large world textures upload as correctly
++      // sized but entirely zero, and never get filled by a copy or a blit. If
++      // the source span is empty the data pointer is null, and decoding from
++      // wasm address 0 reads the zero page rather than faulting -- which
++      // produces exactly that. Log the source address so it can be checked
++      // against the MEM2 range (0x10000000+, i.e. address >> 28 == 1).
++      {
++        static int s_tex_diag = 0;
++        const u8* src = texture_info.GetData();
++        const u32 addr = texture_info.GetRawAddress();
++        // The pointer is valid for MEM2, so the question is whether the guest
++        // memory it points at actually holds texel data or is still zero.
++        int src_nz = -1;
++        if (src != nullptr)
++        {
++          const u32 n = std::min<u32>(texture_info.GetTextureSize(), 8192u);
++          src_nz = 0;
++          for (u32 i = 0; i < n; i++)
++          {
++            if (src[i] != 0)
++            {
++              src_nz = 1;
++              break;
++            }
++          }
++        }
++        if (s_tex_diag < 40 && (src == nullptr || expanded_width >= 128))
++        {
++          s_tex_diag++;
++          printf("[texsrc] addr=%08x mem2=%d src=%s srcNonZero=%d size=%u w=%u h=%u fmt=%u%c",
++                 addr, (addr >> 28) == 1 ? 1 : 0, src ? "ok" : "NULL", src_nz,
++                 texture_info.GetTextureSize(), expanded_width, expanded_height,
++                 static_cast<unsigned>(texture_info.GetTextureFormat()), 10);
++        }
++      }
+       if (!(texture_info.GetTextureFormat() == TextureFormat::RGBA8 && texture_info.IsFromTmem()))
+       {
+         TexDecoder_Decode(dst_buffer, texture_info.GetData(), expanded_width, expanded_height,
+@@ -2898,6 +2936,25 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
+   uniforms.clamp_bottom = (static_cast<float>(bottom_coord) + .5f) * rcp_efb_height;
+   uniforms.pixel_height = g_ActiveConfig.bCopyEFBScaled ? rcp_efb_height : 1.0f / EFB_HEIGHT;
+   uniforms.padding = 0;
++  // DIAG (wasm-dolphin): the EFB->XFB copy SOURCE rect, normalised. Mario Kart
++  // Wii presents an XFB entry of the right size and format whose content is a
++  // magnified patch of ground, while the EFB itself holds the correct scene --
++  // which is what sampling a small source rect and stretching it looks like.
++  if (dst_format == EFBCopyFormat::XFB)
++  {
++    static u32 s_xfb_diag = 0;
++    if ((s_xfb_diag++ % 600) == 0)
++    {
++      NOTICE_LOG_FMT(VIDEO,
++                     "[xfbsrc] srcNorm=({:.4f},{:.4f})+{:.4f}x{:.4f} fbrect=({},{})+{}x{} "
++                     "efb={}x{} dst={}x{} halved={}",
++                     uniforms.src_left, uniforms.src_top, uniforms.src_width,
++                     uniforms.src_height, framebuffer_rect.left, framebuffer_rect.top,
++                     framebuffer_rect.GetWidth(), framebuffer_rect.GetHeight(),
++                     g_framebuffer_manager->GetEFBWidth(), efb_height,
++                     entry->texture->GetWidth(), entry->texture->GetHeight(), scale_by_half);
++    }
++  }
+   g_vertex_manager->UploadUtilityUniforms(&uniforms, sizeof(uniforms));
+ 
+   // Use the copy pipeline to render the VRAM copy.
