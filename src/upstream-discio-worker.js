@@ -8382,6 +8382,10 @@ function vpDiagPresent() {
   vpDiagTc0.clear();
   vpDiagTev.clear();
   vpDiagFog.clear();
+  // Persist the frame's most-sampled textures before clearing, so the readback
+  // at SUBMIT_PRESENT has something to inspect -- vpDiagPresent() runs first
+  // and would otherwise hand it an empty tally.
+  vpDiagLastPicks = [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   vpDiagTexBind.clear();
 }
 function vpDiagFinish(present) {
@@ -8770,6 +8774,9 @@ const DIAG_UV_PERTURB = false;
 // sample populated textures -- and whether anything recognisable appears says
 // how much of the blackness those empty textures actually account for.
 const DIAG_SKIP_EMPTY_TEX = false;
+const DIAG_TEX_READBACK = false;
+let vpDiagReadbackDone = false;
+let vpDiagLastPicks = [];
 function vpDiagTexIsEmpty(texId) {
   const rec = vpDiagTexData.get(texId);
   if (!rec) return false;                 // never uploaded: unknown, keep it
@@ -10273,7 +10280,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             const tex = dev.createTexture({
               size: [Math.max(1, u32[recWord + 2]),
                      Math.max(1, u32[recWord + 3]), layers],
-              format: fmt, usage: u32[recWord + 5]
+              // DIAG_TEX_READBACK adds COPY_SRC so the texture can be copied
+              // back and inspected. Upload-byte accounting has proved
+              // unreliable twice; reading the actual texels replaces the whole
+              // inference chain with a direct observation.
+              format: fmt,
+              usage: u32[recWord + 5] | (DIAG_TEX_READBACK ? 0x1 : 0)
             });
             webGpuObjects.textures.set(id,
               { tex, format: fmt, layers, view2dArray: null,
@@ -11600,6 +11612,22 @@ function drainWebGpuCmdRing(source = "presentation") {
               console.log(`[dummytex] missing=${miss} unfilterable=${fmt} ` +
                 `missingIds=${[...(self._wgDummyMissingIds || [])].slice(0, 8).join(",")} ` +
                 `formats=${[...(self._wgDummyFormats || [])].join(",")}`);
+            }
+          }
+          if (DIAG_TEX_READBACK && !vpDiagReadbackDone &&
+              (self._wgPresentCount || 0) >= 2500 && vpDiagLastPicks.length) {
+            vpDiagReadbackDone = true;
+            try {
+              ensureEnc();
+              const picks = vpDiagLastPicks;
+              for (const [k] of picks) {
+                const m = /tex#(\d+)/.exec(k);
+                if (!m) continue;
+                const e = webGpuObjects.textures.get(Number(m[1]));
+                if (e) diagReadTexture(dev, enc, e, k.slice(0, 60), "texcheck");
+              }
+            } catch (e) {
+              console.log("[vpdiag] readback queue failed: " + (e && e.message));
             }
           }
           frameCapFinish();
