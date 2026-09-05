@@ -1,17 +1,35 @@
 diff --git a/Source/Core/VideoCommon/TextureCacheBase.cpp b/Source/Core/VideoCommon/TextureCacheBase.cpp
-index bbcd1140b4..0eb3be3c38 100644
+index bbcd1140b4..2508121074 100644
 --- a/Source/Core/VideoCommon/TextureCacheBase.cpp
 +++ b/Source/Core/VideoCommon/TextureCacheBase.cpp
-@@ -3,6 +3,8 @@
+@@ -3,6 +3,26 @@
  
  #include "VideoCommon/TextureCacheBase.h"
  
 +#include <cstdio>
++#include <set>
++
++// wasm-dolphin DIAGNOSTIC: every address an EFB copy has ever targeted, so a
++// texture decoding from zeroed memory can be tested for whether a copy was
++// supposed to have filled it.
++static std::set<u32>& DolphinWebTexDiag_CopyDsts()
++{
++  static std::set<u32> s;
++  return s;
++}
++static void DolphinWebTexDiag_NoteCopyDst(u32 a)
++{
++  DolphinWebTexDiag_CopyDsts().insert(a);
++}
++static bool DolphinWebTexDiag_WasCopyDst(u32 a)
++{
++  return DolphinWebTexDiag_CopyDsts().count(a) != 0;
++}
 +
  #include <algorithm>
  #include <chrono>
  #include <cmath>
-@@ -1700,6 +1702,42 @@ RcTcacheEntry TextureCacheBase::CreateTextureEntry(
+@@ -1700,6 +1720,44 @@ RcTcacheEntry TextureCacheBase::CreateTextureEntry(
  
        CheckTempSize(total_texture_size);
        dst_buffer = m_temp;
@@ -26,6 +44,7 @@ index bbcd1140b4..0eb3be3c38 100644
 +        static int s_tex_diag = 0;
 +        const u8* src = texture_info.GetData();
 +        const u32 addr = texture_info.GetRawAddress();
++      const int was_copy_dst = DolphinWebTexDiag_WasCopyDst(addr) ? 1 : 0;
 +        // The pointer is valid for MEM2, so the question is whether the guest
 +        // memory it points at actually holds texel data or is still zero.
 +        int src_nz = -1;
@@ -45,8 +64,9 @@ index bbcd1140b4..0eb3be3c38 100644
 +        if (s_tex_diag < 40 && (src == nullptr || expanded_width >= 128))
 +        {
 +          s_tex_diag++;
-+          printf("[texsrc] addr=%08x mem2=%d src=%s srcNonZero=%d size=%u w=%u h=%u fmt=%u%c",
-+                 addr, (addr >> 28) == 1 ? 1 : 0, src ? "ok" : "NULL", src_nz,
++          printf("[texsrc] addr=%08x mem2=%d src=%s srcNonZero=%d wasCopyDst=%d size=%u "
++                 "w=%u h=%u fmt=%u%c",
++                 addr, (addr >> 28) == 1 ? 1 : 0, src ? "ok" : "NULL", src_nz, was_copy_dst,
 +                 texture_info.GetTextureSize(), expanded_width, expanded_height,
 +                 static_cast<unsigned>(texture_info.GetTextureFormat()), 10);
 +        }
@@ -54,7 +74,36 @@ index bbcd1140b4..0eb3be3c38 100644
        if (!(texture_info.GetTextureFormat() == TextureFormat::RGBA8 && texture_info.IsFromTmem()))
        {
          TexDecoder_Decode(dst_buffer, texture_info.GetData(), expanded_width, expanded_height,
-@@ -2898,6 +2936,25 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
+@@ -2300,6 +2358,28 @@ void TextureCacheBase::CopyRenderTargetToTexture(
+       !is_depth_copy &&
+       (scaleByHalf || g_framebuffer_manager->GetEFBScale() != 1 || y_scale > 1.0f);
+ 
++  // wasm-dolphin DIAGNOSTIC: which addresses the EFB copy path targets, and by
++  // which route. Textures at 10abbd60 and 118d0920 decode from all-zero guest
++  // memory; if a copy registers a VRAM entry for them the later lookup should
++  // hit it instead of falling back to RAM, and if it registers nothing then the
++  // RAM those addresses point at is never written by anyone.
++  {
++    // Log only NON-XFB copies. The XFB copies to the two scan-out buffers are
++    // constant and saturated a flat 40-line cap before any texture-producing
++    // copy could appear, which made "no copy targets those addresses" look
++    // established when the probe had simply run out.
++    // Record EVERY copy destination, uncapped, so membership can be tested
++    // rather than inferred from a truncated log.
++    DolphinWebTexDiag_NoteCopyDst(dstAddr);
++    static int s_copy_diag = 0;
++    if (s_copy_diag < 40 && !is_xfb_copy)
++    {
++      s_copy_diag++;
++      printf("[efbcopy] dst=%08x w=%u h=%u stride=%u vram=%d ram=%d xfb=%d depth=%d%c",
++             dstAddr, width, height, dstStride, copy_to_vram ? 1 : 0, copy_to_ram ? 1 : 0,
++             is_xfb_copy ? 1 : 0, is_depth_copy ? 1 : 0, 10);
++    }
++  }
+   RcTcacheEntry entry;
+   if (copy_to_vram)
+   {
+@@ -2898,6 +2978,25 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
    uniforms.clamp_bottom = (static_cast<float>(bottom_coord) + .5f) * rcp_efb_height;
    uniforms.pixel_height = g_ActiveConfig.bCopyEFBScaled ? rcp_efb_height : 1.0f / EFB_HEIGHT;
    uniforms.padding = 0;
