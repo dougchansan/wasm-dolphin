@@ -7776,6 +7776,16 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
       }
     }
     self._wgBgAll[id] = a;
+    // Structured counterpart of the string above: bgId -> {binding: texId}.
+    // Needed because a draw samples whichever texture unit its TEV uses --
+    // SAMP_AT(i) selects tex_##i -- so checking binding 0 alone inspects the
+    // wrong texture for any draw using another unit.
+    const byB = {};
+    for (let i = 0; i < count; i++) {
+      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+      if (kk === 1) byB[bb] = rr;
+    }
+    vpDiagBgTexByBinding.set(id, byB);
   }
   try {
     webGpuObjects.bindGroups.set(id,
@@ -8174,6 +8184,8 @@ const vpDiagTexData = new Map();   // texId -> {uploads, nonZero}
 // texture from one an EFB copy populated -- the RENDER_ATTACHMENT usage bit
 // cannot, since every entry carries it.
 const vpDiagRtDraws = new Map();   // texId -> cumulative draws into it
+const vpDiagBgTexByBinding = new Map();  // bgId -> {binding: texId}
+const vpDiagFsTexBinding = new Map();    // fsId -> texture binding it samples
 // BlitTexture destinations. A texture can also be filled by a blit rather than
 // a render pass, so counting only BeginPass targets would under-report how a
 // cache entry got populated.
@@ -8204,7 +8216,7 @@ function vpDiagNoteTexUpload(texId, bytes, len) {
   rec.nzBytes = (rec.nzBytes || 0) + nz;
   if (nz > 0) rec.nonZero++;
 }
-function vpDiagNoteTexBind(fbId, cmp, texId) {
+function vpDiagNoteTexBind(fbId, cmp, texId, samplerBinding) {
   if (vpDiagDone || fbId !== self._wgEfbColorId) return;
   if (cmp === "always" || cmp === "none") return;   // world geometry only
   const t = texId != null ? webGpuObjects.textures.get(texId) : null;
@@ -8229,7 +8241,8 @@ function vpDiagNoteTexBind(fbId, cmp, texId) {
     : bl > 0 ? `BLIT DEST (${bl})`
       : "never rendered into or blitted";
   const data = `${up}, ${filled}`;
-  const key = `tex#${texId != null ? texId : "none"} ` +
+  const key = `b${samplerBinding === undefined ? "?" : samplerBinding} ` +
+    `tex#${texId != null ? texId : "none"} ` +
     `${t && t.tex ? `${t.tex.width}x${t.tex.height} ${t.format}` : "unresolved"} ${data}`;
   vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
 }
@@ -8324,8 +8337,13 @@ function vpDiagNoteDraw(fbId, pipelineId) {
   if (fbId === self._wgEfbColorId) { vpDiagDrawsTotalEfb++; vpDiagDrawsSinceClear++; }
   if (fbId) vpDiagRtDraws.set(fbId, (vpDiagRtDraws.get(fbId) || 0) + 1);
   vpDiagCheckVertex(pipelineId);
-  const texId = self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined;
-  vpDiagNoteTexBind(fbId, cmp, texId);
+  const layTex = vpDiagPipeVtx.get(pipelineId);
+  const wantB = layTex ? vpDiagFsTexBinding.get(layTex.fsId) : undefined;
+  const byB = vpDiagBgTexByBinding.get(self._wgCurBg1);
+  const texId = (byB && wantB !== undefined && byB[wantB] !== undefined)
+    ? byB[wantB]
+    : (self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined);
+  vpDiagNoteTexBind(fbId, cmp, texId, wantB);
   const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
   vpDiagNoteTail(`fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp}` +
     ` tex#${texId != null ? texId : "?"}` +
@@ -8747,6 +8765,16 @@ const DIAG_UV_FINITE = false;
 // shows near-black, and a constant UV shows one flat colour.
 const DIAG_UV_VIS = false;
 const DIAG_UV_PERTURB = false;
+// Drop EFB draws whose sampled texture received no non-zero data. If the empty
+// textures cover the large surfaces, what remains should be the draws that
+// sample populated textures -- and whether anything recognisable appears says
+// how much of the blackness those empty textures actually account for.
+const DIAG_SKIP_EMPTY_TEX = false;
+function vpDiagTexIsEmpty(texId) {
+  const rec = vpDiagTexData.get(texId);
+  if (!rec) return false;                 // never uploaded: unknown, keep it
+  return rec.nonZero === 0 || (rec.samples && rec.nzBytes === 0);
+}
 let vpDiagUvFinite = 0;
 // Replace the sample with a verdict colour instead of a texel: magenta when the
 // sampled UV is finite, green when it is NaN or infinite. WGSL has no isNan, so
@@ -11089,6 +11117,13 @@ function drainWebGpuCmdRing(source = "presentation") {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
+            if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
+              const _l = vpDiagPipeVtx.get(self._wgCurPipe);
+              const _wb = _l ? vpDiagFsTexBinding.get(_l.fsId) : undefined;
+              const _bb = vpDiagBgTexByBinding.get(self._wgCurBg1);
+              const _t = (_bb && _wb !== undefined) ? _bb[_wb] : undefined;
+              if (_t !== undefined && vpDiagTexIsEmpty(_t)) break;
+            }
             if (VP_SKIP_RESCALED && vpRescaled) {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
@@ -11124,6 +11159,13 @@ function drainWebGpuCmdRing(source = "presentation") {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
+            if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
+              const _l = vpDiagPipeVtx.get(self._wgCurPipe);
+              const _wb = _l ? vpDiagFsTexBinding.get(_l.fsId) : undefined;
+              const _bb = vpDiagBgTexByBinding.get(self._wgCurBg1);
+              const _t = (_bb && _wb !== undefined) ? _bb[_wb] : undefined;
+              if (_t !== undefined && vpDiagTexIsEmpty(_t)) break;
+            }
             if (VP_SKIP_RESCALED && vpRescaled) {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
@@ -12385,6 +12427,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   // assuming a leading float32x3.
   vpDiagPipeVtx.set(pipelineId, {
     stride,
+    fsId,
     pos: attributes.find((a) => a.shaderLocation === 0) || null,
     // ShaderAttrib::TexCoord0 == 8. With an identity texgen matrix the sampled
     // UV is this attribute, so a zero/degenerate texcoord samples the black
@@ -12652,10 +12695,16 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
           JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
       }
     }
+    if (stage === 2) {
+      const mb0 = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
+      if (mb0) vpDiagFsTexBinding.set(id, Number(mb0[1]));
+    }
     if (stage === 2 && !self._vpDiagFsBindingsLogged) {
       self._vpDiagFsBindingsLogged = true;
       const calls = wgsl.match(/textureSample[A-Za-z]*\([^;]*?\);/g) || [];
       console.log("[vpdiag] FS sample calls: " + JSON.stringify(calls.slice(0, 3)));
+      const mb = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
+      if (mb) vpDiagFsTexBinding.set(id, Number(mb[1]));
       const decls = wgsl.match(/@group\([0-9]+\)\s*@binding\([0-9]+\)\s*var[^;]*;/g) || [];
       console.log("[vpdiag] FS bindings: " + JSON.stringify(decls));
     }
