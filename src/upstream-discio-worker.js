@@ -8174,7 +8174,21 @@ const vpDiagTexData = new Map();   // texId -> {uploads, nonZero}
 // texture from one an EFB copy populated -- the RENDER_ATTACHMENT usage bit
 // cannot, since every entry carries it.
 const vpDiagRtDraws = new Map();   // texId -> cumulative draws into it
+// BlitTexture destinations. A texture can also be filled by a blit rather than
+// a render pass, so counting only BeginPass targets would under-report how a
+// cache entry got populated.
+const vpDiagBlitDst = new Map();
 let vpDiagTexBind = new Map();
+// Shape of the uploads that arrive empty, so the zeros can be attributed:
+// is the payload the expected size, does it come through the staging path, and
+// is any byte non-zero anywhere in it.
+const vpDiagTexUploadShape = new Map();
+function vpDiagNoteTexUploadShape(texId, bpr, w, h, len, staged, nzFrac) {
+  if (vpDiagDone) return;
+  const key = `${w}x${h} bpr=${bpr} len=${len} expect=${bpr * h} ` +
+    `${staged ? "staged" : "direct"} nz=${nzFrac}%`;
+  vpDiagTexUploadShape.set(key, (vpDiagTexUploadShape.get(key) || 0) + 1);
+}
 function vpDiagNoteTexUpload(texId, bytes, len) {
   let rec = vpDiagTexData.get(texId);
   if (!rec) vpDiagTexData.set(texId, (rec = { uploads: 0, nonZero: 0 }));
@@ -8210,7 +8224,11 @@ function vpDiagNoteTexBind(fbId, cmp, texId) {
   const up = !rec ? "no upload"
     : rec.nonZero > 0 ? `${pct}% non-zero`
       : `upload ALL ZERO (${rec.uploads})`;
-  const data = `${up}, ${rt > 0 ? `RENDERED INTO (${rt} draws)` : "never rendered into"}`;
+  const bl = vpDiagBlitDst.get(texId) || 0;
+  const filled = rt > 0 ? `RENDERED INTO (${rt} draws)`
+    : bl > 0 ? `BLIT DEST (${bl})`
+      : "never rendered into or blitted";
+  const data = `${up}, ${filled}`;
   const key = `tex#${texId != null ? texId : "none"} ` +
     `${t && t.tex ? `${t.tex.width}x${t.tex.height} ${t.format}` : "unresolved"} ${data}`;
   vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
@@ -8381,6 +8399,9 @@ function vpDiagFinish(present) {
     const v = k.split(",");
     console.log(`[vpdiag]   ${String(n).padStart(4)}x texmtx0` +
       ` [${v.slice(0, 4).join(" ")}] [${v.slice(4, 8).join(" ")}] [${v.slice(8, 12).join(" ")}]`);
+  }
+  for (const [k, n] of [...vpDiagTexUploadShape.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x texupload ${k}`);
   }
   console.log(`[vpdiag] present #${present}: world draws bind ` +
               `${vpDiagTexBind.size} distinct textures`);
@@ -10254,7 +10275,13 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (!t) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
             }
-            if (!vpDiagDone) vpDiagNoteTexUpload(textureId, uploadSource, uploadBytes);
+            if (!vpDiagDone) {
+              vpDiagNoteTexUpload(textureId, uploadSource, uploadBytes);
+              const _r = vpDiagTexData.get(textureId);
+              vpDiagNoteTexUploadShape(textureId, bpr, u32[recWord + 4], h, uploadBytes,
+                !!stagedUpload,
+                _r && _r.samples ? Math.round((100 * _r.nzBytes) / _r.samples) : 0);
+            }
             const uz = u32[recWord + 7];
             if (t && !t.format.startsWith("depth") && uz < t.layers) {
               const w = u32[recWord + 4];
@@ -11956,6 +11983,9 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (!s) wgpuReplayClassifier?.recordMissingResource({ kind: "blit-source", id: sourceId });
           if (!d) wgpuReplayClassifier?.recordMissingResource({ kind: "blit-destination", id: destinationId });
           if (s && d) {
+            if (!vpDiagDone) {
+              vpDiagBlitDst.set(destinationId, (vpDiagBlitDst.get(destinationId) || 0) + 1);
+            }
             endPass("blit", read);
             ensureEnc();
             const a2 = u32[recWord + 3], a3 = u32[recWord + 4];
