@@ -8260,6 +8260,7 @@ function vpDiagNoteTail(entry) {
 }
 let vpDiagPcc = new Map();
 let vpDiagTexMtx = new Map();
+let vpDiagLight = new Map();
 let vpDiagTc0 = new Map();
 // PixelShaderConstants: colors[4] int4 at 0, kcolors[4] int4 at 64, alpha int4
 // at 128. These are the TEV registers. If a draw's TEV output is built from
@@ -8407,6 +8408,21 @@ function vpDiagNoteUpload(bytes, len) {
   const tm = new Float32Array(bytes.buffer, bytes.byteOffset + 896, 12);
   const tmKey = Array.from(tm, (v) => v.toFixed(2)).join(",");
   vpDiagTexMtx.set(tmKey, (vpDiagTexMtx.get(tmKey) || 0) + 1);
+  // Lighting inputs to vertexColour0. VertexShaderConstants: components at 0,
+  // xfmem_numColorChans at 8, materials[4] int4 at 192, lights[8] at 256 with
+  // each light 80 bytes starting with an int4 colour. vertexColour0.a is what
+  // measured near zero, so the alpha lanes here are the ones that matter.
+  const hdr = new Uint32Array(bytes.buffer, bytes.byteOffset, 3);
+  const mat = new Int32Array(bytes.buffer, bytes.byteOffset + 192, 16);
+  const lit = new Int32Array(bytes.buffer, bytes.byteOffset + 256, 4);
+  vpDiagLight.set(
+    `chans=${hdr[2]} mat0[${mat.slice(0, 4).join(",")}] mat1[${mat.slice(4, 8).join(",")}] ` +
+    `mat2[${mat.slice(8, 12).join(",")}] mat3[${mat.slice(12, 16).join(",")}] ` +
+    `light0[${lit.join(",")}]`,
+    (vpDiagLight.get(
+      `chans=${hdr[2]} mat0[${mat.slice(0, 4).join(",")}] mat1[${mat.slice(4, 8).join(",")}] ` +
+      `mat2[${mat.slice(8, 12).join(",")}] mat3[${mat.slice(12, 16).join(",")}] ` +
+      `light0[${lit.join(",")}]`) || 0) + 1);
   const c = new Float32Array(bytes.buffer, bytes.byteOffset + 3840, 6);
   vpDiagPcc.set(Array.from(c, (v) => v.toFixed(3)).join(","),
     (vpDiagPcc.get(Array.from(c, (v) => v.toFixed(3)).join(",")) || 0) + 1);
@@ -8505,6 +8521,7 @@ function vpDiagPresent() {
   vpDiagPosOk = 0; vpDiagPosBad = 0;
   vpDiagPcc.clear();
   vpDiagTexMtx.clear();
+  vpDiagLight.clear();
   vpDiagTc0.clear();
   vpDiagTev.clear();
   vpDiagFog.clear();
@@ -8544,6 +8561,9 @@ function vpDiagFinish(present) {
               `| pixel shaders containing discard: ${vpDiagShaderWithDiscard}`);
   for (const [k, n] of [...vpDiagTc0.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x tc0 ${k}`);
+  }
+  for (const [k, n] of [...vpDiagLight.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
   }
   for (const [k, n] of [...vpDiagTexMtx.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
     const v = k.split(",");
