@@ -79,8 +79,8 @@ hypotheses previously "measured away", the first was wrong -- see below.
    World's ~7,800 clears a frame drop it to a near-black frame at 2.0 visual
    fps. A working fix needs a clear that does not tear down the pass.
 
-   **A working one now exists, opt-in behind `?disable=0x1000000`
-   (2026-09-06).** The `ClearRect` opcode draws a scissored full-screen
+   **Fixed and ON by default (2026-09-06). Opt out with
+   `?disable=0x2000000`.** The `ClearRect` opcode draws a scissored full-screen
    triangle inside the open pass, so the pass is never torn down. It blanked
    the frame from the day it was added until the cause was measured: it wrote
    the producer's clear depth, 0.9999999403953552, while the `loadOp` path
@@ -118,6 +118,14 @@ hypotheses previously "measured away", the first was wrong -- see below.
    times in one Mario Kart Wii frame with 4 whole-attachment clears, and only
    142 of 390 EFB draws land after the last one. **64% of the frame's geometry
    is destroyed by clears that should not be touching it.**
+
+   Enabling it costs a little speed rather than gaining any. On the
+   deterministic save states, default-on versus forced-off: Double Dash 28% vs
+   32%, Mario Kart Wii 43% vs 45% -- 4 and 2 points lower, the price of a
+   scissored draw per clear instead of a free `loadOp`. The five-title sweep
+   above showed no change because those runs are menus and attract modes rather
+   than loaded races. Correctness was chosen over the few points; the opt-out
+   restores the old behaviour exactly.
 2. **The XFB copy is taken too early.** Falsified. The EFB passes before each
    copy use `loadOp=load`, so content accumulates ACROSS the backbuffer
    present. Re-aligning a frame as the span between XFB copies, Sunshine's
