@@ -2061,7 +2061,22 @@ async function loadCore({
   );
   if (wgpuProducerProfileRequested || wgpuDrawProfileRequested)
     verifyWgpuProducerProfileActivation("core boot");
-  const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
+  // Bit 24 enables the scissored ClearRect path in WebGPUGfx::ClearRegion.
+  // WebGPU has no scissored load-clear, so without it Dolphin's partial clears
+  // become whole-attachment loadOp clears: 16 EFB passes and 4 full clears in
+  // one Mario Kart Wii frame, with only 142 of 390 draws landing after the last
+  // one. It is defaulted ON here rather than in WebGPUGfx.cpp because the gate
+  // reads this runtime mask, so the default costs no core rebuild and no
+  // patch-series or vendor-snapshot change.
+  //
+  // Bit 25 forces it back off, so the behaviour is reversible through the
+  // existing ?disable= parameter without new plumbing: ?disable=0x2000000.
+  const CLEARRECT_ENABLE = 1 << 24;
+  const CLEARRECT_FORCE_OFF = 1 << 25;
+  let disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
+  if ((disableMask & CLEARRECT_FORCE_OFF) === 0) {
+    disableMask = (disableMask | CLEARRECT_ENABLE) >>> 0;
+  }
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
     postStatus(`CachedInterpreter disable mask = 0x${disableMask.toString(16)}`);
