@@ -8090,6 +8090,57 @@ let vpDiagLastVtxLen = 0;
 // with a pipeline: one upload serves many subsequent draws, which read it at
 // their own base-vertex offsets and say nothing about its total length.
 let vpDiagVtxFresh = false;
+// Index-buffer contents and the draw parameters that address them. Correct
+// vertices can still render as wrong shapes if the indices are wrong, and
+// nothing has inspected them yet. The addressing is known to be sane -- the
+// live path binds the index buffer at offset 0 and passes base_index as
+// firstIndex -- so this is about the values themselves.
+let vpDiagLastIdxMin = -1;
+let vpDiagLastIdxMax = -1;
+let vpDiagLastIdxCount = 0;
+let vpDiagLastVtxCount = 0;
+const vpDiagIdxTally = new Map();
+const vpDiagBatchPos = new Map();
+// Keep recent index uploads keyed by their destination byte offset. A draw's
+// firstIndex addresses the ring, not the most recent upload, so the previous
+// version compared a draw against whatever happened to be uploaded last -- which
+// reported a stale 6-index range for every draw.
+const vpDiagIdxUploads = [];
+function vpDiagNoteIndexUpload(bytes, len, dstOffset) {
+  if (vpDiagDone) return;
+  const n = len >> 1;
+  if (!n) return;
+  const copy = new Uint16Array(n);
+  copy.set(new Uint16Array(bytes.buffer, bytes.byteOffset, n));
+  vpDiagIdxUploads.push({ off: dstOffset, n, data: copy });
+  if (vpDiagIdxUploads.length > 24) vpDiagIdxUploads.shift();
+}
+function vpDiagIndicesFor(firstIndex, count) {
+  const startByte = firstIndex * 2;
+  for (let i = vpDiagIdxUploads.length - 1; i >= 0; i--) {
+    const u = vpDiagIdxUploads[i];
+    if (startByte >= u.off && startByte + count * 2 <= u.off + u.n * 2) {
+      const base = (startByte - u.off) >> 1;
+      let mn = 0xffff, mx = 0;
+      for (let k = 0; k < count; k++) {
+        const v = u.data[base + k];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      return { mn, mx };
+    }
+  }
+  return null;
+}
+function vpDiagNoteIndexedDraw(idxCount, firstIndex, baseVertex) {
+  if (vpDiagDone) return;
+  const r = vpDiagIndicesFor(firstIndex, idxCount);
+  const key = r
+    ? `indices[${r.mn}..${r.mx}] span=${r.mx - r.mn + 1} count=${idxCount}` +
+      `${r.mn === r.mx ? " DEGENERATE" : ""}`
+    : `count=${idxCount} first=${firstIndex} NO MATCHING UPLOAD`;
+  vpDiagIdxTally.set(key, (vpDiagIdxTally.get(key) || 0) + 1);
+}
 const VPDIAG_FMT_READ = {
   float32: (dv, o) => [dv.getFloat32(o, true)],
   float32x2: (dv, o) => [dv.getFloat32(o, true), dv.getFloat32(o + 4, true)],
@@ -8140,6 +8191,36 @@ function vpDiagCheckVertex(pipelineId) {
   }
   const pos = lay.pos;
   if (!pos) return;
+  if (fresh && lay.stride) {
+    const rdA = VPDIAG_FMT_READ[pos.format];
+    const nv = Math.floor(vpDiagLastVtxLen / lay.stride);
+    if (rdA && nv > 1) {
+      const dvA = new DataView(vpDiagLastVtxBytes.buffer, vpDiagLastVtxBytes.byteOffset);
+      let mnx = 1e30, mxx = -1e30, mny = 1e30, mxy = -1e30, bad = 0;
+      const lim = Math.min(nv, Math.floor(vpDiagLastVtxBytes.byteLength / lay.stride));
+      for (let i = 0; i < lim; i++) {
+        const o = i * lay.stride + pos.offset;
+        if (o + 8 > vpDiagLastVtxBytes.byteLength) break;
+        const v = rdA(dvA, o);
+        if (!v.every((x) => Number.isFinite(x))) { bad++; continue; }
+        if (v[0] < mnx) mnx = v[0];
+        if (v[0] > mxx) mxx = v[0];
+        if (v[1] < mny) mny = v[1];
+        if (v[1] > mxy) mxy = v[1];
+      }
+      if (lim > 1 && mxx > -1e30) {
+        const flat = (mxx - mnx) < 1e-4 || (mxy - mny) < 1e-4;
+        vpDiagBatchPos.set(
+          `n=${lim} x[${mnx.toFixed(1)}..${mxx.toFixed(1)}] ` +
+          `y[${mny.toFixed(1)}..${mxy.toFixed(1)}]${bad ? ` bad=${bad}` : ""}` +
+          `${flat ? " FLAT" : ""}`,
+          (vpDiagBatchPos.get(
+            `n=${lim} x[${mnx.toFixed(1)}..${mxx.toFixed(1)}] ` +
+            `y[${mny.toFixed(1)}..${mxy.toFixed(1)}]${bad ? ` bad=${bad}` : ""}` +
+            `${flat ? " FLAT" : ""}`) || 0) + 1);
+      }
+    }
+  }
   const rd = VPDIAG_FMT_READ[pos.format];
   if (!rd || pos.offset + 16 > vpDiagLastVtxBytes.byteLength) return;
   const dv = new DataView(vpDiagLastVtxBytes.buffer, vpDiagLastVtxBytes.byteOffset);
@@ -8392,6 +8473,8 @@ function vpDiagPresent() {
   // and would otherwise hand it an empty tally.
   vpDiagLastPicks = [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
   vpDiagTexBind.clear();
+  vpDiagIdxTally.clear();
+  vpDiagBatchPos.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
@@ -8429,6 +8512,12 @@ function vpDiagFinish(present) {
   }
   for (const [k, n] of [...vpDiagTexUploadShape.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x texupload ${k}`);
+  }
+  for (const [k, n] of [...vpDiagBatchPos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x batchpos ${k}`);
+  }
+  for (const [k, n] of [...vpDiagIdxTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
   }
   console.log(`[vpdiag] present #${present}: world draws bind ` +
               `${vpDiagTexBind.size} distinct textures`);
@@ -9955,12 +10044,21 @@ function drainWebGpuCmdRing(source = "presentation") {
             // vertex fetch.
             vpDiagNoteUpload(uploadSource, len);
           vpDiagNotePsUpload(uploadSource, len);
+          if (uploadRole === 4 && !vpDiagDone) {
+            vpDiagNoteIndexUpload(uploadSource, len, u32[recWord + 2]);
+          }
           if (uploadRole === 3) {
             vpDiagNoteVertexUpload(uploadSource, len);
             if (!vpDiagDone) {
-              vpDiagLastVtxBytes = uploadSource.slice(0, Math.min(len, 256));
+              // Keep enough of the batch to decode EVERY vertex, not just the
+              // first. 864fb59 validated only the leading vertex, which says
+              // nothing about the rest of a mesh -- and rectangular coverage is
+              // what wrong positions across the remainder would look like.
+              vpDiagLastVtxBytes = uploadSource.slice(0, Math.min(len, 262144));
               vpDiagLastVtxLen = len;
               vpDiagVtxFresh = true;
+              const _l = vpDiagPipeVtx.get(self._wgCurPipe);
+              vpDiagLastVtxCount = (_l && _l.stride) ? Math.floor(len / _l.stride) : 0;
             }
           }
             const bid = u32[recWord + 1];
@@ -11212,7 +11310,10 @@ function drainWebGpuCmdRing(source = "presentation") {
               break;
             }
             frameCapPush(`  DRAW     fb#${passFbId}`);
-            if (!vpDiagDone) vpDiagIdx += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
+            if (!vpDiagDone) {
+              vpDiagIdx += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
+              vpDiagNoteIndexedDraw(u32[recWord + 1], u32[recWord + 3], u32[recWord + 4]);
+            }
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
             webGpuExecStats.drawIdx++; pd.drawIdx++;
