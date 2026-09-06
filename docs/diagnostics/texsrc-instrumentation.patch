@@ -129,3 +129,36 @@ index bbcd1140b4..2508121074 100644
    g_vertex_manager->UploadUtilityUniforms(&uniforms, sizeof(uniforms));
  
    // Use the copy pipeline to render the VRAM copy.
+
+# ---------------------------------------------------------------------------
+# NOT A DIFF -- the WebGPU backend sources are ADDED by the patch series, so
+# they are untracked inside vendor/dolphin and `git diff` cannot capture them.
+# Reproduce the stride comparison by hand:
+#
+# WebGPUVertexManager.cpp, file scope:
+#   static u32 s_last_commit_stride = 0;
+#   extern "C" void DolphinWebSetLastCommitStride(u32 v) { s_last_commit_stride = v; }
+#   extern "C" u32  DolphinWebGetLastCommitStride()      { return s_last_commit_stride; }
+# and in CommitBuffer(), after the `vertex_stride == 0` guard:
+#   DolphinWebSetLastCommitStride(vertex_stride);
+#
+# WebGPUGfx.cpp, file scope:
+#   extern "C" u32 DolphinWebGetLastCommitStride();
+#   #include <map>
+#   static std::map<u32, u32>& DolphinWebTexDiag_PipelineStride()
+#   { static std::map<u32, u32> m; return m; }
+# in CreatePipeline(), after PushCreatePipelineCfg returns a non-zero bridge_id:
+#   DolphinWebTexDiag_PipelineStride()[bridge_id] =
+#       config.vertex_format
+#         ? (u32)config.vertex_format->GetVertexDeclaration().stride : 0;
+# and in DrawIndexed() -- NOT Draw(), almost every world draw is indexed --
+# before the PrepareDrawResources() guard, printing PERIODICALLY because the
+# consumer keeps only the last 128 status messages:
+#   static u64 s_n = 0; static int s_bad = 0;
+#   const auto& sm = DolphinWebTexDiag_PipelineStride();
+#   const auto it = sm.find(m_cur_pipeline_id);
+#   const u32 declared = (it != sm.end()) ? it->second : 0;
+#   const u32 actual = DolphinWebGetLastCommitStride();
+#   if (declared && actual && declared != actual) ++s_bad;
+#   if (declared && actual && (++s_n % 4000) == 0)
+#     printf("[stride] n=%llu pipe=%u declared=%u actual=%u mismatches=%d\n", ...);
