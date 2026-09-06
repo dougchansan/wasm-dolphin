@@ -8353,8 +8353,13 @@ function vpDiagNoteDraw(fbId, pipelineId) {
 // Called from SUBMIT_PRESENT, before the present counter increments, so the
 // tally holds exactly the draws of the frame being presented.
 function vpDiagPresent() {
+  // Isolation bookkeeping must run every frame, before the tally's early
+  // return -- otherwise it silently stops once the dump window closes.
+  const pn = self._wgPresentCount || 0;
+  vpDiagIsolateSeen = 0;
+  vpDiagIsolateIdx = Math.floor(pn / 300) % 60;
   if (vpDiagDone) return;
-  const n = self._wgPresentCount || 0;
+  const n = pn;
   if (n === 0) {
     console.log(`[vpdiag] armed, dumping every ${VPDIAG_EVERY} presents ` +
                 `up to #${VPDIAG_UNTIL}`);
@@ -8775,6 +8780,28 @@ const DIAG_UV_PERTURB = false;
 // how much of the blackness those empty textures actually account for.
 const DIAG_SKIP_EMPTY_TEX = false;
 const DIAG_TEX_READBACK = false;
+// Render ONE depth-tested EFB draw per frame and skip the rest, so a single
+// draw's output can be observed directly instead of inferred from texture and
+// state accounting. The index advances every 300 presents so successive
+// screenshots show different draws. Depth-less draws (the 2D overlay) are kept
+// for orientation.
+const DIAG_ISOLATE_DRAW = false;
+// Constant colour on pipelines that perform a REAL depth test (less/greater
+// family), leaving depth=always and depth=none alone. DIAG_CONST_FS covers
+// every depth-using pipeline including the always quads, which are the only
+// visible content, so it cannot show whether the less-equal world draws
+// actually cover the screen. This can.
+const DIAG_CONST_FS_TESTED_ONLY = false;
+let vpDiagIsolateIdx = 0;
+let vpDiagIsolateSeen = 0;
+function vpDiagIsolateAllows(fbId, pipelineId) {
+  if (!DIAG_ISOLATE_DRAW || fbId !== self._wgEfbColorId) return true;
+  const tpl = webGpuObjects.pipeTpl.get(pipelineId);
+  const cmp = tpl && tpl.depthBase ? tpl.depthBase.depthCompare : "none";
+  if (cmp === "none") return true;              // 2D overlay: always keep
+  const n = vpDiagIsolateSeen++;
+  return n === vpDiagIsolateIdx;
+}
 let vpDiagReadbackDone = false;
 let vpDiagLastPicks = [];
 function vpDiagTexIsEmpty(texId) {
@@ -11128,6 +11155,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               (!passNeedsVertexBuffer || vertexBufferValid)) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (!vpDiagIsolateAllows(passFbId, self._wgCurPipe)) break;
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
               const _l = vpDiagPipeVtx.get(self._wgCurPipe);
@@ -11170,6 +11198,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           } else if (pass) {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
+            if (!vpDiagIsolateAllows(passFbId, self._wgCurPipe)) break;
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
               const _l = vpDiagPipeVtx.get(self._wgCurPipe);
@@ -12515,7 +12544,11 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
         : []
     },
     fragment: {
-      module: (DIAG_CONST_FS && hasDepth) ? getConstFsModule(renderGpu.device)
+      module: ((DIAG_CONST_FS && hasDepth) ||
+               (DIAG_CONST_FS_TESTED_ONLY && hasDepth && depthTest &&
+                ["less", "greater", "less-equal", "greater-equal"]
+                  .includes(WGPU_COMPARE[depthCompare])))
+        ? getConstFsModule(renderGpu.device)
         : (((DIAG_FORCE_UV || DIAG_UV_FINITE || DIAG_UV_PERTURB) && hasDepth &&
             pickVariantFs(fsId)) || fs),
       targets: [target]
