@@ -8279,6 +8279,28 @@ const vpDiagTexData = new Map();   // texId -> {uploads, nonZero}
 const vpDiagRtDraws = new Map();   // texId -> cumulative draws into it
 const vpDiagBgTexByBinding = new Map();  // bgId -> {binding: texId}
 const vpDiagFsTexBinding = new Map();    // fsId -> texture binding it samples
+const vpDiagFsSource = new Map();        // fsId -> translated WGSL
+const vpDiagPipeDraws = new Map();       // pipelineId -> depth-tested EFB draws
+let vpDiagShaderDumped = false;
+// Print the translated fragment shader of whichever pipeline the most
+// depth-tested EFB draws use. Every test so far has probed this shader from
+// outside -- substituting it, perturbing its sample, stripping its discard --
+// without anyone reading what it actually computes.
+function vpDiagDumpTopShader() {
+  if (vpDiagShaderDumped || !vpDiagPipeDraws.size) return;
+  const top = [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1])[0];
+  const lay = vpDiagPipeVtx.get(top[0]);
+  const src = lay ? vpDiagFsSource.get(lay.fsId) : null;
+  if (!src) return;
+  vpDiagShaderDumped = true;
+  console.log(`[fsdump] pipeline ${top[0]} (${top[1]} draws) fs=${lay.fsId} ` +
+              `len=${src.length}`);
+  const compact = src.replace(/[ 	]+/g, " ");
+  for (let i = 0; i < compact.length; i += 700) {
+    console.log(`[fsdump] ${(i / 700) | 0}| ${compact.slice(i, i + 700)}`);
+  }
+  console.log("[fsdump] END");
+}
 // BlitTexture destinations. A texture can also be filled by a blit rather than
 // a render pass, so counting only BeginPass targets would under-report how a
 // cache entry got populated.
@@ -8427,7 +8449,13 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     ? `wm${lay.writeMask}${lay.blendEnable ? ` blend${lay.srcF}/${lay.dstF}` : " noblend"}`
     : "wm?";
   const key = `fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp} ${blend}`;
-  if (fbId === self._wgEfbColorId) { vpDiagDrawsTotalEfb++; vpDiagDrawsSinceClear++; }
+  if (fbId === self._wgEfbColorId) {
+    vpDiagDrawsTotalEfb++;
+    vpDiagDrawsSinceClear++;
+    if (cmp !== "always" && cmp !== "none") {
+      vpDiagPipeDraws.set(pipelineId, (vpDiagPipeDraws.get(pipelineId) || 0) + 1);
+    }
+  }
   if (fbId) vpDiagRtDraws.set(fbId, (vpDiagRtDraws.get(fbId) || 0) + 1);
   vpDiagCheckVertex(pipelineId);
   const layTex = vpDiagPipeVtx.get(pipelineId);
@@ -8531,6 +8559,7 @@ function vpDiagFinish(present) {
   for (const [k, n] of [...vpDiagIdxTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
   }
+  if (present >= 2500) vpDiagDumpTopShader();
   console.log(`[vpdiag] present #${present}: world draws bind ` +
               `${vpDiagTexBind.size} distinct textures`);
   for (const [k, n] of [...vpDiagTexBind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
@@ -12894,6 +12923,7 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
           JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
       }
     }
+    if (stage === 2 && wgsl.length < 60000) vpDiagFsSource.set(id, wgsl);
     if (stage === 2) {
       const mb0 = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
       if (mb0) vpDiagFsTexBinding.set(id, Number(mb0[1]));
