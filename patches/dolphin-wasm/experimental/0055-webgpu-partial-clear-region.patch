@@ -1,0 +1,44 @@
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1231,8 +1231,8 @@
+ }
+ 
+-void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& /* target_rc */, bool color_enable,
+-                            bool alpha_enable, bool z_enable, u32 color, u32 /* z */)
++void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool color_enable,
++                            bool alpha_enable, bool z_enable, u32 color, u32 z)
+ {
+@@ -1241,31 +1241,12 @@
+-  if (!m_cmd_stream.ready())
+-    return;
+-  EndPassIfOpen();
+-  // color_enable/z_enable used to be ignored: a depth-only clear still set a
+-  // colour clear (to black), which wiped a fully-rendered 3D EFB before the
+-  // XFB copy was taken. The scene rendered correctly and was then destroyed,
+-  // leaving only the 2D overlay -- issue #8. Honour both enables instead.
+-  if (color_enable)
+-  {
+-    m_clear_col[0] = static_cast<float>((color >> 16) & 0xff) / 255.0f;
+-    m_clear_col[1] = static_cast<float>((color >> 8) & 0xff) / 255.0f;
+-    m_clear_col[2] = static_cast<float>(color & 0xff) / 255.0f;
+-    m_clear_col[3] = alpha_enable ? static_cast<float>((color >> 24) & 0xff) / 255.0f : 1.0f;
+-  }
+-  m_pending_clear_color = color_enable;
+-  m_pending_clear_depth = z_enable;
+-  m_pending_clear = color_enable || z_enable;
+-  if (!m_pending_clear)
+-  {
+-    BeginPassIfNeeded();
+-    return;
+-  }
+-  BeginPassIfNeeded();
++  // A render-pass loadOp clear always affects the complete attachment, so it cannot implement
++  // GX's target_rc semantics. Mario Kart Wii uses partial EFB clears while composing race panes
++  // and HUD layers; turning those into whole-EFB clears destroys already-rendered regions.
++  //
++  // Dolphin's generic fallback is exactly the operation WebGPU needs here: it uploads the
++  // requested color/depth, selects the clear utility pipeline, sets viewport+scissor to
++  // target_rc, and draws the clear triangle. This also preserves independent color/alpha/depth
++  // enables rather than encoding a rectangle clear as attachment load state.
++  AbstractGfx::ClearRegion(target_rc, color_enable, alpha_enable, z_enable, color, z);
+ }
