@@ -8323,7 +8323,14 @@ const VPDIAG_DUMP_VS = true;
 // without anyone reading what it actually computes.
 function vpDiagDumpTopShader() {
   if (vpDiagShaderDumped || !vpDiagPipeDraws.size) return;
-  const top = [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1])[0];
+  // Prefer the busiest pipeline with NO Color0 attribute: those must synthesise
+  // colour0 from missing_color_value, which measured opaque white, yet the
+  // coverage probe showed their pixels at alpha 0.
+  const ranked = [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1]);
+  const top = ranked.find(([pid]) => {
+    const l = vpDiagPipeVtx.get(pid);
+    return l && !l.col0;
+  }) || ranked[0];
   const lay = vpDiagPipeVtx.get(top[0]);
   const src = lay ? vpDiagFsSource.get(VPDIAG_DUMP_VS ? lay.vsId : lay.fsId) : null;
   if (!src) return;
@@ -8629,6 +8636,18 @@ function vpDiagFinish(present) {
   }
   for (const [k, n] of [...vpDiagIdxTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
+  }
+  // Per-pipeline colour-attribute presence, weighted by depth-tested draw
+  // count. No upload/pipeline pairing is involved, so this cannot suffer the
+  // ambiguity that broke the earlier per-batch colour probe.
+  {
+    const rows = [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+    for (const [pid, n] of rows) {
+      const l = vpDiagPipeVtx.get(pid);
+      const c = l && l.col0;
+      console.log(`[vpdiag]   pipe ${pid}: ${n} draws stride=${l ? l.stride : "?"} ` +
+        `col0=${c ? `${c.format}@${c.offset}` : "ABSENT"}`);
+    }
   }
   if (present >= 2500) vpDiagDumpTopShader();
   console.log(`[vpdiag] present #${present}: world draws bind ` +
