@@ -8283,6 +8283,7 @@ const vpDiagFsTexBinding = new Map();    // fsId -> texture binding it samples
 const vpDiagFsSource = new Map();        // fsId -> translated WGSL
 const vpDiagPipeDraws = new Map();       // pipelineId -> depth-tested EFB draws
 let vpDiagShaderDumped = false;
+const VPDIAG_DUMP_VS = true;
 // Print the translated fragment shader of whichever pipeline the most
 // depth-tested EFB draws use. Every test so far has probed this shader from
 // outside -- substituting it, perturbing its sample, stripping its discard --
@@ -8291,11 +8292,11 @@ function vpDiagDumpTopShader() {
   if (vpDiagShaderDumped || !vpDiagPipeDraws.size) return;
   const top = [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1])[0];
   const lay = vpDiagPipeVtx.get(top[0]);
-  const src = lay ? vpDiagFsSource.get(lay.fsId) : null;
+  const src = lay ? vpDiagFsSource.get(VPDIAG_DUMP_VS ? lay.vsId : lay.fsId) : null;
   if (!src) return;
   vpDiagShaderDumped = true;
-  console.log(`[fsdump] pipeline ${top[0]} (${top[1]} draws) fs=${lay.fsId} ` +
-              `len=${src.length}`);
+  console.log(`[fsdump] pipeline ${top[0]} (${top[1]} draws) ` +
+              `${VPDIAG_DUMP_VS ? "vs=" + lay.vsId : "fs=" + lay.fsId} len=${src.length}`);
   const compact = src.replace(/[ 	]+/g, " ");
   for (let i = 0; i < compact.length; i += 700) {
     console.log(`[fsdump] ${(i / 700) | 0}| ${compact.slice(i, i + 700)}`);
@@ -12699,6 +12700,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   vpDiagPipeVtx.set(pipelineId, {
     stride,
     fsId,
+    vsId,
     pos: attributes.find((a) => a.shaderLocation === 0) || null,
     // ShaderAttrib::TexCoord0 == 8. With an identity texgen matrix the sampled
     // UV is this attribute, so a zero/degenerate texcoord samples the black
@@ -12977,7 +12979,9 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
           JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
       }
     }
-    if (stage === 2 && wgsl.length < 60000) vpDiagFsSource.set(id, wgsl);
+    // Keep vertex sources too: vertexColour0.a is computed here, and the
+    // constants feeding it measured correct.
+    if ((stage === 2 || stage === 0) && wgsl.length < 60000) vpDiagFsSource.set(id, wgsl);
     if (stage === 2) {
       const mb0 = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
       if (mb0) vpDiagFsTexBinding.set(id, Number(mb0[1]));
