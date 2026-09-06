@@ -8202,7 +8202,19 @@ function vpDiagCheckVertex(pipelineId) {
         const o = i * lay.stride + pos.offset;
         if (o + 8 > vpDiagLastVtxBytes.byteLength) break;
         const v = rdA(dvA, o);
-        if (!v.every((x) => Number.isFinite(x))) { bad++; continue; }
+        if (!v.every((x) => Number.isFinite(x)) || Math.abs(v[0]) > 1e6) {
+          bad++;
+          if (!self._vpDiagBadVtxDumped) {
+            self._vpDiagBadVtxDumped = true;
+            const hex = [];
+            for (let k = 0; k < Math.min(lay.stride, 48); k++) {
+              hex.push(vpDiagLastVtxBytes[i * lay.stride + k].toString(16).padStart(2, "0"));
+            }
+            console.log(`[vpdiag] bad vertex #${i}: stride=${lay.stride} ` +
+              `posFmt=${pos.format} posOff=${pos.offset} raw=${hex.join(" ")}`);
+          }
+          continue;
+        }
         if (v[0] < mnx) mnx = v[0];
         if (v[0] > mxx) mxx = v[0];
         if (v[1] < mny) mny = v[1];
