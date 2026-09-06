@@ -8980,6 +8980,7 @@ const DIAG_UV_FINITE = false;
 const DIAG_UV_VIS = false;
 const DIAG_UV_PERTURB = false;
 const DIAG_SHOW_VCOLOR = false;
+const DIAG_ALPHA_COVERAGE = false;
 // Show vertex ALPHA as greyscale. The alpha stage reduces to
 // texAlpha * vertexAlpha, texture alpha measured 58..255, and the RGB
 // visualisation forced alpha to 1.0 -- so vertex alpha is the one operand in
@@ -9071,9 +9072,17 @@ function vcolorRewrite(src) {
   if (!m.length) return null;
   const last = m[m.length - 1];
   const out = src.slice(0, last.index) +
-    (DIAG_SHOW_VALPHA
-      ? `return vec4<f32>(${name}.w, ${name}.w, ${name}.w, 1.0);`
-      : `return vec4<f32>(${name}.x, ${name}.y, ${name}.z, 1.0);`) +
+    // Alpha in red, a constant 1.0 in green as a coverage marker. This is what
+    // ad77cd6's greyscale version could not do: there, black meant "alpha zero"
+    // OR "no draw covered this pixel", and the two are not the same claim.
+    //   black  = not covered by any depth-tested draw
+    //   green  = covered, vertex alpha 0
+    //   yellow = covered, vertex alpha 1
+    (DIAG_ALPHA_COVERAGE
+      ? `return vec4<f32>(${name}.w, 1.0, 0.0, 1.0);`
+      : DIAG_SHOW_VALPHA
+        ? `return vec4<f32>(${name}.w, ${name}.w, ${name}.w, 1.0);`
+        : `return vec4<f32>(${name}.x, ${name}.y, ${name}.z, 1.0);`) +
     src.slice(last.index + last[0].length);
   if (out !== src && ++vpDiagVcolor <= 1) {
     console.log("[vpdiag] built vertex-colour visualisation variants");
