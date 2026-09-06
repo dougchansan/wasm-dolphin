@@ -91,9 +91,28 @@ hypotheses previously "measured away", the first was wrong -- see below.
 
    With it enabled, Double Dash renders a full correct 3D scene and Mario Kart
    Wii renders its 2D overlay exactly as on the default path -- where before it
-   produced an entirely black frame. It stays opt-in pending a breadth sweep,
-   because it changes clearing for every title and the earlier rewrite is what
-   regressed Wario World.
+   produced an entirely black frame.
+
+   Five-title A/B, 60-70s each, `video=wgpu presenter=webgpu`, clear path off
+   then on:
+
+   | title | off | on |
+   | --- | --- | --- |
+   | Wario World | 70 hashes, 100%, 60.0 fps | 70 hashes, 100%, 60.0 fps |
+   | Melee | 47 hashes, 100% | 41 hashes, 101% |
+   | Double Dash | 56 hashes, 100% | 54 hashes, 100% |
+   | F-Zero GX | 54 hashes, 100% | 55 hashes, 100% |
+   | Pikmin 2 | 24 hashes, 46% | 24 hashes, 47% |
+
+   No regression anywhere. Wario World matters most: it is the title the
+   earlier scissored-quad rewrite dropped to 2.0 visual fps, it issues ~7,800
+   clears a frame, and it is untouched at a full 60. Hash counts move within
+   scene-timing noise and speeds are unchanged.
+
+   Two of the first runs reported `hashes=0 speed=0%` and looked like total
+   regressions; both were "Timed out waiting for Dolphin mount", a harness
+   startup failure on back-to-back runs, and passed on a retry. Worth checking
+   the log before reading a zero as a result.
 
    The cost of not enabling it is now quantified: the EFB pass is begun 16
    times in one Mario Kart Wii frame with 4 whole-attachment clears, and only
