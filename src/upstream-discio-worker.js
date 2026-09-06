@@ -8893,6 +8893,25 @@ const DIAG_ISOLATE_DRAW = false;
 // visible content, so it cannot show whether the less-equal world draws
 // actually cover the screen. This can.
 const DIAG_CONST_FS_TESTED_ONLY = false;
+// Substitute a trivial vertex shader (plus the constant fragment shader, since
+// a trivial VS cannot satisfy the real FS's inputs) on genuinely depth-tested
+// pipelines. It reads the position attribute at location 0 and normalises
+// model-space coordinates into clip space, so what appears is the silhouette
+// the vertex data itself describes -- independent of the translated VS, the
+// uniform blocks and the transform. If a real mesh appears, the data is fine
+// and the translated vertex shader is where the geometry goes wrong.
+const DIAG_TRIVIAL_VS = false;
+let diagTrivialVsModule = null;
+function getTrivialVsModule(dev) {
+  if (!diagTrivialVsModule) {
+    diagTrivialVsModule = dev.createShaderModule({
+      label: "diag-trivial-vs",
+      code: "@vertex fn main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> " +
+            "{ return vec4<f32>(p.x / 400.0, p.y / 400.0, 0.5, 1.0); }"
+    });
+  }
+  return diagTrivialVsModule;
+}
 let vpDiagIsolateIdx = 0;
 let vpDiagIsolateSeen = 0;
 function vpDiagIsolateAllows(fbId, pipelineId) {
@@ -12651,13 +12670,19 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     label: `dolphin-pcfg-${pipelineId}`,
     layout: getFixedLayouts().pipelineLayout,
     vertex: {
-      module: vs,
+      module: (DIAG_TRIVIAL_VS && hasDepth && depthTest &&
+               ["less", "greater", "less-equal", "greater-equal"]
+                 .includes(WGPU_COMPARE[depthCompare]))
+        ? getTrivialVsModule(renderGpu.device) : vs,
       buffers: attrCount > 0
         ? [{ arrayStride: stride, stepMode: "vertex", attributes }]
         : []
     },
     fragment: {
       module: ((DIAG_CONST_FS && hasDepth) ||
+               (DIAG_TRIVIAL_VS && hasDepth && depthTest &&
+                ["less", "greater", "less-equal", "greater-equal"]
+                  .includes(WGPU_COMPARE[depthCompare])) ||
                (DIAG_CONST_FS_TESTED_ONLY && hasDepth && depthTest &&
                 ["less", "greater", "less-equal", "greater-equal"]
                   .includes(WGPU_COMPARE[depthCompare])))
