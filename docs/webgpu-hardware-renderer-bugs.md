@@ -74,11 +74,31 @@ hypotheses previously "measured away", the first was wrong -- see below.
    the whole 640x528 EFB. The game sets a matching scissor on most of them.
    The defect is real (issue #17).
 
-   No fix exists yet. Routing partial clears to VideoCommon's scissored-quad
-   fallback was tried and reverted: it ends and restarts a render pass per
-   clear, and Wario World's ~7,800 clears a frame drop it to a near-black
-   frame at 2.0 visual fps. A working fix needs a clear that does not tear
-   down the pass.
+   Routing partial clears to VideoCommon's scissored-quad fallback was tried
+   and reverted: it ends and restarts a render pass per clear, and Wario
+   World's ~7,800 clears a frame drop it to a near-black frame at 2.0 visual
+   fps. A working fix needs a clear that does not tear down the pass.
+
+   **A working one now exists, opt-in behind `?disable=0x1000000`
+   (2026-09-06).** The `ClearRect` opcode draws a scissored full-screen
+   triangle inside the open pass, so the pass is never torn down. It blanked
+   the frame from the day it was added until the cause was measured: it wrote
+   the producer's clear depth, 0.9999999403953552, while the `loadOp` path
+   writes `dcv = 0.0` because this backend runs the reverse-Z convention and
+   flips every flippable compare to the greater family. Against a reference of
+   1.0 nothing passes the depth test, so every draw after a depth-clearing
+   `ClearRect` was rejected. It now uses the same value the `loadOp` path uses.
+
+   With it enabled, Double Dash renders a full correct 3D scene and Mario Kart
+   Wii renders its 2D overlay exactly as on the default path -- where before it
+   produced an entirely black frame. It stays opt-in pending a breadth sweep,
+   because it changes clearing for every title and the earlier rewrite is what
+   regressed Wario World.
+
+   The cost of not enabling it is now quantified: the EFB pass is begun 16
+   times in one Mario Kart Wii frame with 4 whole-attachment clears, and only
+   142 of 390 EFB draws land after the last one. **64% of the frame's geometry
+   is destroyed by clears that should not be touching it.**
 2. **The XFB copy is taken too early.** Falsified. The EFB passes before each
    copy use `loadOp=load`, so content accumulates ACROSS the backbuffer
    present. Re-aligning a frame as the span between XFB copies, Sunshine's
