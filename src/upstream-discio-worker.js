@@ -8904,6 +8904,7 @@ const DIAG_UV_FINITE = false;
 // shows near-black, and a constant UV shows one flat colour.
 const DIAG_UV_VIS = false;
 const DIAG_UV_PERTURB = false;
+const DIAG_SHOW_VCOLOR = false;
 // Drop EFB draws whose sampled texture received no non-zero data. If the empty
 // textures cover the large surfaces, what remains should be the draws that
 // sample populated textures -- and whether anything recognisable appears says
@@ -8977,6 +8978,27 @@ let vpDiagVariantUsed = 0;
 // "the texel is black" from "TEV zeroes a good texel".
 //   blue appears  -> the sample result reaches the output, so the texel is black
 //   stays black   -> TEV discards it regardless of what was sampled
+// Return the interpolated vertex colour0 instead of the TEV result, keeping the
+// shader's own signature and bindings. The combine is
+// texture.rgb + vertexColour0.rgb, so if this comes back black the lighting
+// path supplies nothing and the dark texel is only half the story.
+function vcolorRewrite(src) {
+  const sig = /@location\(0\)\s+(\w+)\s*:\s*vec4<f32>/.exec(src);
+  if (!sig) return null;
+  const name = sig[1];
+  // The fragment entry's final `return _eN;` is the last return in the module.
+  const m = [...src.matchAll(/return\s+(\w+)\s*;/g)];
+  if (!m.length) return null;
+  const last = m[m.length - 1];
+  const out = src.slice(0, last.index) +
+    `return vec4<f32>(${name}.x, ${name}.y, ${name}.z, 1.0);` +
+    src.slice(last.index + last[0].length);
+  if (out !== src && ++vpDiagVcolor <= 1) {
+    console.log("[vpdiag] built vertex-colour visualisation variants");
+  }
+  return out === src ? null : out;
+}
+let vpDiagVcolor = 0;
 function uvPerturbRewrite(src) {
   const out = src.replace(
     /(textureSample[A-Za-z]*\([^;]*?\));/g,
@@ -12716,7 +12738,8 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
                 ["less", "greater", "less-equal", "greater-equal"]
                   .includes(WGPU_COMPARE[depthCompare])))
         ? getConstFsModule(renderGpu.device)
-        : (((DIAG_FORCE_UV || DIAG_UV_FINITE || DIAG_UV_PERTURB) && hasDepth &&
+        : (((DIAG_FORCE_UV || DIAG_UV_FINITE || DIAG_UV_PERTURB || DIAG_SHOW_VCOLOR) &&
+            hasDepth &&
             pickVariantFs(fsId)) || fs),
       targets: [target]
     },
@@ -12954,7 +12977,8 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     // draws bind begin with black rows -- that is what made a head-only scan
     // misread them as empty -- so texcoords stuck near zero would sample that
     // black corner and produce exactly the observed black.
-    if (DIAG_UV_PERTURB && stage === 2) uvForcedWgsl = uvPerturbRewrite(wgsl);
+    if (DIAG_SHOW_VCOLOR && stage === 2) uvForcedWgsl = vcolorRewrite(wgsl);
+    else if (DIAG_UV_PERTURB && stage === 2) uvForcedWgsl = uvPerturbRewrite(wgsl);
     else if (DIAG_UV_FINITE && stage === 2) uvForcedWgsl = uvFiniteRewrite(wgsl);
     else if (DIAG_FORCE_UV && stage === 2) uvForcedWgsl = uvForceRewrite(wgsl);
     if (DIAG_NO_DISCARD && stage === 2) {
