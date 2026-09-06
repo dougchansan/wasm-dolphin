@@ -8026,6 +8026,7 @@ let vpDiagScissor = "sc?";
 // it, and how many draws land after the LAST clear. Anything drawn before a
 // clear is discarded, so "draws after last clear" is the only geometry that can
 // reach the screen.
+const vpDiagClearRects = new Map();
 let vpDiagEfbPasses = 0;
 let vpDiagEfbClears = 0;
 let vpDiagDrawsSinceClear = 0;
@@ -8565,6 +8566,7 @@ function vpDiagPresent() {
   vpDiagIdx = 0;
   vpDiagTail = [];
   vpDiagVtx.clear();
+  vpDiagClearRects.clear();
   vpDiagEfbPasses = 0; vpDiagEfbClears = 0;
   vpDiagDrawsSinceClear = 0; vpDiagDrawsTotalEfb = 0;
   vpDiagStrideOk = 0; vpDiagStrideBad = 0;
@@ -8592,6 +8594,12 @@ function vpDiagFinish(present) {
               `${vpDiagIdx} indices drawn (~${Math.round(vpDiagIdx / 3)} indexed tris)`);
   const bad = [...vpDiagVtx.entries()].filter(([k]) => k.startsWith("BAD"));
   const badN = bad.reduce((a, [, n]) => a + n, 0);
+  for (const [k, n] of [...vpDiagClearRects.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(5)}x clearrect ${k}`);
+  }
+  console.log(`[vpdiag] present #${present}: skipDraw=${webGpuExecStats.skipDraw || 0} ` +
+              `draw=${webGpuExecStats.draw || 0} drawIdx=${webGpuExecStats.drawIdx || 0} ` +
+              `clearRect=${self._wgClearRectN || 0}`);
   console.log(`[vpdiag] present #${present}: EFB passes=${vpDiagEfbPasses} ` +
               `clears=${vpDiagEfbClears} | EFB draws=${vpDiagDrawsTotalEfb}, ` +
               `${vpDiagDrawsSinceClear} after the last clear`);
@@ -11381,7 +11389,15 @@ function drainWebGpuCmdRing(source = "presentation") {
           const cw = Math.max(1, Math.min(u32[recWord + 3], passW - cx));
           const ch = Math.max(1, Math.min(u32[recWord + 4], passH - cy));
           const crgba = u32[recWord + 5] >>> 0;
-          const cdepth = f32[recWord + 6];
+          // The producer sends the game's clear depth (~1.0), but this backend
+          // runs the reverse-Z convention: BeginPass clears depth to dcv = 0.0
+          // and every flippable pipeline compare is inverted to the greater
+          // family. Writing 1.0 here means a fragment must reach depth >= 1.0
+          // to pass, so every draw after the clear is rejected and the frame
+          // goes black -- which is why this path was left off by default.
+          // Use the same value the loadOp path uses.
+          const cdepthRaw = f32[recWord + 6];
+          const cdepth = GX_NATIVE_DEPTH ? cdepthRaw : 0.0;
           const cflags = u32[recWord + 7] >>> 0;
           const cpipe = ensureClearPipeline(dev, passColorFmt, passDepthFmt,
                                             (cflags & 1) !== 0, (cflags & 2) !== 0,
@@ -11395,6 +11411,19 @@ function drainWebGpuCmdRing(source = "presentation") {
             // unaffected. Without this the clear's rect leaks into the frame.
             pass.setScissorRect(0, 0, passW, passH);
             self._wgClearRectN = (self._wgClearRectN || 0) + 1;
+            if (!vpDiagDone) {
+              const frac = Math.round((100 * cw * ch) / (passW * passH));
+              // Ordering is what matters: as a loadOp the clear ran at pass
+              // begin, but as a draw it lands wherever the game issued it. A
+              // large clear AFTER the world draws wipes them.
+              // cdepth is the producer's clear depth. The loadOp path ignores
+              // it and writes the reverse-Z convention value (dcv = 0.0); if
+              // ClearRect writes something else, every later draw is depth
+              // tested against the wrong reference.
+              const key = `rect(${cx},${cy} ${cw}x${ch}) = ${frac}% flags=${cflags} ` +
+                `depth=${cdepth} raw=${cdepthRaw} afterEfbDraws=${vpDiagDrawsTotalEfb}`;
+              vpDiagClearRects.set(key, (vpDiagClearRects.get(key) || 0) + 1);
+            }
           } catch (e) {
             recordRendererError("validation", `clearrect: ${e?.message || e}`);
           }
