@@ -8101,6 +8101,7 @@ let vpDiagLastIdxCount = 0;
 let vpDiagLastVtxCount = 0;
 const vpDiagIdxTally = new Map();
 const vpDiagBatchPos = new Map();
+const vpDiagCol0 = new Map();
 // Keep recent index uploads keyed by their destination byte offset. A draw's
 // firstIndex addresses the ring, not the most recent upload, so the previous
 // version compared a draw against whatever happened to be uploaded last -- which
@@ -8189,6 +8190,37 @@ function vpDiagCheckVertex(pipelineId) {
   } else {
     vpDiagTc0.set("NO TexCoord0 ATTRIBUTE", (vpDiagTc0.get("NO TexCoord0 ATTRIBUTE") || 0) + 1);
   }
+  const col = lay.col0;
+  if (fresh && col && lay.stride) {
+    const nv = Math.min(Math.floor(vpDiagLastVtxLen / lay.stride),
+                        Math.floor(vpDiagLastVtxBytes.byteLength / lay.stride));
+    let amin = 255, amax = 0, zero = 0, seen = 0;
+    let r0 = -1, g0 = -1, b0 = -1;
+    for (let i = 0; i < nv; i++) {
+      const o = i * lay.stride + col.offset;
+      if (o + 4 > vpDiagLastVtxBytes.byteLength) break;
+      const a = vpDiagLastVtxBytes[o + 3];
+      if (seen === 0) {
+        r0 = vpDiagLastVtxBytes[o];
+        g0 = vpDiagLastVtxBytes[o + 1];
+        b0 = vpDiagLastVtxBytes[o + 2];
+      }
+      if (a < amin) amin = a;
+      if (a > amax) amax = a;
+      if (a === 0) zero++;
+      seen++;
+    }
+    if (seen) {
+      vpDiagCol0.set(
+        `${col.format}@${col.offset} n=${seen} alpha[${amin}..${amax}] ` +
+        `zeroAlpha=${zero} firstRGB=${r0},${g0},${b0}`,
+        (vpDiagCol0.get(
+          `${col.format}@${col.offset} n=${seen} alpha[${amin}..${amax}] ` +
+          `zeroAlpha=${zero} firstRGB=${r0},${g0},${b0}`) || 0) + 1);
+    }
+  } else if (fresh && !col) {
+    vpDiagCol0.set("NO Color0 ATTRIBUTE", (vpDiagCol0.get("NO Color0 ATTRIBUTE") || 0) + 1);
+  }
   const pos = lay.pos;
   if (!pos) return;
   if (fresh && lay.stride) {
@@ -8261,6 +8293,7 @@ function vpDiagNoteTail(entry) {
 let vpDiagPcc = new Map();
 let vpDiagTexMtx = new Map();
 let vpDiagLight = new Map();
+let vpDiagMissing = new Map();
 let vpDiagTc0 = new Map();
 // PixelShaderConstants: colors[4] int4 at 0, kcolors[4] int4 at 64, alpha int4
 // at 128. These are the TEV registers. If a draw's TEV output is built from
@@ -8413,7 +8446,16 @@ function vpDiagNoteUpload(bytes, len) {
   // xfmem_numColorChans at 8, materials[4] int4 at 192, lights[8] at 256 with
   // each light 80 bytes starting with an int4 colour. vertexColour0.a is what
   // measured near zero, so the alpha lanes here are the ones that matter.
-  const hdr = new Uint32Array(bytes.buffer, bytes.byteOffset, 3);
+  // missing_color_hex at byte 12 and missing_color_value (float4) at 16 are
+  // what a vertex shader uses for a colour channel the vertex format does not
+  // supply -- and many pipelines here declare no Color0 attribute at all.
+  const hdr = new Uint32Array(bytes.buffer, bytes.byteOffset, 4);
+  const miss = new Float32Array(bytes.buffer, bytes.byteOffset + 16, 4);
+  vpDiagMissing.set(
+    `hex=0x${hdr[3].toString(16)} value=[${Array.from(miss, (v) => v.toFixed(2)).join(",")}]`,
+    (vpDiagMissing.get(
+      `hex=0x${hdr[3].toString(16)} value=[${Array.from(miss, (v) => v.toFixed(2)).join(",")}]`)
+      || 0) + 1);
   const mat = new Int32Array(bytes.buffer, bytes.byteOffset + 192, 16);
   const lit = new Int32Array(bytes.buffer, bytes.byteOffset + 256, 4);
   vpDiagLight.set(
@@ -8523,6 +8565,7 @@ function vpDiagPresent() {
   vpDiagPcc.clear();
   vpDiagTexMtx.clear();
   vpDiagLight.clear();
+  vpDiagMissing.clear();
   vpDiagTc0.clear();
   vpDiagTev.clear();
   vpDiagFog.clear();
@@ -8533,6 +8576,7 @@ function vpDiagPresent() {
   vpDiagTexBind.clear();
   vpDiagIdxTally.clear();
   vpDiagBatchPos.clear();
+  vpDiagCol0.clear();
 }
 function vpDiagFinish(present) {
   console.log(`[vpdiag] present #${present}: ${vpDiagVsOffsets.size} distinct VS ` +
@@ -8563,6 +8607,9 @@ function vpDiagFinish(present) {
   for (const [k, n] of [...vpDiagTc0.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x tc0 ${k}`);
   }
+  for (const [k, n] of [...vpDiagMissing.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x missingColor ${k}`);
+  }
   for (const [k, n] of [...vpDiagLight.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
   }
@@ -8573,6 +8620,9 @@ function vpDiagFinish(present) {
   }
   for (const [k, n] of [...vpDiagTexUploadShape.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x texupload ${k}`);
+  }
+  for (const [k, n] of [...vpDiagCol0.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x col0 ${k}`);
   }
   for (const [k, n] of [...vpDiagBatchPos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
     console.log(`[vpdiag]   ${String(n).padStart(4)}x batchpos ${k}`);
@@ -12706,6 +12756,9 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     // UV is this attribute, so a zero/degenerate texcoord samples the black
     // corner these textures start with.
     tc0: attributes.find((a) => a.shaderLocation === 8) || null,
+    // ShaderAttrib::Color0 == 5. The vertex shader passes this straight through
+    // as vertexColour0, so its alpha byte IS the alpha that reaches the TEV.
+    col0: attributes.find((a) => a.shaderLocation === 5) || null,
     writeMask,
     blendEnable,
     srcF,
