@@ -8648,14 +8648,18 @@ function diagGridSignature(bytes, bpr, w, h) {
     for (let gx = 0; gx < 4; gx++) {
       const x0 = Math.floor(gx * w / 4), x1 = Math.floor((gx + 1) * w / 4);
       const y0 = Math.floor(gy * h / 3), y1 = Math.floor((gy + 1) * h / 3);
-      let r = 0, g = 0, b = 0, n = 0;
+      // Alpha included: the TEV alpha stage reduces to texAlpha * vertexAlpha
+      // and 206 world draws blend srcAlpha/one-minus-srcAlpha, so a zero alpha
+      // channel makes a draw invisible however bright its RGB is. Every earlier
+      // readback averaged only r, g and b.
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
       for (let y = y0; y < y1; y += 4) {
         for (let x = x0; x < x1; x += 4) {
           const o = y * bpr + x * 4;
-          r += bytes[o]; g += bytes[o + 1]; b += bytes[o + 2]; n++;
+          r += bytes[o]; g += bytes[o + 1]; b += bytes[o + 2]; a += bytes[o + 3]; n++;
         }
       }
-      cells.push(n ? `${(r / n) | 0},${(g / n) | 0},${(b / n) | 0}` : "-");
+      cells.push(n ? `${(r / n) | 0},${(g / n) | 0},${(b / n) | 0}/a${(a / n) | 0}` : "-");
     }
   }
   return cells.join(" | ");
@@ -8905,6 +8909,11 @@ const DIAG_UV_FINITE = false;
 const DIAG_UV_VIS = false;
 const DIAG_UV_PERTURB = false;
 const DIAG_SHOW_VCOLOR = false;
+// Show vertex ALPHA as greyscale. The alpha stage reduces to
+// texAlpha * vertexAlpha, texture alpha measured 58..255, and the RGB
+// visualisation forced alpha to 1.0 -- so vertex alpha is the one operand in
+// that product still unmeasured.
+const DIAG_SHOW_VALPHA = false;
 // Drop EFB draws whose sampled texture received no non-zero data. If the empty
 // textures cover the large surfaces, what remains should be the draws that
 // sample populated textures -- and whether anything recognisable appears says
@@ -8991,7 +9000,9 @@ function vcolorRewrite(src) {
   if (!m.length) return null;
   const last = m[m.length - 1];
   const out = src.slice(0, last.index) +
-    `return vec4<f32>(${name}.x, ${name}.y, ${name}.z, 1.0);` +
+    (DIAG_SHOW_VALPHA
+      ? `return vec4<f32>(${name}.w, ${name}.w, ${name}.w, 1.0);`
+      : `return vec4<f32>(${name}.x, ${name}.y, ${name}.z, 1.0);`) +
     src.slice(last.index + last[0].length);
   if (out !== src && ++vpDiagVcolor <= 1) {
     console.log("[vpdiag] built vertex-colour visualisation variants");
