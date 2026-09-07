@@ -425,12 +425,45 @@ rasterizer, audio and DVD. Separating them needs function names, and the core
 `.wasm` ships without a name section, so V8 reports bare `wasm-function[N]`.
 The top frame is 27% of self time in one anonymous function.
 
-**Blocker, and the next concrete step.** Build the core with emscripten's
-`--profiling-funcs` so profiles carry a name section, register it as a core
-candidate, and capture with `CORE_ID` pointing at it. The existing
-`build/dolphin-wasm-profiling` tree is a plain Release configure with no such
-flag, so it does not help as it stands. Until that exists, the dispatch-versus-
-body split cannot be measured and block linking cannot be sized.
+### Item 3 ANSWERED (2026-09-07)
+
+Rebuilt the core with `--profiling-funcs` added to
+`target_link_options(dolphin_web_core ...)`, so the wasm carries a name section
+and V8 reports real symbols. Metroid Prime, `jitwarmup=60`, 25s window, 1,282
+blocks compiled, emulation thread:
+
+| frame | self time |
+| --- | ---: |
+| `CachedInterpreter::ExecuteOneBlock(bool)` | 27.6% |
+| `CachedInterpreter::FastInteger(...)` | 17.6% |
+| **`JitBaseBlockCache::Dispatch()`** | **10.0%** |
+| `TryFastRamWordLoadStore(...)` | 6.8% |
+| `CachedInterpreter::FastPairedSingle(...)` | 3.6% |
+| `TryFastRamByteHalfLoadStore(...)` | 3.2% |
+| `PowerPC::MMU::WriteToHardware<...>` | 3.0% |
+| `DolphinWeb_OnXfb` | 2.4% |
+| `Helper_Quantize(...)` | 1.9% |
+| `CachedInterpreter::RunWasmBlock(...)` | 1.4% |
+
+Rolled up: cached interpreter about **50%**, memory helpers about **18%**,
+dispatch **10%**, JIT'd block bodies **4.1%** (193 block modules).
+
+**The answer: dispatch is 10%, so that is the ceiling on block linking.**
+Perfect linking could recover at most a tenth of emulation time, and only if
+linking itself were free. That is consistent with the gate that rejected block
+chaining at a 3.7% projected ceiling, and it independently confirms the earlier
+split measurement (interpreter 43%, dispatch 10%, JIT 4.6%) with names rather
+than inference.
+
+The real target remains the cached interpreter at half of all time.
+`ExecuteOneBlock` plus `FastInteger` alone are 45%.
+
+**Reproducing.** The flag is not shipped -- the core in `cores/` is the normal
+build. Add `"--profiling-funcs"` to the link options (see
+`docs/diagnostics/texsrc-instrumentation.patch`), rebuild `dolphin_web_core`,
+run `npm run update:core-abi`, capture, then restore. `cpu-profile-capture` now
+defaults to `jitwarmup=60`; at 700 it compiles 63 blocks and the split is
+unmeasurable.
 
 **Warning.** `G:\dolrecompwned\DolRecomp\docs\register-cache-design.md` records
 **four reverted attempts** at promoting guest registers out of the state struct,

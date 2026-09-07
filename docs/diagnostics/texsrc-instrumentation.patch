@@ -359,3 +359,12 @@ index 837c30c556..06e65e5aa6 100644
      if ((uid_data->components & VB_HAS_NORMAL) != 0)
        out.Write("ATTRIBUTE_LOCATION({:s}) in float3 rawnormal;\n", ShaderAttrib::Normal);
      if ((uid_data->components & VB_HAS_TANGENT) != 0)
+
+# ---------------------------------------------------------------------------
+# Name-sectioned core, for cpu-profile-analyze to report real symbols.
+# Add to target_link_options(dolphin_web_core PRIVATE ...) in
+# Source/Core/Core/CMakeLists.txt, then rebuild dolphin_web_core and run
+# `npm run update:core-abi` before capturing. Restore afterwards -- the shipped
+# core should not carry it.
+#
+#   "--profiling-funcs"
