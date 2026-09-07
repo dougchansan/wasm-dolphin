@@ -8054,6 +8054,7 @@ let vpDiagScissor = "sc?";
 // clear is discarded, so "draws after last clear" is the only geometry that can
 // reach the screen.
 const vpDiagClearRects = new Map();
+const vpDiagBandOrder = new Map();
 let vpDiagEfbPasses = 0;
 let vpDiagEfbClears = 0;
 let vpDiagDrawsSinceClear = 0;
@@ -8560,6 +8561,17 @@ function vpDiagNoteDraw(fbId, pipelineId) {
     : (self._wgBgTex ? self._wgBgTex[self._wgCurBg1] : undefined);
   vpDiagNoteTexBind(fbId, cmp, texId, wantB);
   const texObj = texId != null ? webGpuObjects.textures.get(texId) : null;
+  // Draw-order of each depth band. Reverse-Z means larger = nearer, so the
+  // world band z(0.00,0.84) must be drawn BEFORE anything that writes the
+  // nearer HUD band z(0.89,0.99); if the HUD writes depth first, every world
+  // fragment fails greater-equal and the world is rejected wholesale.
+  if (fbId === self._wgEfbColorId && cls !== "unset" && cmp !== "none") {
+    const band = range;
+    let b = vpDiagBandOrder.get(band);
+    if (!b) vpDiagBandOrder.set(band, (b = { first: vpDiagDrawsTotalEfb, last: 0, n: 0 }));
+    b.last = vpDiagDrawsTotalEfb;
+    b.n++;
+  }
   vpDiagNoteTail(`fb#${fbId} ${vpDiagRect || "vp?"} depth=${cmp}` +
     ` tex#${texId != null ? texId : "?"}` +
     `${texObj && texObj.tex ? ` ${texObj.tex.width}x${texObj.tex.height}` : ""}`);
@@ -8593,6 +8605,10 @@ function vpDiagPresent() {
   vpDiagIdx = 0;
   vpDiagTail = [];
   vpDiagVtx.clear();
+  for (const [band, b] of [...vpDiagBandOrder.entries()].sort((x, y) => x[1].first - y[1].first)) {
+    console.log(`[vpdiag]   band z(${band}) draws=${b.n} first=${b.first} last=${b.last}`);
+  }
+  vpDiagBandOrder.clear();
   vpDiagClearRects.clear();
   vpDiagEfbPasses = 0; vpDiagEfbClears = 0;
   vpDiagDrawsSinceClear = 0; vpDiagDrawsTotalEfb = 0;
