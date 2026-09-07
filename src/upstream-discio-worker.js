@@ -8672,6 +8672,21 @@ function vpDiagFinish(present) {
         `col0=${c ? `${c.format}@${c.offset}` : "ABSENT"}`);
     }
   }
+  // Static profile of the busiest depth-tested pipelines: whether each has a
+  // colour attribute, whether its fragment shader even declares the
+  // @location(0) colour varying, and how it blends. A pipeline whose FS has no
+  // colour varying cannot be using the rasterised colour, so a zero vertex
+  // alpha is irrelevant to it -- which is the check 5f88837 skipped when it
+  // joined a shader from one pipeline to a vertex shader from another.
+  for (const [pid, n] of [...vpDiagPipeDraws.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+    const l = vpDiagPipeVtx.get(pid);
+    const fs = l ? vpDiagFsSource.get(l.fsId) : null;
+    const hasColourVarying = fs ? /@location\(0\)\s+\w+\s*:\s*vec4<f32>/.test(fs) : null;
+    const blend = l ? (l.blendEnable ? `blend${l.srcF}/${l.dstF}` : "noblend") : "?";
+    console.log(`[vpdiag]   pipe ${pid}: ${n} draws col0=${l && l.col0 ? "yes" : "no"} ` +
+      `fsColourVarying=${hasColourVarying === null ? "?" : hasColourVarying} ` +
+      `${blend} wm${l ? l.writeMask : "?"}`);
+  }
   if (present >= 2500) vpDiagDumpTopShader();
   console.log(`[vpdiag] present #${present}: world draws bind ` +
               `${vpDiagTexBind.size} distinct textures`);
@@ -9022,6 +9037,26 @@ const DIAG_UV_FINITE = false;
 const DIAG_UV_VIS = false;
 const DIAG_UV_PERTURB = false;
 const DIAG_SHOW_VCOLOR = false;
+// Render ONLY the opaque depth-tested EFB draws -- blendEnable false -- and
+// skip the blended ones. The two busiest pipelines are noblend/wm15 with a
+// colour attribute, so they ignore alpha entirely and should be visible
+// whatever the vertex alpha does. Selecting by PROPERTY not by pipeline id:
+// bridge ids are assigned per run and shift between them.
+const DIAG_ONLY_OPAQUE = false;
+// Constant colour on the OPAQUE depth-tested pipelines only. The earlier
+// const-FS test covered every depth pipeline including the blended ones, and
+// returned alpha 1.0, so its magenta could have come entirely from those. This
+// isolates the noblend/wm15 pipelines that carry ~47,000 draws and are
+// invisible even though they ignore alpha.
+const DIAG_CONST_FS_OPAQUE = false;
+// With the constant colour forced on the opaque pipelines they still produce
+// nothing, so they are not rasterising. Force their depth compare to "always"
+// as well: if magenta then appears, the depth test is what rejects them.
+const DIAG_OPAQUE_DEPTH_ALWAYS = false;
+function vpDiagIsBlended(pipelineId) {
+  const l = vpDiagPipeVtx.get(pipelineId);
+  return !!(l && l.blendEnable);
+}
 const DIAG_ALPHA_COVERAGE = false;
 // Show vertex ALPHA as greyscale. The alpha stage reduces to
 // texAlpha * vertexAlpha, texture alpha measured 58..255, and the RGB
@@ -11490,6 +11525,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
             if (!vpDiagIsolateAllows(passFbId, self._wgCurPipe)) break;
+            if (DIAG_ONLY_OPAQUE && passFbId === self._wgEfbColorId &&
+                vpDiagIsBlended(self._wgCurPipe)) break;
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
               const _l = vpDiagPipeVtx.get(self._wgCurPipe);
@@ -11533,6 +11570,8 @@ function drainWebGpuCmdRing(source = "presentation") {
             diagTallyDrawTarget(passFbId, currentBackbufferSourceTextureId);
             vpDiagNoteDraw(passFbId, self._wgCurPipe);
             if (!vpDiagIsolateAllows(passFbId, self._wgCurPipe)) break;
+            if (DIAG_ONLY_OPAQUE && passFbId === self._wgEfbColorId &&
+                vpDiagIsBlended(self._wgCurPipe)) break;
             if (DIAG_SKIP_DEPTH_ALWAYS && vpDiagIsDepthAlways(self._wgCurPipe)) break;
             if (DIAG_SKIP_EMPTY_TEX && passFbId === self._wgEfbColorId) {
               const _l = vpDiagPipeVtx.get(self._wgCurPipe);
@@ -12889,6 +12928,9 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
     },
     fragment: {
       module: ((DIAG_CONST_FS && hasDepth) ||
+               (DIAG_CONST_FS_OPAQUE && hasDepth && depthTest && !blendEnable &&
+                ["less", "greater", "less-equal", "greater-equal"]
+                  .includes(WGPU_COMPARE[depthCompare])) ||
                (DIAG_TRIVIAL_VS && hasDepth && depthTest &&
                 ["less", "greater", "less-equal", "greater-equal"]
                   .includes(WGPU_COMPARE[depthCompare])) ||
