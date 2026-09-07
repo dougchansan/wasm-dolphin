@@ -6188,6 +6188,11 @@ const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_CMD_OP_CLEAR_RECT = 25;
+// ClearRect draws its clear triangle through a full-pass [0,1] viewport rather
+// than whatever viewport the game has active, so the clear depth lands as the
+// clear depth and the rect is not cropped to the game's viewport. A/B switch:
+// false restores the behaviour that left Mario Kart Wii's world black.
+const CLEARRECT_FULL_VIEWPORT = true;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
 const WGPU_REPLAY_BUDGET_CHECK_RECORDS = 32;
@@ -8829,6 +8834,24 @@ function diagGridSignature(bytes, bpr, w, h) {
 // bands and the vertex shader together predict 0.00..0.84 for the world, and if
 // the stored values are elsewhere the viewport transform is not mapping as
 // assumed. depth32float copies with aspect "depth-only", 4 bytes a texel.
+// mapAsync on a readback buffer BEFORE the encoder that copies into it is
+// submitted makes that submit invalid ("used in submit while pending map"), and
+// Dawn then drops the whole command buffer: the frame's draws, the copy, all of
+// it. The buffer maps anyway and reads back as the zeros it was created with.
+// That is exactly what the present-time depth readback reported, and what the
+// first two depth-trace runs reported, control write included. Every readback
+// must queue its map here and drain it after queue.submit().
+function dtraceDefer(fn) {
+  (self._wgDtPending = self._wgDtPending || []).push(fn);
+}
+function dtraceDrainPending() {
+  const pend = self._wgDtPending;
+  if (!pend || !pend.length) return;
+  self._wgDtPending = [];
+  for (const fn of pend) {
+    try { fn(); } catch (e) { console.log("[dtrace] drain failed: " + (e && e.message)); }
+  }
+}
 function diagReadDepth(dev, encoder, entry, tag) {
   if (!entry || !entry.tex) return;
   const w = entry.tex.width, h = entry.tex.height;
@@ -8843,7 +8866,7 @@ function diagReadDepth(dev, encoder, entry, tag) {
     console.log("[vpdiag] depth readback rejected: " + (e && e.message));
     return;
   }
-  buf.mapAsync(0x1).then(() => {
+  dtraceDefer(() => buf.mapAsync(0x1).then(() => {
     const f = new Float32Array(buf.getMappedRange());
     const stride = bpr >> 2;
     let mn = Infinity, mx = -Infinity, sum = 0, n = 0, zeros = 0;
@@ -8861,7 +8884,66 @@ function diagReadDepth(dev, encoder, entry, tag) {
       `max=${mx.toFixed(4)} mean=${(sum / Math.max(1, n)).toFixed(4)} ` +
       `zeros=${zeros}/${n}`);
     buf.unmap();
-  }).catch(() => {});
+  }).catch(() => {}));
+}
+function diagReadDepthTrace(dev, encoder, entry, tag) {
+  const dt = self._wgDt;
+  if (!entry || !entry.tex) { console.log(`[dtrace] no depth texture for: ${tag}`); return; }
+  const w = entry.tex.width, h = entry.tex.height;
+  const bpr = Math.ceil(w * 4 / 256) * 256;
+  let buf;
+  try {
+    buf = dev.createBuffer({ size: bpr * h, usage: 0x1 | 0x8 });
+    encoder.copyTextureToBuffer({ texture: entry.tex, aspect: "depth-only" },
+      { buffer: buf, bytesPerRow: bpr, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 });
+  } catch (e) { console.log(`[dtrace] copy rejected (${tag}): ${e && e.message}`); return; }
+  if (dt) dt.issued++;
+  const seq = dt ? dt.issued : 0;
+  dtraceDefer(() => buf.mapAsync(0x1).then(() => {
+    const f = new Float32Array(buf.getMappedRange());
+    const stride = bpr >> 2;
+    let mn = Infinity, mx = -Infinity, sum = 0, n = 0, nz = 0;
+    // 4x3 grid of the fraction of NON-ZERO texels, so where the writes landed
+    // is visible, not just whether any did.
+    const grid = new Array(12).fill(0), gridN = new Array(12).fill(0);
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const v = f[y * stride + x]; n++;
+        const g = Math.floor(y * 3 / h) * 4 + Math.floor(x * 4 / w); gridN[g]++;
+        if (v !== 0) {
+          nz++; grid[g]++;
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+          sum += v;
+        }
+      }
+    }
+    console.log(`[dtrace] #${seq} ${tag}: nonzero=${nz}/${n} ` +
+      (nz ? `min=${mn.toFixed(4)} max=${mx.toFixed(4)} mean=${(sum / nz).toFixed(4)} ` : "") +
+      `grid%=[${grid.map((c, i) => Math.round(100 * c / Math.max(1, gridN[i]))).join(",")}]`);
+    buf.unmap(); buf.destroy();
+    if (dt) dt.done++;
+  }).catch((e) => console.log(`[dtrace] #${seq} map failed (${tag}): ${e && e.message}`)));
+}
+function diagReadColorTrace(dev, encoder, entry, tag) {
+  if (!entry || !entry.tex) { console.log(`[dtrace] no colour texture for: ${tag}`); return; }
+  const w = entry.tex.width, h = entry.tex.height;
+  const bpr = Math.ceil(w * 4 / 256) * 256;
+  let buf;
+  try {
+    buf = dev.createBuffer({ size: bpr * h, usage: 0x1 | 0x8 });
+    encoder.copyTextureToBuffer({ texture: entry.tex },
+      { buffer: buf, bytesPerRow: bpr, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 });
+  } catch (e) { console.log(`[dtrace] colour copy rejected (${tag}): ${e && e.message}`); return; }
+  const dt = self._wgDt;
+  const seq = dt ? dt.issued : 0;
+  dtraceDefer(() => buf.mapAsync(0x1).then(() => {
+    const bytes = new Uint8Array(buf.getMappedRange());
+    console.log(`[dtrace] #${seq} colour ${tag}: ${diagGridSignature(bytes, bpr, w, h)}`);
+    buf.unmap(); buf.destroy();
+  }).catch((e) => console.log(`[dtrace] #${seq} colour map failed (${tag}): ${e && e.message}`)));
 }
 function diagReadTexture(dev, encoder, entry, label, tag) {
   if (!entry || !entry.tex || String(entry.format || "").startsWith("depth")) return;
@@ -9141,6 +9223,25 @@ const DIAG_SHOW_VALPHA = false;
 const DIAG_SKIP_EMPTY_TEX = false;
 const DIAG_TEX_READBACK = false;
 const DIAG_DEPTH_READBACK = false;
+// Depth trace. The present-time depth readback cannot say WHEN the buffer was
+// zero: several frames share an encoder and clears re-run. This reads the EFB
+// depth buffer inside the target frame, in the same encoder, at chosen points:
+// after the Nth EFB draw (the pass is ended, copied, and re-opened with load
+// ops and its state restored), before every depth-clearing ClearRect, and at
+// every EFB pass end. Each read is tagged with how many EFB draws and
+// depth-writing draws preceded it, so "no fragment ever wrote depth" and "the
+// writes were wiped afterwards" become distinguishable.
+const DIAG_DEPTH_TRACE = false;
+const DTRACE_PRESENT = 2500;
+const DTRACE_SPLITS = new Set([1, 5, 20, 60, 119, 135, 251, 384, 419, 500, 792]);
+// Positive control: at the first split, write a known depth through the clear
+// pipeline over a 64x64 corner rect, so the readbacks that follow prove they
+// read the attachment the pass writes. A probe that cannot see its own write
+// is a null instrument, whatever else it reports.
+const DTRACE_CONTROL = true;
+// FINAL depth state per created pipeline object, so a draw can be classified
+// by what the descriptor actually carried rather than the pre-flip template.
+const vpDiagPipeFinalDs = new WeakMap();
 // Render ONE depth-tested EFB draw per frame and skip the rest, so a single
 // draw's output can be observed directly instead of inferred from texture and
 // state accounting. The index advances every 300 presents so successive
@@ -9763,6 +9864,14 @@ function drainWebGpuCmdRing(source = "presentation") {
   let passNeedsVertexBuffer = false;
   let vertexBufferValid = false;
   let indexBufferValid = false;
+  // The viewport last applied to the open pass. ClearRect resets the viewport
+  // for its clear triangle and must put the game's back afterwards.
+  let lastAppliedViewport = null;
+  // DIAG_DEPTH_TRACE: the rest of the last-applied pass state, so a split pass
+  // can be re-opened with the same state the game had set.
+  let dtLastSc = null, dtLastPipe = null;
+  const dtLastBg = [null, null, null];
+  let dtLastVb = null, dtLastIb = null, dtPassDesc = null;
   let currentBackbufferSourceTextureId = 0;
   let lastBackbufferSourceTextureId = wgpuLastBackbufferSourceTextureId;
   let lastBackbufferTexture = null;
@@ -10019,6 +10128,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
       acceptMappedBatch(mappedBatch);
       submitted = true;
+      dtraceDrainPending();
     } catch (e) {
       lastSubmitFailureReason = "submit-error";
       rejectMappedBatch(mappedBatch, e);
@@ -10065,6 +10175,14 @@ function drainWebGpuCmdRing(source = "presentation") {
         wgpuLastBackbufferSourceTextureId = currentBackbufferSourceTextureId;
       }
       try { pass.end(); } catch (e) {}
+      if (DIAG_DEPTH_TRACE && self._wgDt && self._wgDt.armed &&
+          endedFramebufferId === self._wgEfbColorId && passDepthId) {
+        const dt = self._wgDt;
+        diagReadDepthTrace(dev, ensureEnc(), webGpuObjects.textures.get(passDepthId),
+          `end of pass#${dt.passSeq} (${reason}) | efbDraws=${dt.draws} depthWrites=${dt.writes} clearRects=${dt.clears}`);
+        diagReadColorTrace(dev, ensureEnc(), webGpuObjects.textures.get(endedFramebufferId),
+          `end of pass#${dt.passSeq} | efbDraws=${dt.draws}`);
+      }
       // Read the copy destination AND the EFB immediately after the copy pass
       // ends, so both reads sit adjacent in the command stream. Reading at
       // present time instead was confounded by encoder batching: several
@@ -10182,6 +10300,74 @@ function drainWebGpuCmdRing(source = "presentation") {
     }
     return false;
   };
+  // DIAG_DEPTH_TRACE: end the open EFB pass, copy its depth buffer in the same
+  // encoder, and re-open the pass with load ops and the last-applied state.
+  const dtraceSplit = (tag) => {
+    const dt = self._wgDt;
+    if (!DIAG_DEPTH_TRACE || !dt || !dt.armed || !pass ||
+        passFbId !== self._wgEfbColorId) return;
+    if (!dtPassDesc || !dtPassDesc.depthStencilAttachment) {
+      console.log(`[dtrace] split skipped, no depth attachment: ${tag}`);
+      return;
+    }
+    const dtex = webGpuObjects.textures.get(passDepthId);
+    try { pass.end(); } catch (e) { console.log(`[dtrace] end failed: ${e && e.message}`); }
+    diagReadDepthTrace(dev, ensureEnc(), dtex,
+      `${tag} | efbDraws=${dt.draws} depthWrites=${dt.writes} clearRects=${dt.clears} pass#${dt.passSeq}`);
+    diagReadColorTrace(dev, ensureEnc(), webGpuObjects.textures.get(passFbId),
+      `${tag} | efbDraws=${dt.draws}`);
+    const d2 = {
+      colorAttachments: dtPassDesc.colorAttachments.map((c) => ({ ...c, loadOp: "load" })),
+      depthStencilAttachment: { ...dtPassDesc.depthStencilAttachment, depthLoadOp: "load" }
+    };
+    if (d2.depthStencilAttachment.stencilLoadOp) d2.depthStencilAttachment.stencilLoadOp = "load";
+    try {
+      pass = enc.beginRenderPass(d2);
+      if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset("dtrace-split");
+      if (lastAppliedViewport) pass.setViewport(...lastAppliedViewport);
+      if (dtLastSc) pass.setScissorRect(...dtLastSc);
+      if (dtLastPipe) pass.setPipeline(dtLastPipe);
+      for (let sl = 0; sl < 3; sl++) {
+        const g = dtLastBg[sl];
+        if (!g) continue;
+        if (g.off) pass.setBindGroup(sl, g.bg, g.off); else pass.setBindGroup(sl, g.bg);
+      }
+      if (dtLastVb) pass.setVertexBuffer(dtLastVb.slot, dtLastVb.b, dtLastVb.offset);
+      if (dtLastIb) pass.setIndexBuffer(dtLastIb.b, dtLastIb.format, dtLastIb.offset);
+      dt.splits++;
+      if (DTRACE_CONTROL && !dt.controlDone) {
+        dt.controlDone = true;
+        const cp = ensureClearPipeline(dev, passColorFmt, passDepthFmt, false, true, 0, 0.5);
+        if (cp) {
+          pass.setScissorRect(0, 0, 64, 64);
+          pass.setPipeline(cp);
+          pass.draw(3, 1, 0, 0);
+          if (dtLastSc) pass.setScissorRect(...dtLastSc); else pass.setScissorRect(0, 0, passW, passH);
+          if (dtLastPipe) pass.setPipeline(dtLastPipe);
+          console.log(`[dtrace] control: clear-pipeline depth write z=0.5 over (0,0 64x64) ` +
+            `with viewport ${lastAppliedViewport ? lastAppliedViewport.map((v) => +v.toFixed(2)).join(",") : "unset"}`);
+        } else {
+          console.log("[dtrace] control: clear pipeline unavailable");
+        }
+      }
+    } catch (e) {
+      console.log(`[dtrace] re-open failed: ${e && e.message}`);
+    }
+  };
+  const dtraceAfterDraw = () => {
+    const dt = self._wgDt;
+    if (!DIAG_DEPTH_TRACE || !dt || !dt.armed || passFbId !== self._wgEfbColorId) return;
+    dt.draws++;
+    const ds = dtLastPipe ? vpDiagPipeFinalDs.get(dtLastPipe) : null;
+    const k = ds ? `${ds.cmp}/${ds.write ? "write" : "nowrite"}` : "nodepth";
+    dt.cmpTally.set(k, (dt.cmpTally.get(k) || 0) + 1);
+    if (ds && ds.write && ds.cmp !== "never") dt.writes++;
+    if (DTRACE_SPLITS.has(dt.draws)) {
+      const z = vpDiagRaw ? vpDiagRaw.map((v) => v.toFixed(2)).join(",") : "?";
+      dtraceSplit(`after draw ${dt.draws} (${k} ${vpDiagRect || "vp?"} z=${z} ${vpDiagScissor})`);
+    }
+  };
+
   const heapCopy = (off, len) => heap.slice(off, off + len);
   // Atomic replay normally stops before an incomplete BEGIN_PASS and leaves
   // it in the ring until END_PASS is visible. The guard below is retained for
@@ -10732,7 +10918,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               // unreliable twice; reading the actual texels replaces the whole
               // inference chain with a direct observation.
               format: fmt,
-              usage: u32[recWord + 5] | ((DIAG_TEX_READBACK || DIAG_DEPTH_READBACK) ? 0x1 : 0)
+              usage: u32[recWord + 5] | ((DIAG_TEX_READBACK || DIAG_DEPTH_READBACK || DIAG_DEPTH_TRACE) ? 0x1 : 0)
             });
             webGpuObjects.textures.set(id,
               { tex, format: fmt, layers, view2dArray: null,
@@ -11153,6 +11339,13 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (fbId === self._wgEfbColorId) vpDiagNoteEfbPass(loadOp === "clear");
           pass = enc.beginRenderPass(desc);
+          dtPassDesc = desc;
+          lastAppliedViewport = dtLastSc = dtLastPipe = dtLastVb = dtLastIb = null;
+          dtLastBg.fill(null);
+          if (DIAG_DEPTH_TRACE && self._wgDt && self._wgDt.armed &&
+              fbId === self._wgEfbColorId) {
+            self._wgDt.passSeq++;
+          }
           if (causalMetricsEnabled) wgpuUploadAttribution.recordPassBegin();
           wgpuReplayClassifier?.recordPassBegin({ framebufferId: fbId, recordIndex: read });
           if (depthId && loadOp === "clear") {
@@ -11234,6 +11427,7 @@ function drainWebGpuCmdRing(source = "presentation") {
                 if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.recordPipelineApplied(p);
               }
               passHasPipe = true;
+              dtLastPipe = p;
               passNeedsVertexBuffer = Boolean(
                 webGpuObjects.pipeTpl.get(pid)?.desc?.vertex?.buffers?.length
               );
@@ -11307,6 +11501,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               WGPU_DYN_OFF_SCRATCH[k] = u32[recWord + 4 + k];
               if (bgSlot === 0) vpDiagNoteVsOffset(u32[recWord + 4 + k]);
             }
+            dtLastBg[bgSlot] = { bg, off: nOff ? Array.from(WGPU_DYN_OFF_SCRATCH.subarray(0, nOff)) : null };
             const needsApply = !wgpuConsumerStateCacheEnabled ||
               wgpuPassStateCache.bindGroupNeedsApply(
                 bgSlot,
@@ -11357,6 +11552,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (!b) wgpuReplayClassifier?.recordMissingResource({ kind: "vertex-buffer", id: bufferId });
           if (pass && b) {
             const offset = u32[recWord + 3];
+            dtLastVb = { slot, b, offset };
             const needsApply = !wgpuConsumerStateCacheEnabled ||
               wgpuPassStateCache.vertexBufferNeedsApply(slot, b, offset);
             try {
@@ -11388,6 +11584,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (pass && b) {
             const format = u32[recWord + 2] === 1 ? "uint32" : "uint16";
             const offset = u32[recWord + 3];
+            dtLastIb = { b, format, offset };
             const needsApply = !wgpuConsumerStateCacheEnabled ||
               wgpuPassStateCache.indexBufferNeedsApply(b, format, offset);
             try {
@@ -11498,6 +11695,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             // below) since the viewport sense cannot carry it.
             if (mn > mx) { const t = mn; mn = mx; mx = t; }
             pass.setViewport(vx, vy, vw, vh, mn, mx);
+            lastAppliedViewport = [vx, vy, vw, vh, mn, mx];
             if (drawState) drawState.viewport = [vx, vy, vw, vh, mn, mx];
           }
           break;
@@ -11522,14 +11720,43 @@ function drainWebGpuCmdRing(source = "presentation") {
           const cdepthRaw = f32[recWord + 6];
           const cdepth = GX_NATIVE_DEPTH ? cdepthRaw : 0.0;
           const cflags = u32[recWord + 7] >>> 0;
+          if (DIAG_DEPTH_TRACE && self._wgDt && self._wgDt.armed &&
+              passFbId === self._wgEfbColorId) {
+            if (cflags & 2) {
+              dtraceSplit(`before clearrect(${cx},${cy} ${cw}x${ch}) flags=${cflags} depth=${cdepth} ` +
+                `vpz=${lastAppliedViewport ? lastAppliedViewport[4] + "," + lastAppliedViewport[5] : "default"}`);
+            }
+            self._wgDt.clears++;
+          }
           const cpipe = ensureClearPipeline(dev, passColorFmt, passDepthFmt,
                                             (cflags & 1) !== 0, (cflags & 2) !== 0,
                                             crgba, cdepth);
           if (!cpipe) break;
           try {
+            // The clear triangle's depth goes through the viewport transform
+            // like any other fragment: window z = minDepth + z * (maxDepth -
+            // minDepth). Mario Kart Wii's frame-start clear arrives while its
+            // HUD viewport z(0.89,0.99) is active, so a "0.0" clear wrote 0.89
+            // across the whole EFB -- a plane NEARER than the entire world
+            // band z(0.00,0.84) under reverse-Z. Every world fragment then
+            // failed greater-equal and the world was black, while the HUD at
+            // >= 0.89 passed. Measured with DIAG_DEPTH_TRACE: 0.89 at every
+            // viewport texel right after the clear with only non-writing
+            // draws in between, and a control write of 0.5 under the world
+            // viewport landing as 0.42. Clear through a full [0,1] range and
+            // put the game's viewport back.
+            // Only when the game's viewport differs from the full-pass [0,1]
+            // one: Wario World issues ~7,800 clears a frame, so two viewport
+            // calls per clear are not free.
+            const vpFix = CLEARRECT_FULL_VIEWPORT && lastAppliedViewport &&
+              !(lastAppliedViewport[0] === 0 && lastAppliedViewport[1] === 0 &&
+                lastAppliedViewport[2] === passW && lastAppliedViewport[3] === passH &&
+                lastAppliedViewport[4] === 0 && lastAppliedViewport[5] === 1);
+            if (vpFix) pass.setViewport(0, 0, passW, passH, 0, 1);
             pass.setScissorRect(cx, cy, cw, ch);
             pass.setPipeline(cpipe);
             pass.draw(3, 1, 0, 0);
+            if (vpFix) pass.setViewport(...lastAppliedViewport);
             // Restore whatever scissor the game had set, so following draws are
             // unaffected. Without this the clear's rect leaks into the frame.
             pass.setScissorRect(0, 0, passW, passH);
@@ -11583,6 +11810,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             vpDiagNoteScissor(u32[recWord + 1], u32[recWord + 2],
                               u32[recWord + 3], u32[recWord + 4], sx, sy, sw, sh);
             pass.setScissorRect(sx, sy, sw, sh);
+            dtLastSc = [sx, sy, sw, sh];
             if (drawState) drawState.scissor = [sx, sy, sw, sh];
           }
           break;
@@ -11615,6 +11843,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             frameCapPush(`  DRAW     fb#${passFbId}`);
             if (!vpDiagDone) vpDiagVerts += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
+            dtraceAfterDraw();
             webGpuExecStats.draw++; pd.draw++;
             wgpuReplayClassifier?.recordRealDraw({
               framebufferId: passFbId,
@@ -11664,6 +11893,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
             pass.drawIndexed(u32[recWord + 1], u32[recWord + 2],
                              u32[recWord + 3], u32[recWord + 4], 0);
+            dtraceAfterDraw();
             webGpuExecStats.drawIdx++; pd.drawIdx++;
             wgpuReplayClassifier?.recordRealDraw({
               framebufferId: passFbId,
@@ -12127,6 +12357,23 @@ function drainWebGpuCmdRing(source = "presentation") {
               kind: "submit-present",
               complete: true
             });
+          }
+          if (DIAG_DEPTH_TRACE) {
+            const pn = self._wgPresentCount || 0;
+            const dt = self._wgDt;
+            if (dt && dt.armed) {
+              dt.armed = false;
+              console.log(`[dtrace] frame done: efbDraws=${dt.draws} depthWrites=${dt.writes} ` +
+                `clearRects=${dt.clears} efbPasses=${dt.passSeq} splits=${dt.splits} ` +
+                `readbacksIssued=${dt.issued}`);
+              for (const [k, n] of [...dt.cmpTally.entries()].sort((a, b) => b[1] - a[1])) {
+                console.log(`[dtrace]   ${String(n).padStart(4)}x ${k}`);
+              }
+            } else if (!dt && pn >= DTRACE_PRESENT && self._wgEfbColorId) {
+              self._wgDt = { armed: true, draws: 0, writes: 0, clears: 0, passSeq: 0,
+                             splits: 0, issued: 0, done: 0, cmpTally: new Map() };
+              console.log(`[dtrace] armed for the frame after present #${pn}`);
+            }
           }
           let presentAlreadySubmitted = false;
           const hardwareInputMarkerCoreFrame = api?.getFrame?.() ?? 0;
@@ -13164,6 +13411,10 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
   try {
     renderGpu.device.pushErrorScope("validation");
     pipe = renderGpu.device.createRenderPipeline(d);
+    if (pipe && d.depthStencil) {
+      vpDiagPipeFinalDs.set(pipe, { cmp: d.depthStencil.depthCompare,
+                                    write: !!d.depthStencil.depthWriteEnabled });
+    }
     renderGpu.device.popErrorScope().then((err) => {
       if (err) {
         recordRendererError("validation", err.message);

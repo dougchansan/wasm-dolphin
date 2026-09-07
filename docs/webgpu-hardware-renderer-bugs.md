@@ -91,7 +91,10 @@ hypotheses previously "measured away", the first was wrong -- see below.
 
    With it enabled, Double Dash renders a full correct 3D scene and Mario Kart
    Wii renders its 2D overlay exactly as on the default path -- where before it
-   produced an entirely black frame.
+   produced an entirely black frame. (Mario Kart Wii's 3D world stayed black
+   for one more reason, found and fixed on 2026-09-06: the clear triangle's
+   depth was going through the game's viewport depth range. See the root-cause
+   section under the Mario Kart Wii heading below.)
 
    Five-title A/B, 60-70s each, `video=wgpu presenter=webgpu`, clear path off
    then on:
@@ -231,6 +234,59 @@ presenter to `webgl` for every value of `VIDEO` except `software`. With
 `completedPassCount = 0` -- the canvas stays static, and the run silently
 measures nothing while still reporting fps. Any `video=wgpu` result recorded
 without it is suspect.
+
+### Root cause of the black world (2026-09-06): the ClearRect depth went through the viewport
+
+Found by reading the EFB depth buffer INSIDE the frame rather than at present
+time (`DIAG_DEPTH_TRACE` in `src/upstream-discio-worker.js`: it ends the EFB
+pass after chosen draws and before each depth-clearing ClearRect, copies the
+depth and colour attachments in the same encoder, and re-opens the pass with
+load ops and the game's state restored).
+
+The clear triangle is a draw, so its depth is subject to the viewport depth
+range like any other fragment: `window z = minDepth + z * (maxDepth - minDepth)`.
+Mario Kart Wii issues its full-viewport clear while the HUD viewport
+z(0.89,0.99) is active, so the "0.0" reverse-Z clear wrote **0.89** across the
+whole EFB -- a plane nearer than the entire world band z(0.00,0.84). Every world
+fragment then failed `greater-equal` and the world was black; the HUD, at
+>= 0.89, passed. Measured in one frame:
+
+| readback | depth in the viewport |
+| --- | --- |
+| after world draw 1 (carried over from the previous frame's clear) | 0.89 at every texel |
+| after 119 world draws, all `greater-equal`/write | still 0.89 everywhere |
+| after the HUD draws | max rises to 0.98 |
+| after the ClearRect, only non-writing draws in between | 0.89 everywhere again |
+| control: clear pipeline z=0.5 under the world viewport z(0.00,0.84) | lands as 0.42 |
+
+The control row is the direct proof of the mechanism. The fix sets a full
+[0,1] viewport for the clear triangle and restores the game's viewport after
+it. With it the trace reads 0.0 after the clear, world depth writes land, the
+colour buffer holds the scene before the clear, and the screenshot shows road,
+barrier, grass, sky and billboard under the pause overlay -- HUD and world
+together, on the reverse-Z convention the shader implies. No `GX_NATIVE_DEPTH`
+workaround is needed; it "worked" because its unflipped `less-equal` passed
+the world against the 0.99 the clear wrote under that convention.
+
+Deterministic states, `video=wgpu presenter=webgpu`, before -> after: Mario
+Kart Wii 43% -> 55% game speed, Double Dash 28% -> 34%, and Double Dash's race
+scene is unchanged. The viewport reset is skipped when the game's viewport is
+already the full-pass [0,1] one, since Wario World issues ~7,800 clears a
+frame. Wario World A/B, fix off -> on, 70s each: 63 -> 65 hashes, 80% -> 93%
+average speed, 25 -> 30 present fps, throne room correct both ways. F-Zero GX
+boots to its name-entry screen at 63-86% with 48 distinct frames. (The
+harness's per-sample speed on Wario World alternates 0%/200% while the frame
+counter advances steadily; that is the sampler, so the averages above are the
+numbers to read.)
+
+**Why the previous session's depth readback read all zero, and why the first
+two runs of this probe did too, control included:** `mapAsync` was called on
+the readback buffer before the encoder that copies into it was submitted. Dawn
+rejects that submit ("used in submit while pending map") and drops the whole
+command buffer -- the frame's draws, the copy, everything -- while the buffer
+still maps and reads the zeros it was created with. The trace now queues every
+map and drains the queue after `queue.submit()`. A readback that cannot see
+its own control write is a null instrument; that check is what caught it.
 
 ### Method note
 
