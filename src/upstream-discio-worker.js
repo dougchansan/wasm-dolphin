@@ -4556,7 +4556,19 @@ async function createWebGpuPresenter(canvas) {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
     },
   };
-  const device = await adapter.requestDevice();
+  // Depth clamp needs two optional WebGPU features. With bSupportsDepthClamp
+  // true, upstream's vertex shader emits clip distances, and the translated
+  // WGSL then needs the clip-distances extension: without it every vertex
+  // shader fails with "extension 'clip_distances' is not allowed in the
+  // current environment", which surfaces as missing pipelines and a black
+  // frame rather than an error. depth-clip-control is what turns clipping
+  // into clamping.
+  const wantFeatures = ["clip-distances", "depth-clip-control"];
+  const haveFeatures = wantFeatures.filter((f) => adapter.features && adapter.features.has(f));
+  console.log("[wgpu-features] got=" + (haveFeatures.join(",") || "none") +
+              " missing=" + (wantFeatures.filter((f) => !haveFeatures.includes(f)).join(",") || "none"));
+  const device = await adapter.requestDevice(
+    haveFeatures.length ? { requiredFeatures: haveFeatures } : undefined);
   rendererDiagnostics.device = {
     created: true,
     label: device.label || null,

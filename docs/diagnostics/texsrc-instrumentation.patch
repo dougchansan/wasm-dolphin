@@ -368,3 +368,16 @@ index 837c30c556..06e65e5aa6 100644
 # core should not carry it.
 #
 #   "--profiling-funcs"
+
+# ---------------------------------------------------------------------------
+# Depth clamp, to make VertexShaderManager::UseVertexDepthRange() engage.
+# In VideoBackends/WebGPU/VideoBackend.cpp, beside bSupportsClipControl:
+#
+#   g_backend_info.bSupportsDepthClamp = true;
+#
+# REQUIRES the clip-distances device feature, already requested in
+# upstream-discio-worker.js. Without it every vertex shader fails to compile
+# with "extension 'clip_distances' is not allowed in the current environment",
+# which surfaces as missing pipelines (mp138158) and a black frame, NOT as an
+# error. Both clip-distances and depth-clip-control are available on this
+# machine's adapter.
