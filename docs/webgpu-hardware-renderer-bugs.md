@@ -279,6 +279,12 @@ harness's per-sample speed on Wario World alternates 0%/200% while the frame
 counter advances steadily; that is the sampler, so the averages above are the
 numbers to read.)
 
+A second state leak of the same kind, fixed alongside: after the clear
+triangle, ClearRect restored the scissor to the full pass rather than the
+scissor the game had set, so every draw until the game's next scissor change
+ran un-scissored. It now restores the game's last scissor. Mario Kart Wii and
+Wario World render the same with it (38 and 70 hashes, 66% and 94%).
+
 **Why the previous session's depth readback read all zero, and why the first
 two runs of this probe did too, control included:** `mapAsync` was called on
 the readback buffer before the encoder that copies into it was submitted. Dawn

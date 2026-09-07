@@ -9864,12 +9864,13 @@ function drainWebGpuCmdRing(source = "presentation") {
   let passNeedsVertexBuffer = false;
   let vertexBufferValid = false;
   let indexBufferValid = false;
-  // The viewport last applied to the open pass. ClearRect resets the viewport
-  // for its clear triangle and must put the game's back afterwards.
+  // The viewport and scissor last applied to the open pass. ClearRect resets
+  // both for its clear triangle and must put the game's back afterwards.
   let lastAppliedViewport = null;
+  let lastAppliedScissor = null;
   // DIAG_DEPTH_TRACE: the rest of the last-applied pass state, so a split pass
   // can be re-opened with the same state the game had set.
-  let dtLastSc = null, dtLastPipe = null;
+  let dtLastPipe = null;
   const dtLastBg = [null, null, null];
   let dtLastVb = null, dtLastIb = null, dtPassDesc = null;
   let currentBackbufferSourceTextureId = 0;
@@ -10325,7 +10326,7 @@ function drainWebGpuCmdRing(source = "presentation") {
       pass = enc.beginRenderPass(d2);
       if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.reset("dtrace-split");
       if (lastAppliedViewport) pass.setViewport(...lastAppliedViewport);
-      if (dtLastSc) pass.setScissorRect(...dtLastSc);
+      if (lastAppliedScissor) pass.setScissorRect(...lastAppliedScissor);
       if (dtLastPipe) pass.setPipeline(dtLastPipe);
       for (let sl = 0; sl < 3; sl++) {
         const g = dtLastBg[sl];
@@ -10342,7 +10343,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           pass.setScissorRect(0, 0, 64, 64);
           pass.setPipeline(cp);
           pass.draw(3, 1, 0, 0);
-          if (dtLastSc) pass.setScissorRect(...dtLastSc); else pass.setScissorRect(0, 0, passW, passH);
+          if (lastAppliedScissor) pass.setScissorRect(...lastAppliedScissor); else pass.setScissorRect(0, 0, passW, passH);
           if (dtLastPipe) pass.setPipeline(dtLastPipe);
           console.log(`[dtrace] control: clear-pipeline depth write z=0.5 over (0,0 64x64) ` +
             `with viewport ${lastAppliedViewport ? lastAppliedViewport.map((v) => +v.toFixed(2)).join(",") : "unset"}`);
@@ -11340,7 +11341,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (fbId === self._wgEfbColorId) vpDiagNoteEfbPass(loadOp === "clear");
           pass = enc.beginRenderPass(desc);
           dtPassDesc = desc;
-          lastAppliedViewport = dtLastSc = dtLastPipe = dtLastVb = dtLastIb = null;
+          lastAppliedViewport = lastAppliedScissor = dtLastPipe = dtLastVb = dtLastIb = null;
           dtLastBg.fill(null);
           if (DIAG_DEPTH_TRACE && self._wgDt && self._wgDt.armed &&
               fbId === self._wgEfbColorId) {
@@ -11757,9 +11758,11 @@ function drainWebGpuCmdRing(source = "presentation") {
             pass.setPipeline(cpipe);
             pass.draw(3, 1, 0, 0);
             if (vpFix) pass.setViewport(...lastAppliedViewport);
-            // Restore whatever scissor the game had set, so following draws are
-            // unaffected. Without this the clear's rect leaks into the frame.
-            pass.setScissorRect(0, 0, passW, passH);
+            // Restore the scissor the game had set, so following draws are
+            // unaffected. Restoring the full pass instead un-scissored every
+            // draw until the game next changed its scissor.
+            if (lastAppliedScissor) pass.setScissorRect(...lastAppliedScissor);
+            else pass.setScissorRect(0, 0, passW, passH);
             self._wgClearRectN = (self._wgClearRectN || 0) + 1;
             if (!vpDiagDone) {
               const frac = Math.round((100 * cw * ch) / (passW * passH));
@@ -11810,7 +11813,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             vpDiagNoteScissor(u32[recWord + 1], u32[recWord + 2],
                               u32[recWord + 3], u32[recWord + 4], sx, sy, sw, sh);
             pass.setScissorRect(sx, sy, sw, sh);
-            dtLastSc = [sx, sy, sw, sh];
+            lastAppliedScissor = [sx, sy, sw, sh];
             if (drawState) drawState.scissor = [sx, sy, sw, sh];
           }
           break;
