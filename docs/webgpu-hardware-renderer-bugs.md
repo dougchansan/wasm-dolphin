@@ -47,6 +47,57 @@ error at frame 105. Screenshot-verified in this sweep: **Super Mario
 Sunshine's beach background now renders** behind the file select, and Kirby
 Air Ride's race is in full colour with green grass.
 
+Per title, same sweep (hashes = distinct canvas frames in 45s):
+
+| game | verdict | hashes | speed % |
+| --- | --- | ---: | ---: |
+| Animal Crossing (USA, Canada) | static | 3 | 100 |
+| Animal Crossing (USA) | static | 6 | 9 |
+| F-Zero GX (USA) | boots | 39 | 100 |
+| GoldenEye - Rogue Agent (USA) (Disc 2) | black | 1 | 0 |
+| Kirby Air Ride (USA) | boots | 41 | 100 |
+| Legend of Zelda, The - Collector's Edition (USA, Canada) | boots | 38 | 72.5 |
+| Legend of Zelda, The - Four Swords Adventures (USA) | boots | 18 | 100 |
+| Legend of Zelda, The - Ocarina of Time & Master Quest (USA, Canada) | boots | 12 | 100 |
+| Legend of Zelda, The - The Wind Waker (USA, Canada) | boots | 45 | 100 |
+| Legend of Zelda, The - Twilight Princess (USA) | boots | 38 | 100 |
+| Luigi's Mansion (USA, Canada) | boots | 44 | 68.5 |
+| Luigi's Mansion (USA) | boots | 40 | 67.5 |
+| Mario Kart - Double Dash!! (USA) | boots | 30 | 100 |
+| Mario Kart Double Dash (USA) | boots | 40 | 99 |
+| Metal Gear Solid - The Twin Snakes (USA) (Disc 1) | boots | 26 | 37 |
+| Metroid Prime (USA) (Rev 2) | boots | 34 | 36 |
+| Metroid Prime 2 - Echoes (USA, Canada) (Bonus Disc) | boots | 35 | 97 |
+| Naruto - Clash of Ninja 2 (USA) | boots | 27 | 44 |
+| Paper Mario - The Thousand-Year Door (USA) | boots | 20 | 36 |
+| Pikmin (USA) (Rev 1) | boots | 43 | 99 |
+| Pikmin 2 (USA) | boots | 41 | 53 |
+| Pikmin 2 | boots | 34 | 48.5 |
+| Pokemon Box - Ruby & Sapphire (USA) (Rev 1) | boots | 45 | 100 |
+| Pokemon Channel (USA) | boots | 42 | 45 |
+| Pokemon Colosseum (USA) | boots | 28 | 34 |
+| Pokemon XD - Gale of Darkness (USA) | boots | 31 | 36 |
+| Resident Evil - Code - Veronica X (USA) (Disc 1) | black | 5 | 40 |
+| Resident Evil (USA) (Disc 1) | boots | 13 | 100 |
+| Resident Evil 2 (USA) | boots | 18 | 100 |
+| Resident Evil 3 - Nemesis (USA) | boots | 17 | 100 |
+| Resident Evil Zero (USA) (Disc 1) | boots | 20 | 37 |
+| Resident Evil Zero (USA) (Disc 2) | boots | 21 | 37 |
+| Shadow the Hedgehog (USA) (En,Ja,Fr,De,Es,It) | boots | 24 | 37 |
+| Shonen Jump's One Piece - Grand Adventure (USA) | static | 1 | 100 |
+| Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es) | boots | 27 | 39 |
+| Sonic Adventure DX - Director's Cut (USA) (En,Ja,Fr,De,Es) | static | 7 | 100 |
+| Sonic Heroes (USA) (En,Ja,Fr,De,Es,It) | boots | 42 | 45 |
+| SoulCalibur 2 Plus Gamecube version 0.9.9.7 | static | 10 | 63 |
+| Soulcalibur II (USA) | boots | 10 | 60 |
+| Star Fox Adventures (USA) (Rev 1) | boots | 42 | 28.5 |
+| Super Mario Sunshine (USA) | boots | 25 | 80 |
+| Super Monkey Ball Deluxe [GM2EDX] | boots | 19 | 100 |
+| Super Smash Bros. Melee (USA) (En,Ja) (Rev 2) | boots | 42 | 100 |
+| Super Smash Bros. Melee (USA) (En,Ja) (v1.02) | boots | 41 | 97 |
+| Wario World (USA) | boots | 45 | 100 |
+| Yu-Gi-Oh! The Falsebound Kingdom (USA) | boots | 20 | 100 |
+
 Previous baseline, 45 discs, before the viewport fix:
 
 | | value |
