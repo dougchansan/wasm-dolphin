@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:af0a05479772d81f78dd37095d1fc15cd4a3c6dbe245b656415c353262f9c47e",
+  "coreId": "sha256:38808e3affc23dfada3fe2d3492e6fa94980916a24c95e24d9cdcc0c6997619c",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
       "size": 266770,
-      "sha256": "7e627e3d34edc6559f8d422633eb9ad5e7a4409e2b67eb3b75918ec76c987829"
+      "sha256": "ebca612d65707437b07ce56cf5d945590397ffe19ae3ccd11ec1c65ace2ab50e"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12946268,
-      "sha256": "af0a05479772d81f78dd37095d1fc15cd4a3c6dbe245b656415c353262f9c47e"
+      "size": 12947872,
+      "sha256": "38808e3affc23dfada3fe2d3492e6fa94980916a24c95e24d9cdcc0c6997619c"
     }
   ],
   "contractSources": [
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 522686,
-      "sha256": "74ac9c88cf8444207441a9f21134af71e38bc1145a56b13f95e2a5613e38bbff"
+      "size": 607387,
+      "sha256": "6986675e995bfa99601078ea0bafc6bd4a75aa74e439330faae8b5156e17adaa"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -165,7 +165,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "a63d2ec61fd93542084b08d474a4acf348dec84932ab946a0dede74d3a219a27"
+      "sha256": "c1a56bdea0dea02e556a9d04b880e7d6effa96ef788d70e314238ff29b39c6a9"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
@@ -224,8 +224,8 @@
     {
       "path": "src/wgpu-legacy-semantic-decoder.js",
       "hashMode": "lf-normalized",
-      "size": 12519,
-      "sha256": "b7b40fbb7fea324c070619b03506b134467d1cab9d26228276453501262096f9"
+      "size": 12733,
+      "sha256": "2f167fae7ba10525a74d3500503bfa4f98a9582b81e5889d9f75ec351a8fdd8c"
     },
     {
       "path": "src/wgpu-semantic-digest.js",
@@ -254,8 +254,8 @@
     {
       "path": "src/wgpu-semantic-v2-decoder.js",
       "hashMode": "lf-normalized",
-      "size": 21037,
-      "sha256": "7399848fd70833be247e6ac15da2c620be28b6380915ef5eb9500d111537e546"
+      "size": 21226,
+      "sha256": "577f78afae4bede505e3a4af123f63b37ebe364cca958a8e47eaac64a1be7407"
     },
     {
       "path": "src/wgpu-consumer-reset-attestation.js",

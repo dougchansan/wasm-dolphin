@@ -6188,10 +6188,9 @@ const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_CMD_OP_CLEAR_RECT = 25;
-// ClearRect draws its clear triangle through a [0,1] depth range rather than
-// whatever range the game's viewport has active, so the clear depth lands as
-// the clear depth. A/B switch: false restores the behaviour that left Mario
-// Kart Wii's world black.
+// ClearRect uses the full attachment viewport and [0,1] depth range, so its
+// scissor alone determines coverage and its depth is independent of game state.
+// A/B switch: false restores the original game-viewport-dependent clear.
 const CLEARRECT_FULL_VIEWPORT = true;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
@@ -7926,7 +7925,10 @@ function blitTexture(enc, s, d, sx, sy, sw, sh, dx, dy, dw, dh,
   if (s.format.startsWith("depth") || d.format.startsWith("depth")) return;
   const pipe = ensureBlitPipeline(d.format);
   if (!pipe) return;
-  const sw0 = s.tex.width || 1, sh0 = s.tex.height || 1;
+  // Source rectangles are expressed in texels of the selected mip, and the
+  // sampling view below exposes that mip as level zero.
+  const sw0 = Math.max(1, s.tex.width >> sLevel);
+  const sh0 = Math.max(1, s.tex.height >> sLevel);
   // 16-byte uniform per blit (a handful/frame) so concurrent blits in
   // one submit never alias a shared buffer.
   const ubo = dev.createBuffer({ size: 16, usage: 0x40 | 0x8,
@@ -9004,8 +9006,8 @@ function diagNoteBackbufferDraw(srcId, vp, sc) {
 // distinct clear values, so the cache stays small; it is capped regardless.
 const WGPU_CLEAR_PIPELINES = new Map();
 const WGPU_CLEAR_PIPELINE_CAP = 64;
-function ensureClearPipeline(dev, colorFormat, depthFormat, writeColor, writeDepth, rgba, depth) {
-  const key = `${colorFormat}|${depthFormat || "-"}|${writeColor ? 1 : 0}` +
+function ensureClearPipeline(dev, colorFormat, depthFormat, colorWriteMask, writeDepth, rgba, depth) {
+  const key = `${colorFormat}|${depthFormat || "-"}|${colorWriteMask}` +
               `|${writeDepth ? 1 : 0}|${rgba}|${depth.toFixed(6)}`;
   const hit = WGPU_CLEAR_PIPELINES.get(key);
   if (hit) return hit;
@@ -9036,7 +9038,7 @@ function ensureClearPipeline(dev, colorFormat, depthFormat, writeColor, writeDep
     // being cleared, otherwise the pipeline is incompatible with the pass.
     desc.fragment = {
       module: mod, entryPoint: "fs",
-      targets: [{ format: colorFormat, writeMask: writeColor ? 0xF : 0 }]
+      targets: [{ format: colorFormat, writeMask: colorWriteMask }]
     };
     if (depthFormat) {
       desc.depthStencil = {
@@ -10914,6 +10916,9 @@ function drainWebGpuCmdRing(source = "presentation") {
             const tex = dev.createTexture({
               size: [Math.max(1, u32[recWord + 2]),
                      Math.max(1, u32[recWord + 3]), layers],
+              // Older producers leave this word zero. Preserve their single
+              // mip allocation while accepting the game's complete mip chain.
+              mipLevelCount: Math.max(1, u32[recWord + 7] || 1),
               // DIAG_TEX_READBACK adds COPY_SRC so the texture can be copied
               // back and inspected. Upload-byte accounting has proved
               // unreliable twice; reading the actual texels replaces the whole
@@ -11271,7 +11276,8 @@ function drainWebGpuCmdRing(source = "presentation") {
               wgpuReplayClassifier?.recordMissingResource({ kind: "color-texture", id: fbId });
               break;
             }
-            colorView = ct.tex.createView();
+            colorView = ct.tex.createView({ dimension: "2d", mipLevelCount: 1,
+              baseArrayLayer: 0, arrayLayerCount: 1 });
             passW = ct.tex.width;
             passH = ct.tex.height;
             passColorFmt = ct.format;
@@ -11321,7 +11327,8 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           if (dt) {
             const ds = {
-              view: dt.tex.createView(),
+              view: dt.tex.createView({ dimension: "2d", mipLevelCount: 1,
+                baseArrayLayer: 0, arrayLayerCount: 1 }),
               // §28af: per-pass reverse-Z depth clear (dcv computed
               // from the peeked SET_VIEWPORT above). reverse-Z 3D
               // passes clear to far=0.0 (paired with the flipped
@@ -11721,6 +11728,12 @@ function drainWebGpuCmdRing(source = "presentation") {
           const cdepthRaw = f32[recWord + 6];
           const cdepth = GX_NATIVE_DEPTH ? cdepthRaw : 0.0;
           const cflags = u32[recWord + 7] >>> 0;
+          // New records carry independent RGB/alpha enables. Legacy records
+          // used bit 0 for all four color channels. Alpha-only clears build
+          // masks for EFB-copy effects and must preserve the rendered RGB.
+          const colorWriteMask = (cflags & 8)
+            ? ((cflags & 1) ? 0x7 : 0) | ((cflags & 4) ? 0x8 : 0)
+            : ((cflags & 1) ? 0xF : 0);
           if (DIAG_DEPTH_TRACE && self._wgDt && self._wgDt.armed &&
               passFbId === self._wgEfbColorId) {
             if (cflags & 2) {
@@ -11730,7 +11743,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgDt.clears++;
           }
           const cpipe = ensureClearPipeline(dev, passColorFmt, passDepthFmt,
-                                            (cflags & 1) !== 0, (cflags & 2) !== 0,
+                                            colorWriteMask, (cflags & 2) !== 0,
                                             crgba, cdepth);
           if (!cpipe) break;
           try {
@@ -11746,14 +11759,17 @@ function drainWebGpuCmdRing(source = "presentation") {
             // draws in between, and a control write of 0.5 under the world
             // viewport landing as 0.42. Clear through a full [0,1] range and
             // put the game's viewport back.
-            // Only when the game's depth range is not already [0,1]: Wario
-            // World issues ~7,800 clears a frame, so two viewport calls per
-            // clear are not free. The rect is kept as the game set it.
+            // The triangle must also cover the full attachment: a clear
+            // outside the game's viewport otherwise receives no fragments,
+            // even when its scissor and depth are correct. Skip redundant
+            // viewport calls only for the full-pass [0,1] viewport (important
+            // for Wario World's thousands of clears).
             const vpFix = CLEARRECT_FULL_VIEWPORT && lastAppliedViewport &&
-              !(lastAppliedViewport[4] === 0 && lastAppliedViewport[5] === 1);
+              !(lastAppliedViewport[0] === 0 && lastAppliedViewport[1] === 0 &&
+                lastAppliedViewport[2] === passW && lastAppliedViewport[3] === passH &&
+                lastAppliedViewport[4] === 0 && lastAppliedViewport[5] === 1);
             if (vpFix) {
-              const v = lastAppliedViewport;
-              pass.setViewport(v[0], v[1], v[2], v[3], 0, 1);
+              pass.setViewport(0, 0, passW, passH, 0, 1);
             }
             pass.setScissorRect(cx, cy, cw, ch);
             pass.setPipeline(cpipe);

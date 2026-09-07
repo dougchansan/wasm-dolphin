@@ -429,6 +429,9 @@ await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
 let probeError = null;
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
+  // bootstrap.js imports app.js through a top-level await, so DOM readiness
+  // can precede the ROM change listener. Match boot-matrix's readiness gate.
+  await waitForAppReady(page);
   await page.evaluate((showDebugPanel) => {
     const panel = document.querySelector("#debugPanel");
     const toggle = document.querySelector("#debugToggle");
@@ -1516,6 +1519,19 @@ function avg(arr) {
   return Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2));
 }
 
+async function waitForAppReady(page, timeoutSeconds = 30) {
+  for (let attempt = 0; attempt < timeoutSeconds * 4; attempt++) {
+    const ready = await page.evaluate(() => {
+      const pill = document.querySelector("#statusPill")?.textContent?.trim() ?? "";
+      const input = document.querySelector("#romInput");
+      return Boolean(input) && pill !== "" && pill !== "Booting";
+    }).catch(() => false);
+    if (ready) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
 async function waitForMount(page) {
   for (let second = 0; second <= 180; second += 1) {
     const state = await page.evaluate(() => ({
@@ -1526,7 +1542,8 @@ async function waitForMount(page) {
     if (state.coreMode === "Dolphin" && state.mountNote.includes("Dolphin")) return;
     // See the note in boot-matrix.mjs: the optional jit-cache prewarm
     // reports "failed" in its own status text and must not abort the run.
-    if (!/^jit-cache:/i.test(state.status) && /failed|error/i.test(state.status)) {
+    if (!/^jit-cache:/i.test(state.status) &&
+        (/failed|error/i.test(state.status) || /^Dolphin adapter fallback:/i.test(state.status))) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);

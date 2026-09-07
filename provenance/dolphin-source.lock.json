@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "ceaba40bf7c4eae85afcc4ae0128224609825161f952e9e76ed8e5985949ecd7",
+  "patchSeriesSha256": "c1daf354e7018e88334efeb0d277855f827d3e7cb3e55fb3add1cf7eca840ae6",
   "patches": [
     {
       "order": 1,
@@ -449,7 +449,7 @@
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0055-wgpu-clear-rect-probe-and-subrect-experiment.patch",
       "size": 5481,
-      "sha256": "0a6ecbcd14f921b5dca4febba4332d4da39ab773b6c1de8dfa1a295db733343a"
+      "sha256": "3362edc357b8131d31c4e100a2affcf694bb44521d3419b06d4fe5f8879353e1"
     },
     {
       "order": 54,
@@ -464,11 +464,35 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0057-cached-interpreter-fast-paired-single.patch",
-      "size": 7873,
-      "sha256": "da07880f6e876fd1e692e3c9ceec5441a87acd20c1c146b42b1b7ebea06c1dd1"
+      "size": 7984,
+      "sha256": "0d71fb9d1589850dd59b59799226105f5df1f8e266aefee361c4b0121fde91fb"
     },
     {
       "order": 56,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0058-webgpu-preserve-texture-mip-levels.patch",
+      "size": 3340,
+      "sha256": "73d7c78364b1250fd829dc61e0f20b46e1bffeadfcfa67b853be2501a248bc9c"
+    },
+    {
+      "order": 57,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0059-preserve-existing-renderer-and-diagnostic-source.patch",
+      "size": 23884,
+      "sha256": "f795ba2ef01703bd2c2a73f83286021510da23a7a48a96e904ec45747016d637"
+    },
+    {
+      "order": 58,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0060-webgpu-preserve-independent-clear-alpha.patch",
+      "size": 4702,
+      "sha256": "f8aac12406704e78148430e34f35fe2a2059a90dd11b4e1b1b32523b2459c435"
+    },
+    {
+      "order": 59,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -476,7 +500,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 57,
+      "order": 60,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

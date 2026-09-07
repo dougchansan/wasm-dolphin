@@ -309,7 +309,7 @@ async function waitForMount(page, timeoutSeconds) {
     // failure -- intermittently, since it depends on sampling that brief
     // status window. That is the "mount flakiness" in issue #10.
     if (!/^jit-cache:/i.test(state.status) &&
-        /failed|error|unsupported/i.test(state.status)) {
+        (/failed|error|unsupported/i.test(state.status) || /^Dolphin adapter fallback:/i.test(state.status))) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);

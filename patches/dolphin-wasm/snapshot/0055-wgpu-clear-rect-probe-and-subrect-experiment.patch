@@ -57,7 +57,8 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
 +                     "[cleardiag] rect=({},{})+{}x{} efb={}x{} {} col={} a={} z={} "
 +                     "scissor=({},{})+{}x{}",
 +                     target_rc.left, target_rc.top, target_rc.GetWidth(), target_rc.GetHeight(),
-+                     efb_w, efb_h, covers_efb ? "full" : "PARTIAL", color_enable,+
++                     efb_w, efb_h, covers_efb ? "full" : "PARTIAL", color_enable,
++
 +                     alpha_enable,
 +                     z_enable, m_scissor[0], m_scissor[1], m_scissor[2], m_scissor[3]);
 +    }
@@ -77,10 +78,10 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
    // Day-33 Phase C: the game's BP clear-screen. Without this the EFB
    // depth buffer is never initialised, so every drawn primitive fails
    // the depth test and only the load-cleared background shows (the
-@@ -1244,6 +1294,24 @@
+@@ -1244,5 +1294,24 @@
    if (!m_cmd_stream.ready())
      return;
- 
++
 +  // Sub-rect clears cannot be expressed as a WebGPU loadOp:clear -- loadOp
 +  // clears the whole attachment and ignores setScissorRect -- so this backend
 +  // over-clears: a clear requested for 128x128 wipes the whole 640x528 EFB.

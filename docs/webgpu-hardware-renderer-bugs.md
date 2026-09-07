@@ -11,6 +11,76 @@ Reproduce:
 VIDEO=wgpu node tools/boot-matrix.mjs --library "<disc library>" --duration 45
 ```
 
+## Follow-up: mip chains and clear coverage/channels (2026-09-07)
+
+Three additional renderer defects are fixed:
+
+- **Mip uploads were rejected.** Native textures supplied each mip but
+  `CREATE_TEXTURE` allocated only one level. The last record word now carries
+  the configured level count (zero from older producers still means one).
+  Sampling views expose the chain; framebuffer views select one mip/layer.
+  Sampled texture copies now normalize source rectangles using the selected
+  mip's dimensions. This follows the [WebGPU texture/view contract](https://www.w3.org/TR/webgpu/#textures).
+  Earlier Sunshine, Wario World, Twilight Princess and Star Fox logs contain
+  `MipLevel (1) is greater than the number of mip levels (1)` errors.
+- **A clear could miss its rectangle.** The depth-range fix below preserved
+  the game's viewport rectangle. A clear outside that viewport consequently
+  received no fragments. ClearRect now temporarily uses the whole attachment
+  and depth range `[0,1]`, then restores the game viewport and scissor. The
+  redundant-call fast path still applies when all six viewport values already
+  match. The earlier claim that retaining the viewport rectangle was enough
+  is superseded by this measured coverage failure.
+- **Alpha-only clears were dropped.** Mario Kart Wii's trace contains
+  128x128 and 608x456 clears with RGB and depth disabled but alpha enabled.
+  The producer recorded no enabled channels. ClearRect now carries separate
+  RGB, alpha and depth enables; mixed RGB/alpha clears use the draw path even
+  for a whole attachment. Older records retain their RGBA clear semantics.
+
+GPU verification on Chrome/AMD RDNA 4: 19 exact pixel checks cover mip uploads,
+layers, sampled subrect copies, format conversion, thin mips, legacy records
+and attachment views, with zero validation errors. A separate 8x8 clear probe
+requested a 2x2 clear outside a 4x4 game viewport: the old path cleared zero
+pixels; the corrected path cleared exactly four color/depth pixels and
+preserved the surrounding pixels and game state.
+The expanded GPU check verifies ten clear cases, including alpha-only
+preserving RGB/depth, RGB-only preserving alpha/depth, depth-only preserving
+RGBA, combined clears and legacy records. All 64 pixels are checked per case.
+
+Fresh Sunshine screenshots changed from a white file-select background to
+the beach, ocean, palm tree, Mario and all three file blocks after the coverage
+fix. Its 50-second run produced 32 distinct frames at a median 73% speed.
+Mario Kart Wii's saved race retained two opaque copied-texture rectangles
+after those two fixes. Independent alpha clears removed them: the final
+scene shows the road, grass, barriers, kart and pause overlay together, matching
+the software reference's scene content. A final trace confirms the 608x456
+alpha-only clear is emitted and replayed with flags 12. Placeholder tinting and
+global clamp-to-edge sampling had not removed the rectangles; those diagnostic
+changes were confined to intercepted browser responses and are not shipped.
+
+Local evidence: `.omx/render-fix/gpu-mip-smoke.{mjs,json}`,
+`.omx/render-fix/clear-coverage-smoke.{mjs,json}`,
+`.omx/render-fix/sunshine-clear-coverage/`, and
+`.omx/render-fix/mkw-clear-coverage/` (before alpha repair), and
+`.omx/render-fix/mkw-alpha-final/` (after). Tests execute the actual consumer code
+and fail against the previous implementation.
+
+The rebuilt core and ABI hash pin are updated. Snapshot patch 0058 carries
+the mip fix; 0059 preserves native ClearRect and diagnostics already present
+in the local vendor tree but missing from the patch series. Patch 0060 carries
+independent alpha clears. Malformed/context
+whitespace in earlier patches was repaired so replay matches that tree.
+Both browser harnesses now report adapter fallback errors immediately;
+the saved-state harness also waits for app readiness before uploading a ROM.
+
+Final verification: `npm run check`, all 858 tests, and
+`npm run verify:provenance` pass. The active browser core hash matches the
+rebuilt artifact (`38808e3affc23dfada3fe2d3492e6fa94980916a24c95e24d9cdcc0c6997619c`),
+with `WebGPU-Real` active and no fallback. Sunshine and Wario World boot
+checks also pass on that final build; screenshots are in
+`.omx/render-fix/sunshine-alpha-final/` and
+`.omx/render-fix/wario-alpha-final/`. This follow-up verified those scenes,
+not a new full-library compatibility sweep.
+
 ## Status: the main defect is fixed
 
 `ClearRegion` was honouring depth-only clears as colour clears, wiping a
@@ -447,9 +517,9 @@ Recorded so they are not re-investigated:
 - **SoulCalibur 2 Plus** is `static` because it holds an autosave dialog. The
   frame is correct.
 
-## Suggested order (updated)
+## Earlier investigation priorities (superseded)
 
-Bugs 1, 2 and 4 are resolved. What remains, in order:
+These priorities predate the clear fixes above and remain as investigation history:
 
 1. **Super Mario Sunshine's missing background.** The one open rendering
    defect with a clear repro, but FIVE hypotheses have now been measured and

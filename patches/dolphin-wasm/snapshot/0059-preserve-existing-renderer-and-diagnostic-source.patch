@@ -1,0 +1,508 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+index 09bd5f8af0..77ece626be 100644
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -307,6 +307,17 @@ u32 s_wasm_block_mixed_compile_count = 0;
+ u32 s_wasm_block_too_short_count = 0;
+ u32 s_wasm_block_too_short_end_count = 0;
+ u32 s_wasm_prefix_instruction_sum = 0;
++// Why does a compiled prefix stop? pre:6/74 says blocks average six
++// instructions; that is only a problem if they are being TRUNCATED rather than
++// ending naturally at a branch. reject:0 suggests the latter, but that counter
++// covers only two of the six exit paths. Count all of them.
++u32 s_prefix_end_hle = 0;
++u32 s_prefix_end_breakpoint = 0;
++u32 s_prefix_end_idle = 0;
++u32 s_prefix_end_fp_off = 0;
++u32 s_prefix_end_not_candidate = 0;
++u32 s_prefix_end_block_end = 0;
++u32 s_prefix_end_ran_out = 0;
+ u32 s_wasm_prefix_instruction_max = 0;
+ std::array<u32, 5> s_wasm_prefix_histogram{};
+ u32 s_wasm_helper_call_count = 0;
+@@ -5417,7 +5428,12 @@ void EmitDcbz(std::vector<u8>& body, const WasmStateLayout& layout, const PPCAna
+ void LogWasmBlockReject(const char* reason, const GekkoOPInfo* opinfo, u32 inst_hex, u32 address,
+                         u32 instruction_count)
+ {
+-  if (s_wasm_block_reject_log_count++ >= 40)
++  // Raised from 40. Forty samples cannot rank which instructions actually
++  // block compilation, and ranking them is the point: the JIT executes ~0.01%
++  // of the workload because blocks are only admitted when every instruction
++  // has a direct emitter. The EM_ASM below early-returns unless
++  // Module.dolphinWebVerbosePpcJit is set, so this costs nothing when off.
++  if (s_wasm_block_reject_log_count++ >= 4000)
+     return;
+ 
+   EM_ASM(
+@@ -6280,7 +6296,8 @@ bool EmitWasmSupportedIntegerInstruction(std::vector<u8>& body, const WasmStateL
+         EmitLocalGet(body, 3);
+         EmitStateStoreU32Suffix(body, SprOffset(layout, spr_index));
+       }
+-      if (op.canEndBlock)
++      if (op.canEndBlock) ++s_prefix_end_block_end;
++    if (op.canEndBlock)
+         EmitStoreNpcConst(body, layout, op.address + 4);
+       return true;
+     }
+@@ -7777,6 +7794,8 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+       Interpret<false>(ppc_state, *reinterpret_cast<const InterpretOperands*>(payload));
+       normal_entry = payload + sizeof(InterpretOperands);
+     }
++#if DOLPHIN_WEB_HOT_DISPATCH_ORDER
++    // DOLPHIN_WEB_HOT_DISPATCH_ORDER_BEGIN
+ #if DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
+     else if (callback == AnyCallbackCast(RunWasmBlock))
+     {
+@@ -7787,8 +7806,6 @@ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+         break;
+     }
+ #endif
+-#if DOLPHIN_WEB_HOT_DISPATCH_ORDER
+-    // DOLPHIN_WEB_HOT_DISPATCH_ORDER_BEGIN
+     else if (callback == AnyCallbackCast(FastInteger))
+     {
+       if (FastInteger(ppc_state, *reinterpret_cast<const FastInstructionOperands*>(payload)))
+@@ -10646,6 +10663,7 @@ bool CachedInterpreter::TryWriteWasmBlock(u32 nextPC)
+     const PPCAnalyst::CodeOp& op = m_code_buffer[i];
+     if (HLE::TryReplaceFunction(m_ppc_symbol_db, op.address, PowerPC::CoreMode::JIT))
+     {
++      ++s_prefix_end_hle;
+       if (prefix_count == 0)
+         LogWasmBlockReject("hle", op.opinfo, op.inst.hex, op.address, code_block.m_num_instructions);
+       break;
+@@ -10653,6 +10671,7 @@ bool CachedInterpreter::TryWriteWasmBlock(u32 nextPC)
+ 
+     if (IsDebuggingEnabled() && !cpu.IsStepping() && breakpoints.IsAddressBreakPoint(op.address))
+     {
++      ++s_prefix_end_breakpoint;
+       if (prefix_count == 0)
+         LogWasmBlockReject("breakpoint", op.opinfo, op.inst.hex, op.address,
+                            code_block.m_num_instructions);
+@@ -10661,6 +10680,7 @@ bool CachedInterpreter::TryWriteWasmBlock(u32 nextPC)
+ 
+     if (op.branchIsIdleLoop)
+     {
++      ++s_prefix_end_idle;
+       if (prefix_count == 0)
+         LogWasmBlockReject("idle", op.opinfo, op.inst.hex, op.address, code_block.m_num_instructions);
+       break;
+@@ -10670,6 +10690,7 @@ bool CachedInterpreter::TryWriteWasmBlock(u32 nextPC)
+     {
+       ++s_wasm_direct_tier_reject_count;
+       ++s_wasm_direct_reject_key_counts[(op.inst.OPCD << 10) | op.inst.SUBOP10];
++      ++s_prefix_end_fp_off;
+       if (prefix_count == 0)
+         LogWasmBlockReject("direct-tier-fp-off", op.opinfo, op.inst.hex, op.address,
+                            code_block.m_num_instructions);
+@@ -10680,6 +10701,7 @@ bool CachedInterpreter::TryWriteWasmBlock(u32 nextPC)
+     {
+       ++s_wasm_direct_tier_reject_count;
+       ++s_wasm_direct_reject_key_counts[(op.inst.OPCD << 10) | op.inst.SUBOP10];
++      ++s_prefix_end_not_candidate;
+       if (prefix_count == 0)
+         LogWasmBlockReject("direct-tier", op.opinfo, op.inst.hex, op.address,
+                            code_block.m_num_instructions);
+@@ -11251,6 +11273,9 @@ extern "C" const char* GetPpcWasmHelperStats()
+       << " regalloc:" << s_wasm_regalloc_dead_store_skip_count
+       << " emitfail:" << s_wasm_block_emit_fail_count
+       << " compilefail:" << s_wasm_block_compile_fail_count
++      << " prefixend:hle" << s_prefix_end_hle << ",bp" << s_prefix_end_breakpoint
++      << ",idle" << s_prefix_end_idle << ",fpoff" << s_prefix_end_fp_off
++      << ",notcand" << s_prefix_end_not_candidate << ",blockend" << s_prefix_end_block_end
+       << " pre:" << average_prefix << "/" << s_wasm_prefix_instruction_max
+       << " hist:" << s_wasm_prefix_histogram[0] << "," << s_wasm_prefix_histogram[1] << ","
+       << s_wasm_prefix_histogram[2] << "," << s_wasm_prefix_histogram[3] << ","
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 22fb8e6d57..f1ecf610fe 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -1321,6 +1321,28 @@ bool WebGPUCommandStream::PushSetScissor(u32 x, u32 y, u32 w, u32 h)
+   return StagePassRecord(rec);
+ }
+ 
++bool WebGPUCommandStream::PushClearRect(u32 x, u32 y, u32 w, u32 h, u32 rgba, float depth,
++                                        u32 flags)
++{
++  if (w == 0 || h == 0 || flags == 0)
++    return true;
++  if (!m_header)
++  {
++    PoisonPass();
++    return false;
++  }
++  CmdRecord rec{};
++  rec.op = static_cast<u32>(CmdOp::ClearRect);
++  rec.arg.u[0] = x;
++  rec.arg.u[1] = y;
++  rec.arg.u[2] = w;
++  rec.arg.u[3] = h;
++  rec.arg.u[4] = rgba;
++  rec.arg.f[5] = depth;
++  rec.arg.u[6] = flags;
++  return StagePassRecord(rec);
++}
++
+ bool WebGPUCommandStream::PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx)
+ {
+   if (vtx_count == 0)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 129037eb35..7dbe6a2ce5 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -123,6 +123,18 @@ enum class CmdOp : u32
+   // Consumer: same-format+same-size → copyTextureToTexture; otherwise
+   // (e.g. rgba8unorm EFB → bgra8unorm XFB) a sampled render-pass blit.
+   BlitTexture = 24,
++  // Scissored clear INSIDE the open pass. A WebGPU loadOp:clear always clears
++  // the whole attachment and ignores setScissorRect, so a sub-rect clear cannot
++  // be expressed as a clear pass -- this backend used to widen every one to the
++  // full EFB, destroying everything drawn before it. Mario Kart Wii issues
++  // 128x128, 256x256 and 192x96 clears mid-frame.
++  //
++  // Realising it as a utility draw in the core was tried and reverted: that
++  // path ends and restarts the render pass per clear, and Wario World issues
++  // ~7,800 a frame, which blacked it out. The consumer instead sets the scissor
++  // and draws a solid quad without disturbing the pass.
++  //   u0=x u1=y u2=w u3=h  u4=RGBA8 packed  f5=depth  u6=flags(1=colour,2=depth)
++  ClearRect = 25,
+ };
+ 
+ // Stable producer attribution for UploadBuffer records. The value is carried
+@@ -370,6 +382,7 @@ public:
+   bool PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset);
+   bool PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
+   bool PushSetScissor(u32 x, u32 y, u32 w, u32 h);
++  bool PushClearRect(u32 x, u32 y, u32 w, u32 h, u32 rgba, float depth, u32 flags);
+   bool PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
+   bool PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx, u32 base_vtx);
+   bool PushEndPass();
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 8a5c9d7651..c278bdee61 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include "VideoBackends/WebGPU/WebGPUGfx.h"
+ 
++#include <cstdio>
++
+ #include "VideoBackends/Software/EfbCopy.h"
+ #include "VideoBackends/Software/Rasterizer.h"
+ #include "VideoBackends/Software/SWTexture.h"
+@@ -39,6 +41,21 @@
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+ #include <algorithm>
++
++// Opt-in flag for the scissored ClearRect path (?disable=0x1000000). ENABLE
++// polarity, not disable. Default off: enabled, it blanks the frame outright
++// (9,048 clears executed, 0.0 visual fps, black output on Mario Kart Wii).
++extern "C" unsigned int DolphinWeb_GetCachedInterpreterDisableMask();
++extern "C" u32 DolphinWebGetLastCommitStride();
++
++// DIAGNOSTIC: pipeline bridge id -> vertex stride the pipeline declares.
++#include <map>
++static std::map<u32, u32>& DolphinWebTexDiag_PipelineStride()
++{
++  static std::map<u32, u32> m;
++  return m;
++}
++static constexpr unsigned int DOLPHIN_WEB_ENABLE_CLEARRECT = 1u << 24;
+ #include <array>
+ #include <set>
+ #include <atomic>
+@@ -1054,6 +1071,14 @@ WebGPUGfx::CreatePipeline(const AbstractPipelineConfig& config,
+   {
+     const std::vector<u8> blob = SerializePipelineConfig(config, vs_id, fs_id);
+     bridge_id = m_cmd_stream.PushCreatePipelineCfg(blob.data(), blob.size());
++    // DIAGNOSTIC: remember the stride this pipeline declares, so a draw can be
++    // checked against the stride the batch was actually assembled with.
++    if (bridge_id != 0)
++    {
++      DolphinWebTexDiag_PipelineStride()[bridge_id] =
++          config.vertex_format ?
++              static_cast<u32>(config.vertex_format->GetVertexDeclaration().stride) : 0;
++    }
+ 
+     static u32 s_pcfg_ok = 0, s_pcfg_skip = 0;
+     if (bridge_id != 0)
+@@ -1238,6 +1263,7 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+ {
+   const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
+   const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
++  const unsigned int disable_mask = DolphinWeb_GetCachedInterpreterDisableMask();
+   const bool covers_efb = target_rc.left <= 0 && target_rc.top <= 0 &&
+                           static_cast<u32>(std::max(0, target_rc.GetWidth())) >= efb_w &&
+                           static_cast<u32>(std::max(0, target_rc.GetHeight())) >= efb_h;
+@@ -1309,9 +1335,40 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+   // clears a frame. Sending the whole-frame clear down it blanks the screen
+   // outright.
+   //
+-  // So: keep upstream's over-clearing behaviour until the utility draw path
+-  // can service a clear without tearing down the pass. Over-clearing is wrong
+-  // but is what every currently-working title renders against.
++  // Sub-rect clears go to the consumer as a scissored solid-quad draw inside
++  // the open pass (CmdOp::ClearRect). The loadOp path below still serves the
++  // whole-frame clear, which is cheaper and also initialises EFB depth.
++  // NOTE: do NOT gate this on m_pass_open. ClearRegion is normally entered
++  // with no pass open, so that guard made every clear fall through to the
++  // legacy over-clear and the opcode never executed once -- a silent no-op
++  // that looked exactly like "the fix did not help".
++  // OPT-IN ONLY (?disable=0x1000000). Enabled by default this blanks the frame
++  // outright: 9,048 clears executed, 0.0 visual fps, black output on Mario Kart
++  // Wii. The opcode and consumer path are correct enough to run, but something
++  // about taking over the clear -- most likely skipping the depth
++  // initialisation the loadOp path performs, which patch 0053 relies on --
++  // breaks rendering. Kept behind a flag so it can be finished without
++  // shipping a black screen.
++  if (!covers_efb && efb_w != 0 && efb_h != 0 &&
++      (disable_mask & DOLPHIN_WEB_ENABLE_CLEARRECT) != 0 && BeginPassIfNeeded())
++  {
++    const u32 rgba = (static_cast<u32>((color >> 16) & 0xff) << 24) |
++                     (static_cast<u32>((color >> 8) & 0xff) << 16) |
++                     (static_cast<u32>(color & 0xff) << 8) |
++                     static_cast<u32>(alpha_enable ? ((color >> 24) & 0xff) : 0xff);
++    const u32 flags = (color_enable ? 1u : 0u) | (z_enable ? 2u : 0u);
++    if (flags != 0)
++    {
++      const u32 cx = static_cast<u32>(std::max(0, target_rc.left));
++      const u32 cy = static_cast<u32>(std::max(0, target_rc.top));
++      const u32 cw = static_cast<u32>(std::max(0, target_rc.GetWidth()));
++      const u32 ch = static_cast<u32>(std::max(0, target_rc.GetHeight()));
++      if (m_cmd_stream.PushClearRect(cx, cy, cw, ch, rgba,
++                                     static_cast<float>(z & 0xFFFFFF) / 16777216.0f, flags))
++        return;
++    }
++    // Fall through to the legacy over-clear if the record could not be staged.
++  }
+   EndPassIfOpen();
+   // color_enable/z_enable used to be ignored: a depth-only clear still set a
+   // colour clear (to black), which wiped a fully-rendered 3D EFB before the
+@@ -2502,6 +2559,25 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+       return;
+     }
+   }
++  {
++    // DIAGNOSTIC: declared vs actual vertex stride for this indexed draw.
++    // Printed PERIODICALLY, not just for the first few: the consumer keeps only
++    // the last 128 status messages, so early-only output is shifted out before
++    // the artifacts are written.
++    static u64 s_n = 0;
++    static int s_bad = 0;
++    const auto& sm = DolphinWebTexDiag_PipelineStride();
++    const auto it = sm.find(m_cur_pipeline_id);
++    const u32 declared = (it != sm.end()) ? it->second : 0;
++    const u32 actual = DolphinWebGetLastCommitStride();
++    if (declared != 0 && actual != 0 && declared != actual)
++      ++s_bad;
++    if (declared != 0 && actual != 0 && (++s_n % 4000) == 0)
++    {
++      printf("[stride] n=%llu pipe=%u declared=%u actual=%u mismatches=%d%c",
++             (unsigned long long)s_n, m_cur_pipeline_id, declared, actual, s_bad, 10);
++    }
++  }
+   if (!PrepareDrawResources())
+   {
+     AbortRecordedPass();
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+index 0935c196ce..194a8c31b2 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUVertexManager.cpp
+@@ -17,6 +17,17 @@
+ #include "VideoCommon/WasmWebGpuProducerProfile.h"
+ #include "VideoCommon/WasmWgpuDeepDiagnostics.h"
+ 
++// wasm-dolphin DIAGNOSTIC accessors (see CommitBuffer).
++static u32 s_last_commit_stride = 0;
++extern "C" void DolphinWebSetLastCommitStride(u32 v)
++{
++  s_last_commit_stride = v;
++}
++extern "C" u32 DolphinWebGetLastCommitStride()
++{
++  return s_last_commit_stride;
++}
++
+ namespace WebGPU
+ {
+ extern "C" void SetWebGpuGeometryPackEnabled(int enabled);
+@@ -183,6 +194,10 @@ void VertexManager::CommitBuffer(u32 num_vertices, u32 vertex_stride, u32 num_in
+     return;
+   if (vertex_stride == 0)
+     return;
++  // wasm-dolphin DIAGNOSTIC: the stride the batch was actually assembled with,
++  // so it can be compared against the stride the bound pipeline declares. A
++  // disagreement makes the GPU fetch every attribute from the wrong bytes.
++  DolphinWebSetLastCommitStride(vertex_stride);
+   cs.BeginPendingOwnership();
+ 
+   const bool geometry_pack_enabled = IsGeometryUploadPackEnabled();
+diff --git a/Source/Core/VideoCommon/TextureCacheBase.cpp b/Source/Core/VideoCommon/TextureCacheBase.cpp
+index bbcd1140b4..2508121074 100644
+--- a/Source/Core/VideoCommon/TextureCacheBase.cpp
++++ b/Source/Core/VideoCommon/TextureCacheBase.cpp
+@@ -3,6 +3,26 @@
+ 
+ #include "VideoCommon/TextureCacheBase.h"
+ 
++#include <cstdio>
++#include <set>
++
++// wasm-dolphin DIAGNOSTIC: every address an EFB copy has ever targeted, so a
++// texture decoding from zeroed memory can be tested for whether a copy was
++// supposed to have filled it.
++static std::set<u32>& DolphinWebTexDiag_CopyDsts()
++{
++  static std::set<u32> s;
++  return s;
++}
++static void DolphinWebTexDiag_NoteCopyDst(u32 a)
++{
++  DolphinWebTexDiag_CopyDsts().insert(a);
++}
++static bool DolphinWebTexDiag_WasCopyDst(u32 a)
++{
++  return DolphinWebTexDiag_CopyDsts().count(a) != 0;
++}
++
+ #include <algorithm>
+ #include <chrono>
+ #include <cmath>
+@@ -1700,6 +1720,44 @@ RcTcacheEntry TextureCacheBase::CreateTextureEntry(
+ 
+       CheckTempSize(total_texture_size);
+       dst_buffer = m_temp;
++      // wasm-dolphin DIAGNOSTIC (vendor/ is gitignored; not part of the patch
++      // series). Mario Kart Wii's large world textures upload as correctly
++      // sized but entirely zero, and never get filled by a copy or a blit. If
++      // the source span is empty the data pointer is null, and decoding from
++      // wasm address 0 reads the zero page rather than faulting -- which
++      // produces exactly that. Log the source address so it can be checked
++      // against the MEM2 range (0x10000000+, i.e. address >> 28 == 1).
++      {
++        static int s_tex_diag = 0;
++        const u8* src = texture_info.GetData();
++        const u32 addr = texture_info.GetRawAddress();
++      const int was_copy_dst = DolphinWebTexDiag_WasCopyDst(addr) ? 1 : 0;
++        // The pointer is valid for MEM2, so the question is whether the guest
++        // memory it points at actually holds texel data or is still zero.
++        int src_nz = -1;
++        if (src != nullptr)
++        {
++          const u32 n = std::min<u32>(texture_info.GetTextureSize(), 8192u);
++          src_nz = 0;
++          for (u32 i = 0; i < n; i++)
++          {
++            if (src[i] != 0)
++            {
++              src_nz = 1;
++              break;
++            }
++          }
++        }
++        if (s_tex_diag < 40 && (src == nullptr || expanded_width >= 128))
++        {
++          s_tex_diag++;
++          printf("[texsrc] addr=%08x mem2=%d src=%s srcNonZero=%d wasCopyDst=%d size=%u "
++                 "w=%u h=%u fmt=%u%c",
++                 addr, (addr >> 28) == 1 ? 1 : 0, src ? "ok" : "NULL", src_nz, was_copy_dst,
++                 texture_info.GetTextureSize(), expanded_width, expanded_height,
++                 static_cast<unsigned>(texture_info.GetTextureFormat()), 10);
++        }
++      }
+       if (!(texture_info.GetTextureFormat() == TextureFormat::RGBA8 && texture_info.IsFromTmem()))
+       {
+         TexDecoder_Decode(dst_buffer, texture_info.GetData(), expanded_width, expanded_height,
+@@ -2300,6 +2358,28 @@ void TextureCacheBase::CopyRenderTargetToTexture(
+       !is_depth_copy &&
+       (scaleByHalf || g_framebuffer_manager->GetEFBScale() != 1 || y_scale > 1.0f);
+ 
++  // wasm-dolphin DIAGNOSTIC: which addresses the EFB copy path targets, and by
++  // which route. Textures at 10abbd60 and 118d0920 decode from all-zero guest
++  // memory; if a copy registers a VRAM entry for them the later lookup should
++  // hit it instead of falling back to RAM, and if it registers nothing then the
++  // RAM those addresses point at is never written by anyone.
++  {
++    // Log only NON-XFB copies. The XFB copies to the two scan-out buffers are
++    // constant and saturated a flat 40-line cap before any texture-producing
++    // copy could appear, which made "no copy targets those addresses" look
++    // established when the probe had simply run out.
++    // Record EVERY copy destination, uncapped, so membership can be tested
++    // rather than inferred from a truncated log.
++    DolphinWebTexDiag_NoteCopyDst(dstAddr);
++    static int s_copy_diag = 0;
++    if (s_copy_diag < 40 && !is_xfb_copy)
++    {
++      s_copy_diag++;
++      printf("[efbcopy] dst=%08x w=%u h=%u stride=%u vram=%d ram=%d xfb=%d depth=%d%c",
++             dstAddr, width, height, dstStride, copy_to_vram ? 1 : 0, copy_to_ram ? 1 : 0,
++             is_xfb_copy ? 1 : 0, is_depth_copy ? 1 : 0, 10);
++    }
++  }
+   RcTcacheEntry entry;
+   if (copy_to_vram)
+   {
+@@ -2898,6 +2978,25 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
+   uniforms.clamp_bottom = (static_cast<float>(bottom_coord) + .5f) * rcp_efb_height;
+   uniforms.pixel_height = g_ActiveConfig.bCopyEFBScaled ? rcp_efb_height : 1.0f / EFB_HEIGHT;
+   uniforms.padding = 0;
++  // DIAG (wasm-dolphin): the EFB->XFB copy SOURCE rect, normalised. Mario Kart
++  // Wii presents an XFB entry of the right size and format whose content is a
++  // magnified patch of ground, while the EFB itself holds the correct scene --
++  // which is what sampling a small source rect and stretching it looks like.
++  if (dst_format == EFBCopyFormat::XFB)
++  {
++    static u32 s_xfb_diag = 0;
++    if ((s_xfb_diag++ % 600) == 0)
++    {
++      NOTICE_LOG_FMT(VIDEO,
++                     "[xfbsrc] srcNorm=({:.4f},{:.4f})+{:.4f}x{:.4f} fbrect=({},{})+{}x{} "
++                     "efb={}x{} dst={}x{} halved={}",
++                     uniforms.src_left, uniforms.src_top, uniforms.src_width,
++                     uniforms.src_height, framebuffer_rect.left, framebuffer_rect.top,
++                     framebuffer_rect.GetWidth(), framebuffer_rect.GetHeight(),
++                     g_framebuffer_manager->GetEFBWidth(), efb_height,
++                     entry->texture->GetWidth(), entry->texture->GetHeight(), scale_by_half);
++    }
++  }
+   g_vertex_manager->UploadUtilityUniforms(&uniforms, sizeof(uniforms));
+ 
+   // Use the copy pipeline to render the VRAM copy.
+diff --git a/Source/Core/VideoCommon/VertexShaderGen.cpp b/Source/Core/VideoCommon/VertexShaderGen.cpp
+index 8c37785355..06e65e5aa6 100644
+--- a/Source/Core/VideoCommon/VertexShaderGen.cpp
++++ b/Source/Core/VideoCommon/VertexShaderGen.cpp
+@@ -11,6 +11,8 @@
+ #include "VideoCommon/NativeVertexFormat.h"
+ #include "VideoCommon/VertexLoaderManager.h"
+ #include "VideoCommon/VideoCommon.h"
++#include <cstdio>
++
+ #include "VideoCommon/VideoConfig.h"
+ #include "VideoCommon/XFMemory.h"
+ 
+@@ -18,6 +20,24 @@ VertexShaderUid GetVertexShaderUid()
+ {
+   ASSERT(bpmem.genMode.numtexgens == xfmem.numTexGen.numTexGens);
+   ASSERT(bpmem.genMode.numcolchans == xfmem.numChan.numColorChans);
++  // wasm-dolphin DIAGNOSTIC. Shaders generated with numColorChans == 0 zero
++  // colour channel 0, which zeroes vertex alpha and makes srcAlpha-blended
++  // draws invisible. Upstream asserts these two agree; the assert is compiled
++  // out here, so log them. Printed periodically because the consumer keeps only
++  // the last 128 status messages.
++  {
++    static unsigned long long s_n = 0;
++    static unsigned s_disagree = 0;
++    const unsigned bp = bpmem.genMode.numcolchans;
++    const unsigned xf = xfmem.numChan.numColorChans;
++    if (bp != xf)
++      ++s_disagree;
++    if ((++s_n % 3000) == 0)
++    {
++      printf("[colchan] n=%llu bpGenMode=%u xfNumChan=%u components=%08x disagree=%u%c",
++             s_n, bp, xf, VertexLoaderManager::g_current_components, s_disagree, 10);
++    }
++  }
+ 
+   VertexShaderUid out;
+   vertex_shader_uid_data* const uid_data = out.GetUidData();

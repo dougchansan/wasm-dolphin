@@ -17,7 +17,8 @@ diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/
 @@ -267,6 +267,7 @@
  constexpr u32 DOLPHIN_WEB_DISABLE_REGALLOC    = 1u << 20; // §28by GPR regalloc / dead-store-skip (default-off)
  constexpr u32 DOLPHIN_WEB_DISABLE_SHORT_PREFIX = 1u << 21; // §28ca lower JIT min-prefix 4→2 (default-off)
- constexpr u32 DOLPHIN_WEB_DISABLE_COMPILE_THROTTLE = 1u << 22;  // §28ce cap JIT compiles/slice (default-off)
+-constexpr u32 DOLPHIN_WEB_DISABLE_COMPILE_THROTTLE = 1u << 22; // §28ce cap JIT compiles/slice (default-off)
++constexpr u32 DOLPHIN_WEB_DISABLE_COMPILE_THROTTLE = 1u << 22;  // §28ce cap JIT compiles/slice (default-off)
 +constexpr u32 DOLPHIN_WEB_DISABLE_FASTPS      = 1u << 23;  // FastPairedSingle emit path
  // §28cz fastmem bounds-check HOIST. ENABLE polarity (NOT a disable bit): the
  // per-block range-check hoist is emitted ONLY when this bit is SET. Default
