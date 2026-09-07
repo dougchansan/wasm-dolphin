@@ -8055,6 +8055,7 @@ let vpDiagScissor = "sc?";
 // reach the screen.
 const vpDiagClearRects = new Map();
 const vpDiagBandOrder = new Map();
+const vpDiagFinalCmp = new Map();
 let vpDiagEfbPasses = 0;
 let vpDiagEfbClears = 0;
 let vpDiagDrawsSinceClear = 0;
@@ -8605,6 +8606,9 @@ function vpDiagPresent() {
   vpDiagIdx = 0;
   vpDiagTail = [];
   vpDiagVtx.clear();
+  for (const [k, n] of [...vpDiagFinalCmp.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`[vpdiag]   ${String(n).padStart(4)}x ${k}`);
+  }
   for (const [band, b] of [...vpDiagBandOrder.entries()].sort((x, y) => x[1].first - y[1].first)) {
     console.log(`[vpdiag]   band z(${band}) draws=${b.n} first=${b.first} last=${b.last}`);
   }
@@ -8819,6 +8823,45 @@ function diagGridSignature(bytes, bpr, w, h) {
     }
   }
   return cells.join(" | ");
+}
+// Depth readback. diagReadTexture refuses depth formats, but the question is
+// exactly what depth values the world draws leave in the buffer: the viewport
+// bands and the vertex shader together predict 0.00..0.84 for the world, and if
+// the stored values are elsewhere the viewport transform is not mapping as
+// assumed. depth32float copies with aspect "depth-only", 4 bytes a texel.
+function diagReadDepth(dev, encoder, entry, tag) {
+  if (!entry || !entry.tex) return;
+  const w = entry.tex.width, h = entry.tex.height;
+  const bpr = Math.ceil(w * 4 / 256) * 256;
+  let buf;
+  try {
+    buf = dev.createBuffer({ size: bpr * h, usage: 0x1 | 0x8 });
+    encoder.copyTextureToBuffer({ texture: entry.tex, aspect: "depth-only" },
+      { buffer: buf, bytesPerRow: bpr, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 });
+  } catch (e) {
+    console.log("[vpdiag] depth readback rejected: " + (e && e.message));
+    return;
+  }
+  buf.mapAsync(0x1).then(() => {
+    const f = new Float32Array(buf.getMappedRange());
+    const stride = bpr >> 2;
+    let mn = Infinity, mx = -Infinity, sum = 0, n = 0, zeros = 0;
+    for (let y = 0; y < h; y += 4) {
+      for (let x = 0; x < w; x += 4) {
+        const v = f[y * stride + x];
+        if (!Number.isFinite(v)) continue;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        if (v === 0) zeros++;
+        sum += v; n++;
+      }
+    }
+    console.log(`[vpdiag] EFB depth ${tag} ${w}x${h}: min=${mn.toFixed(4)} ` +
+      `max=${mx.toFixed(4)} mean=${(sum / Math.max(1, n)).toFixed(4)} ` +
+      `zeros=${zeros}/${n}`);
+    buf.unmap();
+  }).catch(() => {});
 }
 function diagReadTexture(dev, encoder, entry, label, tag) {
   if (!entry || !entry.tex || String(entry.format || "").startsWith("depth")) return;
@@ -9097,6 +9140,7 @@ const DIAG_SHOW_VALPHA = false;
 // how much of the blackness those empty textures actually account for.
 const DIAG_SKIP_EMPTY_TEX = false;
 const DIAG_TEX_READBACK = false;
+const DIAG_DEPTH_READBACK = false;
 // Render ONE depth-tested EFB draw per frame and skip the rest, so a single
 // draw's output can be observed directly instead of inferred from texture and
 // state accounting. The index advances every 300 presents so successive
@@ -10688,7 +10732,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               // unreliable twice; reading the actual texels replaces the whole
               // inference chain with a direct observation.
               format: fmt,
-              usage: u32[recWord + 5] | (DIAG_TEX_READBACK ? 0x1 : 0)
+              usage: u32[recWord + 5] | ((DIAG_TEX_READBACK || DIAG_DEPTH_READBACK) ? 0x1 : 0)
             });
             webGpuObjects.textures.set(id,
               { tex, format: fmt, layers, view2dArray: null,
@@ -10924,6 +10968,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           const depthLoadOpResolved = clearDepth ? "clear" : "load";
           const depthId = u32[recWord + 7];
           passDepthId = depthId;
+          if (fbId === self._wgEfbColorId && depthId) self._wgEfbDepthId = depthId;
           passLoadOp = loadOp;
           // §28af: the producer emits SET_VIEWPORT immediately after
           // BEGIN_PASS (cached vp re-emit). Peek it to learn this
@@ -12063,6 +12108,15 @@ function drainWebGpuCmdRing(source = "presentation") {
               console.log("[vpdiag] readback queue failed: " + (e && e.message));
             }
           }
+          if (DIAG_DEPTH_READBACK && !self._wgDepthRbDone &&
+              (self._wgPresentCount || 0) >= 2500 && self._wgEfbDepthId) {
+            self._wgDepthRbDone = true;
+            try {
+              ensureEnc();
+              diagReadDepth(dev, enc, webGpuObjects.textures.get(self._wgEfbDepthId),
+                            "after-frame");
+            } catch (e) { console.log("[vpdiag] depth rb failed: " + (e && e.message)); }
+          }
           frameCapFinish();
           self._wgPresentCount = (self._wgPresentCount || 0) + 1;
           diagFrameEnd();
@@ -13093,6 +13147,18 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
     }
   } else {
     delete d.depthStencil;
+  }
+  // The vpdiag tally reports tpl.depthBase.depthCompare, which is the value
+  // BEFORE the reverse-Z flip. Log what the descriptor actually carries, so
+  // "flipped to greater-equal" is observed rather than assumed.
+  if (d.depthStencil && !self._wgCmpLogged) {
+    self._wgCmpLogged = (self._wgCmpLogged || 0) + 1;
+    if (self._wgCmpLogged <= 0) { /* unreachable, keeps shape */ }
+  }
+  if (d.depthStencil) {
+    const key = `final depthCompare=${d.depthStencil.depthCompare} ` +
+      `write=${d.depthStencil.depthWriteEnabled}`;
+    vpDiagFinalCmp.set(key, (vpDiagFinalCmp.get(key) || 0) + 1);
   }
   let pipe = null;
   try {
