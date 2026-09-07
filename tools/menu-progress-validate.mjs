@@ -173,7 +173,7 @@ if (videoMode === "ogl") {
   url.searchParams.set("present", process.env.PRESENT || "full");
   url.searchParams.set("wasmjit", process.env.WASMJIT ?? "1");
   url.searchParams.set("queue", process.env.QUEUE_SIZE || "4");
-  url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
+  url.searchParams.set("jitwarmup", process.env.JITWARMUP || "60");
   // forcejit keeps the JIT engaged through the post-activation stall
   // fuse — required to actually exercise the mixed tier (its larger
   // one-time compile burst otherwise trips the guarded-tuned fuse).
