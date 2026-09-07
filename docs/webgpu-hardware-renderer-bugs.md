@@ -27,7 +27,27 @@ it mattered. Fixed by judging on core fps instead. Boot counts before that date
 are also suspect: both harnesses read the optional JIT-cache prewarm status as a
 fatal mount failure, producing phantom `mount-fail` verdicts (see issue #10).
 
-Current baseline, `video=wgpu`, 45 discs, after both fixes:
+Current baseline, `video=wgpu`, 46 discs (Wario World extracted from its zip),
+2026-09-07, after the ClearRect viewport fix, `JITWARMUP=60`:
+
+| | value |
+| --- | ---: |
+| boots | 39 (5 static, 2 black) |
+| titles at >=95% game speed | 22 |
+| titles at >=80% | 23 |
+
+Report: `.omx/boot-matrix/2026-09-07T03-52-17-254Z/results.md`. The five
+statics: Animal Crossing x2 (issue #11), SoulCalibur 2 Plus and One Piece
+Grand Adventure (both parked on a memory-card dialog, rendering correctly),
+and Sonic Adventure DX (black through its intro, renders its attract scene at
+30s, and the 45s window ends on a later blank transition -- the Naruto/Paper
+Mario pattern, checked three ways below). The two blacks are Resident Evil
+Code: Veronica X and GoldenEye Rogue Agent disc 2, which dies with a worker
+error at frame 105. Screenshot-verified in this sweep: **Super Mario
+Sunshine's beach background now renders** behind the file select, and Kirby
+Air Ride's race is in full colour with green grass.
+
+Previous baseline, 45 discs, before the viewport fix:
 
 | | value |
 | --- | ---: |
@@ -58,9 +78,11 @@ best.
 | Animal Crossing (RVZ + NKit) | static | issue #11, fails on BOTH backends |
 | Resident Evil Code: Veronica X | black | unchanged, uninvestigated |
 | Soulcalibur II | static | **not a defect** - parked on its autosave dialog, rendering correctly |
-| Super Mario Sunshine | boots | menu renders, background still black |
+| Super Mario Sunshine | boots | **fixed 2026-09-07**: beach background renders behind the file select (ClearRect viewport fix, below) |
 
-Sunshine proves at least one more frame-destroying path exists. Of the three
+Sunshine proved at least one more frame-destroying path existed; it was the
+ClearRect depth going through the viewport, the same defect as Mario Kart
+Wii's black world. Of the three
 hypotheses previously "measured away", the first was wrong -- see below.
 
 1. **`target_rc` partial clears. NOT falsified; the original reasoning was too
@@ -259,9 +281,13 @@ fragment then failed `greater-equal` and the world was black; the HUD, at
 | after the ClearRect, only non-writing draws in between | 0.89 everywhere again |
 | control: clear pipeline z=0.5 under the world viewport z(0.00,0.84) | lands as 0.42 |
 
-The control row is the direct proof of the mechanism. The fix sets a full
-[0,1] viewport for the clear triangle and restores the game's viewport after
-it. With it the trace reads 0.0 after the clear, world depth writes land, the
+The control row is the direct proof of the mechanism. The fix sets the depth
+range of the game's viewport to [0,1] for the clear triangle, keeping its
+rect, and restores the game's range after it. (A first version also widened
+the rect to the full pass; Sonic Adventure DX came out black in the sweep
+after it, which turned out to be its intro timing rather than the rect --
+identical results with the fix off, on, and rect-preserving -- but the
+narrower form is what shipped since nothing needed the wider rect.) With it the trace reads 0.0 after the clear, world depth writes land, the
 colour buffer holds the scene before the clear, and the screenshot shows road,
 barrier, grass, sky and billboard under the pause overlay -- HUD and world
 together, on the reverse-Z convention the shader implies. No `GX_NATIVE_DEPTH`

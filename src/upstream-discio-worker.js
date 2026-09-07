@@ -6188,10 +6188,10 @@ const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_CMD_OP_CLEAR_RECT = 25;
-// ClearRect draws its clear triangle through a full-pass [0,1] viewport rather
-// than whatever viewport the game has active, so the clear depth lands as the
-// clear depth and the rect is not cropped to the game's viewport. A/B switch:
-// false restores the behaviour that left Mario Kart Wii's world black.
+// ClearRect draws its clear triangle through a [0,1] depth range rather than
+// whatever range the game's viewport has active, so the clear depth lands as
+// the clear depth. A/B switch: false restores the behaviour that left Mario
+// Kart Wii's world black.
 const CLEARRECT_FULL_VIEWPORT = true;
 const WGPU_REPLAY_WINDOW_RECORDS = 16384;
 const WGPU_MAX_STAGED_UPLOAD_BYTES = 32 * 1024 * 1024;
@@ -11746,14 +11746,15 @@ function drainWebGpuCmdRing(source = "presentation") {
             // draws in between, and a control write of 0.5 under the world
             // viewport landing as 0.42. Clear through a full [0,1] range and
             // put the game's viewport back.
-            // Only when the game's viewport differs from the full-pass [0,1]
-            // one: Wario World issues ~7,800 clears a frame, so two viewport
-            // calls per clear are not free.
+            // Only when the game's depth range is not already [0,1]: Wario
+            // World issues ~7,800 clears a frame, so two viewport calls per
+            // clear are not free. The rect is kept as the game set it.
             const vpFix = CLEARRECT_FULL_VIEWPORT && lastAppliedViewport &&
-              !(lastAppliedViewport[0] === 0 && lastAppliedViewport[1] === 0 &&
-                lastAppliedViewport[2] === passW && lastAppliedViewport[3] === passH &&
-                lastAppliedViewport[4] === 0 && lastAppliedViewport[5] === 1);
-            if (vpFix) pass.setViewport(0, 0, passW, passH, 0, 1);
+              !(lastAppliedViewport[4] === 0 && lastAppliedViewport[5] === 1);
+            if (vpFix) {
+              const v = lastAppliedViewport;
+              pass.setViewport(v[0], v[1], v[2], v[3], 0, 1);
+            }
             pass.setScissorRect(cx, cy, cw, ch);
             pass.setPipeline(cpipe);
             pass.draw(3, 1, 0, 0);
