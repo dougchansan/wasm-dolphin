@@ -135,7 +135,7 @@ url.searchParams.set("presenter", process.env.PRESENTER || "webgpu");
 url.searchParams.set("cpu", process.env.CPU || "dual");
 url.searchParams.set("speed", process.env.SPEED || "1");
 url.searchParams.set("wasmjit", process.env.WASMJIT || "1");
-url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
+url.searchParams.set("jitwarmup", process.env.JITWARMUP || "60");
 url.searchParams.set("jittier", process.env.JITTIER || "guarded");
 // forcejit keeps the JIT engaged past the post-activation stall fuse. Per
 // §28bp that fuse fires spuriously on the WebGPU presenter path (its

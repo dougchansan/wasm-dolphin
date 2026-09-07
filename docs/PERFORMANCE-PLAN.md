@@ -140,7 +140,8 @@ the one remaining explanation consistent with every measurement: CPU-bound
 gated by admission (reject:0), not renderer, pacing, tier or thread-sync.
 
 Before attempting it, read
-`G:\dolrecompwned\DolRecomp\docsegister-cache-design.md` -- four reverted
+`G:\dolrecompwned\DolRecomp\docs
+egister-cache-design.md` -- four reverted
 attempts at the adjacent problem.
 
 ### Block chaining: REJECTED by the repo's own gate (2026-08-31)
@@ -401,6 +402,35 @@ warmup 60 so blocks actually exist.
 
 **Success.** A number: what fraction of emulation time is dispatch versus block
 body. That ratio is the ceiling on block linking.
+
+### Item 3 partial result (2026-09-07)
+
+The test was blocked because the profiler set `jitwarmup=700`, so the JIT
+compiled 63 blocks in the capture window and its bodies rounded to 0% -- the
+`0 block modules` the plan records. At `jitwarmup=60` the same capture compiles
+1,282 blocks and the emulation thread reports:
+
+| bucket | share of emulation WASM time |
+| --- | ---: |
+| JIT'd block bodies (190 block modules) | **3.7%** |
+| core module | 96.3% |
+
+Metroid Prime measured 37% here against 32% in the warmup-700 capture, matching
+the paired +3 in item 2.
+
+**This is not a block-linking ceiling and must not be read as one.** The 96.3%
+is not dispatch: it also holds the JIT helper callbacks compiled blocks call
+out to, the cached-interpreter fallback for uncompiled blocks, the software
+rasterizer, audio and DVD. Separating them needs function names, and the core
+`.wasm` ships without a name section, so V8 reports bare `wasm-function[N]`.
+The top frame is 27% of self time in one anonymous function.
+
+**Blocker, and the next concrete step.** Build the core with emscripten's
+`--profiling-funcs` so profiles carry a name section, register it as a core
+candidate, and capture with `CORE_ID` pointing at it. The existing
+`build/dolphin-wasm-profiling` tree is a plain Release configure with no such
+flag, so it does not help as it stands. Until that exists, the dispatch-versus-
+body split cannot be measured and block linking cannot be sized.
 
 **Warning.** `G:\dolrecompwned\DolRecomp\docs\register-cache-design.md` records
 **four reverted attempts** at promoting guest registers out of the state struct,
