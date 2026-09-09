@@ -110,6 +110,50 @@ for (const [name, flags, colorWriteMask, writeDepth] of [
   });
 }
 
+test("the clear pipeline cache evicts instead of dropping clears past the cap", () => {
+  const pipelineStart = worker.indexOf("function ensureClearPipeline(");
+  const pipelineEnd = worker.indexOf("\nfunction ", pipelineStart);
+  const cache = new Map();
+  const errors = [];
+  let created = 0;
+  const dev = {
+    createShaderModule(descriptor) { return { descriptor }; },
+    createRenderPipeline(descriptor) { created += 1; return { descriptor, id: created }; },
+  };
+  const CAP = 4;
+  const ensureClearPipeline = vm.runInNewContext(
+    `(${worker.slice(pipelineStart, pipelineEnd)})`,
+    {
+      WGPU_CLEAR_PIPELINES: cache,
+      WGPU_CLEAR_PIPELINE_CAP: CAP,
+      recordRendererError: (...args) => errors.push(args),
+    }
+  );
+  const make = (rgba) =>
+    ensureClearPipeline(dev, "rgba8unorm", "depth32float", 15, true, rgba, 0);
+
+  // A game animating its clear colour: every frame is a new cache key. Before
+  // the fix this returned null from the fifth value onwards, and the caller
+  // `break`s on null -- so the clear silently stopped happening, forever.
+  for (let i = 0; i < CAP * 8; i += 1) {
+    const pipeline = make(0x10000000 + i);
+    assert.ok(pipeline, `clear ${i} must still get a pipeline`);
+  }
+  assert.ok(cache.size <= CAP, `cache stayed bounded (${cache.size} <= ${CAP})`);
+  assert.deepEqual(errors, []);
+
+  // Eviction is least-recently-used, and a hit refreshes recency: touch the
+  // oldest key, add one more, and the *second* oldest is the one that goes.
+  cache.clear();
+  const a = make(1), b = make(2), c = make(3), d = make(4);
+  assert.equal(cache.size, CAP);
+  assert.equal(make(1), a, "a is still cached");   // refreshes a
+  make(5);                                          // evicts b, the new oldest
+  assert.equal(make(1), a, "the refreshed entry survived eviction");
+  assert.notEqual(make(2), b, "the least recently used entry was evicted");
+  assert.ok(c && d);
+});
+
 test("clear pipelines preserve channel masks in GPU descriptors and cache identities", () => {
   const pipelineStart = worker.indexOf("function ensureClearPipeline(");
   const pipelineEnd = worker.indexOf("\nfunction ", pipelineStart);

@@ -9016,16 +9016,34 @@ function diagNoteBackbufferDraw(srcId, vp, sc) {
 // open: set the scissor, draw one full-screen triangle, restore the scissor.
 //
 // The colour and depth are baked into the shader constant rather than passed in
-// a uniform buffer, so a clear costs no buffer write. Games use very few
-// distinct clear values, so the cache stays small; it is capped regardless.
+// a uniform buffer, so a clear costs no buffer write. The trade is that the
+// cache is keyed on the clear value, so a game that animates one -- a fade, a
+// cycling fog colour -- mints a pipeline per frame.
+//
+// The cap therefore evicts rather than refusing. Returning null past the cap
+// dropped the clear silently and permanently: the cache never shrank, so once
+// 64 distinct values had been seen, every subsequent clear with a new value did
+// nothing at all and the EFB kept whatever was under it. Least-recently-used
+// eviction bounds the cache the same way, and the worst case is re-creating a
+// pipeline instead of skipping a clear.
 const WGPU_CLEAR_PIPELINES = new Map();
 const WGPU_CLEAR_PIPELINE_CAP = 64;
 function ensureClearPipeline(dev, colorFormat, depthFormat, colorWriteMask, writeDepth, rgba, depth) {
   const key = `${colorFormat}|${depthFormat || "-"}|${colorWriteMask}` +
               `|${writeDepth ? 1 : 0}|${rgba}|${depth.toFixed(6)}`;
   const hit = WGPU_CLEAR_PIPELINES.get(key);
-  if (hit) return hit;
-  if (WGPU_CLEAR_PIPELINES.size >= WGPU_CLEAR_PIPELINE_CAP) return null;
+  if (hit) {
+    // Refresh recency: delete + set moves the key to the end of the Map's
+    // insertion order, which is what makes the eviction below LRU.
+    WGPU_CLEAR_PIPELINES.delete(key);
+    WGPU_CLEAR_PIPELINES.set(key, hit);
+    return hit;
+  }
+  while (WGPU_CLEAR_PIPELINES.size >= WGPU_CLEAR_PIPELINE_CAP) {
+    const oldest = WGPU_CLEAR_PIPELINES.keys().next();
+    if (oldest.done) break;
+    WGPU_CLEAR_PIPELINES.delete(oldest.value);
+  }
   const r = ((rgba >>> 24) & 0xff) / 255;
   const g = ((rgba >>> 16) & 0xff) / 255;
   const b = ((rgba >>> 8) & 0xff) / 255;

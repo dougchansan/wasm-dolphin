@@ -288,15 +288,33 @@ the problem, the *depth semantics* are.
 
 </details>
 
-### 3.2 Clears ignore the scissor
+### 3.2 Clears ignore the scissor -- fixed, on by default
 
-`ClearRegion` maps to `loadOp: "clear"`, which clears the whole attachment.
-Dolphin issues partial clears constantly. `ClearRect` (opcode 25) exists to fix
-this -- a scissored full-screen triangle drawn inside the open pass -- and is
-verified to execute (9,048 clears, 2 cached pipelines), but blanks the frame, so
-it is off by default behind `?disable=0x1000000`. The likely reason it blanks is
-that it does not reproduce the depth initialisation the `loadOp` path performs,
-which the convention in 3.1 depends on.
+A `loadOp: "clear"` clears the whole attachment and ignores `setScissorRect`,
+and Dolphin issues partial clears constantly, so this backend used to over-clear:
+a clear requested for 128x128 wiped the whole 640x528 EFB.
+
+`ClearRect` (opcode 25) fixes it by drawing a scissored full-screen triangle
+inside the open pass, so the pass is never torn down. **It is on by default.**
+The backend owns the default: `DOLPHIN_WEB_RENDERER_FEATURE_DEFAULT` in
+`WebGPUGfx.cpp` sets the bit, so a host that never calls the setter still gets
+the corrected path.
+
+It did blank the frame when first added, for two reasons, both since fixed:
+
+1. it wrote the producer's clear depth (`0.9999999403953552`) where the `loadOp`
+   path writes `dcv = 0.0` for the reverse-Z convention in 3.1, so every later
+   draw failed the depth test;
+2. the clear triangle is a draw, so its depth was remapped by whatever viewport
+   the game had bound. Mario Kart Wii clears while its HUD viewport
+   `z(0.89, 0.99)` is active, which wrote 0.89 across the EFB -- nearer than the
+   whole world band `z(0.00, 0.84)` -- and rejected every world fragment. It now
+   draws through a full-pass `[0, 1]` viewport and restores the game's.
+
+To turn it off for bisection, use `?wgpuclearrect=0` (the older
+`?disable=0x2000000` spelling still works). Doing so restores the over-clearing
+legacy path and reproduces the original patchwork frame; it is a bisection knob,
+not a fallback.
 
 ### 3.3 Capabilities advertised but not implemented
 

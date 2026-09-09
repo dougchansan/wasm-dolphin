@@ -299,9 +299,10 @@ hypotheses previously "measured away", the first was wrong -- see below.
    World's ~7,800 clears a frame drop it to a near-black frame at 2.0 visual
    fps. A working fix needs a clear that does not tear down the pass.
 
-   **Fixed and ON by default (2026-09-06). Opt out with
-   `?disable=0x2000000`.** The `ClearRect` opcode draws a scissored full-screen
-   triangle inside the open pass, so the pass is never torn down. It blanked
+   **Fixed and ON by default (2026-09-06). Opt out with `?wgpuclearrect=0`;
+   the older `?disable=0x2000000` spelling still works.** The `ClearRect`
+   opcode draws a scissored full-screen triangle inside the open pass, so the
+   pass is never torn down. It blanked
    the frame from the day it was added until the cause was measured: it wrote
    the producer's clear depth, 0.9999999403953552, while the `loadOp` path
    writes `dcv = 0.0` because this backend runs the reverse-Z convention and
