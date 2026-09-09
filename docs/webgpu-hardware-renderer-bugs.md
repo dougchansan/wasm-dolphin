@@ -123,9 +123,14 @@ The expanded GPU check verifies ten clear cases, including alpha-only
 preserving RGB/depth, RGB-only preserving alpha/depth, depth-only preserving
 RGBA, combined clears and legacy records. All 64 pixels are checked per case.
 
-Fresh Sunshine screenshots changed from a white file-select background to
-the beach, ocean, palm tree, Mario and all three file blocks after the coverage
-fix. Its 50-second run produced 32 distinct frames at a median 73% speed.
+RETRACTED 2026-09-09. Sunshine's file-select background is still white. It
+was re-checked on this build and on 97a7409 (which has every diagnostic this
+claim was made with), booting from disc and from
+`__sunshine-file-select.sav`: white in all four. The archived sweep frames
+this claim cites, `canvas-t024.png` and `canvas-t041.png` of
+`2026-09-07T03-52-17-254Z/41-super-mario-sunshine-usa`, also show a white
+background -- so the screenshots did not support it when it was written. The
+speed numbers below stand; the beach does not.
 Mario Kart Wii's saved race retained two opaque copied-texture rectangles
 after those two fixes. Independent alpha clears removed them: the final
 scene shows the road, grass, barriers, kart and pause overlay together, matching
@@ -190,9 +195,10 @@ and Sonic Adventure DX (black through its intro, renders its attract scene at
 30s, and the 45s window ends on a later blank transition -- the Naruto/Paper
 Mario pattern, checked three ways below). The two blacks are Resident Evil
 Code: Veronica X and GoldenEye Rogue Agent disc 2, which dies with a worker
-error at frame 105. Screenshot-verified in this sweep: **Super Mario
-Sunshine's beach background now renders** behind the file select, and Kirby
-Air Ride's race is in full colour with green grass.
+error at frame 105. Screenshot-verified in this sweep: Kirby Air Ride's race
+is in full colour with green grass. (This paragraph also claimed Super Mario
+Sunshine's beach background renders behind the file select. It does not --
+see the retraction above.)
 
 Per title, same sweep (hashes = distinct canvas frames in 45s):
 
@@ -276,7 +282,7 @@ best.
 | Animal Crossing (RVZ + NKit) | static | issue #11, fails on BOTH backends |
 | Resident Evil Code: Veronica X | black | unchanged, uninvestigated |
 | Soulcalibur II | static | **not a defect** - parked on its autosave dialog, rendering correctly |
-| Super Mario Sunshine | boots | **fixed 2026-09-07**: beach background renders behind the file select (ClearRect viewport fix, below) |
+| Super Mario Sunshine | boots | file-select background still white; the 2026-09-07 "fixed" claim was retracted 2026-09-09 (see above). Boots and runs at ~100% speed |
 
 Sunshine proved at least one more frame-destroying path existed; it was the
 ClearRect depth going through the viewport, the same defect as Mario Kart
