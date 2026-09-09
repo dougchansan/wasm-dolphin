@@ -89,12 +89,24 @@ const CANONICAL_BUILD_OUTPUTS = new Set([
 
 // Parse `git status --porcelain=v1 -uall` into repo-relative paths, handling
 // renames ("R  old -> new") and quoted paths with spaces.
+//
+// The status field is two columns wide and its first column is a space when a
+// change is not staged (" M path"). Slicing a fixed three characters is
+// therefore wrong as soon as anything trims the text -- and git() trims its
+// stdout, so the FIRST line arrives as "M path" and the fixed slice ate the
+// first character of the path. That turned an allowlisted build output into an
+// unrecognised one and failed an otherwise clean build. Match the status field
+// rather than counting characters.
+const STATUS_LINE = /^\s{0,2}[MADRCU?!]{1,2}\s+(.+)$/;
+
 export function dirtyPathsFromStatus(status) {
   if (!status) return [];
   const paths = [];
   for (const line of status.split("\n")) {
     if (line.trim() === "") continue;
-    let entry = line.slice(3);
+    const matched = STATUS_LINE.exec(line);
+    if (!matched) continue;
+    let entry = matched[1];
     const arrow = entry.indexOf(" -> ");
     if (arrow !== -1) entry = entry.slice(arrow + 4);
     if (entry.startsWith('"') && entry.endsWith('"')) entry = entry.slice(1, -1);
