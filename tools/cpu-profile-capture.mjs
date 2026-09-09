@@ -135,7 +135,7 @@ url.searchParams.set("presenter", process.env.PRESENTER || "webgpu");
 url.searchParams.set("cpu", process.env.CPU || "dual");
 url.searchParams.set("speed", process.env.SPEED || "1");
 url.searchParams.set("wasmjit", process.env.WASMJIT || "1");
-url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
+url.searchParams.set("jitwarmup", process.env.JITWARMUP || "60");
 url.searchParams.set("jittier", process.env.JITTIER || "guarded");
 // forcejit keeps the JIT engaged past the post-activation stall fuse. Per
 // §28bp that fuse fires spuriously on the WebGPU presenter path (its
@@ -168,6 +168,26 @@ page.on("pageerror", (e) => consoleLines.push(`[pageerror] ${e.stack || e.messag
 console.log(`[profile] ${url.toString()}`);
 console.log(`[profile] rom: ${romPath}`);
 await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+
+// app.js is reached through a TOP-LEVEL AWAIT in bootstrap.js, so it evaluates
+// AFTER domcontentloaded. Setting #romInput before then fires a change event at
+// no listener: the input holds the file, nothing reads it, and the run silently
+// falls back to the built-in demo scene. That is not hypothetical -- it wasted
+// three profiling runs, each reporting "Demo scene ... jitc=0/0" for five
+// minutes. boot-matrix.mjs already waits for this; see ARCHITECTURE.md.
+await page
+  .waitForFunction(
+    () => {
+      const pill = document.querySelector("#statusPill");
+      return Boolean(pill) && pill.textContent.trim() !== "" &&
+             !/^Booting/i.test(pill.textContent.trim());
+    },
+    { timeout: 60000 }
+  )
+  .catch(() => {
+    console.log("[profile] WARNING: #statusPill never left Booting; mount may not take");
+  });
+
 await page.setInputFiles("#romInput", romPath);
 console.log("[profile] disc mounted; booting");
 

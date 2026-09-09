@@ -246,10 +246,12 @@ function validateCanonicalCommand(event) {
 
     case 7: // CREATE_TEXTURE
       requirePrimary(event, RESOURCE.TEXTURE, 0);
-      requireArgs(event, 6);
+      // Six-argument packets predate mip counts and imply a single level.
+      requireArgs(event, event.args.length === 7 ? 7 : 6);
       requirePositiveArg(event, 1, "width");
       requirePositiveArg(event, 2, "height");
       requirePositiveArg(event, 5, "layer count");
+      if (event.args.length === 7) requirePositiveArg(event, 6, "mip level count");
       requireNoPayload(event);
       requireNoDependencies(event);
       break;

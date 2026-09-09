@@ -189,6 +189,20 @@ test("legacy decoder exhaustively maps opcodes 0 through 24 to canonical argumen
   }
 });
 
+test("texture mip counts preserve single-level semantics and distinguish mip chains", () => {
+  const baseArgs = [104, 128, 64, 0, 0x17, 2];
+  for (const mipLevelCount of [0, 1, 2, 8]) {
+    const decoded = decodeLegacyWgpuCommandRecord(
+      command(OP.CREATE_TEXTURE, ...baseArgs, mipLevelCount)
+    );
+    assert.deepEqual(
+      decoded.args,
+      mipLevelCount > 1 ? [...baseArgs, mipLevelCount] : baseArgs
+    );
+    assert.equal(decoded.args[6] ?? 1, mipLevelCount || 1);
+  }
+});
+
 test("legacy decoder preserves raw float bits instead of canonicalizing JS numbers", () => {
   const rawBits = [0x7FC00001, 0xFFC12345, 0x80000000, 0x00000001, 0x7F800000, 0xFF800000];
   const decoded = decodeLegacyWgpuCommandRecord(command(OP.SET_VIEWPORT, ...rawBits));

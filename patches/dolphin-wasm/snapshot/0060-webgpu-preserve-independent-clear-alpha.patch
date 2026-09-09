@@ -1,0 +1,78 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 7dbe6a2..7564fc1 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -133,7 +133,9 @@ enum class CmdOp : u32
+   // path ends and restarts the render pass per clear, and Wario World issues
+   // ~7,800 a frame, which blacked it out. The consumer instead sets the scissor
+   // and draws a solid quad without disturbing the pass.
+-  //   u0=x u1=y u2=w u3=h  u4=RGBA8 packed  f5=depth  u6=flags(1=colour,2=depth)
++  //   u0=x u1=y u2=w u3=h  u4=RGBA8 packed  f5=depth  u6=flags
++  //   flags: 8=explicit channel mask, 1=RGB, 2=depth, 4=alpha.
++  //   Without flag 8, legacy flag 1 enables all RGBA channels.
+   ClearRect = 25,
+ };
+ 
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index c278bde..6713529 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -1261,6 +1261,9 @@ void WebGPUGfx::ShowImage(const AbstractTexture* source_texture,
+ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool color_enable,
+                             bool alpha_enable, bool z_enable, u32 color, u32 z)
+ {
++  if (!color_enable && !alpha_enable && !z_enable)
++    return;
++
+   const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
+   const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
+   const unsigned int disable_mask = DolphinWeb_GetCachedInterpreterDisableMask();
+@@ -1337,7 +1340,9 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+   //
+   // Sub-rect clears go to the consumer as a scissored solid-quad draw inside
+   // the open pass (CmdOp::ClearRect). The loadOp path below still serves the
+-  // whole-frame clear, which is cheaper and also initialises EFB depth.
++  // whole-frame clear when RGB and alpha share an enable. A loadOp clear
++  // cannot preserve RGB during an alpha-only clear, or alpha during an
++  // RGB-only clear, so those also need the draw path for a full attachment.
+   // NOTE: do NOT gate this on m_pass_open. ClearRegion is normally entered
+   // with no pass open, so that guard made every clear fall through to the
+   // legacy over-clear and the opcode never executed once -- a silent no-op
+@@ -1349,24 +1354,24 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+   // initialisation the loadOp path performs, which patch 0053 relies on --
+   // breaks rendering. Kept behind a flag so it can be finished without
+   // shipping a black screen.
+-  if (!covers_efb && efb_w != 0 && efb_h != 0 &&
++  if ((!covers_efb || color_enable != alpha_enable) && efb_w != 0 && efb_h != 0 &&
+       (disable_mask & DOLPHIN_WEB_ENABLE_CLEARRECT) != 0 && BeginPassIfNeeded())
+   {
+     const u32 rgba = (static_cast<u32>((color >> 16) & 0xff) << 24) |
+                      (static_cast<u32>((color >> 8) & 0xff) << 16) |
+                      (static_cast<u32>(color & 0xff) << 8) |
+-                     static_cast<u32>(alpha_enable ? ((color >> 24) & 0xff) : 0xff);
+-    const u32 flags = (color_enable ? 1u : 0u) | (z_enable ? 2u : 0u);
+-    if (flags != 0)
+-    {
+-      const u32 cx = static_cast<u32>(std::max(0, target_rc.left));
+-      const u32 cy = static_cast<u32>(std::max(0, target_rc.top));
+-      const u32 cw = static_cast<u32>(std::max(0, target_rc.GetWidth()));
+-      const u32 ch = static_cast<u32>(std::max(0, target_rc.GetHeight()));
+-      if (m_cmd_stream.PushClearRect(cx, cy, cw, ch, rgba,
+-                                     static_cast<float>(z & 0xFFFFFF) / 16777216.0f, flags))
+-        return;
+-    }
++                     static_cast<u32>((color >> 24) & 0xff);
++    // Flag 8 distinguishes independent RGB/alpha enables from legacy flag 1,
++    // which enabled all four channels together.
++    const u32 flags = 8u | (color_enable ? 1u : 0u) | (z_enable ? 2u : 0u) |
++                      (alpha_enable ? 4u : 0u);
++    const u32 cx = static_cast<u32>(std::max(0, target_rc.left));
++    const u32 cy = static_cast<u32>(std::max(0, target_rc.top));
++    const u32 cw = static_cast<u32>(std::max(0, target_rc.GetWidth()));
++    const u32 ch = static_cast<u32>(std::max(0, target_rc.GetHeight()));
++    if (m_cmd_stream.PushClearRect(cx, cy, cw, ch, rgba,
++                                   static_cast<float>(z & 0xFFFFFF) / 16777216.0f, flags))
++      return;
+     // Fall through to the legacy over-clear if the record could not be staged.
+   }
+   EndPassIfOpen();

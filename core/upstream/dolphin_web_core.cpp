@@ -54,6 +54,8 @@
 extern "C" void DolphinWeb_SetFastSoftwareRaster(int mode);
 extern "C" std::uint32_t DolphinWeb_SetCachedInterpreterDisableMask(std::uint32_t mask);
 extern "C" std::uint32_t DolphinWeb_GetCachedInterpreterDisableMask();
+extern "C" unsigned int DolphinWeb_SetRendererFeatureMask(unsigned int mask);
+extern "C" unsigned int DolphinWeb_GetRendererFeatureMask();
 extern "C" void NotifyWebGpuOwnershipTraceLoadRequested();
 
 #ifdef __EMSCRIPTEN__
@@ -933,6 +935,21 @@ std::uint32_t SetCachedInterpreterDisableMask(std::uint32_t mask)
 std::uint32_t GetCachedInterpreterDisableMask()
 {
   return DolphinWeb_GetCachedInterpreterDisableMask();
+}
+
+// Renderer capability mask for the WebGPU backend. ENABLE polarity and default
+// ON in the backend itself, so a host that never calls this still renders
+// correctly; the setter exists to turn a feature OFF for bisection. Bit 0 is
+// the scissored ClearRect path. See DOLPHIN_WEB_RENDERER_FEATURE_* in
+// vendor/dolphin/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp.
+std::uint32_t SetRendererFeatureMask(std::uint32_t mask)
+{
+  return DolphinWeb_SetRendererFeatureMask(mask);
+}
+
+std::uint32_t GetRendererFeatureMask()
+{
+  return DolphinWeb_GetRendererFeatureMask();
 }
 
 // Day-1 instrumentation accessors: the per-swap ring buffer lives in

@@ -9,6 +9,7 @@
 
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createWriteStream, existsSync } from "node:fs";
+import { reapStaleBrowsers } from "./reap-stale-browsers.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createGzip } from "node:zlib";
@@ -172,7 +173,7 @@ if (videoMode === "ogl") {
   url.searchParams.set("present", process.env.PRESENT || "full");
   url.searchParams.set("wasmjit", process.env.WASMJIT ?? "1");
   url.searchParams.set("queue", process.env.QUEUE_SIZE || "4");
-  url.searchParams.set("jitwarmup", process.env.JITWARMUP || "700");
+  url.searchParams.set("jitwarmup", process.env.JITWARMUP || "60");
   // forcejit keeps the JIT engaged through the post-activation stall
   // fuse — required to actually exercise the mixed tier (its larger
   // one-time compile burst otherwise trips the guarded-tuned fuse).
@@ -182,6 +183,11 @@ url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
 if (process.env.XFBFAST) url.searchParams.set("xfbfast", process.env.XFBFAST);
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
+// WGPUCLEARRECT=0 turns the scissored EFB clear off. It is on by default in the
+// backend, so this is a bisection knob: with it off the renderer falls back to
+// whole-attachment loadOp clears and Mario Kart Wii composites a patchwork.
+if (process.env.WGPUCLEARRECT)
+  url.searchParams.set("wgpuclearrect", process.env.WGPUCLEARRECT);
 if (process.env.REDISPATCH) url.searchParams.set("redispatch", process.env.REDISPATCH);
 if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCKMERGE);
 if (process.env.REGALLOC) url.searchParams.set("regalloc", process.env.REGALLOC);
@@ -222,6 +228,9 @@ for (const [environmentName, queryName] of [
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
+  ["CORELOG", "corelog"],
+  ["EFBDIAG", "efbdiag"],
+  ["FRAMECAP", "framecap"],
   ["WGPUATOMIC", "wgpuatomic"],
   ["WGPUUPLOADMB", "wgpuuploadmb"],
   ["WGPUSTAGINGSLOTS", "wgpustagingslots"],
@@ -265,6 +274,7 @@ const chromiumLaunchArgs = [
   "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
 ];
 
+reapStaleBrowsers();
 const browser = persistBrowserData
   ? await chromium.launchPersistentContext(persistBrowserData, {
       channel: process.env.BROWSER_CHANNEL || "chrome",
@@ -424,6 +434,9 @@ await page.exposeFunction("__menuProgressReportInputEvent", (entry) => {
 let probeError = null;
 try {
   await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
+  // bootstrap.js imports app.js through a top-level await, so DOM readiness
+  // can precede the ROM change listener. Match boot-matrix's readiness gate.
+  await waitForAppReady(page);
   await page.evaluate((showDebugPanel) => {
     const panel = document.querySelector("#debugPanel");
     const toggle = document.querySelector("#debugToggle");
@@ -1511,6 +1524,19 @@ function avg(arr) {
   return Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2));
 }
 
+async function waitForAppReady(page, timeoutSeconds = 30) {
+  for (let attempt = 0; attempt < timeoutSeconds * 4; attempt++) {
+    const ready = await page.evaluate(() => {
+      const pill = document.querySelector("#statusPill")?.textContent?.trim() ?? "";
+      const input = document.querySelector("#romInput");
+      return Boolean(input) && pill !== "" && pill !== "Booting";
+    }).catch(() => false);
+    if (ready) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
 async function waitForMount(page) {
   for (let second = 0; second <= 180; second += 1) {
     const state = await page.evaluate(() => ({
@@ -1519,7 +1545,10 @@ async function waitForMount(page) {
       status: document.querySelector("#statusPill")?.textContent?.trim() ?? "",
     }));
     if (state.coreMode === "Dolphin" && state.mountNote.includes("Dolphin")) return;
-    if (/failed|error/i.test(state.status)) {
+    // See the note in boot-matrix.mjs: the optional jit-cache prewarm
+    // reports "failed" in its own status text and must not abort the run.
+    if (!/^jit-cache:/i.test(state.status) &&
+        (/failed|error/i.test(state.status) || /^Dolphin adapter fallback:/i.test(state.status))) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);

@@ -60,7 +60,11 @@ export class UpstreamWorkerAdapter {
     xfbFastPaths = 0,
     correctTimeDrift = false,
     coreLog = false,
+    efbDiag = false,
+    jitVerbose = false,
+    frameCap = 0,
     cachedInterpreterDisableMask = 0,
+    wgpuScissoredClearRect = true,
     noJitCache = false,
     collectMetrics = false,
     legacyOneWayAck = false,
@@ -150,7 +154,11 @@ export class UpstreamWorkerAdapter {
     this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.correctTimeDrift = Boolean(correctTimeDrift);
     this.coreLog = Boolean(coreLog);
+    this.efbDiag = Boolean(efbDiag);
+    this.jitVerbose = Boolean(jitVerbose);
+    this.frameCap = Number(frameCap) || 0;
     this.cachedInterpreterDisableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
+    this.wgpuScissoredClearRect = wgpuScissoredClearRect !== false;
     this.noJitCache = Boolean(noJitCache);
     this.collectMetrics = Boolean(collectMetrics);
     this.legacyOneWayAck = Boolean(legacyOneWayAck);
@@ -346,7 +354,11 @@ export class UpstreamWorkerAdapter {
       xfbFastPaths: this.xfbFastPaths,
       correctTimeDrift: this.correctTimeDrift,
       coreLog: this.coreLog,
+      efbDiag: this.efbDiag,
+      jitVerbose: this.jitVerbose,
+      frameCap: this.frameCap,
       cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
+      wgpuScissoredClearRect: this.wgpuScissoredClearRect,
       noJitCache: this.noJitCache,
       collectMetrics: this.collectMetrics,
       legacyOneWayAck: this.legacyOneWayAck,

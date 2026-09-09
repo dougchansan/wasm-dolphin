@@ -41,7 +41,12 @@ function markedBlock(source, marker) {
     `// ${marker}_BEGIN\\n([\\s\\S]*?)// ${marker}_END`
   ).exec(source);
   assert.ok(match, `missing ${marker} source block`);
-  return match[1];
+  // The direct WASM arm is default-off and has separate gate/semantics
+  // coverage in jit-direct-wasm-block-dispatch-source.test.mjs.
+  return match[1].replace(
+    /#if DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH\n[\s\S]*?#endif\n/g,
+    ""
+  );
 }
 
 function callbackBranches(source) {
