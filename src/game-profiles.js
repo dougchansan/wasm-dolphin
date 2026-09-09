@@ -41,13 +41,14 @@ export const GAME_PROFILES = {
   GAFE01: { renderer: "software", why: "renders black on both paths (issue #11); stay on the shipping path" },
 
   // Wii. These were briefly defaulted to hardware on a 50-vs-9 fps win with the
-  // menus checked by eye. That was wrong: in an actual race the hardware path
-  // misplaces the viewports -- a black band above the scene, the HUD and
-  // minimap drawn into the wrong regions, the player kart not visible. Menus
-  // render correctly on the hardware path and gameplay does not, which is the
-  // same 2D-survives/3D-does-not split as issue #8. A frame rate measured on a
-  // menu is not evidence about a race.
-  RMCE01: { renderer: "software", why: "hardware misplaces in-race viewports (see docs)" },
+  // menus checked by eye. That was wrong twice over. The rendering half of it
+  // is now fixed: the scissored ClearRect (0055) and its independent alpha mask
+  // (0060) put the world back, and on the deterministic race state the hardware
+  // path renders course, kart, signage and HUD pixel-for-pixel against the
+  // software reference at a matched emulated frame. What is left is speed --
+  // hardware averages ~44% against software's ~100% on that same state -- so
+  // software stays the default on performance, not on correctness.
+  RMCE01: { renderer: "software", why: "44% vs ~100% game speed; hardware renders correctly but is slower" },
   SOUE01: { renderer: "software", why: "hardware unverified in gameplay; no Wii Remote input yet" }
 };
 

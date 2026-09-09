@@ -11,6 +11,83 @@ Reproduce:
 VIDEO=wgpu node tools/boot-matrix.mjs --library "<disc library>" --duration 45
 ```
 
+## Independent re-verification on a frame-matched fixture (2026-09-08)
+
+The ClearRect work was re-checked from a clean tree by a second pass that did
+not carry the original session's state: `fetch:dolphin` + `patch:upstream`
+applied all 60 locked patches and reproduced result tree
+`5ab4c03989f1942405c6a8fe83e8a151241f378f`, `verify:provenance` passed, and
+`npm test` ran 858 tests with 0 failures.
+
+### The comparison problem, and how it was removed
+
+Earlier MKWii comparisons were unsound because the two renderers advance at
+different speeds, so screenshots taken at the same wall-clock second are
+different game screens. Two changes fix that:
+
+- both paths load the same deterministic save state (`__mkw-race.sav`,
+  `SAVE_STATE_AT=0`), so they start from an identical machine state;
+- `INPUT_SCRIPT=none` removes the wall-clock-keyed input, which otherwise
+  reaches the two paths at different emulated frames;
+- frames are then matched by the harness's own emulated frame counter from
+  `samples.csv`, not by elapsed time.
+
+That yields pairs one or two emulated frames apart, which is close enough that
+the pause camera has not moved.
+
+### Result: same state, three builds
+
+| build | renderer | emulated frame | what the canvas shows |
+| --- | --- | ---: | --- |
+| `main` | wgpu | 1413 | patchwork: a black band, a brown blur, one strip of track, hard rectangular seams, no world |
+| this branch | wgpu | 1381 | course, road, red/white barriers, grass, trees, sky, Luigi Circuit signage, Mario's kart, pause overlay |
+| this branch | software | 1398 | the same scene, same colours, same placement |
+
+The hardware frame is also stable rather than merely non-black: the inner
+picture region is bit-identical between t=0 and t=44 (0 differing pixels).
+The ~30 distinct canvas hashes over that window come from one region,
+bounding box x 300..684 / y 492..549 with a maximum channel delta of 67 --
+the "Continue Game" selection glow, which is animation, not instability.
+
+### Issue #16's own repro
+
+Driven from boot on `video=wgpu&presenter=webgpu`, the vehicle-select menu --
+structurally the screen #16 filed, a large 3D model at left over 2D chrome
+with model thumbnails in panes -- renders Mario and his kart in full colour,
+and the kart preview panes render red and cream karts with visible wheels and
+shading. Not silhouettes.
+
+The blue-and-white checker blocks in those menus are the game's checkered-flag
+motif, not transparency: the software path draws the same blocks on its own
+menus.
+
+### Melee regression: none
+
+Same fixture (`__battle.sav`, `INPUT_SCRIPT=none`, 45 s, `JITWARMUP=700`,
+`FORCEJIT=1`), `video=wgpu&presenter=webgpu`, A/B against a pristine `main`
+tree served from a second port:
+
+| build | avg game speed | distinct hashes | avg core fps |
+| --- | ---: | ---: | ---: |
+| `main` | 47.03% | 46 | 28.27 |
+| this branch | 47.81% | 46 | 28.86 |
+
+Kirby vs Link on Great Bay renders correctly on both: water, rock faces,
+character models, damage percentages, timer.
+
+### What this does not establish
+
+Mario Kart Wii still averages ~44% game speed on the hardware path against
+~100% on software for the same state, so `RMCE01` stays on `software` in
+`src/game-profiles.js` -- now on performance grounds rather than the
+correctness grounds recorded before.
+
+The software path crops its own output on some Mario Kart Wii screens (menu
+dialogs run off the right edge, and the pause overlay is drawn oversized).
+That is a software-path presentation fault, unrelated to this work, and it is
+why the software reference is used to check colour and content rather than
+placement.
+
 ## Follow-up: mip chains and clear coverage/channels (2026-09-07)
 
 Three additional renderer defects are fixed:
