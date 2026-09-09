@@ -101,6 +101,10 @@ export class EmulatorHost {
     this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
     this.correctTimeDrift = requestedCorrectTimeDrift();
     this.coreLog = requestedCoreLog();
+    this.efbDiag = requestedEfbDiag();
+    this.jitVerbose = new URLSearchParams(window.location.search).get("jitverbose") === "1";
+    this.frameCap = Number.parseInt(
+      new URLSearchParams(window.location.search).get("framecap") || "0", 10) || 0;
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
@@ -377,6 +381,9 @@ export class EmulatorHost {
             xfbFastPaths: this.xfbFastPaths,
             correctTimeDrift: this.correctTimeDrift,
             coreLog: this.coreLog,
+            efbDiag: this.efbDiag,
+            jitVerbose: this.jitVerbose,
+            frameCap: this.frameCap,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
@@ -1347,6 +1354,17 @@ function requestedFastSoftwareRaster() {
 // shipping page load should stay unchanged.
 function requestedCoreLog() {
   return new URLSearchParams(window.location.search).get("corelog") === "1";
+}
+
+// ?efbdiag=1 blits the EFB colour texture straight to the canvas, bypassing
+// the XFB and the presenter. It answers one question: does the EFB actually
+// contain the scene? Diagnostic only -- the picture it shows is not the
+// game's real output.
+function requestedEfbDiag() {
+  if (typeof window === "undefined") return false;
+  // "1" blits the EFB to the canvas; "2" blits the XFB entry last presented.
+  const raw = new URLSearchParams(window.location.search).get("efbdiag");
+  return raw === "2" ? 2 : (raw === "1" ? 1 : false);
 }
 
 function requestedCorrectTimeDrift() {

@@ -1,0 +1,42 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/TextureCache.h b/Source/Core/VideoBackends/WebGPU/TextureCache.h
+--- a/Source/Core/VideoBackends/WebGPU/TextureCache.h
++++ b/Source/Core/VideoBackends/WebGPU/TextureCache.h
+@@ -7,9 +7,19 @@
+ 
+ namespace WebGPU
+ {
+-// Day-14 scaffold. EFB→texture copy is the bridge that lets Melee's
+-// minimap, shadow maps, and post-processing work. Day 15+ will plumb
+-// real wgpuCommandEncoderCopyTextureToTexture + scaled-resolve paths.
++// EFB->texture copy is the bridge that lets minimaps, shadow maps and
++// post-processing work. CopyEFBToCacheEntry was an empty override here from the
++// Day-14 scaffold onwards, while bSupportsCopyToVram was reported as true -- so
++// VideoCommon believed every EFB-to-VRAM copy succeeded and the cache entries
++// were never filled. Anything presented from such an entry showed stale or
++// unrelated content: Mario Kart Wii presents its XFB from one and displayed
++// what looked like its minimap scaled to the full frame.
++//
++// The override is gone; TextureCacheBase's real implementation runs instead.
++//
++// CopyEFB (EFB copy to RAM, below) is still a stub. That one needs working
++// staging-texture readback, and WebGPUStagingTexture is itself a stub, so
++// removing it would break rather than fix.
+ class TextureCache final : public TextureCacheBase
+ {
+ protected:
+@@ -21,15 +31,6 @@
+                const std::array<u32, 3>& /* filter_coefficients */) override
+   {
+   }
+-
+-  void CopyEFBToCacheEntry(RcTcacheEntry& /* entry */, bool /* is_depth_copy */,
+-                           const MathUtil::Rectangle<int>& /* src_rect */,
+-                           bool /* scale_by_half */, bool /* linear_filter */,
+-                           EFBCopyFormat /* dst_format */, bool /* is_intensity */,
+-                           float /* gamma */, bool /* clamp_top */, bool /* clamp_bottom */,
+-                           const std::array<u32, 3>& /* filter_coefficients */) override
+-  {
+-  }
+ };
+ 
+ }  // namespace WebGPU

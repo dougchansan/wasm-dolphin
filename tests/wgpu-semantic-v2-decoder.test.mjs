@@ -51,6 +51,30 @@ test("independent WDS2 decoder round-trips a canonical linked pipeline", () => {
   });
 });
 
+test("texture creation accepts legacy single-level packets and explicit mip counts", () => {
+  const baseArgs = [104, 128, 64, 0, 0x17, 2];
+  for (const mipLevelCount of [undefined, 1, 2, 8]) {
+    const args = mipLevelCount === undefined ? baseArgs : [...baseArgs, mipLevelCount];
+    const decoded = decodeWgpuSemanticEventV2(encodeWgpuSemanticEventV2(event({
+      opcode: 7,
+      resourceClass: 4,
+      resourceId: 104,
+      generation: 1,
+      args,
+    })));
+    assert.deepEqual(decoded.args, args);
+    assert.equal(decoded.args[6] ?? 1, mipLevelCount ?? 1);
+  }
+});
+
+test("texture creation rejects zero mip counts and malformed argument counts", () => {
+  const baseArgs = [104, 128, 64, 0, 0x17, 2];
+  const texture = event({ opcode: 7, resourceClass: 4, resourceId: 104, generation: 1 });
+  assertDecodeRejects({ ...texture, args: [...baseArgs, 0] }, /mip level count must be nonzero/);
+  assertDecodeRejects({ ...texture, args: baseArgs.slice(0, 5) }, /exactly 6 arguments/);
+  assertDecodeRejects({ ...texture, args: [...baseArgs, 2, 3] }, /exactly 6 arguments/);
+});
+
 test("canonical dependency roles cover bind entries, pass depth, and blit destination", () => {
   const bindGroup = decodeWgpuSemanticEventV2(encodeWgpuSemanticEventV2(bindGroupEvent()));
   assert.deepEqual(bindGroup.dependencies.map((dependency) => [

@@ -25,6 +25,7 @@
 
 import { mkdir, readdir, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { reapStaleBrowsers } from "./reap-stale-browsers.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -62,6 +63,7 @@ await mkdir(outDir, { recursive: true });
 console.log(`[boot-matrix] ${selected.length} disc(s) · ${durationSeconds}s each · outDir=${outDir}`);
 
 const { chromium } = await importPlaywright();
+reapStaleBrowsers();
 const browser = await chromium.launch({
   channel: process.env.BROWSER_CHANNEL || "chrome",
   headless: !headed,
@@ -266,6 +268,8 @@ function buildUrl(disc) {
   // which the renderer bug notes rely on; FASTSW selects the software
   // rasteriser quality tier and is meaningless on video=wgpu.
   if (process.env.CORELOG) url.searchParams.set("corelog", process.env.CORELOG);
+  if (process.env.JITVERBOSE) url.searchParams.set("jitverbose", process.env.JITVERBOSE);
+  if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
   if (process.env.NOJITCACHE) url.searchParams.set("nojitcache", process.env.NOJITCACHE);
   if (process.env.WGPUVISUAL) url.searchParams.set("wgpuvisual", process.env.WGPUVISUAL);
   url.searchParams.set("probe", `boot-matrix-${safeSlug(disc.name)}`);
@@ -299,7 +303,13 @@ async function waitForMount(page, timeoutSeconds) {
       status: document.querySelector("#statusPill")?.textContent?.trim() ?? "",
     }));
     if (state.coreMode === "Dolphin" && state.mountNote.includes("Dolphin")) return;
-    if (/failed|error|unsupported/i.test(state.status)) {
+    // "jit-cache: ..." is an optional prewarm step reporting on itself; the
+    // worker already returns 0 and boots without it. Its text contains
+    // "failed"/"unsupported", which used to abort the run as a mount
+    // failure -- intermittently, since it depends on sampling that brief
+    // status window. That is the "mount flakiness" in issue #10.
+    if (!/^jit-cache:/i.test(state.status) &&
+        (/failed|error|unsupported/i.test(state.status) || /^Dolphin adapter fallback:/i.test(state.status))) {
       throw new Error(`Mount failed: ${state.status}`);
     }
     await page.waitForTimeout(1000);
@@ -387,6 +397,13 @@ async function readSample(page, elapsedSeconds) {
       presentFps: pick(info.presentationFps ?? info.fps, "#fpsCounter", "#hudFps"),
       hasFrameInfo: Boolean(window.__lastFrameInfo),
       infoKeys: Object.keys(info).slice(0, 40),
+      // JIT engagement. The slow titles turn out to compile almost no blocks
+      // and run interpreted, so these belong in every sample, not just in a
+      // one-off probe.
+      jitCompiled: info.ppcWasmBlockCompileCount ?? null,
+      jitBlockRuns: info.ppcWasmBlockRunCount ?? null,
+      jitHelper: typeof info.ppcWasmHelperStats === "string"
+        ? info.ppcWasmHelperStats.slice(0, 6000) : null,
       gameTitle: read("#gameTitle"),
       mountNote: read("#mountNote"),
       statusPill: read("#statusPill", "#hudStatus"),

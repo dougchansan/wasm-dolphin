@@ -135,10 +135,14 @@ export function decodeLegacyWgpuCommandRecord(
       requirePositive(u(1), "CREATE_TEXTURE width");
       requirePositive(u(2), "CREATE_TEXTURE height");
       requirePositive(u(5), "CREATE_TEXTURE layers");
+      // The reserved last word was zero in old records, meaning one mip.
+      // Keep their canonical arguments stable while retaining longer chains.
+      const args = [id, u(1), u(2), u(3), u(4), u(5)];
+      if (u(6) > 1) args.push(u(6));
       return result(
         WGPU_RESOURCE_CLASS.TEXTURE,
         id,
-        [id, u(1), u(2), u(3), u(4), u(5)]
+        args
       );
     }
 
