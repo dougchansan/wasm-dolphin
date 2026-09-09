@@ -106,6 +106,9 @@ export class EmulatorHost {
     this.frameCap = Number.parseInt(
       new URLSearchParams(window.location.search).get("framecap") || "0", 10) || 0;
     this.cachedInterpreterDisableMask = requestedCachedInterpreterDisableMask();
+    this.wgpuScissoredClearRect = requestedWgpuScissoredClearRect(
+      this.cachedInterpreterDisableMask
+    );
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
     this.collectMetrics = requestedCollectMetrics();
@@ -385,6 +388,7 @@ export class EmulatorHost {
             jitVerbose: this.jitVerbose,
             frameCap: this.frameCap,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
+            wgpuScissoredClearRect: this.wgpuScissoredClearRect,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,
@@ -1403,6 +1407,24 @@ const CACHED_INTERPRETER_DISABLE_BITS = {
   fastmem:       1 << 7, // legacy synonym for fastsystem (load/store-ish helpers)
   all:           0x7fffff
 };
+
+// The WebGPU backend emits partial and independent-channel EFB clears as a
+// scissored quad draw. It is ON by default in the backend itself; this only
+// exists to turn it off for bisection, because doing so restores the
+// over-clearing legacy path and reproduces the pre-fix broken frame.
+//
+// `?wgpuclearrect=0` is the supported spelling. `?disable=0x2000000` is the
+// spelling this knob shipped with while it rode on the cached-interpreter
+// disable mask, kept working so older notes and scripts still bisect.
+const LEGACY_DISABLE_BIT_CLEARRECT_OFF = 1 << 25;
+
+function requestedWgpuScissoredClearRect(disableMask) {
+  if (typeof window === "undefined") return true;
+  const raw = new URLSearchParams(window.location.search).get("wgpuclearrect");
+  if (raw === "0") return false;
+  if (raw === "1") return true;
+  return ((disableMask >>> 0) & LEGACY_DISABLE_BIT_CLEARRECT_OFF) === 0;
+}
 
 function requestedCachedInterpreterDisableMask() {
   const params = new URLSearchParams(window.location.search);

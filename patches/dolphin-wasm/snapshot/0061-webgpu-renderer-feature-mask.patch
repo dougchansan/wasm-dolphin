@@ -1,0 +1,94 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -42,9 +42,11 @@
+ 
+ #include <algorithm>
+ 
+-// Opt-in flag for the scissored ClearRect path (?disable=0x1000000). ENABLE
+-// polarity, not disable. Default off: enabled, it blanks the frame outright
+-// (9,048 clears executed, 0.0 visual fps, black output on Mario Kart Wii).
++// Renderer feature mask. ENABLE polarity, and DEFAULT ON: the renderer is
++// correct out of the box even if the host never calls the setter. This used to
++// ride on the cached-interpreter *disable* mask, which was doubly confusing --
++// an enable bit transported through a disable word, on a CPU knob unrelated to
++// the renderer. It is its own capability now.
+ extern "C" unsigned int DolphinWeb_GetCachedInterpreterDisableMask();
+ extern "C" u32 DolphinWebGetLastCommitStride();
+ 
+@@ -55,7 +57,26 @@
+   static std::map<u32, u32> m;
+   return m;
+ }
+-static constexpr unsigned int DOLPHIN_WEB_ENABLE_CLEARRECT = 1u << 24;
++// Bit 0: partial and independent-channel EFB clears are emitted as a scissored
++// solid-quad draw inside the open pass (CmdOp::ClearRect) instead of a
++// whole-attachment loadOp clear. Mario Kart Wii does not render without it.
++static constexpr unsigned int DOLPHIN_WEB_RENDERER_FEATURE_SCISSORED_CLEAR_RECT = 1u << 0;
++static constexpr unsigned int DOLPHIN_WEB_RENDERER_FEATURE_DEFAULT =
++    DOLPHIN_WEB_RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
++
++static std::atomic<unsigned int> s_dolphin_web_renderer_feature_mask{
++    DOLPHIN_WEB_RENDERER_FEATURE_DEFAULT};
++
++// Returns the previous mask, so a caller can diff or restore it.
++extern "C" unsigned int DolphinWeb_SetRendererFeatureMask(unsigned int mask)
++{
++  return s_dolphin_web_renderer_feature_mask.exchange(mask, std::memory_order_relaxed);
++}
++
++extern "C" unsigned int DolphinWeb_GetRendererFeatureMask()
++{
++  return s_dolphin_web_renderer_feature_mask.load(std::memory_order_relaxed);
++}
+ #include <array>
+ #include <set>
+ #include <atomic>
+@@ -1266,7 +1287,7 @@
+ 
+   const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
+   const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
+-  const unsigned int disable_mask = DolphinWeb_GetCachedInterpreterDisableMask();
++  const unsigned int renderer_features = DolphinWeb_GetRendererFeatureMask();
+   const bool covers_efb = target_rc.left <= 0 && target_rc.top <= 0 &&
+                           static_cast<u32>(std::max(0, target_rc.GetWidth())) >= efb_w &&
+                           static_cast<u32>(std::max(0, target_rc.GetHeight())) >= efb_h;
+@@ -1347,15 +1368,18 @@
+   // with no pass open, so that guard made every clear fall through to the
+   // legacy over-clear and the opcode never executed once -- a silent no-op
+   // that looked exactly like "the fix did not help".
+-  // OPT-IN ONLY (?disable=0x1000000). Enabled by default this blanks the frame
+-  // outright: 9,048 clears executed, 0.0 visual fps, black output on Mario Kart
+-  // Wii. The opcode and consumer path are correct enough to run, but something
+-  // about taking over the clear -- most likely skipping the depth
+-  // initialisation the loadOp path performs, which patch 0053 relies on --
+-  // breaks rendering. Kept behind a flag so it can be finished without
+-  // shipping a black screen.
++  // ON BY DEFAULT. This blanked the frame when it was first added, for two
++  // reasons since found and fixed: the draw wrote the producer's clear depth
++  // (0.9999999403953552) where the loadOp path writes dcv = 0.0 for this
++  // backend's reverse-Z convention, so every later draw failed the depth test;
++  // and the clear triangle's depth was remapped by whatever viewport the game
++  // had bound, so Mario Kart Wii's HUD viewport z(0.89,0.99) wrote 0.89 across
++  // the EFB and rejected the entire world band z(0.00,0.84). Clearing the
++  // feature bit restores the over-clearing legacy path, which reproduces the
++  // original patchwork frame -- it is a bisection knob, not a fallback.
+   if ((!covers_efb || color_enable != alpha_enable) && efb_w != 0 && efb_h != 0 &&
+-      (disable_mask & DOLPHIN_WEB_ENABLE_CLEARRECT) != 0 && BeginPassIfNeeded())
++      (renderer_features & DOLPHIN_WEB_RENDERER_FEATURE_SCISSORED_CLEAR_RECT) != 0 &&
++      BeginPassIfNeeded())
+   {
+     const u32 rgba = (static_cast<u32>((color >> 16) & 0xff) << 24) |
+                      (static_cast<u32>((color >> 8) & 0xff) << 16) |
+diff --git a/Source/Core/Core/CMakeLists.txt b/Source/Core/Core/CMakeLists.txt
+--- a/Source/Core/Core/CMakeLists.txt
++++ b/Source/Core/Core/CMakeLists.txt
+@@ -934,7 +934,7 @@
+     "-sSTACK_SIZE=5242880"
+     "-sDEFAULT_PTHREAD_STACK_SIZE=5242880"
+     "-sPTHREAD_POOL_SIZE=16"
+-    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuOwnershipTraceEnabled','_AcknowledgeWebGpuOwnershipTraceCapture','_GetWebGpuOwnershipTracePtr','_GetWebGpuOwnershipTraceCapacity','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuDeepDiagnosticsEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
++    "-sEXPORTED_FUNCTIONS=['_CoreInit','_SetVideoBackend','_SetCpuThread','_SetCpuCore','_SetCpuOverclock','_SetEmulationSpeed','_SetPresentationScale','_SetFastSoftwareRaster','_SetSoftwareTevHotCaseMode','_SetPpcWasmJitEnabled','_SetPpcProfileEnabled','_SetCachedInterpreterDisableMask','_GetCachedInterpreterDisableMask','_SetRendererFeatureMask','_GetRendererFeatureMask','_GetFrameRingEntryPtr','_GetFrameRingCapacity','_GetFrameRingEntrySize','_GetFrameRingHead','_GetPpcProfileStats','_BootDisc','_StopCore','_SetCorePaused','_ResetCore','_SaveCoreState','_LoadCoreState','_LoadStateFile','_SaveStateFile','_PumpHostJobs','_GetCoreState','_GetCoreStateName','_GetCoreStatus','_GetCoreTitle','_GetCoreTicksLow','_GetCoreTicksHigh','_GetCoreTicksPerSecond','_GetPPCPC','_GetLastLoadedCoreTicksLow','_GetLastLoadedCoreTicksHigh','_GetLastLoadedPPCPC','_GetLastLoadedCheckpointGeneration','_GetCPUCoreName','_AudioSampleRate','_AudioChannels','_AudioBufferFrames','_AudioBuffer','_MixAudio','_SetAudioMuted','_GetAudioStats','_GetPpcWasmBlockCompileCount','_GetPpcWasmBlockRunCount','_GetPpcWasmHelperStats','_SetWebGpuStateCacheEnabled','_SetWebGpuUboCacheEnabled','_SetWebGpuUboPackEnabled','_SetWebGpuGeometryPackEnabled','_SetWebGpuGeometryRangeEnabled','_SetWebGpuUploadArenaMiB','_SetWebGpuOwnershipTraceEnabled','_AcknowledgeWebGpuOwnershipTraceCapture','_GetWebGpuOwnershipTracePtr','_GetWebGpuOwnershipTraceCapacity','_SetWebGpuProducerProfileEnabled','_SetWebGpuDrawProfileEnabled','_SetWgpuDeepDiagnosticsEnabled','_SetWgpuIdleFifoTailElisionEnabled','_RunWebGpuDenseUboPacketSmoke','_RunWebGpuDenseUboRollbackSmoke','_GetWebGpuDenseUboSmokeError','_GetWebGpuStateCacheStats','_DolphinWeb_RecordModuleUs','_DolphinWeb_RecordInstanceUs','_DolphinWeb_RecordCacheHit','_DolphinWeb_RecordCacheMiss','_TestPpcWasmDirectCandidate','_TestDcbxLoopPattern','_TestPpcWasmDirectCandidateCompiles','_RunPpcWasmMultipleWordMemorySmoke','_RunPpcWasmSinglePrecisionArithmeticSmoke','_RunPpcWasmDoublePrecisionArithmeticSmoke','_RunPpcWasmPairedQuantizedMemorySmoke','_RunPpcWasmFloatCompareSmoke','_GetVideoStats','_RunWasmJitSmoke','_RunPpcWasmAddiSmoke','_RunPpcWasmStateAddiSmoke','_RunPpcWasmDolphinStateAddiSmoke','_RunPpcWasmIntegerBlockSmoke','_MountDisc','_Reset','_SetInputMask','_SetInputState','_RunFrame','_FrameWidth','_FrameHeight','_FrameBuffer','_SaveState','_LoadState','_GetFrame','_GetFrameSignalPtr','_GetGameId','_GetGameTitle','_GetMakerId','_GetPlatform','_GetRegion','_GetDiscNumber','_GetApploaderDate','_GetApploaderSize','_GetBootDolOffset','_GetBootDolSize','_GetFstOffset','_GetFstSize','_GetRawSize','_GetDataSize','_GetRootEntryCount','_GetRootEntryName','_GetRootEntryPath','_GetRootEntryIsDirectory','_GetRootEntryOffset','_GetRootEntrySize','_ReadDisc','_ReadDiscFile','_malloc','_free']"
+     # WORKERFS and NODEFS are named here so they survive dead-code
+     # elimination. -lworkerfs.js / -lnodefs.js above only make the JS
+     # libraries available to the link; current Emscripten still drops a JS

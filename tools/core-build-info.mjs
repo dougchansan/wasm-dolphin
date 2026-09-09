@@ -75,6 +75,38 @@ function git(args, cwd = root) {
   return result.stdout.trim();
 }
 
+// Paths a canonical build is allowed to have dirty, because the build itself
+// produces them. Everything else -- modified or untracked -- means the artifact
+// does not correspond to any committed source state, and the recorded
+// provenance would be a description of one person's desk rather than something
+// a third party can reproduce.
+const CANONICAL_BUILD_OUTPUTS = new Set([
+  "cores/dolphin/dolphin-core-upstream.js",
+  "cores/dolphin/dolphin-core-upstream.wasm",
+  "cores/dolphin/dolphin-core-upstream.build.json",
+  "provenance/dolphin-core-abi-v1.json"
+]);
+
+// Parse `git status --porcelain=v1 -uall` into repo-relative paths, handling
+// renames ("R  old -> new") and quoted paths with spaces.
+export function dirtyPathsFromStatus(status) {
+  if (!status) return [];
+  const paths = [];
+  for (const line of status.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry = line.slice(3);
+    const arrow = entry.indexOf(" -> ");
+    if (arrow !== -1) entry = entry.slice(arrow + 4);
+    if (entry.startsWith('"') && entry.endsWith('"')) entry = entry.slice(1, -1);
+    paths.push(entry);
+  }
+  return paths;
+}
+
+export function unexpectedDirtyPaths(status) {
+  return dirtyPathsFromStatus(status).filter((path) => !CANONICAL_BUILD_OUTPUTS.has(path));
+}
+
 export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_BUILD_INFO_PATH } = {}) {
   const absoluteBuildDir = resolve(buildDir ?? process.env.DOLPHIN_WASM_BUILD_DIR ?? resolve(root, "build/dolphin-wasm"));
   const configurePath = resolve(absoluteBuildDir, "wasm-dolphin-configure.json");
@@ -108,13 +140,29 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
     }))
   )));
 
+  // Refuse to stamp a canonical build with a dirty tree. DOLPHIN_ALLOW_DIRTY_BUILD=1
+  // is the deliberate escape hatch for local experiments; it also records the
+  // override in the evidence so a dirty build can never masquerade as a clean one.
+  const repositoryStatus = git(["status", "--porcelain=v1", "--untracked-files=all"]);
+  const dirty = unexpectedDirtyPaths(repositoryStatus);
+  const allowDirty = process.env.DOLPHIN_ALLOW_DIRTY_BUILD === "1";
+  if (dirty.length > 0 && !allowDirty) {
+    throw new Error(
+      `Refusing to record a canonical core build from a dirty tree. Commit, stash or ` +
+      `remove these ${dirty.length} path(s) first, or set DOLPHIN_ALLOW_DIRTY_BUILD=1 ` +
+      `for a throwaway build:\n  ${dirty.join("\n  ")}`
+    );
+  }
+
   const info = {
     schemaVersion: 1,
     createdAt: new Date().toISOString(),
     coreId: `sha256:${wasm.sha256}`,
     repository: {
       commit: git(["rev-parse", "HEAD"]),
-      status: git(["status", "--porcelain=v1", "--untracked-files=all"])
+      status: repositoryStatus,
+      cleanTree: dirty.length === 0,
+      dirtyBuildOverride: dirty.length > 0 && allowDirty ? dirty : undefined
     },
     source: {
       upstreamCommit: sourceLock.upstream.commit,

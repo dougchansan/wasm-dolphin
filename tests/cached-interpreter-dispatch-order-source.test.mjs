@@ -14,7 +14,6 @@ const CANDIDATE_ORDER = [
   "FastInteger",
   "FastBranch",
   "FastFloat",
-  "FastPairedSingle",
   "FastBranchBdnz",
   "Interpret<true>",
   "FastMfmsr",
@@ -35,7 +34,6 @@ const LEGACY_ORDER = [
   "FastBranch",
   "FastBranchBdnz",
   "FastFloat",
-  "FastPairedSingle",
 ];
 
 function markedBlock(source, marker) {

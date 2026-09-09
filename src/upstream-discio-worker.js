@@ -929,6 +929,7 @@ async function handleMessage(type, payload) {
         jitVerbose: payload.jitVerbose,
         frameCap: payload.frameCap,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
+        wgpuScissoredClearRect: payload.wgpuScissoredClearRect,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
         wgpuReplayDiagnostics: payload.wgpuReplayDiagnostics,
@@ -1424,6 +1425,7 @@ async function loadCore({
   jitVerbose = false,
   frameCap = 0,
   cachedInterpreterDisableMask = 0,
+  wgpuScissoredClearRect = true,
   noJitCache = false,
   reportedCoreSelection = null,
   wgpuReplayDiagnostics = false,
@@ -2061,25 +2063,28 @@ async function loadCore({
   );
   if (wgpuProducerProfileRequested || wgpuDrawProfileRequested)
     verifyWgpuProducerProfileActivation("core boot");
-  // Bit 24 enables the scissored ClearRect path in WebGPUGfx::ClearRegion.
-  // WebGPU has no scissored load-clear, so without it Dolphin's partial clears
-  // become whole-attachment loadOp clears: 16 EFB passes and 4 full clears in
-  // one Mario Kart Wii frame, with only 142 of 390 draws landing after the last
-  // one. It is defaulted ON here rather than in WebGPUGfx.cpp because the gate
-  // reads this runtime mask, so the default costs no core rebuild and no
-  // patch-series or vendor-snapshot change.
-  //
-  // Bit 25 forces it back off, so the behaviour is reversible through the
-  // existing ?disable= parameter without new plumbing: ?disable=0x2000000.
-  const CLEARRECT_ENABLE = 1 << 24;
-  const CLEARRECT_FORCE_OFF = 1 << 25;
-  let disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
-  if ((disableMask & CLEARRECT_FORCE_OFF) === 0) {
-    disableMask = (disableMask | CLEARRECT_ENABLE) >>> 0;
-  }
+  const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
   if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
     api.setCachedInterpreterDisableMask(disableMask);
     postStatus(`CachedInterpreter disable mask = 0x${disableMask.toString(16)}`);
+  }
+
+  // Renderer capabilities are their own mask, separate from the CPU disable
+  // mask above. The backend defaults every bit ON, so this call only ever
+  // needs to make a call when something is being turned OFF for bisection --
+  // but it is issued unconditionally so the active configuration is visible in
+  // the status log rather than implied.
+  const RENDERER_FEATURE_SCISSORED_CLEAR_RECT = 1 << 0;
+  let rendererFeatureMask = RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
+  if (!wgpuScissoredClearRect) {
+    rendererFeatureMask =
+      (rendererFeatureMask & ~RENDERER_FEATURE_SCISSORED_CLEAR_RECT) >>> 0;
+  }
+  if (api.setRendererFeatureMask) {
+    api.setRendererFeatureMask(rendererFeatureMask);
+    postStatus(`Renderer feature mask = 0x${rendererFeatureMask.toString(16)}`);
+  } else if (!wgpuScissoredClearRect) {
+    postStatus("Renderer feature mask unsupported by this core; ClearRect stays on");
   }
   startFrameRingDrainLoop();
   configurePresentationQueue(presentationQueueSize);
@@ -2255,6 +2260,15 @@ function bindApi(module) {
     setSoftwareRasterProfileEnabled:
       typeof module._SetSoftwareRasterProfileEnabled === "function"
         ? (enabled) => ccall("SetSoftwareRasterProfileEnabled", "number", ["number"], [enabled ? 1 : 0])
+        : null,
+    setRendererFeatureMask:
+      typeof module._SetRendererFeatureMask === "function"
+        ? (mask) =>
+            ccall("SetRendererFeatureMask", "number", ["number"], [(mask >>> 0)])
+        : null,
+    getRendererFeatureMask:
+      typeof module._GetRendererFeatureMask === "function"
+        ? () => ccall("GetRendererFeatureMask", "number", [], []) >>> 0
         : null,
     setCachedInterpreterDisableMask:
       typeof module._SetCachedInterpreterDisableMask === "function"
