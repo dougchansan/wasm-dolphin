@@ -125,9 +125,57 @@ Sparse adds nothing over the mapped transport it requires, and the arena wait
 does not fall -- which is the signature of a change that never touched the
 arena. The mapped transport is itself a 14.5% regression on this workload.
 
+## The knobs do nothing, and the benchmark cannot see small effects
+
+Three reps each, idle machine, interleaved, 60 s runs. Medians, because one
+control run was an outlier:
+
+| config | median frames | delta |
+| --- | ---: | ---: |
+| control | 1788 | -- |
+| `wgpuubopack=1` | 1806 | +1.0% |
+| `wgpugeompack=1` | 1789 | +0.1% |
+| `wgpugeompack=1&wgpugeomrange=1` | 1792 | +0.2% |
+| `wgpuubocache=1` | 1787 | -0.1% |
+
+Every one of them is nothing. That includes `wgpuubocache`, which read +4.4% at
+two reps in the previous batch -- that signal was noise, and acting on it would
+have been a mistake.
+
+The reason the earlier readings looked meaningful is the more important result
+here. The three control runs alone were **2059, 1788, 1785**: a standard
+deviation of 8.4%, which puts the smallest reliably detectable effect at n=3 at
+roughly **17%**.
+
+Within-round deltas show where that comes from:
+
+    round1 ctl=2059 : ubopack -12.9%  geompack -13.1%  geomboth -13.0%  ubocache -13.2%
+    round2 ctl=1788 : ubopack  +1.0%  geompack  -4.1%  geomboth  -0.1%  ubocache  -0.2%
+    round3 ctl=1785 : ubopack  +8.3%  geompack  +0.4%  geomboth  +1.1%  ubocache +12.4%
+
+Round 1 is not a knob effect. Its control is 15% above the other two, and every
+arm in that round is dragged down against it. The control ran first in every
+round, so the first run of a session -- cold browser, cold GPU, cold JIT cache
+in a fresh profile -- is systematically favoured, and the bias lands entirely on
+the control arm.
+
+**No optimization worth less than about 17% can be evaluated on this fixture as
+it stands.** That is the finding that matters most, because it applies to every
+change anyone tries next, not just these five.
+
 ## Recommended next step
 
-Make the *producer* upload only dirty ranges. The shadow copies that
+Harden the benchmark before optimizing anything further. The 8.4% control
+spread has identifiable causes: every run launches a cold browser with a fresh
+profile, so the JIT cache never warms; the first run of a session is
+consistently fastest; and the control always ran first. Discarding the first
+run, randomizing arm order, running longer than 60 s, and using
+`PROBE_PERSIST_DIR` so the JIT cache is warm should each shrink it. Until the
+floor is well under the effects being chased, optimization work cannot be
+told apart from noise.
+
+The uniform path is still the largest identified cost, and the shape of the fix
+is unchanged: make the *producer* upload only dirty ranges. The shadow copies that
 `PrepareDrawResources` already maintains (`m_vs_shadow`, `m_ps_shadow`,
 `m_gs_shadow`) contain everything needed to compute them; the block is already
 compared against them with `memcmp` on every draw, so the comparison is paid
@@ -139,11 +187,45 @@ device plus small dirty-range uploads -- the same shape as the JS module, moved
 to the layer where the traffic actually is. That is a native change and a core
 rebuild.
 
-Expected upside: VS traffic 4112 -> ~172 bytes plus range overhead on 361
-draws/frame, which should remove most of the 2.1 s of arena stalls and a large
-part of the 5.42 ms/frame in UniformPrepare. It does not obviously reach parity
-with software on its own, and no estimate here should be treated as a promise
-until it is built and measured.
+### Revised estimate: do not build this yet
+
+Working the design through dropped the expected payoff far enough that it is no
+longer the right next move.
+
+Two things emerged. First, `VertexShaderManager` exposes a single `bool dirty`
+for the whole block, with no per-group flags, so finding the dirty range means
+scanning all 4112 bytes -- which **loses the early exit `memcmp` already gets**.
+That is added cost, not saved cost. Second, the shadow copy still has to happen
+for the next comparison. So per changed VS draw:
+
+| | today | with dirty ranges |
+| --- | ---: | ---: |
+| compare | partial, early-exit | full 4112 scan |
+| memcpy to shadow | 4112 | 4112 |
+| memcpy to arena | 4112 | ~866 |
+| copy traffic | 8224 B | ~4978 B |
+| extra encoder commands | 0 | 2 per draw |
+
+About 1.17 MB/frame less memcpy, call it 1.06 ms on a 33 ms frame, ~3.2% --
+then give back the full scan and roughly 722 extra encoder calls a frame. Net
+1-2.5%, plausibly negative.
+
+The arena relief was also overstated above: uniforms are only about 2.8 GB of
+the 7.75 GB crossing the arena, and the total stall is 2.1 s in 60 s, so
+removing it entirely is worth ~3.5%.
+
+There is also a correctness constraint that makes it a bigger change than it
+looks. The unchanged bytes exist only in the previous slice on the GPU, so
+carrying them forward is a device-side `copyBufferToBuffer`. But uniform
+uploads on the default transport go through `queue.writeBuffer`, which lands on
+the queue timeline **before** the render encoder is submitted -- so a
+copy-forward inside that encoder would execute after every write of the frame
+and silently clobber them. Doing it correctly needs the dirty bytes staged into
+a device buffer and both copies issued inside the encoder: a new opcode, a
+staging ring, and changes on both sides of the protocol.
+
+Against a 17% detection floor, a 1-2.5% change cannot be validated at all. Fix
+the benchmark first.
 
 ## Measurement notes
 
