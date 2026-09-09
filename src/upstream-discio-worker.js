@@ -2063,28 +2063,42 @@ async function loadCore({
   );
   if (wgpuProducerProfileRequested || wgpuDrawProfileRequested)
     verifyWgpuProducerProfileActivation("core boot");
-  const disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
-  if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
-    api.setCachedInterpreterDisableMask(disableMask);
-    postStatus(`CachedInterpreter disable mask = 0x${disableMask.toString(16)}`);
-  }
-
   // Renderer capabilities are their own mask, separate from the CPU disable
-  // mask above. The backend defaults every bit ON, so this call only ever
-  // needs to make a call when something is being turned OFF for bisection --
-  // but it is issued unconditionally so the active configuration is visible in
-  // the status log rather than implied.
+  // mask below. The backend defaults every bit ON, so a call is only strictly
+  // needed to turn something OFF for bisection -- but it is issued
+  // unconditionally so the active configuration is visible in the status log
+  // rather than implied.
   const RENDERER_FEATURE_SCISSORED_CLEAR_RECT = 1 << 0;
   let rendererFeatureMask = RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
   if (!wgpuScissoredClearRect) {
     rendererFeatureMask =
       (rendererFeatureMask & ~RENDERER_FEATURE_SCISSORED_CLEAR_RECT) >>> 0;
   }
-  if (api.setRendererFeatureMask) {
+
+  // Cores built before the capability existed read the ClearRect enable out of
+  // the cached-interpreter disable mask instead, at bit 24, defaulting to off.
+  // Host and core are versioned independently -- a stale cached core, a
+  // half-finished rebuild -- and getting this wrong is not a degraded feature
+  // but a black Mario Kart Wii, so fall back rather than assume they match.
+  const LEGACY_DISABLE_BIT_CLEARRECT_ENABLE = 1 << 24;
+  let disableMask = (Number(cachedInterpreterDisableMask) || 0) >>> 0;
+  const rendererMaskSupported = Boolean(api.setRendererFeatureMask);
+  if (!rendererMaskSupported && wgpuScissoredClearRect) {
+    disableMask = (disableMask | LEGACY_DISABLE_BIT_CLEARRECT_ENABLE) >>> 0;
+  }
+
+  if (disableMask !== 0 && api.setCachedInterpreterDisableMask) {
+    api.setCachedInterpreterDisableMask(disableMask);
+    postStatus(`CachedInterpreter disable mask = 0x${disableMask.toString(16)}`);
+  }
+  if (rendererMaskSupported) {
     api.setRendererFeatureMask(rendererFeatureMask);
     postStatus(`Renderer feature mask = 0x${rendererFeatureMask.toString(16)}`);
-  } else if (!wgpuScissoredClearRect) {
-    postStatus("Renderer feature mask unsupported by this core; ClearRect stays on");
+  } else {
+    postStatus(
+      `Renderer feature mask unsupported by this core; ClearRect via legacy bit 24 ` +
+      `(${wgpuScissoredClearRect ? "on" : "off"})`
+    );
   }
   startFrameRingDrainLoop();
   configurePresentationQueue(presentationQueueSize);

@@ -200,11 +200,36 @@ test("a default launch turns the capability on", { skip: false }, async () => {
   );
   assert.match(
     worker,
-    /if \(api\.setRendererFeatureMask\) \{\s*\n\s*api\.setRendererFeatureMask\(rendererFeatureMask\);/,
-    "the worker must push the capability mask to the core"
+    /if \(rendererMaskSupported\) \{\s*\n\s*api\.setRendererFeatureMask\(rendererFeatureMask\);/,
+    "the worker must push the capability mask to a core that supports it"
   );
 
-  // The old smuggling is gone in both directions.
-  assert.doesNotMatch(worker, /CLEARRECT_ENABLE/, "the disable-mask smuggling must be gone");
-  assert.doesNotMatch(worker, /CLEARRECT_FORCE_OFF/, "the disable-mask smuggling must be gone");
+  // The unconditional smuggling is gone: bit 24 is only ever set now as a
+  // fallback for a core that predates the capability.
+  assert.doesNotMatch(worker, /CLEARRECT_FORCE_OFF/, "the force-off bit must be gone");
+});
+
+test("a core without the capability still gets ClearRect via the legacy bit", { skip: false }, async () => {
+  const worker = await read(workerUrl);
+
+  // Host and core version independently. A stale cached core, or a
+  // half-finished rebuild, must not silently mean a black Mario Kart Wii.
+  assert.match(
+    worker,
+    /const LEGACY_DISABLE_BIT_CLEARRECT_ENABLE = 1 << 24;/,
+    "the legacy enable bit must still be known"
+  );
+  assert.match(
+    worker,
+    /if \(!rendererMaskSupported && wgpuScissoredClearRect\) \{\s*\n\s*disableMask = \(disableMask \| LEGACY_DISABLE_BIT_CLEARRECT_ENABLE\) >>> 0;/,
+    "an old core must be driven through the legacy bit instead"
+  );
+
+  // And the fallback must be conditional on the capability being absent, not
+  // applied unconditionally -- a new core takes the capability path.
+  assert.match(
+    worker,
+    /const rendererMaskSupported = Boolean\(api\.setRendererFeatureMask\);/,
+    "the fallback must key off whether the core exports the capability"
+  );
 });
