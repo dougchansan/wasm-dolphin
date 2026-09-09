@@ -228,6 +228,11 @@ for (const [environmentName, queryName] of [
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
+  // Native producer/draw phase timers. Accumulated counters read once at the
+  // end of a run, but they are still off by default -- a profiling capture is
+  // a separate run from a throughput measurement, never the same one.
+  ["WGPUPRODPROFILE", "wgpuprodprofile"],
+  ["WGPUDRAWPROFILE", "wgpudrawprofile"],
   ["CORELOG", "corelog"],
   ["EFBDIAG", "efbdiag"],
   ["FRAMECAP", "framecap"],
