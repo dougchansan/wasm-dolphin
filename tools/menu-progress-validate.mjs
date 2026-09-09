@@ -183,6 +183,11 @@ url.searchParams.set("oc", process.env.OC || "1");
 url.searchParams.set("fastsw", process.env.FASTSW || "1");
 if (process.env.XFBFAST) url.searchParams.set("xfbfast", process.env.XFBFAST);
 if (process.env.DISABLE) url.searchParams.set("disable", process.env.DISABLE);
+// WGPUCLEARRECT=0 turns the scissored EFB clear off. It is on by default in the
+// backend, so this is a bisection knob: with it off the renderer falls back to
+// whole-attachment loadOp clears and Mario Kart Wii composites a patchwork.
+if (process.env.WGPUCLEARRECT)
+  url.searchParams.set("wgpuclearrect", process.env.WGPUCLEARRECT);
 if (process.env.REDISPATCH) url.searchParams.set("redispatch", process.env.REDISPATCH);
 if (process.env.BLOCKMERGE) url.searchParams.set("blockmerge", process.env.BLOCKMERGE);
 if (process.env.REGALLOC) url.searchParams.set("regalloc", process.env.REGALLOC);
