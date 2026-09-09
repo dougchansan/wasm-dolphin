@@ -293,7 +293,10 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
   assert.equal(result.upstreamCommit, "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1");
   assert.equal(result.patches.count, loadSourceLock(projectRoot).patches.length);
   assert.equal(Object.keys(result.externalRepositories).length, 2);
-  assert.equal(result.vendorSnapshot.rootPaths, 110);
+  // Tracks the patch series: 110 before the investigation diagnostics were
+  // stripped out of 0059, which left TextureCacheBase.cpp untouched by any
+  // patch. Update deliberately when the series changes what it modifies.
+  assert.equal(result.vendorSnapshot.rootPaths, 109);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
   assert.equal(result.core.abiVersion, 1);
   assert.equal(result.core.memoryContract.jsGlue.initialPages, 24576);

@@ -1,0 +1,134 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+index 22fb8e6d57..f1ecf610fe 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -1321,6 +1321,28 @@ bool WebGPUCommandStream::PushSetScissor(u32 x, u32 y, u32 w, u32 h)
+   return StagePassRecord(rec);
+ }
+ 
++bool WebGPUCommandStream::PushClearRect(u32 x, u32 y, u32 w, u32 h, u32 rgba, float depth,
++                                        u32 flags)
++{
++  if (w == 0 || h == 0 || flags == 0)
++    return true;
++  if (!m_header)
++  {
++    PoisonPass();
++    return false;
++  }
++  CmdRecord rec{};
++  rec.op = static_cast<u32>(CmdOp::ClearRect);
++  rec.arg.u[0] = x;
++  rec.arg.u[1] = y;
++  rec.arg.u[2] = w;
++  rec.arg.u[3] = h;
++  rec.arg.u[4] = rgba;
++  rec.arg.f[5] = depth;
++  rec.arg.u[6] = flags;
++  return StagePassRecord(rec);
++}
++
+ bool WebGPUCommandStream::PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx)
+ {
+   if (vtx_count == 0)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+index 129037eb35..7dbe6a2ce5 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -123,6 +123,18 @@ enum class CmdOp : u32
+   // Consumer: same-format+same-size → copyTextureToTexture; otherwise
+   // (e.g. rgba8unorm EFB → bgra8unorm XFB) a sampled render-pass blit.
+   BlitTexture = 24,
++  // Scissored clear INSIDE the open pass. A WebGPU loadOp:clear always clears
++  // the whole attachment and ignores setScissorRect, so a sub-rect clear cannot
++  // be expressed as a clear pass -- this backend used to widen every one to the
++  // full EFB, destroying everything drawn before it. Mario Kart Wii issues
++  // 128x128, 256x256 and 192x96 clears mid-frame.
++  //
++  // Realising it as a utility draw in the core was tried and reverted: that
++  // path ends and restarts the render pass per clear, and Wario World issues
++  // ~7,800 a frame, which blacked it out. The consumer instead sets the scissor
++  // and draws a solid quad without disturbing the pass.
++  //   u0=x u1=y u2=w u3=h  u4=RGBA8 packed  f5=depth  u6=flags(1=colour,2=depth)
++  ClearRect = 25,
+ };
+ 
+ // Stable producer attribution for UploadBuffer records. The value is carried
+@@ -370,6 +382,7 @@ public:
+   bool PushSetIndexBuffer(u32 buf_id, u32 fmt, u32 offset);
+   bool PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
+   bool PushSetScissor(u32 x, u32 y, u32 w, u32 h);
++  bool PushClearRect(u32 x, u32 y, u32 w, u32 h, u32 rgba, float depth, u32 flags);
+   bool PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
+   bool PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx, u32 base_vtx);
+   bool PushEndPass();
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index 8a5c9d7651..c278bdee61 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -39,6 +39,13 @@
+ #include "VideoCommon/WasmWgpuIdleFifoTailGate.h"
+ 
+ #include <algorithm>
++
++// Opt-in flag for the scissored ClearRect path (?disable=0x1000000). ENABLE
++// polarity, not disable. Default off: enabled, it blanks the frame outright
++// (9,048 clears executed, 0.0 visual fps, black output on Mario Kart Wii).
++extern "C" unsigned int DolphinWeb_GetCachedInterpreterDisableMask();
++
++static constexpr unsigned int DOLPHIN_WEB_ENABLE_CLEARRECT = 1u << 24;
+ #include <array>
+ #include <set>
+ #include <atomic>
+@@ -1238,6 +1245,7 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+ {
+   const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
+   const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
++  const unsigned int disable_mask = DolphinWeb_GetCachedInterpreterDisableMask();
+   const bool covers_efb = target_rc.left <= 0 && target_rc.top <= 0 &&
+                           static_cast<u32>(std::max(0, target_rc.GetWidth())) >= efb_w &&
+                           static_cast<u32>(std::max(0, target_rc.GetHeight())) >= efb_h;
+@@ -1309,9 +1317,40 @@ void WebGPUGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool colo
+   // clears a frame. Sending the whole-frame clear down it blanks the screen
+   // outright.
+   //
+-  // So: keep upstream's over-clearing behaviour until the utility draw path
+-  // can service a clear without tearing down the pass. Over-clearing is wrong
+-  // but is what every currently-working title renders against.
++  // Sub-rect clears go to the consumer as a scissored solid-quad draw inside
++  // the open pass (CmdOp::ClearRect). The loadOp path below still serves the
++  // whole-frame clear, which is cheaper and also initialises EFB depth.
++  // NOTE: do NOT gate this on m_pass_open. ClearRegion is normally entered
++  // with no pass open, so that guard made every clear fall through to the
++  // legacy over-clear and the opcode never executed once -- a silent no-op
++  // that looked exactly like "the fix did not help".
++  // OPT-IN ONLY (?disable=0x1000000). Enabled by default this blanks the frame
++  // outright: 9,048 clears executed, 0.0 visual fps, black output on Mario Kart
++  // Wii. The opcode and consumer path are correct enough to run, but something
++  // about taking over the clear -- most likely skipping the depth
++  // initialisation the loadOp path performs, which patch 0053 relies on --
++  // breaks rendering. Kept behind a flag so it can be finished without
++  // shipping a black screen.
++  if (!covers_efb && efb_w != 0 && efb_h != 0 &&
++      (disable_mask & DOLPHIN_WEB_ENABLE_CLEARRECT) != 0 && BeginPassIfNeeded())
++  {
++    const u32 rgba = (static_cast<u32>((color >> 16) & 0xff) << 24) |
++                     (static_cast<u32>((color >> 8) & 0xff) << 16) |
++                     (static_cast<u32>(color & 0xff) << 8) |
++                     static_cast<u32>(alpha_enable ? ((color >> 24) & 0xff) : 0xff);
++    const u32 flags = (color_enable ? 1u : 0u) | (z_enable ? 2u : 0u);
++    if (flags != 0)
++    {
++      const u32 cx = static_cast<u32>(std::max(0, target_rc.left));
++      const u32 cy = static_cast<u32>(std::max(0, target_rc.top));
++      const u32 cw = static_cast<u32>(std::max(0, target_rc.GetWidth()));
++      const u32 ch = static_cast<u32>(std::max(0, target_rc.GetHeight()));
++      if (m_cmd_stream.PushClearRect(cx, cy, cw, ch, rgba,
++                                     static_cast<float>(z & 0xFFFFFF) / 16777216.0f, flags))
++        return;
++    }
++    // Fall through to the legacy over-clear if the record could not be staged.
++  }
+   EndPassIfOpen();
+   // color_enable/z_enable used to be ignored: a depth-only clear still set a
+   // colour clear (to black), which wiped a fully-rendered 3D EFB before the

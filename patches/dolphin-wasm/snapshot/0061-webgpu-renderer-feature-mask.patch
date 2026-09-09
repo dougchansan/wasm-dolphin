@@ -1,26 +1,22 @@
 diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
 --- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
 +++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
-@@ -42,9 +42,11 @@
+@@ -40,12 +40,32 @@
  
  #include <algorithm>
  
 -// Opt-in flag for the scissored ClearRect path (?disable=0x1000000). ENABLE
 -// polarity, not disable. Default off: enabled, it blanks the frame outright
 -// (9,048 clears executed, 0.0 visual fps, black output on Mario Kart Wii).
+-extern "C" unsigned int DolphinWeb_GetCachedInterpreterDisableMask();
+-
+-static constexpr unsigned int DOLPHIN_WEB_ENABLE_CLEARRECT = 1u << 24;
 +// Renderer feature mask. ENABLE polarity, and DEFAULT ON: the renderer is
 +// correct out of the box even if the host never calls the setter. This used to
 +// ride on the cached-interpreter *disable* mask, which was doubly confusing --
 +// an enable bit transported through a disable word, on a CPU knob unrelated to
 +// the renderer. It is its own capability now.
- extern "C" unsigned int DolphinWeb_GetCachedInterpreterDisableMask();
- extern "C" u32 DolphinWebGetLastCommitStride();
- 
-@@ -55,7 +57,26 @@
-   static std::map<u32, u32> m;
-   return m;
- }
--static constexpr unsigned int DOLPHIN_WEB_ENABLE_CLEARRECT = 1u << 24;
++//
 +// Bit 0: partial and independent-channel EFB clears are emitted as a scissored
 +// solid-quad draw inside the open pass (CmdOp::ClearRect) instead of a
 +// whole-attachment loadOp clear. Mario Kart Wii does not render without it.
@@ -44,7 +40,7 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
  #include <array>
  #include <set>
  #include <atomic>
-@@ -1266,7 +1287,7 @@
+@@ -1248,7 +1268,7 @@
  
    const u32 efb_w = g_framebuffer_manager ? g_framebuffer_manager->GetEFBWidth() : 0;
    const u32 efb_h = g_framebuffer_manager ? g_framebuffer_manager->GetEFBHeight() : 0;
@@ -53,7 +49,7 @@ diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoB
    const bool covers_efb = target_rc.left <= 0 && target_rc.top <= 0 &&
                            static_cast<u32>(std::max(0, target_rc.GetWidth())) >= efb_w &&
                            static_cast<u32>(std::max(0, target_rc.GetHeight())) >= efb_h;
-@@ -1347,15 +1368,18 @@
+@@ -1329,15 +1349,18 @@
    // with no pass open, so that guard made every clear fall through to the
    // legacy over-clear and the opcode never executed once -- a silent no-op
    // that looked exactly like "the fix did not help".

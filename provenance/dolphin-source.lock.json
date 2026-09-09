@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "ccfcd70d9e953ca4324db934d840850dae71902d6f861c6a5f6b3eae2b5d87d7",
+  "patchSeriesSha256": "2d8eb36bd8ff78263bfe93172e0336bae75effefb592e4f4130f873e4d3fe7db",
   "patches": [
     {
       "order": 1,
@@ -471,9 +471,9 @@
       "order": 56,
       "cwd": ".",
       "hashMode": "lf-normalized",
-      "path": "patches/dolphin-wasm/snapshot/0059-preserve-existing-renderer-and-diagnostic-source.patch",
-      "size": 23884,
-      "sha256": "f795ba2ef01703bd2c2a73f83286021510da23a7a48a96e904ec45747016d637"
+      "path": "patches/dolphin-wasm/snapshot/0059-webgpu-scissored-clear-rect-producer.patch",
+      "size": 6993,
+      "sha256": "ca0840a8935c4addcb7df23ba0db97e292776437e8eee1cd1182428bc7cb8ea5"
     },
     {
       "order": 57,
@@ -488,8 +488,8 @@
       "cwd": ".",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/snapshot/0061-webgpu-renderer-feature-mask.patch",
-      "size": 10685,
-      "sha256": "8e5dfef8a62ee5246d8d53b238d3d040498dd5b78d6999f8ea01862dfe58aa9b"
+      "size": 10574,
+      "sha256": "1464ed08812ca7f6b58408dc09bee6ab22ba135bf7055e34c11a3214418e92d4"
     },
     {
       "order": 59,

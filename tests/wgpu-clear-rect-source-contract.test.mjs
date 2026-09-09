@@ -1,15 +1,33 @@
 // Copyright 2026 wasm-dolphin contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// tests/wgpu-clear-rect.test.mjs proves the JS decoder does the right thing
-// with a ClearRect record it is handed. That is not the same as proving one is
-// ever produced: the gate on the native side once read an ENABLE bit out of the
-// cached-interpreter *disable* mask, so whether a normal launch emitted the
-// opcode at all depended on a line in the worker that nothing tested and that
-// the native comment contradicted.
+// A SOURCE-CONTRACT test. It reads the patched vendor tree and the host source
+// and asserts their shape. It does not compile or execute anything, so on its
+// own it cannot show that a ClearRect record is ever produced at runtime.
 //
-// This covers the rest of the chain, from the native decision point to the
-// constant the JS decoder dispatches on:
+// Native emission is established by three things together, and the other two
+// live outside this file:
+//
+//   1. this file      -- the gate is wired to a capability that defaults on,
+//                        and producer and consumer agree on the opcode;
+//   2. runtime count  -- a default MKWii launch reports a non-zero
+//                        `[clearrect] executed=N`, and `?wgpuclearrect=0`
+//                        reports none (recorded in the PR description);
+//   3. visual A/B     -- the same pair renders the world vs. the pre-fix
+//                        patchwork.
+//
+// Cite all three. This test alone would still pass if the opcode never left
+// the producer.
+//
+// It exists because tests/wgpu-clear-rect.test.mjs starts from a record the
+// test itself builds, so it proves the decoder is right and says nothing about
+// whether one is ever produced -- and the gate once read an ENABLE bit out of
+// the cached-interpreter *disable* mask, so whether a normal launch emitted the
+// opcode depended on a line in the worker that nothing tested and that the
+// native comment contradicted.
+//
+// What is checked here, from the native decision point to the constant the JS
+// decoder dispatches on:
 //
 //   default launch configuration      -> host sends the capability on
 //   native ClearRegion decision       -> gated on the renderer feature mask
