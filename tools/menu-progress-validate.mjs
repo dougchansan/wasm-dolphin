@@ -277,11 +277,20 @@ const persistBrowserData = persistUserDataDir
   ? path.resolve(persistUserDataDir)
   : null;
 
+// BROWSER_ARGS appends space-separated Chromium flags. Needed to reach the GPU
+// at all on some hosts: on a headless Linux box with an NVIDIA card,
+// requestAdapter() returns null until --use-angle=vulkan is passed, and then
+// reports vendor "nvidia" / architecture "ampere". Without this the run still
+// completes and still reports numbers -- they are just software-rendered ones.
+const extraBrowserArgs = String(process.env.BROWSER_ARGS || "")
+  .split(/\s+/)
+  .filter(Boolean);
 const chromiumLaunchArgs = [
   "--autoplay-policy=no-user-gesture-required",
   "--enable-webgl",
   "--enable-unsafe-webgpu",
-  "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
+  "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
+  ...extraBrowserArgs
 ];
 
 reapStaleBrowsers();
