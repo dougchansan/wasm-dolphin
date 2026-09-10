@@ -36,6 +36,7 @@ function parseArgs(argv) {
     // arms. Eight runs is about ten minutes of overhead per session, which is
     // cheap next to reporting a win that is not there.
     warmup: 8, metric: "frames", selftest: false, persist: true,
+    gpuRecoverySeconds: 90,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -48,6 +49,7 @@ function parseArgs(argv) {
     else if (k === "--video") out.video = argv[++i];
     else if (k === "--presenter") out.presenter = argv[++i];
     else if (k === "--expect-adapter") out.expectAdapter = argv[++i];
+    else if (k === "--gpu-recovery-seconds") out.gpuRecoverySeconds = Number(argv[++i]);
     else if (k === "--rom") out.rom = argv[++i];
     else if (k === "--save-state") out.saveState = argv[++i];
     else if (k === "--state-at") out.stateAt = argv[++i];
@@ -136,6 +138,29 @@ function envFrom(spec) {
 // retry loop should get a good run, and the count is reported at the end so a
 // host that keeps losing the GPU is visible rather than silently averaged in.
 const discardedBackend = [];
+
+// Count NVIDIA Xid faults the kernel has logged. Best effort: dmesg is often
+// restricted to root, and this is a Linux/NVIDIA-only signal, so an unreadable
+// or absent log means "cannot tell", never "no faults".
+function gpuFaultCount() {
+  try {
+    const out = execFileSync("dmesg", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return (out.match(/Xid /g) || []).length;
+  } catch {
+    return null;
+  }
+}
+
+// A faulted GPU channel does not recover instantly, and retrying into it just
+// burns runs. This host logged NVRM Xid 32 -- "invalid or corrupted push buffer
+// stream" -- from both chrome and the emulator worker thread, and every launch
+// after a fault returned a null adapter until the machine had been left alone
+// for a while. Retries were therefore spending four attempts each against a
+// channel that could not answer, which is how a session lost 28 runs.
+function sleepSeconds(seconds) {
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, seconds * 1000);
+}
 
 function achievedBackendProblem(dir, expectAdapter) {
   let diag;
@@ -334,8 +359,25 @@ for (let i = 1; i <= args.pairs; i++) {
   const attempt = (spec) => {
     const tries = Number.isFinite(args.retries) ? args.retries : 2;
     for (let t = 0; t <= tries; t++) {
+      const discardsBefore = discardedBackend.length;
+      const faultsBefore = gpuFaultCount();
       const v = measure(spec);
       if (v != null) return v;
+      // Only back off when the run actually lost the backend. An ordinary
+      // failed run -- a flaky mount, say -- should be retried at once.
+      const lostBackend = discardedBackend.length > discardsBefore;
+      if (lostBackend && t < tries) {
+        const faultsAfter = gpuFaultCount();
+        const newFaults =
+          faultsBefore != null && faultsAfter != null ? faultsAfter - faultsBefore : null;
+        const wait = args.gpuRecoverySeconds;
+        console.log(
+          `    backend lost` +
+          (newFaults ? ` (${newFaults} new GPU Xid fault(s) logged)` : "") +
+          `; waiting ${wait}s for the driver to recover before retrying`
+        );
+        sleepSeconds(wait);
+      }
     }
     return null;
   };
@@ -370,14 +412,27 @@ const aMed = median(aVals);
 // Half the spread of the paired differences, as a share of the control. Two
 // arms that differ by less than this cannot be told apart by this many pairs,
 // so it is the number to quote as "what this rig can resolve today".
-const resolution = aMed ? ((hi - lo) / 2 / aMed) * 100 : NaN;
+// Half the spread of the paired differences, as a share of the control -- but
+// only once there are enough pairs for a spread to mean anything. Over one pair
+// the range is a single point, so this reads +/-0.0%: a rig that had just thrown
+// away 28 of 30 runs announced perfect precision. Two pairs is barely better.
+// Below MIN_RESOLUTION_PAIRS the honest answer is that the question was not
+// asked enough times, so say that instead of printing a number.
+const MIN_RESOLUTION_PAIRS = 3;
+const resolutionKnown = diffs.length >= MIN_RESOLUTION_PAIRS && aMed;
+const resolution = resolutionKnown ? ((hi - lo) / 2 / aMed) * 100 : NaN;
 const mdPct = aMed ? (md / aMed) * 100 : NaN;
 
 console.log("");
 console.log(`[perf-ab] A median ${aMed.toFixed(1)} ${unit}  (spread ${Math.min(...aVals).toFixed(1)}-${Math.max(...aVals).toFixed(1)})`);
 console.log(`[perf-ab] B median ${median(bVals).toFixed(1)} ${unit}  (spread ${Math.min(...bVals).toFixed(1)}-${Math.max(...bVals).toFixed(1)})`);
 console.log(`[perf-ab] paired difference (B-A): median ${md.toFixed(1)} ${unit} (${mdPct >= 0 ? "+" : ""}${mdPct.toFixed(1)}%), range ${lo.toFixed(1)}..${hi.toFixed(1)}`);
-console.log(`[perf-ab] resolution at ${diffs.length} pair(s): +/-${resolution.toFixed(1)}%`);
+console.log(
+  resolutionKnown
+    ? `[perf-ab] resolution at ${diffs.length} pair(s): +/-${resolution.toFixed(1)}%`
+    : `[perf-ab] resolution: UNKNOWN -- ${diffs.length} usable pair(s), need ` +
+      `${MIN_RESOLUTION_PAIRS}. Any difference above is unproven.`
+);
 if (discarded) console.log(`[perf-ab] ${discarded} pair(s) discarded`);
 if (discardedBackend.length) {
   const tally = {};
@@ -394,9 +449,17 @@ if (args.selftest) {
   // and the range is noise. Sign agreement here is a warning, not a result --
   // it means something drifts with run order that pairing has not cancelled.
   console.log("");
-  console.log(`[perf-ab] SELF-TEST RESULT: this rig resolves about +/-${resolution.toFixed(1)}%.`);
-  console.log(`[perf-ab] Treat any A/B difference smaller than that as unproven.`);
-  if (sameSign) {
+  if (resolutionKnown) {
+    console.log(`[perf-ab] SELF-TEST RESULT: this rig resolves about +/-${resolution.toFixed(1)}%.`);
+    console.log(`[perf-ab] Treat any A/B difference smaller than that as unproven.`);
+  } else {
+    console.log(
+      `[perf-ab] SELF-TEST RESULT: NOT ESTABLISHED. ${diffs.length} usable pair(s) of ` +
+      `${args.pairs}; ${MIN_RESOLUTION_PAIRS} are needed before a spread means anything.`
+    );
+    console.log(`[perf-ab] This rig did not stay healthy long enough to characterise itself.`);
+  }
+  if (sameSign && diffs.length >= 2) {
     console.log(
       `[perf-ab] WARNING: identical arms still disagreed consistently ` +
       `(${mdPct >= 0 ? "+" : ""}${mdPct.toFixed(1)}%). There is order-dependent drift ` +
