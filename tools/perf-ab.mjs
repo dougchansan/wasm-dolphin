@@ -27,15 +27,14 @@ import path from "node:path";
 function parseArgs(argv) {
   const out = {
     pairs: 5, duration: 40, a: "", b: "", library: "F:/Games/Library/GameCube",
-    // Eight, measured rather than guessed. Eighteen back-to-back identical
-    // runs of the Mario Kart Wii fixture (video=wgpu, presenter=webgpu) spread
-    // 29.1% across runs 1-8, spiking at runs 2-3, and then settled: runs 9-18
-    // spread 5.5% with a 1.77% standard deviation. It is a settling transient,
-    // not a warm-up ramp, which is why one discarded run was nowhere near
-    // enough -- at warmup=1 an A/A self-test reported +4.3% between identical
-    // arms. Eight runs is about ten minutes of overhead per session, which is
-    // cheap next to reporting a win that is not there.
-    warmup: 8, metric: "frames", selftest: false, persist: true,
+    // Was 8, derived from an 18-run curve that swung 29.1% before settling.
+    // That curve was measured with the shared profile on, and the shared
+    // profile was itself the fault, so the "settling transient" it described
+    // was largely an artifact. Re-measured with the profile off, the same
+    // fixture settles to 2.0% within 8 runs on a much flatter curve, and 4 is
+    // enough to clear the opening spread. Raise it if a self-test on your host
+    // still shows drift.
+    warmup: 4, metric: "frames", selftest: false, persist: false,
     gpuRecoverySeconds: 90,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -59,6 +58,7 @@ function parseArgs(argv) {
     else if (k === "--metric") out.metric = argv[++i];
     else if (k === "--selftest") out.selftest = true;
     else if (k === "--no-persist") out.persist = false;
+    else if (k === "--persist") out.persist = true;
     else throw new Error(`Unknown arg: ${k}`);
   }
   if (!out.filter) throw new Error("--filter is required");
@@ -95,11 +95,24 @@ if (args.saveState) {
   console.log(`[perf-ab] save state: ${saveStateUrl}`);
 }
 
-// One browser profile shared by every run in the session. Each run otherwise
-// launched a cold Chrome with a fresh temp profile, so the origin's IndexedDB
-// was empty and the JIT cache started from nothing every time -- the run then
-// spent part of its window recompiling instead of measuring. Sharing the
-// profile lets the cache warm during --warmup and stay warm for the pairs.
+// Sharing one browser profile across runs was tried, to let the JIT cache in
+// the origin's IndexedDB warm up instead of starting cold every run. It broke
+// the rig, and badly enough that it is now OFF by default.
+//
+// Chrome single-instances a profile with a SingletonLock. Once any run failed
+// to release it, every later launch against that directory failed too, and the
+// lock outlived them all -- it only went away when the whole process tree
+// exited. That is the collapse that cost four debugging sessions: about ten
+// good runs, then nothing, with a GPU that answered normally again the instant
+// perf-ab was killed. It was diagnosed as Xvfb churn, then file descriptors,
+// then NVIDIA Xid faults, and it was none of those.
+//
+// Measured back to back on the same host: with the profile shared, 28 of 30
+// runs discarded and no usable pairs; without it, 14 runs, zero discards, a
+// +/-0.7% self-test, and no new Xid faults at all.
+//
+// --persist re-enables it. Do not, unless the SingletonLock behaviour has been
+// dealt with first.
 const persistDir = args.persist
   ? mkdtempSync(path.join(tmpdir(), "perfab-profile-"))
   : null;
