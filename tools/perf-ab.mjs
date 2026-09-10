@@ -47,6 +47,7 @@ function parseArgs(argv) {
     else if (k === "--library") out.library = argv[++i];
     else if (k === "--video") out.video = argv[++i];
     else if (k === "--presenter") out.presenter = argv[++i];
+    else if (k === "--expect-adapter") out.expectAdapter = argv[++i];
     else if (k === "--rom") out.rom = argv[++i];
     else if (k === "--save-state") out.saveState = argv[++i];
     else if (k === "--state-at") out.stateAt = argv[++i];
@@ -123,6 +124,37 @@ function envFrom(spec) {
   return env;
 }
 
+// What the run ACHIEVED, as opposed to what it asked for. Checking the URL is
+// not enough: on a headless Linux box with an RTX 3090, GPU acquisition under
+// Xvfb is intermittent, and a run that loses it still requests
+// video=wgpu&presenter=webgpu and still finishes. One such run scored 3602
+// frames/60s against a ~1530 GPU cluster -- within 0.15% of this project's
+// known software figure. The URL check passed it.
+//
+// Returns null when the run is fine, or a short reason to discard it. It is a
+// discard rather than a hard failure because the loss is intermittent: the
+// retry loop should get a good run, and the count is reported at the end so a
+// host that keeps losing the GPU is visible rather than silently averaged in.
+const discardedBackend = [];
+
+function achievedBackendProblem(dir, expectAdapter) {
+  let diag;
+  try {
+    diag = JSON.parse(readFileSync(path.join(dir, "renderer-diagnostics.json"), "utf8"));
+  } catch {
+    return null; // Nothing to check against; do not invent a failure.
+  }
+  const adapter = diag.adapter;
+  if (adapter && adapter.isFallbackAdapter) return "fallback adapter";
+  if (expectAdapter) {
+    const vendor = String(adapter?.vendor ?? "");
+    if (!vendor) return "no adapter reported";
+    if (!vendor.toLowerCase().includes(expectAdapter.toLowerCase()))
+      return `adapter vendor "${vendor}" != expected "${expectAdapter}"`;
+  }
+  return null;
+}
+
 // Read back what the run actually launched and compare it against what was
 // requested. A mismatch throws rather than returning a number, because the
 // failure mode being guarded against is a plausible-looking result from the
@@ -174,6 +206,11 @@ function measureFixedScene(spec) {
     // benchmark that measures the wrong thing quietly is worse than one that
     // fails.
     assertRunConfiguration(dir, env);
+    const backendProblem = achievedBackendProblem(dir, args.expectAdapter);
+    if (backendProblem) {
+      discardedBackend.push(backendProblem);
+      return null;
+    }
     // Score only the post-load tail, so the pre-state boot is excluded.
     const samples = JSON.parse(readFileSync(path.join(dir, "samples.json"), "utf8"));
     const scored = (samples.samples || samples)
@@ -342,6 +379,15 @@ console.log(`[perf-ab] B median ${median(bVals).toFixed(1)} ${unit}  (spread ${M
 console.log(`[perf-ab] paired difference (B-A): median ${md.toFixed(1)} ${unit} (${mdPct >= 0 ? "+" : ""}${mdPct.toFixed(1)}%), range ${lo.toFixed(1)}..${hi.toFixed(1)}`);
 console.log(`[perf-ab] resolution at ${diffs.length} pair(s): +/-${resolution.toFixed(1)}%`);
 if (discarded) console.log(`[perf-ab] ${discarded} pair(s) discarded`);
+if (discardedBackend.length) {
+  const tally = {};
+  for (const r of discardedBackend) tally[r] = (tally[r] || 0) + 1;
+  console.log(
+    `[perf-ab] ${discardedBackend.length} run(s) discarded for not achieving the ` +
+    `requested backend: ${Object.entries(tally).map(([r, n]) => `${n}x ${r}`).join(", ")}`
+  );
+  console.log(`[perf-ab] A host that keeps losing the GPU will not produce a trustworthy result.`);
+}
 
 if (args.selftest) {
   // A against A: the true difference is zero, so the median difference is bias
