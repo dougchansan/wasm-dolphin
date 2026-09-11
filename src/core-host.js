@@ -109,8 +109,6 @@ export class EmulatorHost {
     this.wgpuScissoredClearRect = requestedWgpuScissoredClearRect(
       this.cachedInterpreterDisableMask
     );
-    this.wgpuUboDelta =
-      new URLSearchParams(window.location.search).get("wgpuubodelta") === "1";
     this.noJitCache =
       new URLSearchParams(window.location.search).get("nojitcache") === "1";
     this.collectMetrics = requestedCollectMetrics();
@@ -391,7 +389,6 @@ export class EmulatorHost {
             frameCap: this.frameCap,
             cachedInterpreterDisableMask: this.cachedInterpreterDisableMask,
             wgpuScissoredClearRect: this.wgpuScissoredClearRect,
-            wgpuUboDelta: this.wgpuUboDelta,
             noJitCache: this.noJitCache,
             collectMetrics: this.collectMetrics,
             legacyOneWayAck: this.legacyOneWayAck,

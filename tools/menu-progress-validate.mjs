@@ -215,7 +215,6 @@ for (const [environmentName, queryName] of [
   ["WGPUUBOCACHE", "wgpuubocache"],
   ["WGPUUBOPACK", "wgpuubopack"],
   ["WGPUUBOSPARSE", "wgpuubosparse"],
-  ["WGPUUBODELTA", "wgpuubodelta"],
   ["WGPUUBOMETRICS", "wgpuubometrics"],
   ["WGPUUNIFORMFAST", "wgpuuniformfast"],
   ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
