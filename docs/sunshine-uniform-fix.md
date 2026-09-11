@@ -92,7 +92,7 @@ per-texture samplers cost nothing measurable.
 This also corrects `a41b1de`, which retracted a claim about this background
 and recorded it as unexplained.
 
-## Throughput, measured on both rigs
+## Throughput, measured across two rigs and three titles
 
 Paired core swaps, A = main `650308c2`, B = this branch `286e7287`, backend
 guarded, warm-ups discarded.
@@ -101,7 +101,9 @@ guarded, warm-ups discarded.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Mario Kart Wii | Radeon RX 9070 XT | 8 | 2452.3 | 2467.2 | +0.35% | 5/8 | 0.73 |
 | Mario Kart Wii | RTX 3090 | 8 | 1521.1 | 1473.4 | +0.20% | 4/8 | 1.00 |
-| Super Mario Sunshine | Radeon RX 9070 XT | 6 | 2102.9 | 2096.2 | -0.40% | 2/6 | 0.69 |
+| Super Mario Sunshine (attract) | Radeon RX 9070 XT | 6 | 2102.9 | 2096.2 | -0.40% | 2/6 | 0.69 |
+| Melee (Great Bay battle) | Radeon RX 9070 XT | 6 | 1753.4 | 1926.4 | -0.03% | 3/6 | 1.00 |
+| Sunshine (file select, save state) | Radeon RX 9070 XT | 6 | 3602.1 | 3546.6 | **-1.08%** | 1/6 | 0.22 |
 
 No regression on Mario Kart Wii on either rig. Sunshine reads slightly
 negative and is not resolved; its first two pairs ran while both arms were
@@ -117,3 +119,19 @@ Backward compatibility was checked separately, because the consumer and the
 core version independently: the new worker against the old core `650308c2`
 renders Mario Kart Wii correctly with zero validation errors. An untagged
 sampler word still decodes to the old shared linear/repeat state.
+
+### The one place it costs something
+
+The deterministic file-select fixture is the only workload where the sign is
+consistent: five of six pairs negative, median -1.08%. It is not resolved at
+six pairs, but it is the workload where the fix does the most extra work, and
+the reason is the point of the change: on the old core that screen renders a
+white rectangle, and on this one it renders the beach, Mario, the file boxes
+and the signpost. About one percent is what drawing the scene costs.
+
+A single run of that fixture first read main at 3014 frames/60s against 3609
+for this branch, which looks like a 20% win. It is not one. In the paired run
+main's arm sits at 3602 -- the 3014 was a cold first run after a core swap,
+before the JIT cache warmed. Only the within-pair deltas mean anything here,
+and they say this branch is about a percent slower on that screen and level
+everywhere else.
