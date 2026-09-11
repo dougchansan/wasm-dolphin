@@ -91,3 +91,29 @@ per-texture samplers cost nothing measurable.
 
 This also corrects `a41b1de`, which retracted a claim about this background
 and recorded it as unexplained.
+
+## Throughput, measured on both rigs
+
+Paired core swaps, A = main `650308c2`, B = this branch `286e7287`, backend
+guarded, warm-ups discarded.
+
+| workload | rig | pairs | A median | B median | median delta | positive | sign p |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mario Kart Wii | Radeon RX 9070 XT | 8 | 2452.3 | 2467.2 | +0.35% | 5/8 | 0.73 |
+| Mario Kart Wii | RTX 3090 | 8 | 1521.1 | 1473.4 | +0.20% | 4/8 | 1.00 |
+| Super Mario Sunshine | Radeon RX 9070 XT | 6 | 2102.9 | 2096.2 | -0.40% | 2/6 | 0.69 |
+
+No regression on Mario Kart Wii on either rig. Sunshine reads slightly
+negative and is not resolved; its first two pairs ran while both arms were
+still drifting upward, and the four pairs after that settled are -0.3, -2.0,
+-0.5 and -0.6 -- all negative, which at four pairs is p = 0.125 and cannot be
+called. If there is a cost there it is under one percent.
+
+Worth noting for that number: the no-input boot run used here renders the
+attract-mode background correctly on both cores, so it is not measuring the
+extra work of drawing a background that used to be white.
+
+Backward compatibility was checked separately, because the consumer and the
+core version independently: the new worker against the old core `650308c2`
+renders Mario Kart Wii correctly with zero validation errors. An untagged
+sampler word still decodes to the old shared linear/repeat state.
