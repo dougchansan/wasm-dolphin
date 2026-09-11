@@ -1,18 +1,150 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-09-11T01:28:28.286Z",
-  "coreId": "sha256:650308c2c52fbf7fa9818cbe1fa27c2794ae31c5d0d56344533858a179f229e3",
+  "createdAt": "2026-09-11T10:07:36.883Z",
+  "coreId": "sha256:286e72870545636f0d36f083adda9b05951145dba0db48a960b2773e3ff501c8",
   "repository": {
-    "commit": "e65f0ea1657c24180be5412b5722ea44323f0c13",
-    "status": "",
-    "cleanTree": true
+    "commit": "0483b97a47387e9a9d1eab59395a05b2aaf232df",
+    "status": "M cores/dolphin/dolphin-core-upstream.js\n M cores/dolphin/dolphin-core-upstream.wasm\n M package.json\n M provenance/dolphin-source.lock.json\n M provenance/dolphin-vendor-snapshot-v1.json\n M src/upstream-discio-worker.js\n M tests/audio-controller-worklet.test.mjs\n M tests/audio-pcm-producer.test.mjs\n M tests/audio-pcm-ring.test.mjs\n M tests/audio-worklet-plumbing.test.mjs\n M tests/audio-worklet-processor.test.mjs\n M tests/audio-worklet-telemetry.test.mjs\n M tests/benchmark-url.test.mjs\n M tests/cached-interpreter-fast-branch-inline-source.test.mjs\n M tests/cached-interpreter-hot-counters-source.test.mjs\n M tests/causal-telemetry.test.mjs\n M tests/configure-upstream.test.mjs\n M tests/core-build-info.test.mjs\n M tests/demo-core.test.mjs\n M tests/diagnostic-log-filter.test.mjs\n M tests/dol.test.mjs\n M tests/dolphin-provenance.test.mjs\n M tests/export-prebuilt-jit-cache.test.mjs\n M tests/fastbranch-build-toggle.test.mjs\n M tests/frame-reuse-telemetry.test.mjs\n M tests/gpu-completion-telemetry.test.mjs\n M tests/incremental-sha256.test.mjs\n M tests/input-latency-telemetry.test.mjs\n M tests/input-photon-marker-plumbing.test.mjs\n M tests/input-transport.test.mjs\n M tests/input-visual-marker.test.mjs\n M tests/input.test.mjs\n M tests/jit-cache-benchmark-readiness.test.mjs\n M tests/jit-cache-identity.test.mjs\n M tests/jit-correlated-slice-source.test.mjs\n M tests/jit-diagnostics-analyze.test.mjs\n M tests/jit-direct-wasm-block-dispatch-source.test.mjs\n M tests/jit-fallback-map-diagnostics-source.test.mjs\n M tests/jit-fallback-map-sizing-source.test.mjs\n M tests/menu-progress-app-ready.test.mjs\n M tests/menu-progress-audio-mode.test.mjs\n M tests/menu-progress-direct-save.test.mjs\n M tests/menu-progress-input-marker-observer.test.mjs\n M tests/native-core.test.mjs\n M tests/ogl-visual-metric.test.mjs\n M tests/perf-artifacts.test.mjs\n M tests/perf-audio-mode.test.mjs\n M tests/perf-browser-launch.test.mjs\n M tests/perf-browser-scheduling.test.mjs\n M tests/perf-fixed-scene-boundary.test.mjs\n M tests/perf-input-marker-readiness.test.mjs\n M tests/perf-prebuilt-provenance-source.test.mjs\n M tests/prebuilt-jit-cache-provenance.test.mjs\n M tests/presentation-pacing.test.mjs\n M tests/software-raster-profile-source.test.mjs\n M tests/tev-hot-case-source.test.mjs\n M tests/upstream-discio.test.mjs\n M tests/upstream-full-core.test.mjs\n M tests/upstream-pthread-channels.test.mjs\n M tests/upstream-worker-protocol.test.mjs\n M tests/upstream-worker-runtime.test.mjs\n M tests/upstream-worker-transport.test.mjs\n M tests/wgpu-command-stream-native-smoke.test.mjs\n M tests/wgpu-consumer-reset-attestation.test.mjs\n M tests/wgpu-deep-diagnostics-source.test.mjs\n M tests/wgpu-device-lifecycle.test.mjs\n M tests/wgpu-dirty-range-evidence.test.mjs\n M tests/wgpu-dirty-range-projection.test.mjs\n M tests/wgpu-draw-profile-source.test.mjs\n M tests/wgpu-geometry-packet.test.mjs\n M tests/wgpu-idle-fifo-tail-elision-source.test.mjs\n M tests/wgpu-leaf-replay-executor.test.mjs\n M tests/wgpu-legacy-semantic-decoder.test.mjs\n M tests/wgpu-mapped-drain-coalescer.test.mjs\n M tests/wgpu-mapped-staging-integration.test.mjs\n M tests/wgpu-mapped-staging-pool.test.mjs\n M tests/wgpu-native-ownership-trace-source.test.mjs\n M tests/wgpu-ownership-command-correlator.test.mjs\n M tests/wgpu-ownership-trace.test.mjs\n M tests/wgpu-pass-package-projection.test.mjs\n M tests/wgpu-pass-state-cache.test.mjs\n M tests/wgpu-pass-transaction.test.mjs\n M tests/wgpu-producer-phase-profile-source.test.mjs\n M tests/wgpu-renderer-runtime.test.mjs\n M tests/wgpu-renderer-worker-control.test.mjs\n M tests/wgpu-renderer-worker-probe.test.mjs\n M tests/wgpu-replay-diagnostics.test.mjs\n M tests/wgpu-replay-quiescence-state.test.mjs\n M tests/wgpu-replay-quiescence.test.mjs\n M tests/wgpu-resource-generation-tracker.test.mjs\n M tests/wgpu-ring-backpressure.test.mjs\n M tests/wgpu-scheduling-screening-validator.test.mjs\n M tests/wgpu-semantic-digest.test.mjs\n M tests/wgpu-semantic-parity-sink.test.mjs\n M tests/wgpu-semantic-runtime.test.mjs\n M tests/wgpu-semantic-v2-decoder.test.mjs\n M tests/wgpu-semantic-worker-integration.test.mjs\n M tests/wgpu-sparse-ubo-copy-forward.test.mjs\n M tests/wgpu-synthetic-diagnostics.test.mjs\n M tests/wgpu-tail-gate.test.mjs\n M tests/wgpu-texture-mips.test.mjs\n M tests/wgpu-ubo-change-attribution.test.mjs\n M tests/wgpu-ubo-compute-codec.test.mjs\n M tests/wgpu-ubo-compute-projection.test.mjs\n M tests/wgpu-ubo-compute-reconstruction.test.mjs\n M tests/wgpu-ubo-compute-worker-source.test.mjs\n M tests/wgpu-ubo-pack-gate.test.mjs\n M tests/wgpu-ubo-packet-attribution.test.mjs\n M tests/wgpu-ubo-packet.test.mjs\n M tests/wgpu-ubo-ring-resource-role-source.test.mjs\n M tests/wgpu-ubo-screening-validator.test.mjs\n M tests/wgpu-uniform-fast-path-source.test.mjs\n M tests/wgpu-upload-attribution-validator.test.mjs\n M tests/wgpu-upload-attribution.test.mjs\n M tests/wgpu-upload-probe-executor.test.mjs\n M tests/wgpu-upload-run-projection.test.mjs\n M tests/wgpu-upload-watermark.test.mjs\n M tests/wgpu-visual-cadence.test.mjs\n M tests/windows-process-affinity.test.mjs\n M tests/worker-metrics-gate.test.mjs\n?? patches/dolphin-wasm/snapshot/0062-webgpu-per-texture-samplers.patch\n?? patches/dolphin-wasm/snapshot/0063-webgpu-specialize-texture-sample-helpers.patch\n?? patches/dolphin-wasm/snapshot/0064-webgpu-expire-retained-uniform-slices.patch\n?? patches/dolphin-wasm/snapshot/0065-webgpu-select-uniforms-by-pipeline-usage.patch\n?? src/wgpu-sampler-state.js\n?? tests/wgpu-depth-sampling.test.mjs\n?? tests/wgpu-immediate-upload-scratch.test.mjs\n?? tests/wgpu-sampler-producer.test.mjs\n?? tests/wgpu-sampler-state.test.mjs\n?? tests/wgpu-ubo-lifetime.test.mjs\n?? tests/wgpu-uniform-source.test.mjs\n?? tests/wgpu-viewport.test.mjs",
+    "cleanTree": false,
+    "dirtyBuildOverride": [
+      "package.json",
+      "provenance/dolphin-source.lock.json",
+      "provenance/dolphin-vendor-snapshot-v1.json",
+      "src/upstream-discio-worker.js",
+      "tests/audio-controller-worklet.test.mjs",
+      "tests/audio-pcm-producer.test.mjs",
+      "tests/audio-pcm-ring.test.mjs",
+      "tests/audio-worklet-plumbing.test.mjs",
+      "tests/audio-worklet-processor.test.mjs",
+      "tests/audio-worklet-telemetry.test.mjs",
+      "tests/benchmark-url.test.mjs",
+      "tests/cached-interpreter-fast-branch-inline-source.test.mjs",
+      "tests/cached-interpreter-hot-counters-source.test.mjs",
+      "tests/causal-telemetry.test.mjs",
+      "tests/configure-upstream.test.mjs",
+      "tests/core-build-info.test.mjs",
+      "tests/demo-core.test.mjs",
+      "tests/diagnostic-log-filter.test.mjs",
+      "tests/dol.test.mjs",
+      "tests/dolphin-provenance.test.mjs",
+      "tests/export-prebuilt-jit-cache.test.mjs",
+      "tests/fastbranch-build-toggle.test.mjs",
+      "tests/frame-reuse-telemetry.test.mjs",
+      "tests/gpu-completion-telemetry.test.mjs",
+      "tests/incremental-sha256.test.mjs",
+      "tests/input-latency-telemetry.test.mjs",
+      "tests/input-photon-marker-plumbing.test.mjs",
+      "tests/input-transport.test.mjs",
+      "tests/input-visual-marker.test.mjs",
+      "tests/input.test.mjs",
+      "tests/jit-cache-benchmark-readiness.test.mjs",
+      "tests/jit-cache-identity.test.mjs",
+      "tests/jit-correlated-slice-source.test.mjs",
+      "tests/jit-diagnostics-analyze.test.mjs",
+      "tests/jit-direct-wasm-block-dispatch-source.test.mjs",
+      "tests/jit-fallback-map-diagnostics-source.test.mjs",
+      "tests/jit-fallback-map-sizing-source.test.mjs",
+      "tests/menu-progress-app-ready.test.mjs",
+      "tests/menu-progress-audio-mode.test.mjs",
+      "tests/menu-progress-direct-save.test.mjs",
+      "tests/menu-progress-input-marker-observer.test.mjs",
+      "tests/native-core.test.mjs",
+      "tests/ogl-visual-metric.test.mjs",
+      "tests/perf-artifacts.test.mjs",
+      "tests/perf-audio-mode.test.mjs",
+      "tests/perf-browser-launch.test.mjs",
+      "tests/perf-browser-scheduling.test.mjs",
+      "tests/perf-fixed-scene-boundary.test.mjs",
+      "tests/perf-input-marker-readiness.test.mjs",
+      "tests/perf-prebuilt-provenance-source.test.mjs",
+      "tests/prebuilt-jit-cache-provenance.test.mjs",
+      "tests/presentation-pacing.test.mjs",
+      "tests/software-raster-profile-source.test.mjs",
+      "tests/tev-hot-case-source.test.mjs",
+      "tests/upstream-discio.test.mjs",
+      "tests/upstream-full-core.test.mjs",
+      "tests/upstream-pthread-channels.test.mjs",
+      "tests/upstream-worker-protocol.test.mjs",
+      "tests/upstream-worker-runtime.test.mjs",
+      "tests/upstream-worker-transport.test.mjs",
+      "tests/wgpu-command-stream-native-smoke.test.mjs",
+      "tests/wgpu-consumer-reset-attestation.test.mjs",
+      "tests/wgpu-deep-diagnostics-source.test.mjs",
+      "tests/wgpu-device-lifecycle.test.mjs",
+      "tests/wgpu-dirty-range-evidence.test.mjs",
+      "tests/wgpu-dirty-range-projection.test.mjs",
+      "tests/wgpu-draw-profile-source.test.mjs",
+      "tests/wgpu-geometry-packet.test.mjs",
+      "tests/wgpu-idle-fifo-tail-elision-source.test.mjs",
+      "tests/wgpu-leaf-replay-executor.test.mjs",
+      "tests/wgpu-legacy-semantic-decoder.test.mjs",
+      "tests/wgpu-mapped-drain-coalescer.test.mjs",
+      "tests/wgpu-mapped-staging-integration.test.mjs",
+      "tests/wgpu-mapped-staging-pool.test.mjs",
+      "tests/wgpu-native-ownership-trace-source.test.mjs",
+      "tests/wgpu-ownership-command-correlator.test.mjs",
+      "tests/wgpu-ownership-trace.test.mjs",
+      "tests/wgpu-pass-package-projection.test.mjs",
+      "tests/wgpu-pass-state-cache.test.mjs",
+      "tests/wgpu-pass-transaction.test.mjs",
+      "tests/wgpu-producer-phase-profile-source.test.mjs",
+      "tests/wgpu-renderer-runtime.test.mjs",
+      "tests/wgpu-renderer-worker-control.test.mjs",
+      "tests/wgpu-renderer-worker-probe.test.mjs",
+      "tests/wgpu-replay-diagnostics.test.mjs",
+      "tests/wgpu-replay-quiescence-state.test.mjs",
+      "tests/wgpu-replay-quiescence.test.mjs",
+      "tests/wgpu-resource-generation-tracker.test.mjs",
+      "tests/wgpu-ring-backpressure.test.mjs",
+      "tests/wgpu-scheduling-screening-validator.test.mjs",
+      "tests/wgpu-semantic-digest.test.mjs",
+      "tests/wgpu-semantic-parity-sink.test.mjs",
+      "tests/wgpu-semantic-runtime.test.mjs",
+      "tests/wgpu-semantic-v2-decoder.test.mjs",
+      "tests/wgpu-semantic-worker-integration.test.mjs",
+      "tests/wgpu-sparse-ubo-copy-forward.test.mjs",
+      "tests/wgpu-synthetic-diagnostics.test.mjs",
+      "tests/wgpu-tail-gate.test.mjs",
+      "tests/wgpu-texture-mips.test.mjs",
+      "tests/wgpu-ubo-change-attribution.test.mjs",
+      "tests/wgpu-ubo-compute-codec.test.mjs",
+      "tests/wgpu-ubo-compute-projection.test.mjs",
+      "tests/wgpu-ubo-compute-reconstruction.test.mjs",
+      "tests/wgpu-ubo-compute-worker-source.test.mjs",
+      "tests/wgpu-ubo-pack-gate.test.mjs",
+      "tests/wgpu-ubo-packet-attribution.test.mjs",
+      "tests/wgpu-ubo-packet.test.mjs",
+      "tests/wgpu-ubo-ring-resource-role-source.test.mjs",
+      "tests/wgpu-ubo-screening-validator.test.mjs",
+      "tests/wgpu-uniform-fast-path-source.test.mjs",
+      "tests/wgpu-upload-attribution-validator.test.mjs",
+      "tests/wgpu-upload-attribution.test.mjs",
+      "tests/wgpu-upload-probe-executor.test.mjs",
+      "tests/wgpu-upload-run-projection.test.mjs",
+      "tests/wgpu-upload-watermark.test.mjs",
+      "tests/wgpu-visual-cadence.test.mjs",
+      "tests/windows-process-affinity.test.mjs",
+      "tests/worker-metrics-gate.test.mjs",
+      "patches/dolphin-wasm/snapshot/0062-webgpu-per-texture-samplers.patch",
+      "patches/dolphin-wasm/snapshot/0063-webgpu-specialize-texture-sample-helpers.patch",
+      "patches/dolphin-wasm/snapshot/0064-webgpu-expire-retained-uniform-slices.patch",
+      "patches/dolphin-wasm/snapshot/0065-webgpu-select-uniforms-by-pipeline-usage.patch",
+      "src/wgpu-sampler-state.js",
+      "tests/wgpu-depth-sampling.test.mjs",
+      "tests/wgpu-immediate-upload-scratch.test.mjs",
+      "tests/wgpu-sampler-producer.test.mjs",
+      "tests/wgpu-sampler-state.test.mjs",
+      "tests/wgpu-ubo-lifetime.test.mjs",
+      "tests/wgpu-uniform-source.test.mjs",
+      "tests/wgpu-viewport.test.mjs"
+    ]
   },
   "source": {
     "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "patchSeriesSha256": "2d8eb36bd8ff78263bfe93172e0336bae75effefb592e4f4130f873e4d3fe7db",
-    "vendorResultTree": "37ed892e5367e448634807deef5f74fe66c1012f",
-    "sourceLockSha256": "6104d3c2d7c047fa5ae60e1e272230125f87d20a684590f4bc7428a0659eb0f3",
-    "vendorSnapshotSha256": "9f9a17947600e526d8027e77454a66c339454a531b6bf382d4f825a1bfba165e",
+    "patchSeriesSha256": "c557601c2a65175455ae9cca8942ceef77ca2edaaf76963323c6bf5b4a0317c8",
+    "vendorResultTree": "0e68600dfc6dc2a2949f2f7b57c480e0fabb0356",
+    "sourceLockSha256": "9de6574e1051dd1d9d550dee8a575356f17603ab16d05031bc65ea0f7b03d315",
+    "vendorSnapshotSha256": "5b098a08d174e5b3f2d93b7b214118257da6edfe9ea48b99cfcf7c7ef2f73884",
     "localInputsSha256": "2864bb48e04d618f1c0ebdfafa75724f8619120df445cb45c615582968f90ace",
     "localInputs": [
       {
@@ -127,36 +259,36 @@
       "-DDOLPHIN_WASM_CORE_SOURCE=G:\\wasm-dolphin\\.claude\\worktrees\\wasm-dolphin-mkwii-webgpu-64624f\\core\\upstream\\dolphin_web_core.cpp",
       "-DDOLPHIN_WASM_OUTPUT_DIR=G:\\wasm-dolphin\\.claude\\worktrees\\wasm-dolphin-mkwii-webgpu-64624f\\cores\\dolphin"
     ],
-    "cmakeCacheSha256": "75b3a762d4f1489b6e33fbf590a5686c55087e8eb0fbdcf0a4bbdf0008f99976"
+    "cmakeCacheSha256": "28186f1e9053c23038f2600cb110177abbd87cc0785685a83786b6e9873a406a"
   },
   "artifacts": {
     "js": {
       "path": "G:\\wasm-dolphin\\.claude\\worktrees\\wasm-dolphin-mkwii-webgpu-64624f\\cores\\dolphin\\dolphin-core-upstream.js",
       "size": 266972,
-      "sha256": "0f69847c5034cc5f555c765521cc41ff8a5a08f5fc0691e352a8e0b60bf27b80",
+      "sha256": "d61b5882541713cdd1db0c46c40bc811d27acdcb35a97b1bfc5787f6fff8faf3",
       "hashMode": "lf-normalized"
     },
     "wasm": {
       "path": "G:\\wasm-dolphin\\.claude\\worktrees\\wasm-dolphin-mkwii-webgpu-64624f\\cores\\dolphin\\dolphin-core-upstream.wasm",
-      "size": 12956928,
-      "sha256": "650308c2c52fbf7fa9818cbe1fa27c2794ae31c5d0d56344533858a179f229e3",
+      "size": 15160739,
+      "sha256": "286e72870545636f0d36f083adda9b05951145dba0db48a960b2773e3ff501c8",
       "hashMode": "raw"
     },
     "wasmSections": [
       {
         "id": 1,
         "size": 2005,
-        "sha256": "c48376cddb4f470d76e2a24f9de752558c897af37d91cda9d119b8a01cec734f"
+        "sha256": "e75262f2a6b72305b96658ecca7812610152ab3b8cf4965e81b686fed620f164"
       },
       {
         "id": 2,
         "size": 2420,
-        "sha256": "1f645339d6761f89e1a29d5fa84eab40ec4d3c38e52e75cfb52774b441d63e13"
+        "sha256": "bd46bcdd749e2368c29266a800ebd0eb6c68d98c040ad58b35eb89e9d77ba706"
       },
       {
         "id": 3,
-        "size": 12431,
-        "sha256": "06d12a0bb8fe9d105da286be4ef0ef0060ee01e202174b2e0dfdc972fb3bbbe7"
+        "size": 12435,
+        "sha256": "4980462739b5353ba6359b1b8f344ba73f3191c561559356d93c4d6a8a07215a"
       },
       {
         "id": 4,
@@ -166,37 +298,42 @@
       {
         "id": 6,
         "size": 49,
-        "sha256": "cbb92203992b2a8e072712594059bdad2e4531aed572161cda11314411240c1c"
+        "sha256": "c553420ae3ccc61e8fbd14f046ce6055280a305ef32be322639cba830672b901"
       },
       {
         "id": 7,
         "size": 1069,
-        "sha256": "fca9197a9e889f2a445f3925752d18c2a263eba87108fb6802e6557e8e8bf8ff"
+        "sha256": "b3432186ff5d92889cb13ec24d059838fd2fa207ccddb3704a314ea16ef3ffc4"
       },
       {
         "id": 8,
         "size": 2,
-        "sha256": "d739371a0d76522d3fa73937ce99e63a5976b7964e2bd2970ef4fe237a5a820e"
+        "sha256": "742478b426465e3fe8caff674e71877ee5568f21008b750933faef9602e61daa"
       },
       {
         "id": 9,
-        "size": 22563,
-        "sha256": "a72702c672549f818fb2788dcb877e6bb2a9d30c5249caceffe1f06c43b168ef"
+        "size": 22553,
+        "sha256": "9fbbc61938fd4f7fb12cd853790f016ada77fb0babba7b6708b520a623d4d332"
       },
       {
         "id": 12,
         "size": 2,
-        "sha256": "76813e3162f6e7c93a7ca7a62ab667d5e6dc13e66408b85b80929e6a54581a79"
+        "sha256": "c2b07439d99f328f52b8d07bc4a0bf83bccb4ad91386cbb128163fc56cd04297"
       },
       {
         "id": 10,
-        "size": 10451630,
-        "sha256": "a778f5144c0eebd1413a42dbef129a8a4d313db4346f5c699b7f4ab35304b640"
+        "size": 10452994,
+        "sha256": "9c363d173e4c54a3429cc4e0ea3b3e02f50230b4b2b62c3c619b1c52506eec18"
       },
       {
         "id": 11,
-        "size": 2464710,
-        "sha256": "4a846fb57366ee3b186521eb4ef3648d67f9408dc0f843d7f8f13a8132363e95"
+        "size": 2464895,
+        "sha256": "d404e99f520abba3a9bd9cba246e44acc368a8e69f8ed3792f137d1b996e60cb"
+      },
+      {
+        "id": 0,
+        "size": 2202263,
+        "sha256": "b2bc00474effca0da8ed127c1103471f1e4bebc2901de423da524172d157a091"
       }
     ]
   }

@@ -9,6 +9,7 @@ import {
   sha256Hex
 } from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
+import { decodeWgpuSamplerState } from "./wgpu-sampler-state.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 import {
   JIT_CACHE_ENTRY_KEY_SCHEMA,
@@ -6267,9 +6268,12 @@ const webGpuObjects = {
   buffers: new Map(),
   textures: new Map(),
   samplers: new Map(),
+  samplerDescriptors: new Map(),
+  nearestSamplers: new Map(),
   bindGroups: new Map(),
+  bindGroupSamplingMasks: new Map(),
   pipeTpl: new Map(),  // id → {desc, target, depthBase} template
-  pipeVar: new Map(),  // `id|cFmt|dFmt` → GPURenderPipeline|null
+  pipeVar: new Map(),  // pipeline/attachment/depth/sampling-layout key → pipeline|null
   shaderOk: 0,
   shaderFail: 0
 };
@@ -6518,6 +6522,33 @@ function copyWgpuUploadPayload(heap, pointer, bytes, padToFour = false) {
   const copy = new Uint8Array(length);
   copy.set(heap.subarray(pointer, pointer + bytes));
   return copy;
+}
+
+// Borrowed payload for the immediate queue.writeBuffer call only. That call
+// copies its bytes synchronously; the next upload may reuse storage after it
+// returns. Held uploads, texture uploads, and mapped staging retain their own data.
+const WGPU_IMMEDIATE_BUFFER_SCRATCH_MAX_BYTES = 4 * 1024 * 1024;
+let wgpuImmediateBufferScratch = new Uint8Array(0);
+
+function copyImmediateWgpuBufferUpload(heap, pointer, bytes) {
+  if (bytes > WGPU_IMMEDIATE_BUFFER_SCRATCH_MAX_BYTES) {
+    return copyWgpuUploadPayload(heap, pointer, bytes, true);
+  }
+  const source = heap.subarray(pointer, pointer + bytes);
+  // Preserve the original helper behavior for truncated or invalid spans.
+  if (source.byteLength !== bytes) {
+    return copyWgpuUploadPayload(heap, pointer, bytes, true);
+  }
+  const length = (bytes + 3) & ~3;
+  if (wgpuImmediateBufferScratch.byteLength < length) {
+    let capacity = Math.max(256, wgpuImmediateBufferScratch.byteLength);
+    while (capacity < length) capacity *= 2;
+    wgpuImmediateBufferScratch = new Uint8Array(capacity);
+  }
+  const payload = wgpuImmediateBufferScratch.subarray(0, length);
+  payload.set(source);
+  payload.fill(0, bytes);
+  return payload;
 }
 
 function stageHeldWgpuUploads(
@@ -7602,20 +7633,43 @@ const WGPU_TEX_FORMAT = [
   "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
   "rgb10a2unorm"
 ];
-// §26: formats compatible with the fixed group-1 texture layout
-// (sampleType:"float", filterable). Anything else bound there —
-// r32float (EFB depth, unfilterable-float), r16uint (uint), depth* —
-// is a validation error that poisons the whole frame submit.
+// Color bindings use the filterable layout. Depth and R32F bindings use
+// matching unfilterable layouts and point samplers without converting texels.
 const FILTERABLE_TEX_FORMATS = new Set([
   "rgba8unorm", "bgra8unorm", "rgba16float", "rgb10a2unorm"
 ]);
+const UNFILTERABLE_TEX_FORMATS = new Set([
+  "r32float", "depth24plus", "depth32float", "depth24plus-stencil8"
+]);
 
-// Explicit fixed bind-group layouts mirroring the Day-22 translator
-// SHADER_HEADER: group0 = UBOs b0..3, group1 = textures b0..7 +
-// sampler b8, group2 = bbox storage b0. Created once; replaces
-// layout:"auto" so bind groups are uniform across every TEV config.
-function getFixedLayouts() {
-  if (renderGpu._fixedLayouts) return renderGpu._fixedLayouts;
+// Explicit layouts mirroring SHADER_HEADER: group0 = UBOs b0..3, group1 =
+// textures b0..7 and samplers b8..15, group2 = bbox storage b0. Groups 0 and 2
+// are shared; group 1 and the pipeline layout vary with texture sample types.
+function getFixedLayouts(unfilterableMask = 0, nonFilteringSamplerMask = unfilterableMask) {
+  if (renderGpu._fixedLayouts) {
+    const base = renderGpu._fixedLayouts;
+    if (!unfilterableMask && !nonFilteringSamplerMask) return base;
+    const key = `${unfilterableMask}/${nonFilteringSamplerMask}`;
+    if (!base.samplingVariants.has(key)) {
+      const entries = [];
+      for (let i = 0; i < 8; i++) {
+        entries.push({ binding: i, visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: (unfilterableMask & (1 << i))
+            ? "unfilterable-float" : "float", viewDimension: "2d-array" } });
+        entries.push({ binding: i + 8, visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: (nonFilteringSamplerMask & (1 << i))
+            ? "non-filtering" : "filtering" } });
+      }
+      const l1 = renderGpu.device.createBindGroupLayout({
+        label: `dolphin-bg1-samp-${key}`, entries
+      });
+      const pipelineLayout = renderGpu.device.createPipelineLayout({
+        label: `dolphin-pipeline-layout-${key}`, bindGroupLayouts: [base.l0, l1, base.l2]
+      });
+      base.samplingVariants.set(key, { ...base, l1, pipelineLayout });
+    }
+    return base.samplingVariants.get(key);
+  }
   const dev = renderGpu.device;
   const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
   // §16: the 4 group-0 UBOs are dynamic-offset — one bind group over
@@ -7628,9 +7682,8 @@ function getFixedLayouts() {
       buffer: { type: "uniform", hasDynamicOffset: true }
     }))
   });
-  // GX pixel path (Day-30 split): texture2DArray tex_0..7 at b0-7 +
-  // shared sampler samp_ss at b8. Utility/framebuffer shaders
-  // (FramebufferShaderGen EmitSamplerDeclarations) use a WIDER scheme:
+  // GX and utility/framebuffer shaders pair each texture with its own sampler.
+  // FramebufferShaderGen EmitSamplerDeclarations uses:
   // fbtex{i} → SAMPLER_BINDING(i) (b0-7), fbsmp{i} → SAMPLER_BINDING(i+8)
   // (b8-15). GenerateEFBRestorePixelShader uses index 0+1, so fbsmp1
   // lands at @group(1) @binding(9). Declare b0-7 textures + b8-15
@@ -7669,11 +7722,8 @@ function getFixedLayouts() {
     size: [1, 1, 1], format: "rgba8unorm",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
   });
-  // The dummy is substituted whenever a bound texture's format is not
-  // filterable (depth32float, r32float, uint...). Created empty it reads as
-  // (0,0,0,0), so any TEV stage that multiplies by texture colour collapses to
-  // black -- indistinguishable from "the geometry never drew". DIAG_DUMMY_TINT
-  // fills it with bright green so substituted draws are visible instead.
+  // Unsupported integer formats and missing resources still need a float
+  // placeholder. DIAG_DUMMY_TINT makes those substitutions visible.
   if (DIAG_DUMMY_TINT) {
     dev.queue.writeTexture({ texture: dummyTex },
       new Uint8Array([0, 255, 0, 255]), { bytesPerRow: 4, rowsPerImage: 1 },
@@ -7682,8 +7732,25 @@ function getFixedLayouts() {
   const dummyTexView = dummyTex.createView({ dimension: "2d-array" });
   const dummySampler = dev.createSampler({});
   renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout,
-                              dummyTex, dummyTexView, dummySampler };
-  return renderGpu._fixedLayouts;
+    dummyTex, dummyTexView, dummySampler, samplingVariants: new Map() };
+  return getFixedLayouts(unfilterableMask, nonFilteringSamplerMask);
+}
+
+function getNonFilteringSampler(id) {
+  const descriptor = webGpuObjects.samplerDescriptors.get(id);
+  if (descriptor && (descriptor.magFilter || "nearest") === "nearest" &&
+      (descriptor.minFilter || "nearest") === "nearest" &&
+      (descriptor.mipmapFilter || "nearest") === "nearest" &&
+      (descriptor.maxAnisotropy || 1) === 1) {
+    return webGpuObjects.samplers.get(id);
+  }
+  if (!webGpuObjects.nearestSamplers.has(id)) {
+    webGpuObjects.nearestSamplers.set(id, renderGpu.device.createSampler({
+      ...descriptor, magFilter: "nearest", minFilter: "nearest",
+      mipmapFilter: "nearest", maxAnisotropy: 1
+    }));
+  }
+  return webGpuObjects.nearestSamplers.get(id);
 }
 
 // Build a GPUBindGroup from a CREATE_BIND_GROUP blob against the fixed
@@ -7702,13 +7769,31 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     return;
   }
   const group = u[1], count = u[2];
-  const layouts = getFixedLayouts();
+  let unfilterableMask = 0;
+  let hasPerTextureSamplers = false;
+  if (group === 1) {
+    for (let i = 0; i < count; i++) {
+      const base = 3 + i * 5;
+      const binding = u[base], kind = u[base + 1], resId = u[base + 2];
+      if (kind === 1 && binding < 8 &&
+          UNFILTERABLE_TEX_FORMATS.has(webGpuObjects.textures.get(resId)?.format)) {
+        unfilterableMask |= 1 << binding;
+      }
+      if (kind === 2 && binding > 8) hasPerTextureSamplers = true;
+    }
+  }
+  // Older cores pair every texture with sampler 8. Their compatibility path
+  // must make that shared sampler nearest whenever any bound texture needs it.
+  const nonFilteringSamplerMask = unfilterableMask |
+    (unfilterableMask && !hasPerTextureSamplers ? 1 : 0);
+  const samplingKey = `${unfilterableMask}/${nonFilteringSamplerMask}`;
+  const layouts = getFixedLayouts(unfilterableMask, nonFilteringSamplerMask);
   const layout = group === 0 ? layouts.l0 : group === 1 ? layouts.l1 : layouts.l2;
   // DIAG one-shot: for the first few group-1 (texture+sampler) bind
   // groups, dump each binding's resId and whether that texture exists
   // / its format+size. Reveals if textured GX draws sample the 1×1
   // dummy or a never-built id (→ black) vs real game textures.
-  if (group === 1 && (self._wgBg1N = (self._wgBg1N || 0) + 1) <= 10) {
+  if (!vpDiagDone && group === 1 && (self._wgBg1N = (self._wgBg1N || 0) + 1) <= 10) {
     let s = `[webgpu-DIAG-bg1] id=${id} count=${count}`;
     for (let i = 0; i < count; i++) {
       const b = u[3 + i * 5], k = u[3 + i * 5 + 1], r = u[3 + i * 5 + 2];
@@ -7759,22 +7844,17 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
         continue;
       }
-      // §26: the fixed group-1 layout declares sampleType:"float"
-      // (filterable). Binding a non-filterable / non-float texture
-      // (the battle samples the EFB DEPTH as r32float; also uint /
-      // depth formats) is a WebGPU validation error that poisons the
-      // WHOLE frame's submit → black battle. Substitute the filterable
-      // rgba8unorm dummy so the bind group stays layout-valid and the
-      // frame renders (the one depth-sample effect is lost, not the
-      // scene). Filterable-float formats l1 accepts:
-      const FILTERABLE = FILTERABLE_TEX_FORMATS;
-      if (!FILTERABLE.has(t.format)) {
+      // Depth-aspect views are legal texture_2d_array<f32> resources with
+      // unfilterable-float layouts. Dolphin reads .r and requests point
+      // sampling for depth copies/restores, preserving all 24 GX depth bits.
+      if (!FILTERABLE_TEX_FORMATS.has(t.format) && !UNFILTERABLE_TEX_FORMATS.has(t.format)) {
         self._wgDummyFormat = (self._wgDummyFormat || 0) + 1;
         (self._wgDummyFormats = self._wgDummyFormats || new Set()).add(t.format);
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
       } else {
         entries.push({ binding, resource: t.view2dArray ||
-          (t.view2dArray = t.tex.createView({ dimension: "2d-array" })) });
+          (t.view2dArray = t.tex.createView({ dimension: "2d-array",
+            aspect: t.format.startsWith("depth") ? "depth-only" : "all" })) });
       }
     } else if (kind === 2) {
       const s = webGpuObjects.samplers.get(resId);
@@ -7784,7 +7864,9 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         entries.push({ binding, resource: getFixedLayouts().dummySampler });
         continue;
       }
-      entries.push({ binding, resource: s });
+      entries.push({ binding, resource: group === 1 && binding >= 8 &&
+        (nonFilteringSamplerMask & (1 << (binding - 8)))
+        ? getNonFilteringSampler(resId) : s });
     } else {
       const b = webGpuObjects.buffers.get(resId);
       if (!b) {
@@ -7816,44 +7898,47 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         : { binding: b, resource: layouts.dummySampler });
     }
   }
-  // Sidecar: bgId → its group-1 binding-0 source texture id, so the
-  // [webgpu-DIAG-cpypass] probe can name what the EFB-copy draw samples.
+  // Runtime sidecar: the presenter also uses binding 0 to identify the
+  // backbuffer source. Preserve it even when optional diagnostics are off.
   if (group === 1 && srcTexId >= 0) {
     self._wgBgTex = self._wgBgTex || {};
     self._wgBgTex[id] = srcTexId;
-    // §28: full group-1 texture binding set (b0..b7) so we can see
-    // what the black backdrop draw actually samples at every binding.
-    self._wgBgAll = self._wgBgAll || {};
-    let a = "";
-    for (let i = 0; i < count; i++) {
-      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
-      if (kk !== 1) continue;
-      const tt = webGpuObjects.textures.get(rr);
-      a += ` b${bb}=tex#${rr}` +
-        (tt ? `(${tt.tex.width}x${tt.tex.height})` : "(?)");
-      // §28: stash the backdrop's b1/b2 non-dummy textures so the
-      // periodic DIAG-cpy readback dumps their content (is tex#5499
-      // the real backdrop image, or also black?).
-      if ((bb === 1 || bb === 2) && tt && !(tt.tex.width === 1)) {
-        self._wgCpyExtra = self._wgCpyExtra || new Set();
-        if (self._wgCpyExtra.size < 24) self._wgCpyExtra.add(rr);
+    if (!vpDiagDone) {
+      // §28: full group-1 texture binding set (b0..b7) so we can see
+      // what the black backdrop draw actually samples at every binding.
+      self._wgBgAll = self._wgBgAll || {};
+      let a = "";
+      for (let i = 0; i < count; i++) {
+        const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+        if (kk !== 1) continue;
+        const tt = webGpuObjects.textures.get(rr);
+        a += ` b${bb}=tex#${rr}` +
+          (tt ? `(${tt.tex.width}x${tt.tex.height})` : "(?)");
+        // §28: stash the backdrop's b1/b2 non-dummy textures so the
+        // periodic DIAG-cpy readback dumps their content (is tex#5499
+        // the real backdrop image, or also black?).
+        if ((bb === 1 || bb === 2) && tt && !(tt.tex.width === 1)) {
+          self._wgCpyExtra = self._wgCpyExtra || new Set();
+          if (self._wgCpyExtra.size < 24) self._wgCpyExtra.add(rr);
+        }
       }
+      self._wgBgAll[id] = a;
+      // Structured counterpart of the string above: bgId -> {binding: texId}.
+      // Needed because a draw samples whichever texture unit its TEV uses --
+      // SAMP_AT(i) selects tex_##i -- so checking binding 0 alone inspects the
+      // wrong texture for any draw using another unit.
+      const byB = {};
+      for (let i = 0; i < count; i++) {
+        const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+        if (kk === 1) byB[bb] = rr;
+      }
+      vpDiagBgTexByBinding.set(id, byB);
     }
-    self._wgBgAll[id] = a;
-    // Structured counterpart of the string above: bgId -> {binding: texId}.
-    // Needed because a draw samples whichever texture unit its TEV uses --
-    // SAMP_AT(i) selects tex_##i -- so checking binding 0 alone inspects the
-    // wrong texture for any draw using another unit.
-    const byB = {};
-    for (let i = 0; i < count; i++) {
-      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
-      if (kk === 1) byB[bb] = rr;
-    }
-    vpDiagBgTexByBinding.set(id, byB);
   }
   try {
     webGpuObjects.bindGroups.set(id,
       renderGpu.device.createBindGroup({ layout, entries }));
+    if (group === 1) webGpuObjects.bindGroupSamplingMasks.set(id, samplingKey);
   } catch (e) {
     if (!self._webGpuBgErr) {
       self._webGpuBgErr = true;
@@ -9918,6 +10003,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   let passDepthId = 0;
   let passLoadOp = "load";
   let passHasPipe = false;
+  let passSamplingKey = "0/0";
   let passNeedsVertexBuffer = false;
   let vertexBufferValid = false;
   let indexBufferValid = false;
@@ -10898,7 +10984,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
-                uploadPayload = copyWgpuUploadPayload(heap, srcP, uploadBytes, true);
+                uploadPayload = copyImmediateWgpuBufferUpload(heap, srcP, uploadBytes);
                 if (causalMetricsEnabled) {
                   wgpuReplayOpMetrics.recordUploadCopy(
                     WGPU_CMD_OP_UPLOAD_BUFFER,
@@ -11178,11 +11264,9 @@ function drainWebGpuCmdRing(source = "presentation") {
         case WGPU_CMD_OP_CREATE_SAMPLER: {
           const id = u32[recWord + 1];
           if (!webGpuObjects.samplers.has(id)) {
-            webGpuObjects.samplers.set(id, dev.createSampler({
-              magFilter: "linear", minFilter: "linear",
-              mipmapFilter: "linear", addressModeU: "repeat",
-              addressModeV: "repeat"
-            }));
+            const descriptor = decodeWgpuSamplerState(u32[recWord + 2]);
+            webGpuObjects.samplers.set(id, dev.createSampler(descriptor));
+            webGpuObjects.samplerDescriptors.set(id, descriptor);
           }
           break;
         }
@@ -11325,7 +11409,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = cur.width;
             passH = cur.height;
             passColorFmt = renderGpu.format;
-            frameCapPush(`BEGINPASS fb#0 BACKBUFFER ${passW}x${passH}`);
+            if (frameCapActive()) frameCapPush(`BEGINPASS fb#0 BACKBUFFER ${passW}x${passH}`);
           } else {
             webGpuExecStats.beginFbN++;
             const ct = webGpuObjects.textures.get(fbId);
@@ -11338,7 +11422,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = ct.tex.width;
             passH = ct.tex.height;
             passColorFmt = ct.format;
-            frameCapPush(`BEGINPASS fb#${fbId} ${passW}x${passH} fmt=${ct.format}` +
+            if (frameCapActive()) frameCapPush(`BEGINPASS fb#${fbId} ${passW}x${passH} fmt=${ct.format}` +
               `${fbId === (self._wgEfbColorId || -1) ? " (EFB)" : ""}`);
             // DIAG: which texture ids are ever render targets (+size).
             // Cross-ref with tex#69 (640x480 green, sampled at b1
@@ -11424,6 +11508,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           passNeedsVertexBuffer = false;
           vertexBufferValid = false;
           indexBufferValid = false;
+          passSamplingKey = "0/0";
           bgValid[0] = bgValid[1] = bgValid[2] = false;  // §28j
           if (drawState) {
             drawState.bindGroups.fill(0);
@@ -11481,7 +11566,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           const p = pass
             ? resolvePipeline(pid, passColorFmt, passDepthFmt, undefined,
-                              !!self._wgPassRevZ)
+                              !!self._wgPassRevZ, passSamplingKey)
             : null;
           if (pass && p) {
             const needsApply = !wgpuConsumerStateCacheEnabled ||
@@ -11523,6 +11608,35 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (!bg) {
             wgpuReplayClassifier?.recordMissingResource({ kind: "bind-group", id: bgId });
           }
+          if (bgSlot === 1 && pass) {
+            const samplingKey = webGpuObjects.bindGroupSamplingMasks.get(bgId) || "0/0";
+            if (samplingKey !== passSamplingKey) {
+              passSamplingKey = samplingKey;
+              // The producer sets its pipeline before its texture group and
+              // can retain that pipeline while textures change. Select the
+              // matching layout now, before either draw opcode uses it.
+              if (passHasPipe) {
+                const pipeline = resolvePipeline(self._wgCurPipe, passColorFmt,
+                  passDepthFmt, undefined, !!self._wgPassRevZ, passSamplingKey);
+                passHasPipe = false;
+                if (pipeline) {
+                  try {
+                    pass.setPipeline(pipeline);
+                    dtLastPipe = pipeline;
+                    if (wgpuConsumerStateCacheEnabled) {
+                      wgpuPassStateCache.recordPipelineApplied(pipeline);
+                    }
+                    passHasPipe = true;
+                  } catch (error) {
+                    if (wgpuConsumerStateCacheEnabled) {
+                      wgpuPassStateCache.recordPipelineApplyFailed();
+                    }
+                    recordRendererError("set-pipeline", error?.message || error);
+                  }
+                }
+              }
+            }
+          }
           if (bgSlot < 3) bgValid[bgSlot] = !!(pass && bg);  // §28j
           if (drawState && bgSlot < 3) {
             drawState.bindGroups[bgSlot] = bgId;
@@ -11532,7 +11646,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (bgSlot === 1 && self._wgBgTex) {
             const _bt = self._wgBgTex[bgId];
             const _bo = _bt != null ? webGpuObjects.textures.get(_bt) : null;
-            frameCapPush(`  BINDTEX  fb#${passFbId} tex#${_bt != null ? _bt : "?"}` +
+            if (frameCapActive()) frameCapPush(`  BINDTEX  fb#${passFbId} tex#${_bt != null ? _bt : "?"}` +
               `${_bo && _bo.tex ? " " + _bo.tex.width + "x" + _bo.tex.height : ""}`);
           }
           if (passFbId === 0 && bgSlot === 1 && self._wgBgTex) {
@@ -11679,7 +11793,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastVp = `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
               `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`;
           }
-          frameCapPush(`  VIEWPORT fb#${passFbId} ` +
+          if (frameCapActive()) frameCapPush(`  VIEWPORT fb#${passFbId} ` +
             `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
             `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
@@ -11697,13 +11811,9 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
           }
           if (pass && passW > 0) {
-            // WebGPU: x,y>=0; x+w<=W; y+h<=H; 0<=minD<=maxD<=1.
-            let vx = f32[recWord + 1], vy = f32[recWord + 2];
-            let vw = f32[recWord + 3], vh = f32[recWord + 4];
-            if (vx < 0) { vw += vx; vx = 0; }
-            if (vy < 0) { vh += vy; vy = 0; }
-            vw = Math.max(1, Math.min(vw, passW - vx));
-            vh = Math.max(1, Math.min(vh, passH - vy));
+            // Preserve the viewport transform; the attachment/scissor clips fragments.
+            const vx = f32[recWord + 1], vy = f32[recWord + 2];
+            const vw = f32[recWord + 3], vh = f32[recWord + 4];
             // §28af: raw near>far ⇒ Dolphin reverse-Z viewport for
             // this pass. Drives the per-pass compare-flip + depth
             // clear (set self._wgPassRevZ BEFORE the Dawn-required
@@ -11867,7 +11977,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastSc = `${u32[recWord + 1]},${u32[recWord + 2]}` +
               `+${u32[recWord + 3]}x${u32[recWord + 4]}`;
           }
-          frameCapPush(`  SCISSOR  fb#${passFbId} ${u32[recWord + 1]},${u32[recWord + 2]}` +
+          if (frameCapActive()) frameCapPush(`  SCISSOR  fb#${passFbId} ${u32[recWord + 1]},${u32[recWord + 2]}` +
             `+${u32[recWord + 3]}x${u32[recWord + 4]}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbScN = (self._wgBbScN || 0) + 1;
@@ -12853,6 +12963,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               wgpuPassStateCache.invalidateDestroyedResource(tag, resource);
             }
             m.delete(id);
+            if (tag === 3) webGpuObjects.bindGroupSamplingMasks.delete(id);
           }
           break;
         }
@@ -13403,7 +13514,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
 
 // Return (building+caching on first use) the pipeline variant whose
 // colour/depth attachment formats match the render pass it'll run in.
-function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
+function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ, samplingKey = "0/0") {
   // §28af: revZ is per-PASS (from the SET_VIEWPORT near>far that
   // precedes this draw). Default to the last-seen pass state so the
   // warm template build (revZ undefined) doesn't pin a wrong variant.
@@ -13427,11 +13538,19 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
                   REVZ_COMPARE_FLIP_ALL)
                    ? rzRelevant
                    : (rzRelevant && revZ)) ? 1 : 0;
-  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}`;
+  // The sampling key is part of the identity: a pipeline built against the
+  // filtering layout cannot be reused for one whose bind group declares an
+  // unfilterable texture or a non-filtering sampler.
+  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}|s${samplingKey}`;
   const cached = webGpuObjects.pipeVar.get(key);
   if (cached !== undefined) return cached;
   if (!tpl) { webGpuObjects.pipeVar.set(key, null); return null; }
   const d = Object.assign({}, tpl.desc);
+  // Build against the layout the bind group will actually be created with.
+  // The template carries the all-filtering layout, which a bind group holding
+  // a depth or R32F texture cannot satisfy.
+  const [unfilterableMask, nonFilteringSamplerMask] = samplingKey.split("/").map(Number);
+  d.layout = getFixedLayouts(unfilterableMask, nonFilteringSamplerMask).pipelineLayout;
   d.fragment = { module: tpl.desc.fragment.module,
                  targets: [Object.assign({}, tpl.target, { format: colorFmt })] };
   if (depthFmt) {

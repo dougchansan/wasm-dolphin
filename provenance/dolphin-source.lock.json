@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "2d8eb36bd8ff78263bfe93172e0336bae75effefb592e4f4130f873e4d3fe7db",
+  "patchSeriesSha256": "c557601c2a65175455ae9cca8942ceef77ca2edaaf76963323c6bf5b4a0317c8",
   "patches": [
     {
       "order": 1,
@@ -493,6 +493,38 @@
     },
     {
       "order": 59,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0062-webgpu-per-texture-samplers.patch",
+      "size": 7731,
+      "sha256": "fa8ddcbf653230e33a12ce41c50eed66840faca40621adfbfde5e8c9d16d281f"
+    },
+    {
+      "order": 60,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0063-webgpu-specialize-texture-sample-helpers.patch",
+      "size": 5091,
+      "sha256": "e651cf780896f048e6d95d1d70dd90162fb32e5c10a04e00c70b7bc0167b1943"
+    },
+    {
+      "order": 61,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0064-webgpu-expire-retained-uniform-slices.patch",
+      "size": 2149,
+      "sha256": "27e09bd166d95ab4e13a33f18e40dbeff91f9659cbbb0e34e3c62fb8dc18559b"
+    },
+    {
+      "order": 62,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0065-webgpu-select-uniforms-by-pipeline-usage.patch",
+      "size": 8408,
+      "sha256": "a77e7e5628a115d9fa42ebec5a0eb4eb76b53ffbe03341be3a4e82df013dc1a6"
+    },
+    {
+      "order": 63,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -500,7 +532,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 60,
+      "order": 64,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

@@ -1,0 +1,117 @@
+diff --git a/Source/Core/VideoCommon/PixelShaderGen.cpp b/Source/Core/VideoCommon/PixelShaderGen.cpp
+--- a/Source/Core/VideoCommon/PixelShaderGen.cpp
++++ b/Source/Core/VideoCommon/PixelShaderGen.cpp
+@@ -638,29 +638,44 @@
+     }
+   }
+ 
+-  out.Write("\nint4 sampleTexture(uint texmap, SAMP_PARAM, int2 uv, int layer) {{\n");
+-
+   if (!host_config.manual_texture_sampling)
+   {
+-    out.Write("  float size_s = float(" I_TEXDIMS "[texmap].x * 128);\n"
+-              "  float size_t = float(" I_TEXDIMS "[texmap].y * 128);\n"
+-              "  float3 coords = float3(float(uv.x) / size_s, float(uv.y) / size_t, layer);\n");
+-    if (!host_config.backend_sampler_lod_bias)
+-    {
+-      out.Write("  uint texmode0 = samp_texmode0(texmap);\n"
+-                "  float lod_bias = float({}) / 256.0f;\n"
+-                "  return iround(255.0 * texture(SAMP_USE,coords, lod_bias));\n",
+-                BitfieldExtract<&SamplerState::TM0::lod_bias>("texmode0"));
+-    }
+-    else
+-    {
+-      out.Write("  return iround(255.0 * texture(SAMP_USE,coords));\n");
+-    }
+-
+-    out.Write("}}\n");
+-  }
+-  else
+-  {
++    // WebGPU validates texture/sampler pairs across calls to a shared opaque-
++    // parameter helper. Different call sites can then cross-pair a depth
++    // texture with another slot's linear sampler. Keep each hardware sample
++    // tied to its slot's globals; scalar-only helpers can still be shared.
++    const bool static_sampler = api_type == APIType::Vulkan;
++    for (u32 i = 0; i < (static_sampler ? 8u : 1u); ++i)
++    {
++      const std::string texmap = static_sampler ? fmt::format("{}u", i) : "texmap";
++      const std::string sampler =
++          static_sampler ? fmt::format("sampler2DArray(tex_{}u, samp_{}u)", i, i) : "SAMP_USE";
++      if (static_sampler)
++        out.Write("\nint4 sampleTexture_{}u(int2 uv, int layer) {{\n", i);
++      else
++        out.Write("\nint4 sampleTexture(uint texmap, SAMP_PARAM, int2 uv, int layer) {{\n");
++
++      out.Write("  float size_s = float(" I_TEXDIMS "[{}].x * 128);\n"
++                "  float size_t = float(" I_TEXDIMS "[{}].y * 128);\n"
++                "  float3 coords = float3(float(uv.x) / size_s, float(uv.y) / size_t, layer);\n",
++                texmap, texmap);
++      if (!host_config.backend_sampler_lod_bias)
++      {
++        out.Write("  uint texmode0 = samp_texmode0({});\n"
++                  "  float lod_bias = float({}) / 256.0f;\n"
++                  "  return iround(255.0 * texture({},coords, lod_bias));\n",
++                  texmap, BitfieldExtract<&SamplerState::TM0::lod_bias>("texmode0"), sampler);
++      }
++      else
++      {
++        out.Write("  return iround(255.0 * texture({},coords));\n", sampler);
++      }
++      out.Write("}}\n");
++    }
++  }
++  else
++  {
++    out.Write("\nint4 sampleTexture(uint texmap, SAMP_PARAM, int2 uv, int layer) {{\n");
+     out.Write(R"(
+   uint texmode0 = samp_texmode0(texmap);
+   uint texmode1 = samp_texmode1(texmap);
+@@ -819,6 +834,11 @@
+ }}
+ )");
+   }
++  if (api_type == APIType::Vulkan && !host_config.manual_texture_sampling)
++    out.Write("#define SAMPLE_TEXTURE(texmap, uv, layer) sampleTexture_##texmap(uv, layer)\n");
++  else
++    out.Write("#define SAMPLE_TEXTURE(texmap, uv, layer) "
++              "sampleTexture(texmap, SAMP_AT(texmap), uv, layer)\n");
+ }
+ 
+ static void WriteStage(ShaderCode& out, const pixel_shader_uid_data* uid_data, int n,
+@@ -861,7 +881,7 @@
+   WritePixelShaderCommonHeader(out, api_type, host_config, uid_data->bounding_box);
+ 
+   out.Write("\n#define sampleTextureWrapper(texmap, uv, layer) "
+-            "sampleTexture(texmap, SAMP_AT(texmap), uv, layer)\n");
++            "SAMPLE_TEXTURE(texmap, uv, layer)\n");
+ 
+   if (uid_data->ztest == EmulatedZ::ForcedEarly)
+   {
+diff --git a/Source/Core/VideoCommon/UberShaderPixel.cpp b/Source/Core/VideoCommon/UberShaderPixel.cpp
+--- a/Source/Core/VideoCommon/UberShaderPixel.cpp
++++ b/Source/Core/VideoCommon/UberShaderPixel.cpp
+@@ -307,7 +307,7 @@
+     // Doesn't look like DirectX supports this. Oh well the code path is here just in case it
+     // supports this in the future.
+     out.Write("int4 sampleTextureWrapper(uint texmap, int2 uv, int layer) {{\n");
+-    out.Write("  return sampleTexture(texmap, SAMP_AT(texmap), uv, layer);\n");
++    out.Write("  return SAMPLE_TEXTURE(texmap, uv, layer);\n");
+     out.Write("}}\n\n");
+   }
+   else
+@@ -320,12 +320,12 @@
+               "  switch(sampler_num) {{\n");
+     for (int i = 0; i < 8; i++)
+     {
+-      out.Write("  case {0}u: return sampleTexture({0}u, SAMP_AT({0}u), uv, layer);\n", i);
++      out.Write("  case {0}u: return SAMPLE_TEXTURE({0}u, uv, layer);\n", i);
+     }
+     // §28cx: add explicit default so the switch has a complete return path on
+     // every branch. Without it, glslang may generate a merge block with OpUndef
+     // that some Naga versions flag as a fall-through.
+-    out.Write("  default: return sampleTexture(0u, SAMP_AT(0u), uv, layer);\n"
++    out.Write("  default: return SAMPLE_TEXTURE(0u, uv, layer);\n"
+               "  }}\n"
+               "}}\n\n");
+   }
