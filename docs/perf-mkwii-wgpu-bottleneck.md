@@ -393,3 +393,68 @@ report measured at 1790 frames/60s, and it now reads about 2106 on the same
 rig -- the dump again, not the core. The scoring windows differ, so treat that
 as indicative rather than a measurement, but the direction matches the paired
 result.
+
+## Calling it less often does not work either, and that closes the line
+
+The memo failed because it cut the cost of the call and not the count. So the
+count was cut: within the drain loop the read-write distance only falls, so
+each watermark boundary is crossed at most once and can be detected from the
+value `fetch_sub` already returned -- no extra shared load. Breakpoints keep
+the old per-chunk behaviour, a 64-chunk ceiling bounds how long a register
+write from the CPU thread can go unnoticed, and the unconditional call after
+the loop is untouched. Roughly a sixty-fold reduction in calls.
+
+Eight pairs a side again, cores swapped between runs:
+
+| rig | A median | B median | median delta | positive | two-tailed sign |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Radeon RX 9070 XT | 2035.4 | 2070.3 | -1.71% | 3/8 | p = 0.73 |
+| RTX 3090 | 1305.2 | 1300.3 | -0.37% | 4/8 | p = 1.00 |
+
+Nothing, on either rig. Both sessions were noisier than earlier batches --
+look at the A spreads -- but pairing absorbs that, and two independent nulls
+at eight pairs each is not a resolution problem.
+
+That result also disposes of the mechanism that motivated it. If the video
+thread's atomic traffic on the shared FIFO cache lines had been slowing the
+CPU thread, cutting that traffic sixty-fold would have shown something.
+
+### Why the whole line was a dead end
+
+The thread that matters is the one with no slack, and it is not the video
+thread:
+
+| thread | idle | blocked (futex) |
+| --- | ---: | ---: |
+| video thread | 0.0% | 15.3% |
+| CPU emulation thread | 0.0% | **0.1%** |
+| consumer (discio) | 42.0% | 0.0% |
+
+The CPU emulation thread is saturated and essentially never blocks, so it sets
+the pace. `SetCPStatusFromGPU` is 35% of a thread that is *not* on the
+critical path, and 35% of slack is worth nothing -- which is what both attacks
+measured. The profile said "35% of a thread" and that was read as "35% of the
+frame"; they are only the same thing on the critical path.
+
+## Where this leaves Mario Kart Wii
+
+The renderer is no longer what limits this title. What is left on the critical
+path is PPC emulation:
+
+| | share of the CPU thread |
+| --- | ---: |
+| `CachedInterpreter::ExecuteOneBlock` | 23.0% |
+| `CachedInterpreter::FastInteger` | 20.5% |
+| `JitBaseBlockCache::Dispatch` | 10.9% |
+| `TryFastRamWordLoadStore` | 8.9% |
+| `PowerPC::MMU::WriteToHardware` | 5.1% |
+| `DolphinWeb_OnXfb` | 4.3% |
+
+About 54% is interpreter dispatch machinery, and the profile reports no
+separate JIT block modules at all -- the WASM JIT is contributing nothing to
+this workload. That is the ratio `tools/cpu-profile-capture.mjs` was written
+to measure, and it is a CPU-side question, not a renderer one.
+
+Three renderer-side changes were built and measured during this work and all
+three were reverted. The one thing that did move throughput was deleting
+debug instrumentation from the hot path.
