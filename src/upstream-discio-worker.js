@@ -930,6 +930,7 @@ async function handleMessage(type, payload) {
         frameCap: payload.frameCap,
         cachedInterpreterDisableMask: payload.cachedInterpreterDisableMask,
         wgpuScissoredClearRect: payload.wgpuScissoredClearRect,
+        wgpuUboDelta: payload.wgpuUboDelta,
         noJitCache: payload.noJitCache,
         reportedCoreSelection: payload.coreSelection,
         wgpuReplayDiagnostics: payload.wgpuReplayDiagnostics,
@@ -1426,6 +1427,7 @@ async function loadCore({
   frameCap = 0,
   cachedInterpreterDisableMask = 0,
   wgpuScissoredClearRect = true,
+  wgpuUboDelta: requestedWgpuUboDelta = false,
   noJitCache = false,
   reportedCoreSelection = null,
   wgpuReplayDiagnostics = false,
@@ -2069,7 +2071,11 @@ async function loadCore({
   // unconditionally so the active configuration is visible in the status log
   // rather than implied.
   const RENDERER_FEATURE_SCISSORED_CLEAR_RECT = 1 << 0;
+  const RENDERER_FEATURE_UBO_DELTA = 1 << 1;
   let rendererFeatureMask = RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
+  if (requestedWgpuUboDelta) {
+    rendererFeatureMask = (rendererFeatureMask | RENDERER_FEATURE_UBO_DELTA) >>> 0;
+  }
   if (!wgpuScissoredClearRect) {
     rendererFeatureMask =
       (rendererFeatureMask & ~RENDERER_FEATURE_SCISSORED_CLEAR_RECT) >>> 0;
@@ -6216,6 +6222,33 @@ const WGPU_CMD_OP_SUBMIT_PRESENT = 22;
 const WGPU_CMD_OP_DESTROY = 23;
 const WGPU_CMD_OP_BLIT_TEXTURE = 24;
 const WGPU_CMD_OP_CLEAR_RECT = 25;
+const WGPU_CMD_OP_UBO_DELTA_UPLOAD = 26;
+// Staging ring for UBO deltas. The changed bytes go in here via writeBuffer,
+// which lands on the queue timeline BEFORE the render encoder is submitted;
+// the encoder then copies previous->new and staging->new, in that order, so the
+// patch cannot be overwritten by the carry-forward. A plain UploadBuffer beside
+// an encoder copy would have the opposite order and silently lose every write.
+//
+// It must not wrap within one submit interval, or a later write would land on a
+// region an earlier queued copy still has to read. At roughly 600 deltas a
+// frame of under a kilobyte each, 8 MiB is about an order of magnitude of head
+// room, and the offset resets at submit.
+const WGPU_UBO_DELTA_STAGING_BYTES = 8 * 1024 * 1024;
+let wgpuUboDeltaStaging = null;
+let wgpuUboDeltaStagingOffset = 0;
+let wgpuUboDeltaCount = 0;
+let wgpuUboDeltaBytes = 0;
+
+function ensureUboDeltaStaging(dev) {
+  if (!wgpuUboDeltaStaging) {
+    wgpuUboDeltaStaging = dev.createBuffer({
+      size: WGPU_UBO_DELTA_STAGING_BYTES,
+      usage: 0x4 | 0x8, // COPY_DST | COPY_SRC
+      label: "dolphin-ubo-delta-staging",
+    });
+  }
+  return wgpuUboDeltaStaging;
+}
 // ClearRect uses the full attachment viewport and [0,1] depth range, so its
 // scissor alone determines coverage and its depth is independent of game state.
 // A/B switch: false restores the original game-viewport-dependent clear.
@@ -10175,6 +10208,11 @@ function drainWebGpuCmdRing(source = "presentation") {
         renderCommandBuffer,
       ]);
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
+      // Everything queued before this submit has now been ordered against it,
+      // so the delta staging region is free to be reused from the start again.
+      // Resetting here is what guarantees it cannot wrap mid-frame and let a
+      // later write land on bytes an earlier queued copy still needs.
+      wgpuUboDeltaStagingOffset = 0;
       acceptMappedBatch(mappedBatch);
       submitted = true;
       dtraceDrainPending();
@@ -11753,6 +11791,41 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (drawState) drawState.viewport = [vx, vy, vw, vh, mn, mx];
           }
           break;
+        case WGPU_CMD_OP_UBO_DELTA_UPLOAD: {
+          const ringId = u32[recWord + 1];
+          const newOff = u32[recWord + 2];
+          const prevOff = u32[recWord + 3];
+          const blockSize = u32[recWord + 4];
+          const deltaOff = u32[recWord + 5];
+          const deltaLen = u32[recWord + 6];
+          const srcPtr = u32[recWord + 7];
+          const ring = webGpuObjects.buffers.get(ringId);
+          if (!ring) {
+            wgpuReplayClassifier?.recordMissingResource({ kind: "ubo-delta-ring", id: ringId });
+            break;
+          }
+          try {
+            const staging = ensureUboDeltaStaging(dev);
+            // writeBuffer needs 4-byte alignment at both ends.
+            const len = (deltaLen + 3) & ~3;
+            if (wgpuUboDeltaStagingOffset + len > WGPU_UBO_DELTA_STAGING_BYTES) {
+              wgpuUboDeltaStagingOffset = 0;
+            }
+            const stageAt = wgpuUboDeltaStagingOffset;
+            q.writeBuffer(staging, stageAt,
+                          copyWgpuUploadPayload(heap, srcPtr, deltaLen, true));
+            wgpuUboDeltaStagingOffset = (stageAt + len + 255) & ~255;
+            const enc = ensureEnc();
+            // Order matters: carry the predecessor forward first, then patch.
+            enc.copyBufferToBuffer(ring, prevOff, ring, newOff, blockSize);
+            enc.copyBufferToBuffer(staging, stageAt, ring, newOff + deltaOff, len);
+            wgpuUboDeltaCount++;
+            wgpuUboDeltaBytes += deltaLen;
+          } catch (e) {
+            recordRendererError("validation", `ubodelta: ${e?.message || e}`);
+          }
+          break;
+        }
         case WGPU_CMD_OP_CLEAR_RECT: {
           // Scissored clear inside the open pass: set the scissor, draw one
           // full-screen triangle with the clear colour/depth baked in, restore
@@ -12382,6 +12455,13 @@ function drainWebGpuCmdRing(source = "presentation") {
             const fmt = self._wgDummyFormat || 0;
             const cr = self._wgClearRectN || 0;
             if (cr) console.log(`[clearrect] executed=${cr} pipelines=${WGPU_CLEAR_PIPELINES.size}`);
+            if (wgpuUboDeltaCount) {
+              console.log(
+                `[ubodelta] uploads=${wgpuUboDeltaCount} ` +
+                `bytes=${wgpuUboDeltaBytes} ` +
+                `avg=${Math.round(wgpuUboDeltaBytes / wgpuUboDeltaCount)}B`
+              );
+            }
             if (miss || fmt) {
               console.log(`[dummytex] missing=${miss} unfilterable=${fmt} ` +
                 `missingIds=${[...(self._wgDummyMissingIds || [])].slice(0, 8).join(",")} ` +

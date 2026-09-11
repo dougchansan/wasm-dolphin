@@ -1,0 +1,206 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.h
+@@ -137,6 +137,22 @@
+   //   flags: 8=explicit channel mask, 1=RGB, 2=depth, 4=alpha.
+   //   Without flag 8, legacy flag 1 enables all RGBA channels.
+   ClearRect = 25,
++  // Publish a UBO slice as "previous slice, plus the bytes that changed".
++  // Mario Kart Wii rewrites 4112-byte VertexShaderConstants 361 times a frame
++  // while only ~172 bytes of each differ, so the full-block upload moves 2.39 GB
++  // across a run to convey 0.100 GB of change.
++  //
++  // The unchanged bytes exist only in the previous slice on the GPU, so they are
++  // carried forward with a device-side copy. That copy CANNOT simply be an
++  // encoder command next to an ordinary UploadBuffer: uploads go out through
++  // queue.writeBuffer, which lands on the queue timeline before the render
++  // encoder is submitted, so a copy inside the encoder would run after every
++  // write of the frame and clobber them. The consumer therefore does all three
++  // steps itself, in order: writeBuffer the delta into a staging buffer, then
++  // copy previous->new and staging->new inside the encoder.
++  //   u0=ringId u1=newOff u2=prevOff u3=blockSize u4=deltaOff u5=deltaLen
++  //   u6=srcHeapPtr
++  UboDeltaUpload = 26,
+ };
+ 
+ // Stable producer attribution for UploadBuffer records. The value is carried
+@@ -385,6 +401,8 @@
+   bool PushSetViewport(float x, float y, float w, float h, float min_d, float max_d);
+   bool PushSetScissor(u32 x, u32 y, u32 w, u32 h);
+   bool PushClearRect(u32 x, u32 y, u32 w, u32 h, u32 rgba, float depth, u32 flags);
++  bool PushUboDeltaUpload(u32 ring_id, u32 new_off, u32 prev_off, u32 block_size,
++                          u32 delta_off, u32 delta_len, u32 src_heap_ptr);
+   bool PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx);
+   bool PushDrawIndexed(u32 idx_count, u32 inst_count, u32 first_idx, u32 base_vtx);
+   bool PushEndPass();
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUCommandStream.cpp
+@@ -1343,6 +1343,29 @@
+   return StagePassRecord(rec);
+ }
+ 
++bool WebGPUCommandStream::PushUboDeltaUpload(u32 ring_id, u32 new_off, u32 prev_off,
++                                            u32 block_size, u32 delta_off, u32 delta_len,
++                                            u32 src_heap_ptr)
++{
++  if (ring_id == 0 || block_size == 0 || delta_len == 0)
++    return false;
++  if (!m_header)
++  {
++    PoisonPass();
++    return false;
++  }
++  CmdRecord rec{};
++  rec.op = static_cast<u32>(CmdOp::UboDeltaUpload);
++  rec.arg.u[0] = ring_id;
++  rec.arg.u[1] = new_off;
++  rec.arg.u[2] = prev_off;
++  rec.arg.u[3] = block_size;
++  rec.arg.u[4] = delta_off;
++  rec.arg.u[5] = delta_len;
++  rec.arg.u[6] = src_heap_ptr;
++  return StagePassRecord(rec);
++}
++
+ bool WebGPUCommandStream::PushDraw(u32 vtx_count, u32 inst_count, u32 first_vtx)
+ {
+   if (vtx_count == 0)
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -190,6 +190,8 @@
+     Count = 3
+   };
+   u32 AllocUboSlice(const void* data, u32 size, BufferUploadRole role);
++  u32 AllocUboSliceDelta(const void* data, u32 size, const u8* shadow, bool shadow_valid,
++                         u32 prev_off, BufferUploadRole role);
+   u32 AcquireUboSlice(UboClass ubo_class, const void* data, u32 size);
+   u32 RefreshUboControlMode();
+   bool IsUboSliceLive(u64 publication_serial) const;
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -50,6 +50,12 @@
+ // solid-quad draw inside the open pass (CmdOp::ClearRect) instead of a
+ // whole-attachment loadOp clear. Mario Kart Wii does not render without it.
+ static constexpr unsigned int DOLPHIN_WEB_RENDERER_FEATURE_SCISSORED_CLEAR_RECT = 1u << 0;
++// Bit 1: publish a changed UBO slice as "previous slice plus the changed bytes"
++// instead of re-uploading the whole block. DEFAULT OFF: it is a throughput
++// experiment, not a correctness fix, and the analysis says the win is small
++// enough to be within a bad rig's noise. Being a feature bit means one build
++// serves both arms of the A/B, so the comparison has no cross-build confound.
++static constexpr unsigned int DOLPHIN_WEB_RENDERER_FEATURE_UBO_DELTA = 1u << 1;
+ static constexpr unsigned int DOLPHIN_WEB_RENDERER_FEATURE_DEFAULT =
+     DOLPHIN_WEB_RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
+ 
+@@ -1880,7 +1886,9 @@
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_vs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Vertex, &vsm.constants, sizeof(vsm.constants)) :
+-                   AllocUboSlice(&vsm.constants, sizeof(vsm.constants), BufferUploadRole::Ubo);
++                   AllocUboSliceDelta(&vsm.constants, sizeof(vsm.constants),
++                                      m_vs_shadow.data(), m_vs_shadow_valid, m_vs_off,
++                                      BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(0, cpu_start_ms);
+     if (ubo_cache_enabled && m_vs_off == kUboOffNone)
+       return false;
+@@ -1940,7 +1948,9 @@
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_ps_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Pixel, &psm.constants, sizeof(psm.constants)) :
+-                   AllocUboSlice(&psm.constants, sizeof(psm.constants), BufferUploadRole::Ubo);
++                   AllocUboSliceDelta(&psm.constants, sizeof(psm.constants),
++                                      m_ps_shadow.data(), m_ps_shadow_valid, m_ps_off,
++                                      BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(1, cpu_start_ms);
+     if (ubo_cache_enabled && m_ps_off == kUboOffNone)
+       return false;
+@@ -2027,7 +2037,9 @@
+     const u64 publication_serial_before = m_ubo_publication_serial;
+     m_gs_off = ubo_cache_enabled ?
+                    AcquireUboSlice(UboClass::Geometry, &gsm.constants, sizeof(gsm.constants)) :
+-                   AllocUboSlice(&gsm.constants, sizeof(gsm.constants), BufferUploadRole::Ubo);
++                   AllocUboSliceDelta(&gsm.constants, sizeof(gsm.constants),
++                                      m_gs_shadow.data(), m_gs_shadow_valid, m_gs_off,
++                                      BufferUploadRole::Ubo);
+     RecordUboPrepareCpu(2, cpu_start_ms);
+     if (ubo_cache_enabled && m_gs_off == kUboOffNone)
+       return false;
+@@ -2409,6 +2421,76 @@
+   return offset;
+ }
+ 
++// The changed span of `data` against `shadow`, rounded out to 256-byte blocks
++// (256 is the WebGPU dynamic-offset alignment, and rounding keeps the copy
++// destination legal). Returns false when nothing differs or when the span is
++// too large to be worth the extra records.
++static bool PlanUboDeltaSpan(const u8* data, const u8* shadow, u32 size, u32* out_off,
++                             u32* out_len)
++{
++  constexpr u32 kBlock = 256;
++  u32 lo = size;
++  u32 hi = 0;
++  for (u32 block = 0; block < size; block += kBlock)
++  {
++    const u32 span = std::min(kBlock, size - block);
++    if (std::memcmp(data + block, shadow + block, span) != 0)
++    {
++      if (block < lo)
++        lo = block;
++      hi = block + span;
++    }
++  }
++  if (lo >= hi)
++    return false;
++  // A delta only pays for itself while it is a small part of the block. Past
++  // half, the copy-forward plus the patch move more bytes than one plain
++  // upload, so fall back rather than make things worse.
++  const u32 len = hi - lo;
++  if (len * 2 >= size)
++    return false;
++  *out_off = lo;
++  *out_len = len;
++  return true;
++}
++
++u32 WebGPUGfx::AllocUboSliceDelta(const void* data, u32 size, const u8* shadow, bool shadow_valid,
++                                  u32 prev_off, BufferUploadRole role)
++{
++  const unsigned int renderer_features = DolphinWeb_GetRendererFeatureMask();
++  if ((renderer_features & DOLPHIN_WEB_RENDERER_FEATURE_UBO_DELTA) == 0 || !shadow_valid ||
++      prev_off == kUboOffNone || m_ubo_ring == 0 || size == 0 || size > kUboSliceStride)
++  {
++    return AllocUboSlice(data, size, role);
++  }
++  u32 delta_off = 0;
++  u32 delta_len = 0;
++  if (!PlanUboDeltaSpan(static_cast<const u8*>(data), shadow, size, &delta_off, &delta_len))
++    return AllocUboSlice(data, size, role);
++
++  if (m_ubo_ring_off + kUboSliceStride > kUboRingSize)
++    m_ubo_ring_off = 0;
++  const u32 off = m_ubo_ring_off;
++  // Only the changed span crosses the arena. The rest is carried forward on the
++  // device from the slice this draw's predecessor published.
++  const u32 src = m_cmd_stream.UploadAlloc(static_cast<const u8*>(data) + delta_off, delta_len, 16);
++  if (src == 0)
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
++    return kUboOffNone;
++  }
++  if (!m_cmd_stream.PushUboDeltaUpload(m_ubo_ring, off, prev_off, size, delta_off, delta_len, src))
++  {
++    if (m_ubo_cache_active)
++      InvalidateUboSlices();
++    return kUboOffNone;
++  }
++  m_ubo_ring_off = off + kUboSliceStride;
++  m_last_ubo_slice_serial = ++m_ubo_publication_serial;
++  return off;
++}
++
+ u32 WebGPUGfx::AllocUboSlice(const void* data, u32 size, BufferUploadRole role)
+ {
+   if (m_ubo_ring == 0 || size == 0 || size > kUboSliceStride)

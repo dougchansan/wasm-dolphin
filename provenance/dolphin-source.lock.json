@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "2d8eb36bd8ff78263bfe93172e0336bae75effefb592e4f4130f873e4d3fe7db",
+  "patchSeriesSha256": "95a8ea50435cc1abb1b346b4272b61d8050440996e58183c73a3d392cc1df6e6",
   "patches": [
     {
       "order": 1,
@@ -493,6 +493,14 @@
     },
     {
       "order": 59,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0062-webgpu-ubo-delta-upload.patch",
+      "size": 9731,
+      "sha256": "8d60cf5d15ea6f81a8b833037ae25002fde4a17409143b4b0576fb581b81bd06"
+    },
+    {
+      "order": 60,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -500,7 +508,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 60,
+      "order": 61,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",
