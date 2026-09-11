@@ -2075,6 +2075,7 @@ async function loadCore({
   let rendererFeatureMask = RENDERER_FEATURE_SCISSORED_CLEAR_RECT;
   if (requestedWgpuUboDelta) {
     rendererFeatureMask = (rendererFeatureMask | RENDERER_FEATURE_UBO_DELTA) >>> 0;
+    wgpuUboDeltaEnabled = true;
   }
   if (!wgpuScissoredClearRect) {
     rendererFeatureMask =
@@ -6238,12 +6239,68 @@ let wgpuUboDeltaStaging = null;
 let wgpuUboDeltaStagingOffset = 0;
 let wgpuUboDeltaCount = 0;
 let wgpuUboDeltaBytes = 0;
+// The delta copies CANNOT go into the frame encoder. Uniforms are published
+// per draw, which is inside an open RenderPassEncoder, and an encoder is
+// locked for recording while one of its passes is open -- the full-upload path
+// only works there because queue.writeBuffer is a queue operation, not
+// encoder recording. So the copies get their own encoder, which never opens a
+// pass, and its command buffer is submitted ahead of the frame's.
+let wgpuUboDeltaEncoder = null;
+
+function ensureUboDeltaEncoder(dev) {
+  if (!wgpuUboDeltaEncoder) {
+    wgpuUboDeltaEncoder = dev.createCommandEncoder({ label: "dolphin-ubo-delta" });
+  }
+  return wgpuUboDeltaEncoder;
+}
+
+// Finishes the delta encoder, if any, returning its command buffer. The caller
+// must submit it BEFORE the render command buffer so every slice is complete
+// before a draw reads it.
+function takeUboDeltaCommandBuffer() {
+  if (!wgpuUboDeltaEncoder) return null;
+  const encoder = wgpuUboDeltaEncoder;
+  wgpuUboDeltaEncoder = null;
+  try {
+    return encoder.finish();
+  } catch (e) {
+    recordRendererError("validation", `ubodelta-finish: ${e?.message || e}`);
+    return null;
+  }
+}
+
+// WebGPU rejects copyBufferToBuffer when source and destination are the same
+// buffer, whatever the offsets -- so the predecessor slice cannot be carried
+// forward ring->ring directly. It hops through this scratch buffer instead.
+// Slots are strided so a slot is never rewritten while an earlier copy in the
+// same command buffer might still need it.
+const WGPU_UBO_DELTA_SCRATCH_SLOT = 4352; // >= the largest block (VS, 4112)
+const WGPU_UBO_DELTA_SCRATCH_SLOTS = 256;
+const WGPU_UBO_DELTA_SCRATCH_BYTES =
+  WGPU_UBO_DELTA_SCRATCH_SLOT * WGPU_UBO_DELTA_SCRATCH_SLOTS;
+// Gated rather than always-on: widening the ring's usage changes the control
+// arm too, and an A/B whose control is not the shipping configuration measures
+// nothing.
+let wgpuUboDeltaEnabled = false;
+let wgpuUboDeltaScratch = null;
+let wgpuUboDeltaScratchSlot = 0;
+
+function ensureUboDeltaScratch(dev) {
+  if (!wgpuUboDeltaScratch) {
+    wgpuUboDeltaScratch = dev.createBuffer({
+      size: WGPU_UBO_DELTA_SCRATCH_BYTES,
+      usage: 0x4 | 0x8, // COPY_SRC | COPY_DST
+      label: "dolphin-ubo-delta-scratch",
+    });
+  }
+  return wgpuUboDeltaScratch;
+}
 
 function ensureUboDeltaStaging(dev) {
   if (!wgpuUboDeltaStaging) {
     wgpuUboDeltaStaging = dev.createBuffer({
       size: WGPU_UBO_DELTA_STAGING_BYTES,
-      usage: 0x4 | 0x8, // COPY_DST | COPY_SRC
+      usage: 0x4 | 0x8, // COPY_SRC | COPY_DST
       label: "dolphin-ubo-delta-staging",
     });
   }
@@ -10189,6 +10246,20 @@ function drainWebGpuCmdRing(source = "presentation") {
       // but callers use the return value to decide whether a render/present
       // command buffer was submitted.
       flushMappedUploadsOnly(reason, decisionPrepared);
+      // Any delta copies recorded before this drain still have to land. The
+      // producer has already moved its shadow on, so a later slice will copy
+      // forward from these; dropping them would break the whole chain rather
+      // than just this frame.
+      const orphanDeltaBuffer = takeUboDeltaCommandBuffer();
+      if (orphanDeltaBuffer) {
+        try {
+          q.submit([orphanDeltaBuffer]);
+          gpuCompletionTracker.recordSubmittedWork(q, "ubo-delta-orphan");
+          wgpuUboDeltaStagingOffset = 0;
+        } catch (e) {
+          recordRendererError("submit-error", `ubodelta-orphan: ${e?.message || e}`);
+        }
+      }
       lastSubmitFailureReason = wgpuReplayFatal ? "replay-fatal" : "no-command-encoder";
       return false;
     }
@@ -10202,9 +10273,11 @@ function drainWebGpuCmdRing(source = "presentation") {
     let submitted = false;
     try {
       const renderCommandBuffer = enc.finish();
+      const deltaCommandBuffer = takeUboDeltaCommandBuffer();
       q.submit([
         ...(mappedBatch?.ordinary ? [mappedBatch.ordinary.commandBuffer] : []),
         ...(mappedBatch?.compute ? [mappedBatch.compute.commandBuffer] : []),
+        ...(deltaCommandBuffer ? [deltaCommandBuffer] : []),
         renderCommandBuffer,
       ]);
       gpuCompletionTracker.recordSubmittedWork(q, "hardware-replay");
@@ -10242,6 +10315,8 @@ function drainWebGpuCmdRing(source = "presentation") {
       }
     }
     enc = null;
+    // Normally already taken above; this only fires if enc.finish() threw.
+    takeUboDeltaCommandBuffer();
     if (errScope) {
       errScope = false;
       dev.popErrorScope().then((er) => {
@@ -10571,6 +10646,13 @@ function drainWebGpuCmdRing(source = "presentation") {
                   `[webgpu-ubo-compute] disabled before replay: ${error?.message || error}`
                 );
               }
+            }
+            if (wgpuUboDeltaEnabled &&
+                resourceRole === WGPU_BUFFER_RESOURCE_ROLE_UBO_RING) {
+              // The delta path carries the predecessor slice forward with a
+              // copy out of the ring, which the producer's usage does not ask
+              // for.
+              usage |= 0x0004; // GPUBufferUsage.COPY_SRC
             }
             const createdBuffer = dev.createBuffer({ size, usage });
             webGpuObjects.buffers.set(id, createdBuffer);
@@ -11815,10 +11897,17 @@ function drainWebGpuCmdRing(source = "presentation") {
             q.writeBuffer(staging, stageAt,
                           copyWgpuUploadPayload(heap, srcPtr, deltaLen, true));
             wgpuUboDeltaStagingOffset = (stageAt + len + 255) & ~255;
-            const enc = ensureEnc();
+            const scratch = ensureUboDeltaScratch(dev);
+            const scratchAt =
+              wgpuUboDeltaScratchSlot * WGPU_UBO_DELTA_SCRATCH_SLOT;
+            wgpuUboDeltaScratchSlot =
+              (wgpuUboDeltaScratchSlot + 1) % WGPU_UBO_DELTA_SCRATCH_SLOTS;
+            const denc = ensureUboDeltaEncoder(dev);
             // Order matters: carry the predecessor forward first, then patch.
-            enc.copyBufferToBuffer(ring, prevOff, ring, newOff, blockSize);
-            enc.copyBufferToBuffer(staging, stageAt, ring, newOff + deltaOff, len);
+            // The carry-forward is two hops because ring->ring is rejected.
+            denc.copyBufferToBuffer(ring, prevOff, scratch, scratchAt, blockSize);
+            denc.copyBufferToBuffer(scratch, scratchAt, ring, newOff, blockSize);
+            denc.copyBufferToBuffer(staging, stageAt, ring, newOff + deltaOff, len);
             wgpuUboDeltaCount++;
             wgpuUboDeltaBytes += deltaLen;
           } catch (e) {

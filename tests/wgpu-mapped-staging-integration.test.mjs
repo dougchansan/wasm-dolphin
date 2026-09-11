@@ -150,7 +150,7 @@ test("submission orders upload before render and capacity never falls back", asy
   const worker = await readSource("../src/upstream-discio-worker.js");
   assert.match(
     worker,
-    /q\.submit\(\[\s*\.\.\.\(mappedBatch\?\.ordinary \? \[mappedBatch\.ordinary\.commandBuffer\] : \[\]\),\s*\.\.\.\(mappedBatch\?\.compute \? \[mappedBatch\.compute\.commandBuffer\] : \[\]\),\s*renderCommandBuffer,\s*\]\)/
+    /q\.submit\(\[\s*\.\.\.\(mappedBatch\?\.ordinary \? \[mappedBatch\.ordinary\.commandBuffer\] : \[\]\),\s*\.\.\.\(mappedBatch\?\.compute \? \[mappedBatch\.compute\.commandBuffer\] : \[\]\),\s*\.\.\.\(deltaCommandBuffer \? \[deltaCommandBuffer\] : \[\]\),\s*renderCommandBuffer,\s*\]\)/
   );
   assert.match(
     worker,
