@@ -536,11 +536,26 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityAlloc = utilitySource.indexOf(
     "AllocUboSlice(data, size, BufferUploadRole::Utility)"
   );
-  const utilityArm = utilitySource.indexOf("m_util_uniform_mode = true");
   assert.ok(
     utilityStart >= 0 && utilityEnd > utilityStart &&
-    utilityRefresh >= 0 && utilityRefresh < utilityAlloc && utilityAlloc < utilityArm,
-    "utility uploads must consume an epoch change before publishing and arming their slice"
+    utilityRefresh >= 0 && utilityRefresh < utilityAlloc,
+    "utility uploads must consume an epoch change before publishing their slice"
+  );
+  // The upload used to arm a one-use flag (m_util_uniform_mode) that redirected
+  // the NEXT draw's binding 0 to utility constants. OnScreenUI uploads its
+  // viewport uniform before iterating its draw lists, so an empty list uploaded
+  // without drawing and left the flag set -- and the next GX draw read ImGui
+  // data as pixel constants. That is the Super Mario Sunshine white
+  // file-select background. The domain is now chosen from the bound pipeline's
+  // declared usage instead, so zero utility draws cannot redirect anything.
+  assert.equal(
+    (gfxSource.match(/m_util_uniform_mode/g) ?? []).length, 0,
+    "the one-use utility uniform flag must not come back"
+  );
+  assert.match(
+    gfxSource,
+    /pipeline && pipeline->m_config\.usage == AbstractPipelineUsage::Utility/,
+    "the uniform domain must be selected from the pipeline's declared usage"
   );
   assert.match(worker,
     /case "loadState":[\s\S]*?setWebGpuUboCacheEnabled[\s\S]*?api\?\.loadState[\s\S]*?setWebGpuUboCacheEnabled/);

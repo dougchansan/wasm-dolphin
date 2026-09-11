@@ -100,6 +100,12 @@ test("sampled bind groups expose every mip and array layer of the created textur
       webGpuObjects: objects, moduleInstance: { HEAPU8: new Uint8Array(heap.buffer) },
       getFixedLayouts: () => ({ l1: {}, dummyTexView: {}, dummySampler: {} }),
       FILTERABLE_TEX_FORMATS: new Set(["rgba8unorm"]),
+      // Depth and R32F bindings now use matching unfilterable layouts rather
+      // than being swapped for the dummy texture.
+      UNFILTERABLE_TEX_FORMATS: new Set(["r32float", "depth24plus", "depth32float", "depth24plus-stencil8"]),
+      // The viewport dump is gated off by default; bind-group replay only
+      // consults it for diagnostics.
+      vpDiagDone: true,
       wgpuReplayClassifier: null, vpDiagBgTexByBinding: new Map(),
       self: {}, console: { log() {} },
     }

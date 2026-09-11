@@ -1,0 +1,208 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+index ad87128..494ee0d 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -817,7 +817,10 @@ std::unique_ptr<AbstractShader> WebGPUGfx::CreateShaderFromBinary(ShaderStage st
+ class WebGPUPipeline final : public AbstractPipeline
+ {
+ public:
+-  explicit WebGPUPipeline(u32 bridge_id) : m_bridge_id(bridge_id) {}
++  WebGPUPipeline(const AbstractPipelineConfig& config, u32 bridge_id)
++      : AbstractPipeline(config), m_bridge_id(bridge_id)
++  {
++  }
+   u32 GetBridgeId() const { return m_bridge_id; }
+ 
+ private:
+@@ -1111,7 +1114,7 @@ WebGPUGfx::CreatePipeline(const AbstractPipelineConfig& config,
+     }
+   }
+ 
+-  return std::make_unique<WebGPUPipeline>(bridge_id);
++  return std::make_unique<WebGPUPipeline>(config, bridge_id);
+ }
+ 
+ std::unique_ptr<NativeVertexFormat>
+@@ -2088,7 +2091,7 @@ bool WebGPUGfx::PrepareDrawResources()
+     // PS), b3 = GS. kUboOffNone shouldn't reach here (forced-allocated
+     // above) but clamp to 0 defensively so the offset stays valid.
+     auto off = [](u32 o) { return o == kUboOffNone ? 0u : o; };
+-    const u32 b0 = off(m_util_uniform_mode ? m_util_off : m_ps_off);
++    const u32 b0 = off(m_pipeline_uses_utility_uniforms ? m_util_off : m_ps_off);
+     const u32 dyn[4] = {b0, off(m_vs_off), b0, off(m_gs_off)};
+ #ifdef __EMSCRIPTEN__
+     // §28ac decisive probe (i): at a utility draw's SET_BIND_GROUP(0),
+@@ -2096,7 +2099,7 @@ bool WebGPUGfx::PrepareDrawResources()
+     // Pair with [s28ac-uu] (same utilOff value ⇒ the copy reads the
+     // bytes TextureCacheBase wrote). fbColor/vp identify the 640×480
+     // EFB-copy target.
+-    if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled() && m_util_uniform_mode)
++    if (DolphinWeb::WgpuDeepDiagnostics::IsEnabled() && m_pipeline_uses_utility_uniforms)
+     {
+       static u32 s_pd = 0;
+       const u32 n = s_pd++;
+@@ -2240,6 +2243,8 @@ void WebGPUGfx::SetPipeline(const AbstractPipeline* pipeline)
+ {
+   m_cur_pipeline_id =
+       pipeline ? static_cast<const WebGPUPipeline*>(pipeline)->GetBridgeId() : 0;
++  m_pipeline_uses_utility_uniforms =
++      pipeline && pipeline->m_config.usage == AbstractPipelineUsage::Utility;
+ }
+ 
+ void WebGPUGfx::SetFramebuffer(AbstractFramebuffer* framebuffer)
+@@ -2379,7 +2384,6 @@ void WebGPUGfx::InvalidateUboSlices()
+   m_ps_shadow_valid = false;
+   m_vs_shadow_valid = false;
+   m_gs_shadow_valid = false;
+-  m_util_uniform_mode = false;
+ }
+ 
+ void WebGPUGfx::StoreUboSlice(UboClass ubo_class, const void* data, u32 size, u32 offset,
+@@ -2487,17 +2491,20 @@ void WebGPUGfx::UploadUtilityUniforms(const void* data, u32 size)
+   // A state-load/toggle epoch may have changed since the last GX draw. Apply
+   // it before publishing this utility slice; refreshing later from
+   // PrepareDrawResources would otherwise invalidate the just-written offset
+-  // and clear m_util_uniform_mode before the utility draw can bind it.
++  // before the utility draw can bind it.
+   RefreshUboControlMode();
++  // Utility uploads can precede the first draw, which normally creates this
++  // ring. Publish its creation before allocating the first utility slice.
++  if (m_ubo_ring == 0)
++    m_ubo_ring = m_cmd_stream.PushCreateBuffer(kUboRingSize, kUsageUniform,
++                                               BufferResourceRole::UboRing);
+   const u32 off = AllocUboSlice(data, size, BufferUploadRole::Utility);
+   if (off == kUboOffNone)
+     return;
+-  // The next recorded draw is a utility draw — group0/binding0's
+-  // dynamic offset selects this util slice (the EFB-copy / conversion
+-  // PSBlock) instead of the GX PixelShaderConstants slice. Cleared by
+-  // Draw/DrawIndexed so the following GX draw reverts.
++  // Pipeline usage selects this slice. An upload with no utility draw (for
++  // example empty ImGui draw lists) must not redirect the next GX draw, and
++  // several utility draws may share this upload.
+   m_util_off = off;
+-  m_util_uniform_mode = true;
+ #ifdef __EMSCRIPTEN__
+   // §28ac decisive probe (ii): what did TextureCacheBase actually write
+   // into the util slice? size==48 ⇒ the EFB→texture copy Uniforms
+@@ -2540,15 +2547,11 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+   if (m_cur_pipeline_id == 0)
+   {
+     DiscardOrAbortPendingGeometryRange();
+-    // Don't let an armed utility-uniform mode leak onto a later GX draw
+-    // when this (utility) draw is skipped.
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (!BeginPassIfNeeded())
+   {
+     DiscardOrAbortPendingGeometryRange();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+@@ -2556,14 +2559,12 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+     if (!SetRecordedPipeline(m_cur_pipeline_id))
+     {
+       AbortRecordedPass();
+-      m_util_uniform_mode = false;
+       return;
+     }
+   }
+   if (!PrepareDrawResources())
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   const auto* vm = static_cast<const VertexManager*>(g_vertex_manager.get());
+@@ -2571,17 +2572,13 @@ void WebGPUGfx::Draw(u32 base_vertex, u32 num_vertices)
+       !SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0))
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (!m_cmd_stream.PushDraw(num_vertices, 1, base_vertex))
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+-  // Utility draw consumed — revert to the GX bg0 for following draws.
+-  m_util_uniform_mode = false;
+ }
+ 
+ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+@@ -2589,13 +2586,11 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+   if (m_cur_pipeline_id == 0 || num_indices == 0)
+   {
+     DiscardOrAbortPendingGeometryRange();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (!BeginPassIfNeeded())
+   {
+     DiscardOrAbortPendingGeometryRange();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (m_last_set_pipeline_id != m_cur_pipeline_id)
+@@ -2603,7 +2598,6 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+     if (!SetRecordedPipeline(m_cur_pipeline_id))
+     {
+       AbortRecordedPass();
+-      m_util_uniform_mode = false;
+       return;
+     }
+   }
+@@ -2629,31 +2623,25 @@ void WebGPUGfx::DrawIndexed(u32 base_index, u32 num_indices, u32 base_vertex)
+   if (!PrepareDrawResources())
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   const auto* vm = static_cast<const VertexManager*>(g_vertex_manager.get());
+   if (!vm || vm->GetVertexBufferId() == 0 || vm->GetIndexBufferId() == 0)
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (!SetRecordedVertexBuffer(0, vm->GetVertexBufferId(), 0) ||
+       !SetRecordedIndexBuffer(vm->GetIndexBufferId(), /*u16=*/0, 0))
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+   if (!m_cmd_stream.PushDrawIndexed(num_indices, 1, base_index, base_vertex))
+   {
+     AbortRecordedPass();
+-    m_util_uniform_mode = false;
+     return;
+   }
+-  // Utility draw consumed — revert to the GX bg0 for following draws.
+-  m_util_uniform_mode = false;
+ }
+ 
+ void WebGPUGfx::ScaleTexture(AbstractFramebuffer* dst_framebuffer,
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+index 756cedc..bf7cda7 100644
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -300,10 +300,9 @@ private:
+   bool m_ps_shadow_valid = false;
+   std::array<u8, kUboSliceStride> m_gs_shadow{};
+   bool m_gs_shadow_valid = false;
+-  // Armed by UploadUtilityUniforms, consumed (and cleared) by the next
+-  // recorded draw — selects the util slice for group0/binding0 instead
+-  // of the GX PixelShaderConstants slice.
+-  bool m_util_uniform_mode = false;
++  // SetPipeline selects the UBO domain. Uploading utility data does not imply
++  // that a utility draw follows, or that only one draw will use the data.
++  bool m_pipeline_uses_utility_uniforms = false;
+ 
+   // Cached bind-group ids. group0 (UBOs) + group2 (ssbo) reference
+   // fixed buffers — created once, reused every draw (UBO *contents*

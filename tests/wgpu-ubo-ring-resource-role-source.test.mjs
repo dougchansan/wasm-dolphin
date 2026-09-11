@@ -25,7 +25,20 @@ test("producer tags only the WebGPU UBO ring with a stable resource role", async
     gfx,
     /PushCreateBuffer\(kUboRingSize, kUsageUniform,[\s\S]*BufferResourceRole::UboRing\)/
   );
-  assert.equal((gfx.match(/BufferResourceRole::UboRing/g) ?? []).length, 1);
+  // The ring is created lazily, and since utility uploads can precede the first
+  // GX draw there is now more than one site that can create it. What matters is
+  // not how many sites there are but that every one of them is guarded on the
+  // ring not already existing and tags the buffer with the same role -- one
+  // ring, created once, whichever path gets there first.
+  const uboRingSites = gfx.match(/BufferResourceRole::UboRing/g) ?? [];
+  assert.ok(uboRingSites.length >= 1, "the UBO ring must be tagged with its role");
+  const guardedCreations = gfx.match(
+    /if \(m_ubo_ring == 0\)\s*m_ubo_ring = m_cmd_stream\.PushCreateBuffer\(\s*kUboRingSize, kUsageUniform,\s*BufferResourceRole::UboRing\)/g
+  ) ?? [];
+  assert.equal(
+    guardedCreations.length, uboRingSites.length,
+    "every UboRing creation must be guarded by m_ubo_ring == 0"
+  );
   assert.match(patch, /u3=BufferResourceRole/);
   assert.match(patch, /BufferResourceRole::UboRing/);
 });

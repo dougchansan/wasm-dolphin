@@ -1,0 +1,211 @@
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.cpp
+@@ -590,8 +590,19 @@
+ // (clears, copies, draws) with native wgpu operations until SW drops
+ // out of the chain entirely.
+ 
++static u32 PackSamplerState(const SamplerState& state)
++{
++  // CREATE_SAMPLER keeps its one-word descriptor. Bit 31 distinguishes
++  // per-texture state from legacy untagged linear/repeat commands. Filters
++  // and wrap modes occupy bits 0..6, anisotropy 7..10, min/max LOD 11..26.
++  // LOD bias is already applied by PixelShaderGen at the texture sample.
++  return 0x80000000u | (state.tm0.hex & 0x7fu) |
++         (((state.tm0.hex >> 25) & 0xfu) << 7) | ((state.tm1.hex & 0xffffu) << 11);
++}
++
+ WebGPUGfx::WebGPUGfx()
+ {
++  m_sampler_states.fill(PackSamplerState(RenderState::GetPointSamplerState()));
+   UpdateActiveConfig();
+ }
+ 
+@@ -2038,8 +2049,6 @@
+   RecordUboPacketOpportunity(ubo_change_mask, ubo_payload_sizes);
+   uniform_profile.Pause();
+ 
+-  // One shared sampler (the Day-30 split uses a single samp_ss).
+-
+   // Bind group 0 — the uniform ring at all 4 UBO bindings (b0 PS /
+   // utility PSBlock, b1 VS, b2 custom→reuse PS, b3 GS). Built ONCE: the
+   // per-draw constants live at per-draw *dynamic offsets* into the ring
+@@ -2108,7 +2117,7 @@
+       return false;
+   }
+ 
+-  // Bind group 1 — samplers (b0..7 textures, b8 sampler). Rebuild
++  // Bind group 1 — textures at b0..7 and per-slot samplers at b8..15. Rebuild
+   // only when the bound texture/sampler set OR the render target
+   // changes. A sampler slot that references the *current* render
+   // target (EFB feedback) is a WebGPU read-while-write hazard
+@@ -2126,16 +2135,38 @@
+   u32 sig = 0;
+   Bg1Slot* slot = nullptr;
+   u32 bg1_id = 0;
++  std::array<u32, 8> texture_ids{};
+   {
+     DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
+         DolphinWeb::WebGpuDrawProfile::Phase::TextureSamplerResolve);
+-    if (m_sampler_id == 0)
+-      m_sampler_id = m_cmd_stream.PushCreateSampler(/*linear+repeat=*/0);
+-    sig = m_sampler_id * 2654435761u + m_fb_color_id * 40503u + m_fb_depth_id;
++    sig = m_fb_color_id * 40503u + m_fb_depth_id;
+     for (u32 i = 0; i < 8; i++)
+-      sig = sig * 16777619u + resolve_tex(i);
++    {
++      if (m_sampler_ids[i] == 0)
++      {
++        const auto cached = m_sampler_cache.find(m_sampler_states[i]);
++        if (cached != m_sampler_cache.end())
++        {
++          m_sampler_ids[i] = cached->second;
++        }
++        else
++        {
++          const u32 id = m_cmd_stream.PushCreateSampler(m_sampler_states[i]);
++          if (id == 0)
++            return false;
++          m_sampler_cache.emplace(m_sampler_states[i], id);
++          m_sampler_ids[i] = id;
++        }
++      }
++      texture_ids[i] = resolve_tex(i);
++      sig = sig * 16777619u + texture_ids[i];
++      sig = sig * 16777619u + m_sampler_ids[i];
++    }
+     slot = &m_bg1_cache[sig % kBg1CacheSize];
+-    bg1_id = (slot->id != 0 && slot->sig == sig) ? slot->id : 0;
++    bg1_id = (slot->id != 0 && slot->sig == sig && slot->texture_ids == texture_ids &&
++              slot->sampler_ids == m_sampler_ids) ?
++                 slot->id :
++                 0;
+   }
+   {
+   DolphinWeb::WebGpuDrawProfile::ScopedSample draw_profile(
+@@ -2147,25 +2178,30 @@
+     std::vector<u8> b;
+     PutBgU32(b, 0x57424731);
+     PutBgU32(b, 1);
+-    PutBgU32(b, 9);
++    PutBgU32(b, 16);
+     for (u32 i = 0; i < 8; i++)
+     {
+       PutBgU32(b, i);
+       PutBgU32(b, 1);
+-      PutBgU32(b, resolve_tex(i));
++      PutBgU32(b, texture_ids[i]);
+       PutBgU32(b, 0);
+       PutBgU32(b, 0);
+     }
+-    PutBgU32(b, 8);
+-    PutBgU32(b, 2);
+-    PutBgU32(b, m_sampler_id);
+-    PutBgU32(b, 0);
+-    PutBgU32(b, 0);
++    for (u32 i = 0; i < 8; i++)
++    {
++      PutBgU32(b, 8 + i);
++      PutBgU32(b, 2);
++      PutBgU32(b, m_sampler_ids[i]);
++      PutBgU32(b, 0);
++      PutBgU32(b, 0);
++    }
+     const u32 id = m_cmd_stream.PushCreateBindGroup(b.data(), b.size(), 1);
+     if (id)
+     {
+       slot->id = id;  // evicts any colliding entry (harmless rebuild)
+       slot->sig = sig;
++      slot->texture_ids = texture_ids;
++      slot->sampler_ids = m_sampler_ids;
+       bg1_id = id;
+     }
+   }
+@@ -2267,10 +2303,15 @@
+   m_tex_id[index] = texture ? static_cast<const WebGPUTexture*>(texture)->GetBridgeId() : 0;
+ }
+ 
+-void WebGPUGfx::SetSamplerState(u32 /* index */, const SamplerState& /* state */)
+-{
+-  // Day-30 split uses one shared sampler; per-index sampler state is a
+-  // post-cutover refinement.
++void WebGPUGfx::SetSamplerState(u32 index, const SamplerState& state)
++{
++  if (index >= m_sampler_states.size())
++    return;
++  const u32 packed = PackSamplerState(state);
++  if (m_sampler_states[index] == packed)
++    return;
++  m_sampler_states[index] = packed;
++  m_sampler_ids[index] = 0;
+ }
+ 
+ u32 WebGPUGfx::RefreshUboControlMode()
+diff --git a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+--- a/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
++++ b/Source/Core/VideoBackends/WebGPU/WebGPUGfx.h
+@@ -4,6 +4,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <unordered_map>
+ #include <vector>
+ 
+ #include "Common/CommonTypes.h"
+@@ -222,8 +223,9 @@
+   u32 m_scissor[4] = {0, 0, 640, 480};
+ 
+   u32 m_tex_id[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+-  u32 m_sampler_id = 0;
+-  u32 m_sampler_packed = 0xffffffffu;  // force first CreateSampler
++  std::array<u32, 8> m_sampler_states{};
++  std::array<u32, 8> m_sampler_ids{};
++  std::unordered_map<u32, u32> m_sampler_cache;
+ 
+   u32 m_ssbo_bbox = 0;
+   u32 m_dummy_tex = 0;
+@@ -306,12 +308,12 @@
+   // Cached bind-group ids. group0 (UBOs) + group2 (ssbo) reference
+   // fixed buffers — created once, reused every draw (UBO *contents*
+   // change via writeBuffer; the GPUBindGroup stays valid). group1
+-  // (textures+sampler) is rebuilt only when the bound texture set
+-  // changes (keyed by m_bg1_sig). Prevents the per-draw bind-group
++  // (textures+samplers) is rebuilt only when the bound resource set
++  // changes. Prevents the per-draw bind-group
+   // explosion (was 1.7M/run).
+   u32 m_bg0_id = 0;
+   u32 m_bg2_id = 0;
+-  // group1 (textures+sampler) signature→id cache. A single last-sig
++  // group1 (textures+samplers) signature→id cache. A single last-sig
+   // slot (the old m_bg1_sig/id) re-emitted CREATE_BIND_GROUP whenever
+   // consecutive draws used different texture sets — and Melee cycles
+   // through many per frame, so the ring overflowed (records DROPPED →
+@@ -325,6 +327,8 @@
+   {
+     u32 sig = 0;
+     u32 id = 0;  // 0 = empty (resource ids start at 1)
++    std::array<u32, 8> texture_ids{};
++    std::array<u32, 8> sampler_ids{};
+   };
+   Bg1Slot m_bg1_cache[kBg1CacheSize] = {};
+ };
+diff --git a/Source/Core/VideoCommon/PixelShaderGen.cpp b/Source/Core/VideoCommon/PixelShaderGen.cpp
+--- a/Source/Core/VideoCommon/PixelShaderGen.cpp
++++ b/Source/Core/VideoCommon/PixelShaderGen.cpp
+@@ -379,12 +379,14 @@
+   if (api_type == APIType::Vulkan)
+   {
+     for (u32 i = 0; i < 8; i++)
++    {
+       out.Write("SAMPLER_BINDING({}) uniform texture2DArray tex_{}u;\n", i, i);
+-    out.Write("SAMPLER_BINDING(8) uniform sampler samp_ss;\n");
++      out.Write("SAMPLER_BINDING({}) uniform sampler samp_{}u;\n", i + 8, i);
++    }
+     out.Write("#define SAMP_PARAM texture2DArray dtex, sampler dsmp\n");
+     out.Write("#define SAMP_USE sampler2DArray(dtex, dsmp)\n");
+     out.Write("#define SAMP_FWD dtex, dsmp\n");
+-    out.Write("#define SAMP_AT(i) tex_##i, samp_ss\n");
++    out.Write("#define SAMP_AT(i) tex_##i, samp_##i\n");
+   }
+   else
+   {
