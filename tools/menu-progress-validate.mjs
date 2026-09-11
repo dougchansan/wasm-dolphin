@@ -216,6 +216,7 @@ for (const [environmentName, queryName] of [
   ["WGPUUBOPACK", "wgpuubopack"],
   ["WGPUUBOSPARSE", "wgpuubosparse"],
   ["WGPUUBOMETRICS", "wgpuubometrics"],
+  ["WGPUVPDIAG", "wgpuvpdiag"],
   ["WGPUUNIFORMFAST", "wgpuuniformfast"],
   ["WGPUPACKAGEPROJECTION", "wgpupackageprojection"],
   ["WGPUUPLOADRUNPROJECTION", "wgpuuploadrunprojection"],
@@ -228,6 +229,11 @@ for (const [environmentName, queryName] of [
   ["WGPUDETACHED", "wgpudetached"],
   ["WGPULOADFENCE", "wgpuloadfence"],
   ["WGPUDEEPDIAG", "wgpudeepdiag"],
+  // Native producer/draw phase timers. Accumulated counters read once at the
+  // end of a run, but they are still off by default -- a profiling capture is
+  // a separate run from a throughput measurement, never the same one.
+  ["WGPUPRODPROFILE", "wgpuprodprofile"],
+  ["WGPUDRAWPROFILE", "wgpudrawprofile"],
   ["CORELOG", "corelog"],
   ["EFBDIAG", "efbdiag"],
   ["FRAMECAP", "framecap"],
@@ -235,6 +241,11 @@ for (const [environmentName, queryName] of [
   ["WGPUUPLOADMB", "wgpuuploadmb"],
   ["WGPUSTAGINGSLOTS", "wgpustagingslots"],
   ["WGPUSTAGEFAST", "wgpustagefast"],
+  // Sparse UBO copy-forward uploads only the dirty 16-byte ranges of a
+  // constant block instead of the whole block. It needs the mapped upload
+  // transport, so the two travel together.
+  ["WGPUUBOSPARSE", "wgpuubosparse"],
+  ["WGPUUPLOADTRANSPORT", "wgpuuploadtransport"],
   ["WGPUMAPPEDTIMING", "wgpumappedtiming"],
   ["WGPUDRAINCOALESCE", "wgpudraincoalesce"],
   ["WGPUREPLAYMS", "wgpureplayms"],
@@ -267,11 +278,20 @@ const persistBrowserData = persistUserDataDir
   ? path.resolve(persistUserDataDir)
   : null;
 
+// BROWSER_ARGS appends space-separated Chromium flags. Needed to reach the GPU
+// at all on some hosts: on a headless Linux box with an NVIDIA card,
+// requestAdapter() returns null until --use-angle=vulkan is passed, and then
+// reports vendor "nvidia" / architecture "ampere". Without this the run still
+// completes and still reports numbers -- they are just software-rendered ones.
+const extraBrowserArgs = String(process.env.BROWSER_ARGS || "")
+  .split(/\s+/)
+  .filter(Boolean);
 const chromiumLaunchArgs = [
   "--autoplay-policy=no-user-gesture-required",
   "--enable-webgl",
   "--enable-unsafe-webgpu",
-  "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling"
+  "--enable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
+  ...extraBrowserArgs
 ];
 
 reapStaleBrowsers();

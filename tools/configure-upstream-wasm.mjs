@@ -167,7 +167,13 @@ cmakeArgs.push(`-DDOLPHIN_WASM_PROJECT_ROOT=${root.replace(/\\/g, "/")}`);
 // real symbols instead of wasm-function[N]. Name section only — no codegen or
 // optimisation change, so timings stay representative. Off by default.
 if (process.env.PROFILING_FUNCS === "1") {
+  // The -D was on its own for a while, and nothing in the vendored CMake ever
+  // read it: the configure step logged that it was building with symbols, the
+  // link never got the flag, and the profile still read wasm-function[N].
+  // Pass the flag itself so the setting cannot be advertised without taking
+  // effect.
   cmakeArgs.push("-DDOLPHIN_WASM_PROFILING_FUNCS=ON");
+  cmakeArgs.push("-DCMAKE_EXE_LINKER_FLAGS:STRING=--profiling-funcs");
   console.log("PROFILING_FUNCS=1 -> core will be built with a wasm name section");
 }
 

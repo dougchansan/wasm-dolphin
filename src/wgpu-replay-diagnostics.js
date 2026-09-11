@@ -226,6 +226,16 @@ export function requestedWgpuUboMetrics(search = globalThis.location?.search ?? 
   return new URLSearchParams(search).get("wgpuubometrics") === "1";
 }
 
+// The viewport/uniform dump from the PR #19 black-3D-models investigation.
+// It builds string keys out of float arrays on EVERY uniform upload, for the
+// first 6000 presents -- about five minutes on the hardware path, so every
+// benchmark run this project has ever taken was measured with it running. A
+// CPU profile of the consumer thread put it at ~15% of that thread's time,
+// plus a large share of an 11% garbage-collector share. Off unless asked for.
+export function requestedWgpuVpDiag(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("wgpuvpdiag") === "1";
+}
+
 export function requestedWgpuUniformFast(search = globalThis.location?.search ?? "") {
   return new URLSearchParams(search).get("wgpuuniformfast") === "1";
 }

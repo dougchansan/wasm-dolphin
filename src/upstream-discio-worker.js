@@ -947,6 +947,7 @@ async function handleMessage(type, payload) {
         wgpuStateCache: payload.wgpuStateCache,
         wgpuUboCache: payload.wgpuUboCache,
         wgpuUboMetrics: payload.wgpuUboMetrics,
+        wgpuVpDiag: payload.wgpuVpDiag,
         wgpuUniformFast: payload.wgpuUniformFast,
         wgpuUboPack: payload.wgpuUboPack,
         wgpuSparseUbo: payload.wgpuSparseUbo,
@@ -1443,6 +1444,7 @@ async function loadCore({
   wgpuStateCache: requestedWgpuStateCache = false,
   wgpuUboCache: requestedWgpuUboCache = false,
   wgpuUboMetrics: requestedWgpuUboMetrics = false,
+  wgpuVpDiag: requestedWgpuVpDiag = false,
   wgpuUniformFast: requestedWgpuUniformFast = false,
   wgpuUboPack: requestedWgpuUboPack = false,
   wgpuSparseUbo: requestedWgpuSparseUbo = false,
@@ -1587,6 +1589,9 @@ async function loadCore({
     throw new Error("wgpuubometrics=1 requires video=wgpu");
   }
   wgpuUboMetricsEnabled = collectMetrics && Boolean(requestedWgpuUboMetrics);
+  // vpdiag starts finished, so every vpDiagNote* call is a single boolean
+  // test until someone asks for the dump.
+  vpDiagDone = !requestedWgpuVpDiag;
   if (requestedWgpuUniformFast && videoBackend !== "WebGPU-Real") {
     throw new Error("wgpuuniformfast=1 requires video=wgpu");
   }
@@ -8069,7 +8074,11 @@ const VPDIAG_UNTIL = 6000; // ... up to here, so a scene change can't be missed
 let vpDiagRaw = null;      // [near, far] as the producer sent them
 let vpDiagTally = new Map();
 let vpDiagDraws = 0;
-let vpDiagDone = false;
+// Starts true: this is the PR #19 investigation dump, and it is only armed by
+// wgpuvpdiag=1. It used to run unconditionally for the first 6000 presents,
+// which is about five minutes on the hardware path -- long enough that every
+// benchmark run was measured with it on.
+let vpDiagDone = true;
 function vpDiagNoteViewport(near, far) {
   if (vpDiagDone) return;
   vpDiagRaw = [near, far];
@@ -10599,8 +10608,10 @@ function drainWebGpuCmdRing(source = "presentation") {
             // @byte128=projection. Zeros here ⇒ upload path broken;
             // valid ⇒ the GPU UBO is fine and the bug is VS exec /
             // vertex fetch.
-            vpDiagNoteUpload(uploadSource, len);
-          vpDiagNotePsUpload(uploadSource, len);
+            if (!vpDiagDone) {
+              vpDiagNoteUpload(uploadSource, len);
+              vpDiagNotePsUpload(uploadSource, len);
+            }
           if (uploadRole === 4 && !vpDiagDone) {
             vpDiagNoteIndexUpload(uploadSource, len, u32[recWord + 2]);
           }

@@ -83,6 +83,7 @@ export class UpstreamWorkerAdapter {
     wgpuStateCache = false,
     wgpuUboCache = false,
     wgpuUboMetrics = false,
+    wgpuVpDiag = false,
     wgpuUniformFast = false,
     wgpuUboPack = false,
     wgpuSparseUbo = false,
@@ -181,6 +182,7 @@ export class UpstreamWorkerAdapter {
     this.wgpuStateCache = Boolean(wgpuStateCache);
     this.wgpuUboCache = Boolean(wgpuUboCache);
     this.wgpuUboMetrics = Boolean(wgpuUboMetrics);
+    this.wgpuVpDiag = Boolean(wgpuVpDiag);
     this.wgpuUniformFast = Boolean(wgpuUniformFast);
     this.wgpuUboPack = Boolean(wgpuUboPack);
     this.wgpuSparseUbo = Boolean(wgpuSparseUbo);
@@ -378,6 +380,7 @@ export class UpstreamWorkerAdapter {
       wgpuStateCache: this.wgpuStateCache,
       wgpuUboCache: this.wgpuUboCache,
       wgpuUboMetrics: this.wgpuUboMetrics,
+      wgpuVpDiag: this.wgpuVpDiag,
       wgpuUniformFast: this.wgpuUniformFast,
       wgpuUboPack: this.wgpuUboPack,
       wgpuSparseUbo: this.wgpuSparseUbo,
