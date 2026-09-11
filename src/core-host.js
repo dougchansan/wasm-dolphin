@@ -34,6 +34,7 @@ import {
   requestedWgpuMappedDrainCoalescing,
   requestedWgpuUboCache,
   requestedWgpuUboMetrics,
+  requestedWgpuVpDiag,
   requestedWgpuUniformFast,
   requestedWgpuUboPack
 } from "./wgpu-replay-diagnostics.js";
@@ -138,6 +139,7 @@ export class EmulatorHost {
     this.wgpuStateCache = requestedWgpuStateCache(window.location.search);
     this.wgpuUboCache = requestedWgpuUboCache(window.location.search);
     this.wgpuUboMetrics = requestedWgpuUboMetrics(window.location.search);
+    this.wgpuVpDiag = requestedWgpuVpDiag(window.location.search);
     this.wgpuUniformFast = requestedWgpuUniformFast(window.location.search);
     this.wgpuUboPack = requestedWgpuUboPack(window.location.search);
     this.wgpuSparseUbo = requestedWgpuSparseUbo(window.location.search);
@@ -407,6 +409,7 @@ export class EmulatorHost {
             wgpuStateCache: this.wgpuStateCache,
             wgpuUboCache: this.wgpuUboCache,
             wgpuUboMetrics: this.wgpuUboMetrics,
+            wgpuVpDiag: this.wgpuVpDiag,
             wgpuUniformFast: this.wgpuUniformFast,
             wgpuUboPack: this.wgpuUboPack,
             wgpuSparseUbo: this.wgpuSparseUbo,
