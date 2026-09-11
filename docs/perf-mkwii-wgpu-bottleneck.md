@@ -239,3 +239,48 @@ Every number kept here comes from runs that were interleaved with an adjacent
 control, so shared load biases both arms equally. On a machine that other work
 shares, only within-batch deltas mean anything, and absolute numbers between
 batches do not compare.
+
+## Result: the producer-side dirty-range upload was built, and it is worth nothing
+
+It was built anyway, because "do not build this yet" rested on an estimate and
+the benchmark had since been hardened enough to test it.
+
+    rig           RTX 3090, Ryzen, Chromium 145, ANGLE Vulkan
+    fixture       __mkw-race.sav, SAVE_STATE_AT=0, INPUT_SCRIPT=none, 40 s
+    arms          control vs WGPUUBODELTA=1, 6 pairs, 4 warmups discarded
+
+| | median frames/60 s | spread |
+| --- | ---: | --- |
+| A (control) | 1440.0 | 1402.3-1450.3 |
+| B (delta) | 1438.2 | 1411.8-1455.5 |
+
+Paired difference **+0.8 frames/60 s (+0.1%)**, range -18.9..+22.3, with the
+six pairs disagreeing in sign three to three. The rig resolves +/-1.4% at six
+pairs, so the verdict is NOT RESOLVED: the effect is smaller than the smallest
+thing this fixture can see.
+
+The important part is that this is not a failure to engage. The B arm moved
+**199 MB of uniform payload in 25 s where the full-upload path moves roughly
+1.5 GB** -- about a 7.5x cut in exactly the traffic that was named as the
+bottleneck -- with zero validation errors and a correct picture. The dirty-range
+upload did what it was designed to do, and throughput did not move.
+
+So the 2.39 GB of uniform over-upload is real, and it is not what limits this
+workload. Removing it buys nothing measurable. The remaining sections above
+that treat arena volume as the thing to attack should be read with that in
+mind: the next candidate has to come from somewhere other than upload volume.
+
+### Getting a hardware adapter on the Linux rig
+
+Chromium 145 blocklists the 3090, and the documented `--use-angle=vulkan` is no
+longer sufficient on its own -- a run still completes and still reports
+numbers, they are just SwiftShader ones.
+
+| flags | adapter |
+| --- | --- |
+| `--use-angle=vulkan --ignore-gpu-blocklist` | nvidia / ampere |
+| `--ignore-gpu-blocklist` alone | google / swiftshader |
+| `--use-angle=vulkan` alone | google / swiftshader |
+
+Both are needed, and `--expect-adapter nvidia` should be passed on every run so
+a silent fallback is discarded rather than averaged in.
