@@ -14,23 +14,30 @@ const end = worker.indexOf("case WGPU_CMD_OP_SET_SCISSOR:", start);
 assert.ok(start >= 0 && end > start, "worker ClearRect execution seam exists");
 const clearCase = worker.slice(start, end);
 
-function clearRect(viewport, scissor = [4, 4, 4, 4], flags = 3, onPipeline = () => {}) {
+function clearRect(viewport, scissor = [4, 4, 4, 4], flags = 3, onPipeline = () => {}, havePipeline = true) {
   const events = [];
   const errors = [];
   const pipeline = {};
+  const gamePipeline = {};
+  let currentPipeline = havePipeline ? gamePipeline : null;
+  let cachedPipeline = currentPipeline;
   const pass = {
     setViewport(...args) { events.push(["viewport", ...args]); },
     setScissorRect(...args) { events.push(["scissor", ...args]); },
-    setPipeline(value) { assert.equal(value, pipeline); events.push(["pipeline"]); },
+    setPipeline(value) {
+      assert.ok(value === pipeline || value === gamePipeline);
+      currentPipeline = value;
+      events.push([value === pipeline ? "pipeline" : "restore-pipeline"]);
+    },
     draw(...args) { events.push(["draw", ...args]); },
   };
   const u32 = new Uint32Array([25, 0, 0, 2, 2, 0xc86432ff, 0, flags]);
   const f32 = new Float32Array(u32.buffer);
   f32[6] = 0.25;
-  const self = { _wgCurPipe: 42 };
+  const self = { _wgCurPipe: havePipeline ? 42 : 0 };
   const replay = vm.runInNewContext(
     `(function () {
-      let passHasPipe = true, passNeedsVertexBuffer = true;
+      let passHasPipe = ${havePipeline}, passNeedsVertexBuffer = ${havePipeline};
       switch (25) { ${clearCase} }
       return { passHasPipe, passNeedsVertexBuffer };
     })`,
@@ -39,16 +46,24 @@ function clearRect(viewport, scissor = [4, 4, 4, 4], flags = 3, onPipeline = () 
       u32, f32, recWord: 0, WGPU_CMD_OP_CLEAR_RECT: 25,
       dev: {}, ensureClearPipeline: (...args) => { onPipeline(args); return pipeline; },
       GX_NATIVE_DEPTH: false, CLEARRECT_FULL_VIEWPORT: true,
-      DIAG_DEPTH_TRACE: false, vpDiagDone: true,
+      dtLastPipe: havePipeline ? gamePipeline : null,
+      wgpuConsumerStateCacheEnabled: true,
+      wgpuPassStateCache: {
+        recordPipelineApplied(value) { cachedPipeline = value; },
+        recordPipelineApplyFailed() { cachedPipeline = null; },
+      },
+      DIAG_DEPTH_TRACE: false, vpDiagEnabled: false, vpDiagDone: true,
       lastAppliedViewport: viewport, lastAppliedScissor: scissor, self,
       recordRendererError: (...args) => errors.push(args),
     }
   );
   const state = replay();
   assert.deepEqual(errors, [], "clear does not swallow an execution error");
-  assert.equal(state.passHasPipe, false, "next game draw must bind its own pipeline");
-  assert.equal(state.passNeedsVertexBuffer, false);
-  assert.equal(self._wgCurPipe, 0);
+  assert.equal(state.passHasPipe, havePipeline, "producer may elide an unchanged SET_PIPELINE");
+  assert.equal(state.passNeedsVertexBuffer, havePipeline);
+  assert.equal(self._wgCurPipe, havePipeline ? 42 : 0);
+  if (havePipeline) assert.equal(currentPipeline, gamePipeline, "following draws use the game pipeline");
+  assert.equal(cachedPipeline, havePipeline ? gamePipeline : null);
   assert.equal(self._wgClearRectN, 1);
   return events;
 }
@@ -68,6 +83,7 @@ for (const [name, viewport] of [
       ["draw", 3, 1, 0, 0],
       ["viewport", ...viewport],
       ["scissor", ...scissor],
+      ["restore-pipeline"],
     ]);
     assert.deepEqual(viewport, before, "cached game viewport remains unchanged");
     assert.deepEqual(scissor, [4, 4, 4, 4], "cached game scissor remains unchanged");
@@ -80,6 +96,7 @@ test("ClearRect skips redundant viewport calls when the game already uses the fu
     ["pipeline"],
     ["draw", 3, 1, 0, 0],
     ["scissor", 1, 1, 6, 6],
+    ["restore-pipeline"],
   ]);
 });
 
@@ -88,6 +105,14 @@ test("ClearRect preserves the implicit full attachment viewport and restores the
     ["scissor", 0, 0, 2, 2],
     ["pipeline"],
     ["draw", 3, 1, 0, 0],
+    ["scissor", 0, 0, 8, 8],
+    ["restore-pipeline"],
+  ]);
+});
+
+test("ClearRect does not make game drawing valid when no pipeline was bound before the clear", () => {
+  assert.deepEqual(clearRect(null, null, 3, () => {}, false), [
+    ["scissor", 0, 0, 2, 2], ["pipeline"], ["draw", 3, 1, 0, 0],
     ["scissor", 0, 0, 8, 8],
   ]);
 });
@@ -149,4 +174,63 @@ test("clear pipelines preserve channel masks in GPU descriptors and cache identi
   assert.equal(cache.size, 4);
   assert.equal(descriptors.length, 4);
   assert.deepEqual(errors, []);
+});
+
+function clearPipelineCacheFixture() {
+  const pipelineStart = worker.indexOf("function ensureClearPipeline(");
+  const pipelineEnd = worker.indexOf("\nfunction ", pipelineStart);
+  const cache = new Map();
+  const errors = [];
+  let failNext = false;
+  const dev = {
+    createShaderModule(descriptor) { return { descriptor }; },
+    createRenderPipeline(descriptor) {
+      if (failNext) { failNext = false; throw new Error("test pipeline failure"); }
+      return { descriptor };
+    },
+  };
+  const ensure = vm.runInNewContext(`(${worker.slice(pipelineStart, pipelineEnd)})`, {
+    WGPU_CLEAR_PIPELINES: cache,
+    WGPU_CLEAR_PIPELINE_CAP: 64,
+    recordRendererError: (...args) => errors.push(args),
+  });
+  return {
+    cache, errors,
+    failNext() { failNext = true; },
+    get: (rgba) => ensure(dev, "rgba8unorm", "depth32float", 15, true, rgba, 0),
+  };
+}
+
+test("clear cache eviction never suppresses a new or previously evicted clear", () => {
+  const fixture = clearPipelineCacheFixture();
+  const heldPipelines = [];
+  for (let value = 0; value < 130; value++) {
+    const rgba = (value * 0x1000000 + 0xff) >>> 0;
+    const pipeline = fixture.get(rgba);
+    assert.ok(pipeline, `clear ${value} must still draw after cache capacity`);
+    assert.equal(fixture.get(rgba), pipeline, "a cache hit does not rebuild a pipeline");
+    assert.ok(fixture.cache.size <= 64, "cache remains bounded");
+    heldPipelines.push(pipeline);
+  }
+  assert.equal(fixture.cache.size, 64);
+  assert.ok(![...fixture.cache.values()].includes(heldPipelines[0]));
+  assert.equal(heldPipelines[0].descriptor.fragment.targets[0].writeMask, 15,
+    "eviction leaves pipeline references held by pending command buffers usable");
+  const recreated = fixture.get(0xff);
+  assert.ok(recreated, "returning to an evicted clear must not be dropped");
+  assert.notEqual(recreated, heldPipelines[0]);
+  assert.equal(fixture.cache.size, 64);
+  assert.deepEqual(fixture.errors, []);
+});
+
+test("failed clear pipeline creation does not consume capacity or evict a working entry", () => {
+  const fixture = clearPipelineCacheFixture();
+  for (let value = 0; value < 64; value++) fixture.get(value);
+  const before = [...fixture.cache.values()];
+  fixture.failNext();
+  assert.equal(fixture.get(0x12345678), null);
+  assert.deepEqual([...fixture.cache.values()], before);
+  assert.equal(fixture.errors.length, 1);
+  assert.ok(fixture.get(0x12345678), "a failed creation remains retryable");
+  assert.equal(fixture.cache.size, 64);
 });

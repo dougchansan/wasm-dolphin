@@ -536,11 +536,11 @@ test("opt-in UBO cache is exact, two-entry MRU, serial-bounded, and load-invalid
   const utilityAlloc = utilitySource.indexOf(
     "AllocUboSlice(data, size, BufferUploadRole::Utility)"
   );
-  const utilityArm = utilitySource.indexOf("m_util_uniform_mode = true");
+  const utilityPublish = utilitySource.indexOf("m_util_off = off");
   assert.ok(
     utilityStart >= 0 && utilityEnd > utilityStart &&
-    utilityRefresh >= 0 && utilityRefresh < utilityAlloc && utilityAlloc < utilityArm,
-    "utility uploads must consume an epoch change before publishing and arming their slice"
+    utilityRefresh >= 0 && utilityRefresh < utilityAlloc && utilityAlloc < utilityPublish,
+    "utility uploads must consume an epoch change before publishing their slice"
   );
   assert.match(worker,
     /case "loadState":[\s\S]*?setWebGpuUboCacheEnabled[\s\S]*?api\?\.loadState[\s\S]*?setWebGpuUboCacheEnabled/);

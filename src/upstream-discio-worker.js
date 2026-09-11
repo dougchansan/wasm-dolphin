@@ -9,6 +9,7 @@ import {
   sha256Hex
 } from "./upstream-worker-protocol.js";
 import { parseDolHeader } from "./dol.js";
+import { decodeWgpuSamplerState } from "./wgpu-sampler-state.js";
 import { decodePrebuiltCache } from "./prebuilt-jit-cache-format.js";
 import {
   JIT_CACHE_ENTRY_KEY_SCHEMA,
@@ -406,6 +407,8 @@ let ppcWasmJitPreEngageCoreFps = 0;
 let ppcWasmJitCoreSampleFrame = -1;
 let ppcWasmJitCoreSampleTime = 0;
 let ppcWasmJitCoreFpsRolling = 0;
+let ppcWasmJitCorePaused = false;
+let ppcWasmJitTimingSuspensions = 0;
 function sampleCoreFpsRolling(coreFrame) {
   const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const cf = coreFrame >>> 0;
@@ -1038,7 +1041,14 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
-      const loaded = Boolean(api?.loadState(payload.slot | 0));
+      let loaded = false;
+      ppcWasmJitTimingSuspensions += 1;
+      try {
+        loaded = Boolean(api?.loadState(payload.slot | 0));
+      } finally {
+        resetPpcWasmJitTiming(loaded);
+        ppcWasmJitTimingSuspensions -= 1;
+      }
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
@@ -1061,17 +1071,28 @@ async function handleMessage(type, payload) {
       }
       const paused = Boolean(payload.paused);
       const transitionAtMs = performance.now();
-      api.setCorePaused(paused ? 1 : 0);
-      if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
-      const observedAtMs = performance.now();
-      return {
-        paused: api?.getCoreStateName?.() === "Paused",
-        requestedPaused: paused,
-        coreStateName: api?.getCoreStateName?.() ?? "",
-        transitionAtMs,
-        observedAtMs,
-        ...framePayload(),
-      };
+      ppcWasmJitTimingSuspensions += 1;
+      resetPpcWasmJitTiming();
+      try {
+        if (api.setCorePaused(paused ? 1 : 0)) {
+          ppcWasmJitCorePaused = paused;
+        }
+        if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
+        const observedAtMs = performance.now();
+        const coreStateName = api?.getCoreStateName?.() ?? "";
+        if (coreStateName) ppcWasmJitCorePaused = coreStateName === "Paused";
+        return {
+          paused: coreStateName === "Paused",
+          requestedPaused: paused,
+          coreStateName,
+          transitionAtMs,
+          observedAtMs,
+          ...framePayload(),
+        };
+      } finally {
+        resetPpcWasmJitTiming();
+        ppcWasmJitTimingSuspensions -= 1;
+      }
     }
     case "validationReadCoreProgress": {
       const loadedCheckpoint = readLastLoadedCheckpoint();
@@ -1238,11 +1259,18 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
-      const rc = api.loadStateFile(path) | 0;
-      // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
-      // step the core) — wait real wall-clock time so the restore
-      // actually takes effect before we sample/screenshot.
-      await new Promise((r) => setTimeout(r, 1200));
+      let rc = 0;
+      ppcWasmJitTimingSuspensions += 1;
+      try {
+        rc = api.loadStateFile(path) | 0;
+        // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
+        // step the core) — wait real wall-clock time so the restore
+        // actually takes effect before we sample/screenshot.
+        await new Promise((r) => setTimeout(r, 1200));
+      } finally {
+        resetPpcWasmJitTiming(rc === 1);
+        ppcWasmJitTimingSuspensions -= 1;
+      }
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
@@ -1642,6 +1670,12 @@ async function loadCore({
   wgpuConsumerStateCacheEnabled = false;
   wgpuPassStateCache = createWgpuPassStateCache();
   wgpuDeepReplayDiagnostics = Boolean(requestedWgpuDeepReplayDiagnostics);
+  // Collect payload/vertex diagnostics only when requested. Explicit capture
+  // and render probes also need these sidecars; ordinary replay does not.
+  vpDiagEnabled = wgpuDeepReplayDiagnostics || Number(frameCap) > 0 ||
+    Boolean(efbDiag) || DIAG_DEPTH_TRACE || DIAG_DEPTH_READBACK ||
+    DIAG_TEX_READBACK || DIAG_ISOLATE_DRAW || DIAG_SKIP_EMPTY_TEX || DIAG_ONLY_OPAQUE;
+  vpDiagDone = false;
   wgpuDetachedPresenter = Boolean(requestedWgpuDetachedPresenter);
   wgpuDetachedBitmapPending = false;
   wgpuLoadEpochFence = Boolean(requestedWgpuLoadEpochFence);
@@ -2034,6 +2068,9 @@ async function loadCore({
   ppcWasmJitDisabledForSession = false;
   ppcWasmJitCooldownUntilFrame = 0;
   ppcWasmJitEnabledAtFrame = 0;
+  ppcWasmJitCorePaused = false;
+  ppcWasmJitTimingSuspensions = 0;
+  resetPpcWasmJitTiming(true);
   ppcWasmJitTier = requestedPpcWasmJitTier === "mixed" ? "mixed" : "guarded";
   ppcWasmJitWarmupFrames = normalizePpcWasmJitWarmupFrames(requestedPpcWasmJitWarmupFrames);
   console.log(`[s28-jittier] worker init: requested=${JSON.stringify(requestedPpcWasmJitTier)} ` +
@@ -3457,7 +3494,25 @@ function runPresentationLoop() {
   }
 }
 
+function resetPpcWasmJitTiming(invalidateBaseline = false) {
+  // Intentional pauses and loads are not emulation stalls. Keep JIT mode,
+  // cooldown, presentation resources, and lifetime metrics unchanged.
+  ppcWasmJitCoreSampleFrame = -1;
+  ppcWasmJitCoreSampleTime = 0;
+  ppcWasmJitCoreFpsRolling = 0;
+  ppcWasmJitFuseLastFrame = -1;
+  ppcWasmJitFuseLastTime = 0;
+  presentationMaxIntervalMs = 0;
+  maxIntervalSincePresentationFps = 0;
+  lastPresentedAt = performance.now();
+  if (invalidateBaseline) {
+    ppcWasmJitPreEngageFps = 0;
+    ppcWasmJitPreEngageCoreFps = 0;
+  }
+}
+
 function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
+  if (ppcWasmJitCorePaused || ppcWasmJitTimingSuspensions > 0) return;
   // Keep a pre-engage core-fps estimate warm. This runs every tick while the
   // JIT is still off, which is the only window in which an honest "before"
   // baseline can be taken.
@@ -3524,6 +3579,7 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
 }
 
 function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
+  if (ppcWasmJitCorePaused || ppcWasmJitTimingSuspensions > 0) return;
   if (!ppcWasmJitActive || ppcWasmJitForce || !api?.setPpcWasmJitEnabled) {
     return;
   }
@@ -3616,7 +3672,7 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   ppcWasmJitCooldownUntilFrame = (coreFrame >>> 0) + WASM_JIT_DEGRADED_COOLDOWN_FRAMES;
   postStatus(
     `Experimental WASM JIT temporarily off ` +
-      `(fps:${presentationFps} baseline:${baseline} ` +
+      `(fps:${presentationFps} baseline:${ppcWasmJitPreEngageCoreFps} ` +
       `${catastrophic ? "catastrophic" : "regressed"}; cooldown ` +
       `${WASM_JIT_DEGRADED_COOLDOWN_FRAMES} frames)`
   );
@@ -6234,9 +6290,12 @@ const webGpuObjects = {
   buffers: new Map(),
   textures: new Map(),
   samplers: new Map(),
+  samplerDescriptors: new Map(),
+  nearestSamplers: new Map(),
   bindGroups: new Map(),
+  bindGroupSamplingMasks: new Map(),
   pipeTpl: new Map(),  // id → {desc, target, depthBase} template
-  pipeVar: new Map(),  // `id|cFmt|dFmt` → GPURenderPipeline|null
+  pipeVar: new Map(),  // pipeline/attachment/depth/sampling-layout key → pipeline|null
   shaderOk: 0,
   shaderFail: 0
 };
@@ -6485,6 +6544,33 @@ function copyWgpuUploadPayload(heap, pointer, bytes, padToFour = false) {
   const copy = new Uint8Array(length);
   copy.set(heap.subarray(pointer, pointer + bytes));
   return copy;
+}
+
+// Borrowed payload for the immediate queue.writeBuffer call only. That call
+// copies its bytes synchronously; the next upload may reuse storage after it
+// returns. Held uploads, texture uploads, and mapped staging retain their own data.
+const WGPU_IMMEDIATE_BUFFER_SCRATCH_MAX_BYTES = 4 * 1024 * 1024;
+let wgpuImmediateBufferScratch = new Uint8Array(0);
+
+function copyImmediateWgpuBufferUpload(heap, pointer, bytes) {
+  if (bytes > WGPU_IMMEDIATE_BUFFER_SCRATCH_MAX_BYTES) {
+    return copyWgpuUploadPayload(heap, pointer, bytes, true);
+  }
+  const source = heap.subarray(pointer, pointer + bytes);
+  // Preserve the original helper behavior for truncated or invalid spans.
+  if (source.byteLength !== bytes) {
+    return copyWgpuUploadPayload(heap, pointer, bytes, true);
+  }
+  const length = (bytes + 3) & ~3;
+  if (wgpuImmediateBufferScratch.byteLength < length) {
+    let capacity = Math.max(256, wgpuImmediateBufferScratch.byteLength);
+    while (capacity < length) capacity *= 2;
+    wgpuImmediateBufferScratch = new Uint8Array(capacity);
+  }
+  const payload = wgpuImmediateBufferScratch.subarray(0, length);
+  payload.set(source);
+  payload.fill(0, bytes);
+  return payload;
 }
 
 function stageHeldWgpuUploads(
@@ -7569,20 +7655,43 @@ const WGPU_TEX_FORMAT = [
   "depth24plus-stencil8", "rgba16float", "r16uint", "r32float",
   "rgb10a2unorm"
 ];
-// §26: formats compatible with the fixed group-1 texture layout
-// (sampleType:"float", filterable). Anything else bound there —
-// r32float (EFB depth, unfilterable-float), r16uint (uint), depth* —
-// is a validation error that poisons the whole frame submit.
+// Color bindings use the filterable layout. Depth and R32F bindings use
+// matching unfilterable layouts and point samplers without converting texels.
 const FILTERABLE_TEX_FORMATS = new Set([
   "rgba8unorm", "bgra8unorm", "rgba16float", "rgb10a2unorm"
 ]);
+const UNFILTERABLE_TEX_FORMATS = new Set([
+  "r32float", "depth24plus", "depth32float", "depth24plus-stencil8"
+]);
 
-// Explicit fixed bind-group layouts mirroring the Day-22 translator
-// SHADER_HEADER: group0 = UBOs b0..3, group1 = textures b0..7 +
-// sampler b8, group2 = bbox storage b0. Created once; replaces
-// layout:"auto" so bind groups are uniform across every TEV config.
-function getFixedLayouts() {
-  if (renderGpu._fixedLayouts) return renderGpu._fixedLayouts;
+// Explicit layouts mirroring SHADER_HEADER: group0 = UBOs b0..3, group1 =
+// textures b0..7 and samplers b8..15, group2 = bbox storage b0. Groups 0 and 2
+// are shared; group 1 and the pipeline layout vary with texture sample types.
+function getFixedLayouts(unfilterableMask = 0, nonFilteringSamplerMask = unfilterableMask) {
+  if (renderGpu._fixedLayouts) {
+    const base = renderGpu._fixedLayouts;
+    if (!unfilterableMask && !nonFilteringSamplerMask) return base;
+    const key = `${unfilterableMask}/${nonFilteringSamplerMask}`;
+    if (!base.samplingVariants.has(key)) {
+      const entries = [];
+      for (let i = 0; i < 8; i++) {
+        entries.push({ binding: i, visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: (unfilterableMask & (1 << i))
+            ? "unfilterable-float" : "float", viewDimension: "2d-array" } });
+        entries.push({ binding: i + 8, visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: (nonFilteringSamplerMask & (1 << i))
+            ? "non-filtering" : "filtering" } });
+      }
+      const l1 = renderGpu.device.createBindGroupLayout({
+        label: `dolphin-bg1-samp-${key}`, entries
+      });
+      const pipelineLayout = renderGpu.device.createPipelineLayout({
+        label: `dolphin-pipeline-layout-${key}`, bindGroupLayouts: [base.l0, l1, base.l2]
+      });
+      base.samplingVariants.set(key, { ...base, l1, pipelineLayout });
+    }
+    return base.samplingVariants.get(key);
+  }
   const dev = renderGpu.device;
   const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
   // §16: the 4 group-0 UBOs are dynamic-offset — one bind group over
@@ -7595,9 +7704,8 @@ function getFixedLayouts() {
       buffer: { type: "uniform", hasDynamicOffset: true }
     }))
   });
-  // GX pixel path (Day-30 split): texture2DArray tex_0..7 at b0-7 +
-  // shared sampler samp_ss at b8. Utility/framebuffer shaders
-  // (FramebufferShaderGen EmitSamplerDeclarations) use a WIDER scheme:
+  // GX and utility/framebuffer shaders pair each texture with its own sampler.
+  // FramebufferShaderGen EmitSamplerDeclarations uses:
   // fbtex{i} → SAMPLER_BINDING(i) (b0-7), fbsmp{i} → SAMPLER_BINDING(i+8)
   // (b8-15). GenerateEFBRestorePixelShader uses index 0+1, so fbsmp1
   // lands at @group(1) @binding(9). Declare b0-7 textures + b8-15
@@ -7636,11 +7744,8 @@ function getFixedLayouts() {
     size: [1, 1, 1], format: "rgba8unorm",
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
   });
-  // The dummy is substituted whenever a bound texture's format is not
-  // filterable (depth32float, r32float, uint...). Created empty it reads as
-  // (0,0,0,0), so any TEV stage that multiplies by texture colour collapses to
-  // black -- indistinguishable from "the geometry never drew". DIAG_DUMMY_TINT
-  // fills it with bright green so substituted draws are visible instead.
+  // Unsupported integer formats and missing resources still need a float
+  // placeholder. DIAG_DUMMY_TINT makes those substitutions visible.
   if (DIAG_DUMMY_TINT) {
     dev.queue.writeTexture({ texture: dummyTex },
       new Uint8Array([0, 255, 0, 255]), { bytesPerRow: 4, rowsPerImage: 1 },
@@ -7649,8 +7754,25 @@ function getFixedLayouts() {
   const dummyTexView = dummyTex.createView({ dimension: "2d-array" });
   const dummySampler = dev.createSampler({});
   renderGpu._fixedLayouts = { l0, l1, l2, pipelineLayout,
-                              dummyTex, dummyTexView, dummySampler };
-  return renderGpu._fixedLayouts;
+    dummyTex, dummyTexView, dummySampler, samplingVariants: new Map() };
+  return getFixedLayouts(unfilterableMask, nonFilteringSamplerMask);
+}
+
+function getNonFilteringSampler(id) {
+  const descriptor = webGpuObjects.samplerDescriptors.get(id);
+  if (descriptor && (descriptor.magFilter || "nearest") === "nearest" &&
+      (descriptor.minFilter || "nearest") === "nearest" &&
+      (descriptor.mipmapFilter || "nearest") === "nearest" &&
+      (descriptor.maxAnisotropy || 1) === 1) {
+    return webGpuObjects.samplers.get(id);
+  }
+  if (!webGpuObjects.nearestSamplers.has(id)) {
+    webGpuObjects.nearestSamplers.set(id, renderGpu.device.createSampler({
+      ...descriptor, magFilter: "nearest", minFilter: "nearest",
+      mipmapFilter: "nearest", maxAnisotropy: 1
+    }));
+  }
+  return webGpuObjects.nearestSamplers.get(id);
 }
 
 // Build a GPUBindGroup from a CREATE_BIND_GROUP blob against the fixed
@@ -7669,13 +7791,31 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
     return;
   }
   const group = u[1], count = u[2];
-  const layouts = getFixedLayouts();
+  let unfilterableMask = 0;
+  let hasPerTextureSamplers = false;
+  if (group === 1) {
+    for (let i = 0; i < count; i++) {
+      const base = 3 + i * 5;
+      const binding = u[base], kind = u[base + 1], resId = u[base + 2];
+      if (kind === 1 && binding < 8 &&
+          UNFILTERABLE_TEX_FORMATS.has(webGpuObjects.textures.get(resId)?.format)) {
+        unfilterableMask |= 1 << binding;
+      }
+      if (kind === 2 && binding > 8) hasPerTextureSamplers = true;
+    }
+  }
+  // Older cores pair every texture with sampler 8. Their compatibility path
+  // must make that shared sampler nearest whenever any bound texture needs it.
+  const nonFilteringSamplerMask = unfilterableMask |
+    (unfilterableMask && !hasPerTextureSamplers ? 1 : 0);
+  const samplingKey = `${unfilterableMask}/${nonFilteringSamplerMask}`;
+  const layouts = getFixedLayouts(unfilterableMask, nonFilteringSamplerMask);
   const layout = group === 0 ? layouts.l0 : group === 1 ? layouts.l1 : layouts.l2;
   // DIAG one-shot: for the first few group-1 (texture+sampler) bind
   // groups, dump each binding's resId and whether that texture exists
   // / its format+size. Reveals if textured GX draws sample the 1×1
   // dummy or a never-built id (→ black) vs real game textures.
-  if (group === 1 && (self._wgBg1N = (self._wgBg1N || 0) + 1) <= 10) {
+  if (vpDiagEnabled && group === 1 && (self._wgBg1N = (self._wgBg1N || 0) + 1) <= 10) {
     let s = `[webgpu-DIAG-bg1] id=${id} count=${count}`;
     for (let i = 0; i < count; i++) {
       const b = u[3 + i * 5], k = u[3 + i * 5 + 1], r = u[3 + i * 5 + 2];
@@ -7726,22 +7866,17 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
         continue;
       }
-      // §26: the fixed group-1 layout declares sampleType:"float"
-      // (filterable). Binding a non-filterable / non-float texture
-      // (the battle samples the EFB DEPTH as r32float; also uint /
-      // depth formats) is a WebGPU validation error that poisons the
-      // WHOLE frame's submit → black battle. Substitute the filterable
-      // rgba8unorm dummy so the bind group stays layout-valid and the
-      // frame renders (the one depth-sample effect is lost, not the
-      // scene). Filterable-float formats l1 accepts:
-      const FILTERABLE = FILTERABLE_TEX_FORMATS;
-      if (!FILTERABLE.has(t.format)) {
+      // Depth-aspect views are legal texture_2d_array<f32> resources with
+      // unfilterable-float layouts. Dolphin reads .r and requests point
+      // sampling for depth copies/restores, preserving all 24 GX depth bits.
+      if (!FILTERABLE_TEX_FORMATS.has(t.format) && !UNFILTERABLE_TEX_FORMATS.has(t.format)) {
         self._wgDummyFormat = (self._wgDummyFormat || 0) + 1;
         (self._wgDummyFormats = self._wgDummyFormats || new Set()).add(t.format);
         entries.push({ binding, resource: getFixedLayouts().dummyTexView });
       } else {
         entries.push({ binding, resource: t.view2dArray ||
-          (t.view2dArray = t.tex.createView({ dimension: "2d-array" })) });
+          (t.view2dArray = t.tex.createView({ dimension: "2d-array",
+            aspect: t.format.startsWith("depth") ? "depth-only" : "all" })) });
       }
     } else if (kind === 2) {
       const s = webGpuObjects.samplers.get(resId);
@@ -7751,7 +7886,9 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         entries.push({ binding, resource: getFixedLayouts().dummySampler });
         continue;
       }
-      entries.push({ binding, resource: s });
+      entries.push({ binding, resource: group === 1 && binding >= 8 &&
+        (nonFilteringSamplerMask & (1 << (binding - 8)))
+        ? getNonFilteringSampler(resId) : s });
     } else {
       const b = webGpuObjects.buffers.get(resId);
       if (!b) {
@@ -7783,44 +7920,47 @@ function replayCreateBindGroup(id, blobPtr, blobLen) {
         : { binding: b, resource: layouts.dummySampler });
     }
   }
-  // Sidecar: bgId → its group-1 binding-0 source texture id, so the
-  // [webgpu-DIAG-cpypass] probe can name what the EFB-copy draw samples.
+  // Runtime sidecar: the presenter also uses binding 0 to identify the
+  // backbuffer source. Preserve it even when optional diagnostics are off.
   if (group === 1 && srcTexId >= 0) {
     self._wgBgTex = self._wgBgTex || {};
     self._wgBgTex[id] = srcTexId;
-    // §28: full group-1 texture binding set (b0..b7) so we can see
-    // what the black backdrop draw actually samples at every binding.
-    self._wgBgAll = self._wgBgAll || {};
-    let a = "";
-    for (let i = 0; i < count; i++) {
-      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
-      if (kk !== 1) continue;
-      const tt = webGpuObjects.textures.get(rr);
-      a += ` b${bb}=tex#${rr}` +
-        (tt ? `(${tt.tex.width}x${tt.tex.height})` : "(?)");
-      // §28: stash the backdrop's b1/b2 non-dummy textures so the
-      // periodic DIAG-cpy readback dumps their content (is tex#5499
-      // the real backdrop image, or also black?).
-      if ((bb === 1 || bb === 2) && tt && !(tt.tex.width === 1)) {
-        self._wgCpyExtra = self._wgCpyExtra || new Set();
-        if (self._wgCpyExtra.size < 24) self._wgCpyExtra.add(rr);
+    if (vpDiagEnabled) {
+      // §28: full group-1 texture binding set (b0..b7) so we can see
+      // what the black backdrop draw actually samples at every binding.
+      self._wgBgAll = self._wgBgAll || {};
+      let a = "";
+      for (let i = 0; i < count; i++) {
+        const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+        if (kk !== 1) continue;
+        const tt = webGpuObjects.textures.get(rr);
+        a += ` b${bb}=tex#${rr}` +
+          (tt ? `(${tt.tex.width}x${tt.tex.height})` : "(?)");
+        // §28: stash the backdrop's b1/b2 non-dummy textures so the
+        // periodic DIAG-cpy readback dumps their content (is tex#5499
+        // the real backdrop image, or also black?).
+        if ((bb === 1 || bb === 2) && tt && !(tt.tex.width === 1)) {
+          self._wgCpyExtra = self._wgCpyExtra || new Set();
+          if (self._wgCpyExtra.size < 24) self._wgCpyExtra.add(rr);
+        }
       }
+      self._wgBgAll[id] = a;
+      // Structured counterpart of the string above: bgId -> {binding: texId}.
+      // Needed because a draw samples whichever texture unit its TEV uses --
+      // SAMP_AT(i) selects tex_##i -- so checking binding 0 alone inspects the
+      // wrong texture for any draw using another unit.
+      const byB = {};
+      for (let i = 0; i < count; i++) {
+        const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
+        if (kk === 1) byB[bb] = rr;
+      }
+      vpDiagBgTexByBinding.set(id, byB);
     }
-    self._wgBgAll[id] = a;
-    // Structured counterpart of the string above: bgId -> {binding: texId}.
-    // Needed because a draw samples whichever texture unit its TEV uses --
-    // SAMP_AT(i) selects tex_##i -- so checking binding 0 alone inspects the
-    // wrong texture for any draw using another unit.
-    const byB = {};
-    for (let i = 0; i < count; i++) {
-      const bb = u[3 + i * 5], kk = u[3 + i * 5 + 1], rr = u[3 + i * 5 + 2];
-      if (kk === 1) byB[bb] = rr;
-    }
-    vpDiagBgTexByBinding.set(id, byB);
   }
   try {
     webGpuObjects.bindGroups.set(id,
       renderGpu.device.createBindGroup({ layout, entries }));
+    if (group === 1) webGpuObjects.bindGroupSamplingMasks.set(id, samplingKey);
   } catch (e) {
     if (!self._webGpuBgErr) {
       self._webGpuBgErr = true;
@@ -8031,19 +8171,18 @@ function frameCapFinish() {
 // skips the block that would pin min/max to [0, MAX_EFB_DEPTH] and emits the
 // game's own farZ/zRange instead. zRange < 0 then yields near > far.
 //
-// Deliberately NOT gated on ?framecap: that plumbing runs through core-host ->
-// adapter -> worker payload, and a value that fails to arrive makes the probe
-// silently print nothing, which reads identically to "the pass is uniform".
-// The trigger is the consumer's own present counter instead, so the probe
-// cannot no-op without saying so.
+// Enabled by wgpudeepdiag or an explicit capture/render probe. The present
+// counter bounds collection after activation; it must not activate costly
+// payload scans and per-draw formatting during ordinary gameplay.
 const VPDIAG_EVERY = 500;  // dump a tally every Nth present ...
 const VPDIAG_UNTIL = 6000; // ... up to here, so a scene change can't be missed
 let vpDiagRaw = null;      // [near, far] as the producer sent them
 let vpDiagTally = new Map();
 let vpDiagDraws = 0;
+let vpDiagEnabled = false;
 let vpDiagDone = false;
 function vpDiagNoteViewport(near, far) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   vpDiagRaw = [near, far];
 }
 // Raw (producer) vs clamped (WebGPU-legal) viewport rect. WebGPU requires the
@@ -8068,7 +8207,7 @@ let vpDiagEfbClears = 0;
 let vpDiagDrawsSinceClear = 0;
 let vpDiagDrawsTotalEfb = 0;
 function vpDiagNoteEfbPass(cleared) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   vpDiagEfbPasses++;
   if (cleared) { vpDiagEfbClears++; vpDiagDrawsSinceClear = 0; }
 }
@@ -8077,7 +8216,7 @@ function vpDiagIsDepthAlways(pipelineId) {
   return !!(tpl && tpl.depthBase && tpl.depthBase.depthCompare === "always");
 }
 function vpDiagNoteScissor(rx, ry, rw, rh, sx, sy, sw, sh) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   const same = rx === sx && ry === sy && rw === sw && rh === sh;
   vpDiagScissor = (sw === 0 || sh === 0)
     ? `sc COLLAPSED raw(${rx},${ry} ${rw}x${rh})`
@@ -8145,7 +8284,7 @@ const vpDiagCol0 = new Map();
 // reported a stale 6-index range for every draw.
 const vpDiagIdxUploads = [];
 function vpDiagNoteIndexUpload(bytes, len, dstOffset) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   const n = len >> 1;
   if (!n) return;
   const copy = new Uint16Array(n);
@@ -8171,7 +8310,7 @@ function vpDiagIndicesFor(firstIndex, count) {
   return null;
 }
 function vpDiagNoteIndexedDraw(idxCount, firstIndex, baseVertex) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   const r = vpDiagIndicesFor(firstIndex, idxCount);
   const key = r
     ? `indices[${r.mn}..${r.mx}] span=${r.mx - r.mn + 1} count=${idxCount}` +
@@ -8200,7 +8339,7 @@ let vpDiagPosOk = 0;
 // A stride mismatch means the pipeline and the data disagree about the vertex
 // size, which fetches every attribute from the wrong bytes.
 function vpDiagCheckVertex(pipelineId) {
-  if (vpDiagDone || !vpDiagLastVtxBytes) return;
+  if (!vpDiagEnabled || vpDiagDone || !vpDiagLastVtxBytes) return;
   const lay = vpDiagPipeVtx.get(pipelineId);
   if (!lay || !lay.stride) return;
   const fresh = vpDiagVtxFresh;
@@ -8316,14 +8455,14 @@ function vpDiagCheckVertex(pipelineId) {
   }
 }
 function vpDiagNoteVertexUpload(bytes, len) {
-  if (vpDiagDone || len < 12) return;
+  if (!vpDiagEnabled || vpDiagDone || len < 12) return;
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, 3);
   const bad = ![...f].every((v) => Number.isFinite(v) && Math.abs(v) < 1e6);
   const key = `${bad ? "BAD " : ""}${f[0].toFixed(1)},${f[1].toFixed(1)},${f[2].toFixed(1)}`;
   vpDiagVtx.set(key, (vpDiagVtx.get(key) || 0) + 1);
 }
 function vpDiagNoteTail(entry) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   vpDiagTail.push(entry);
   if (vpDiagTail.length > 12) vpDiagTail.shift();
 }
@@ -8390,12 +8529,13 @@ let vpDiagTexBind = new Map();
 // is any byte non-zero anywhere in it.
 const vpDiagTexUploadShape = new Map();
 function vpDiagNoteTexUploadShape(texId, bpr, w, h, len, staged, nzFrac) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   const key = `${w}x${h} bpr=${bpr} len=${len} expect=${bpr * h} ` +
     `${staged ? "staged" : "direct"} nz=${nzFrac}%`;
   vpDiagTexUploadShape.set(key, (vpDiagTexUploadShape.get(key) || 0) + 1);
 }
 function vpDiagNoteTexUpload(texId, bytes, len) {
+  if (!vpDiagEnabled || vpDiagDone) return;
   let rec = vpDiagTexData.get(texId);
   if (!rec) vpDiagTexData.set(texId, (rec = { uploads: 0, nonZero: 0 }));
   rec.uploads++;
@@ -8411,7 +8551,7 @@ function vpDiagNoteTexUpload(texId, bytes, len) {
   if (nz > 0) rec.nonZero++;
 }
 function vpDiagNoteTexBind(fbId, cmp, texId, samplerBinding) {
-  if (vpDiagDone || fbId !== self._wgEfbColorId) return;
+  if (!vpDiagEnabled || vpDiagDone || fbId !== self._wgEfbColorId) return;
   if (cmp === "always" || cmp === "none") return;   // world geometry only
   const t = texId != null ? webGpuObjects.textures.get(texId) : null;
   const rec = vpDiagTexData.get(texId);
@@ -8441,7 +8581,7 @@ function vpDiagNoteTexBind(fbId, cmp, texId, samplerBinding) {
   vpDiagTexBind.set(key, (vpDiagTexBind.get(key) || 0) + 1);
 }
 function vpDiagNotePsUpload(bytes, len) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   if (len < 1500 || len > 1700) return;
   const i = new Int32Array(bytes.buffer, bytes.byteOffset, 36);
   const cols = Array.from(i.slice(0, 16));
@@ -8461,7 +8601,7 @@ function vpDiagNotePsUpload(bytes, len) {
   vpDiagTev.set(key, (vpDiagTev.get(key) || 0) + 1);
 }
 function vpDiagNoteUpload(bytes, len) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   if (len < 4000 || len > 4200) return;            // VS constants are ~4112 B
   const f = new Float32Array(bytes.buffer, bytes.byteOffset + VS_CONSTANTS_PROJ_OFFSET, 16);
   const key = Array.from(f, (v) => v.toFixed(3)).join(",");
@@ -8515,7 +8655,7 @@ function vpDiagNoteUpload(bytes, len) {
     (vpDiagPcc.get(Array.from(c, (v) => v.toFixed(3)).join(",")) || 0) + 1);
 }
 function vpDiagNoteVsOffset(off) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   if (vpDiagVsOffsets.size < 4096) vpDiagVsOffsets.add(off >>> 0);
 }
 // Set when the requested viewport did not fit the attachment and the clamp
@@ -8527,7 +8667,7 @@ function vpDiagNoteVsOffset(off) {
 const VP_SKIP_RESCALED = false;
 let vpRescaled = false;
 function vpDiagNoteRect(rawX, rawY, rawW, rawH, cx, cy, cw, ch, passW, passH) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   const same = rawX === cx && rawY === cy && rawW === cw && rawH === ch;
   vpDiagRect = same
     ? `vp(${cx.toFixed(0)},${cy.toFixed(0)} ${cw.toFixed(0)}x${ch.toFixed(0)}) fb=${passW}x${passH}`
@@ -8536,7 +8676,7 @@ function vpDiagNoteRect(rawX, rawY, rawW, rawH, cx, cy, cw, ch, passW, passH) {
       ` fb=${passW}x${passH}  <-- RESCALED`;
 }
 function vpDiagNoteDraw(fbId, pipelineId) {
-  if (vpDiagDone) return;
+  if (!vpDiagEnabled || vpDiagDone) return;
   vpDiagDraws++;
   const tpl = webGpuObjects.pipeTpl.get(pipelineId);
   const cmp = tpl && tpl.depthBase ? tpl.depthBase.depthCompare : "none";
@@ -8588,6 +8728,7 @@ function vpDiagNoteDraw(fbId, pipelineId) {
 // Called from SUBMIT_PRESENT, before the present counter increments, so the
 // tally holds exactly the draws of the frame being presented.
 function vpDiagPresent() {
+  if (!vpDiagEnabled) return;
   // Isolation bookkeeping must run every frame, before the tally's early
   // return -- otherwise it silently stops once the dump window closes.
   const pn = self._wgPresentCount || 0;
@@ -9011,7 +9152,6 @@ function ensureClearPipeline(dev, colorFormat, depthFormat, colorWriteMask, writ
               `|${writeDepth ? 1 : 0}|${rgba}|${depth.toFixed(6)}`;
   const hit = WGPU_CLEAR_PIPELINES.get(key);
   if (hit) return hit;
-  if (WGPU_CLEAR_PIPELINES.size >= WGPU_CLEAR_PIPELINE_CAP) return null;
   const r = ((rgba >>> 24) & 0xff) / 255;
   const g = ((rgba >>> 16) & 0xff) / 255;
   const b = ((rgba >>> 8) & 0xff) / 255;
@@ -9052,7 +9192,15 @@ function ensureClearPipeline(dev, colorFormat, depthFormat, colorWriteMask, writ
     recordRendererError("validation", `clearrect pipeline: ${e?.message || e}`);
     pipe = null;
   }
-  WGPU_CLEAR_PIPELINES.set(key, pipe);
+  if (pipe) {
+    // A full cache must not suppress a clear. Evict only after successful
+    // creation; submitted command buffers retain their own pipeline references.
+    // FIFO avoids extra Map writes on the frequent cache-hit path.
+    if (WGPU_CLEAR_PIPELINES.size >= WGPU_CLEAR_PIPELINE_CAP) {
+      WGPU_CLEAR_PIPELINES.delete(WGPU_CLEAR_PIPELINES.keys().next().value);
+    }
+    WGPU_CLEAR_PIPELINES.set(key, pipe);
+  }
   return pipe;
 }
 function diagTallyDrawTarget(passFbId, srcId) {
@@ -9863,6 +10011,7 @@ function drainWebGpuCmdRing(source = "presentation") {
   let passDepthId = 0;
   let passLoadOp = "load";
   let passHasPipe = false;
+  let passSamplingKey = "0/0";
   let passNeedsVertexBuffer = false;
   let vertexBufferValid = false;
   let indexBufferValid = false;
@@ -10555,12 +10704,12 @@ function drainWebGpuCmdRing(source = "presentation") {
             // vertex fetch.
             vpDiagNoteUpload(uploadSource, len);
           vpDiagNotePsUpload(uploadSource, len);
-          if (uploadRole === 4 && !vpDiagDone) {
+          if (uploadRole === 4 && vpDiagEnabled && !vpDiagDone) {
             vpDiagNoteIndexUpload(uploadSource, len, u32[recWord + 2]);
           }
           if (uploadRole === 3) {
             vpDiagNoteVertexUpload(uploadSource, len);
-            if (!vpDiagDone) {
+            if (vpDiagEnabled && !vpDiagDone) {
               // Keep enough of the batch to decode EVERY vertex, not just the
               // first. 864fb59 validated only the leading vertex, which says
               // nothing about the rest of a mesh -- and rectangular coverage is
@@ -10573,18 +10722,20 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
           }
             const bid = u32[recWord + 1];
-            self._wgUbN = (self._wgUbN || 0) + 1;
-            // First few + periodic so steady-state UBO uploads are
-            // visible (one-shot only caught the pre-SetConstants zero).
-            if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
-              const ff = new Float32Array(uploadSource.buffer,
-                                          uploadSource.byteOffset,
-                                          Math.min(len, 160) >>> 2);
-              console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
-                `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
-                `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
-                `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
-                `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
+            if (vpDiagEnabled) {
+              self._wgUbN = (self._wgUbN || 0) + 1;
+              // First few + periodic so steady-state UBO uploads are
+              // visible (one-shot only caught the pre-SetConstants zero).
+              if (self._wgUbN <= 6 || (self._wgUbN % 4000) === 0) {
+                const ff = new Float32Array(uploadSource.buffer,
+                                            uploadSource.byteOffset,
+                                            Math.min(len, 160) >>> 2);
+                console.log(`[webgpu-DIAG-ub] id=${bid} dst=${u32[recWord+2]} ` +
+                  `len=${len} f0=${ff[0]?.toFixed(3)},${ff[1]?.toFixed(3)} ` +
+                  `pnm@32=${ff[8]?.toFixed(3)},${ff[9]?.toFixed(3)},${ff[10]?.toFixed(3)} ` +
+                  `proj@128=${ff[32]?.toFixed(3)},${ff[33]?.toFixed(3)},` +
+                  `${ff[34]?.toFixed(3)},${ff[35]?.toFixed(3)}`);
+              }
             }
             // §28b: PixelShaderConstants has fogcolor (int4 @byte432),
             // fogi (int4 @448), fogf (float4 @464). The backdrop FS
@@ -10841,7 +10992,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               let uploadPayload = stagedUpload?.data;
               if (!uploadPayload) {
                 const copyStartedAt = causalMetricsEnabled ? performance.now() : 0;
-                uploadPayload = copyWgpuUploadPayload(heap, srcP, uploadBytes, true);
+                uploadPayload = copyImmediateWgpuBufferUpload(heap, srcP, uploadBytes);
                 if (causalMetricsEnabled) {
                   wgpuReplayOpMetrics.recordUploadCopy(
                     WGPU_CMD_OP_UPLOAD_BUFFER,
@@ -10954,7 +11105,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             if (!t) {
               wgpuReplayClassifier?.recordMissingResource({ kind: "upload-texture", id: textureId });
             }
-            if (!vpDiagDone) {
+            if (vpDiagEnabled && !vpDiagDone) {
               vpDiagNoteTexUpload(textureId, uploadSource, uploadBytes);
               const _r = vpDiagTexData.get(textureId);
               vpDiagNoteTexUploadShape(textureId, bpr, u32[recWord + 4], h, uploadBytes,
@@ -10966,18 +11117,20 @@ function drainWebGpuCmdRing(source = "presentation") {
               const w = u32[recWord + 4];
             // DIAG one-shot per tex id: confirm uploaded pixels aren't
             // all-zero (→ black sampling). Dumps first 4 RGBA texels.
-            self._wgUtN = self._wgUtN || {};
-            const tid = u32[recWord + 1];
-            if (!self._wgUtN[tid] &&
-                (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
-              self._wgUtN[tid] = true;
-              const px = uploadSource.subarray(0, Math.min(uploadBytes, 16));
-              let nz = 0;
-              const chk = uploadSource.subarray(0, Math.min(uploadBytes, 4096));
-              for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
-              console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
-                `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
-                `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
+            if (vpDiagEnabled) {
+              self._wgUtN = self._wgUtN || {};
+              const tid = u32[recWord + 1];
+              if (!self._wgUtN[tid] &&
+                  (self._wgUtTot = (self._wgUtTot || 0) + 1) <= 14) {
+                self._wgUtN[tid] = true;
+                const px = uploadSource.subarray(0, Math.min(uploadBytes, 16));
+                let nz = 0;
+                const chk = uploadSource.subarray(0, Math.min(uploadBytes, 4096));
+                for (let q2 = 0; q2 < chk.length; q2++) if (chk[q2]) { nz++; }
+                console.log(`[webgpu-DIAG-ut] tex#${tid} ${w}x${h} bpr=${bpr} ` +
+                  `mip=${u32[recWord+6]} px0=${px[0]},${px[1]},${px[2]},${px[3]} ` +
+                  `px1=${px[4]},${px[5]},${px[6]},${px[7]} nz=${nz}/${chk.length}`);
+              }
             }
               if (wgpuUploadTransport === "mapped") {
                 const stageStartedAt = causalMetricsEnabled
@@ -11121,11 +11274,9 @@ function drainWebGpuCmdRing(source = "presentation") {
         case WGPU_CMD_OP_CREATE_SAMPLER: {
           const id = u32[recWord + 1];
           if (!webGpuObjects.samplers.has(id)) {
-            webGpuObjects.samplers.set(id, dev.createSampler({
-              magFilter: "linear", minFilter: "linear",
-              mipmapFilter: "linear", addressModeU: "repeat",
-              addressModeV: "repeat"
-            }));
+            const descriptor = decodeWgpuSamplerState(u32[recWord + 2]);
+            webGpuObjects.samplers.set(id, dev.createSampler(descriptor));
+            webGpuObjects.samplerDescriptors.set(id, descriptor);
           }
           break;
         }
@@ -11268,7 +11419,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = cur.width;
             passH = cur.height;
             passColorFmt = renderGpu.format;
-            frameCapPush(`BEGINPASS fb#0 BACKBUFFER ${passW}x${passH}`);
+            if (frameCapActive()) frameCapPush(`BEGINPASS fb#0 BACKBUFFER ${passW}x${passH}`);
           } else {
             webGpuExecStats.beginFbN++;
             const ct = webGpuObjects.textures.get(fbId);
@@ -11281,7 +11432,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             passW = ct.tex.width;
             passH = ct.tex.height;
             passColorFmt = ct.format;
-            frameCapPush(`BEGINPASS fb#${fbId} ${passW}x${passH} fmt=${ct.format}` +
+            if (frameCapActive()) frameCapPush(`BEGINPASS fb#${fbId} ${passW}x${passH} fmt=${ct.format}` +
               `${fbId === (self._wgEfbColorId || -1) ? " (EFB)" : ""}`);
             // DIAG: which texture ids are ever render targets (+size).
             // Cross-ref with tex#69 (640x480 green, sampled at b1
@@ -11367,6 +11518,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           passNeedsVertexBuffer = false;
           vertexBufferValid = false;
           indexBufferValid = false;
+          passSamplingKey = "0/0";
           bgValid[0] = bgValid[1] = bgValid[2] = false;  // §28j
           if (drawState) {
             drawState.bindGroups.fill(0);
@@ -11424,7 +11576,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           }
           const p = pass
             ? resolvePipeline(pid, passColorFmt, passDepthFmt, undefined,
-                              !!self._wgPassRevZ)
+                              !!self._wgPassRevZ, passSamplingKey)
             : null;
           if (pass && p) {
             const needsApply = !wgpuConsumerStateCacheEnabled ||
@@ -11466,6 +11618,35 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (!bg) {
             wgpuReplayClassifier?.recordMissingResource({ kind: "bind-group", id: bgId });
           }
+          if (bgSlot === 1 && pass) {
+            const samplingKey = webGpuObjects.bindGroupSamplingMasks.get(bgId) || "0/0";
+            if (samplingKey !== passSamplingKey) {
+              passSamplingKey = samplingKey;
+              // The producer sets its pipeline before its texture group and
+              // can retain that pipeline while textures change. Select the
+              // matching layout now, before either draw opcode uses it.
+              if (passHasPipe) {
+                const pipeline = resolvePipeline(self._wgCurPipe, passColorFmt,
+                  passDepthFmt, undefined, !!self._wgPassRevZ, passSamplingKey);
+                passHasPipe = false;
+                if (pipeline) {
+                  try {
+                    pass.setPipeline(pipeline);
+                    dtLastPipe = pipeline;
+                    if (wgpuConsumerStateCacheEnabled) {
+                      wgpuPassStateCache.recordPipelineApplied(pipeline);
+                    }
+                    passHasPipe = true;
+                  } catch (error) {
+                    if (wgpuConsumerStateCacheEnabled) {
+                      wgpuPassStateCache.recordPipelineApplyFailed();
+                    }
+                    recordRendererError("set-pipeline", error?.message || error);
+                  }
+                }
+              }
+            }
+          }
           if (bgSlot < 3) bgValid[bgSlot] = !!(pass && bg);  // §28j
           if (drawState && bgSlot < 3) {
             drawState.bindGroups[bgSlot] = bgId;
@@ -11475,7 +11656,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (bgSlot === 1 && self._wgBgTex) {
             const _bt = self._wgBgTex[bgId];
             const _bo = _bt != null ? webGpuObjects.textures.get(_bt) : null;
-            frameCapPush(`  BINDTEX  fb#${passFbId} tex#${_bt != null ? _bt : "?"}` +
+            if (frameCapActive()) frameCapPush(`  BINDTEX  fb#${passFbId} tex#${_bt != null ? _bt : "?"}` +
               `${_bo && _bo.tex ? " " + _bo.tex.width + "x" + _bo.tex.height : ""}`);
           }
           if (passFbId === 0 && bgSlot === 1 && self._wgBgTex) {
@@ -11622,7 +11803,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastVp = `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
               `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`;
           }
-          frameCapPush(`  VIEWPORT fb#${passFbId} ` +
+          if (frameCapActive()) frameCapPush(`  VIEWPORT fb#${passFbId} ` +
             `${f32[recWord + 1].toFixed(0)},${f32[recWord + 2].toFixed(0)}` +
             `+${f32[recWord + 3].toFixed(0)}x${f32[recWord + 4].toFixed(0)}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
@@ -11640,13 +11821,9 @@ function drainWebGpuCmdRing(source = "presentation") {
             }
           }
           if (pass && passW > 0) {
-            // WebGPU: x,y>=0; x+w<=W; y+h<=H; 0<=minD<=maxD<=1.
-            let vx = f32[recWord + 1], vy = f32[recWord + 2];
-            let vw = f32[recWord + 3], vh = f32[recWord + 4];
-            if (vx < 0) { vw += vx; vx = 0; }
-            if (vy < 0) { vh += vy; vy = 0; }
-            vw = Math.max(1, Math.min(vw, passW - vx));
-            vh = Math.max(1, Math.min(vh, passH - vy));
+            // Preserve the viewport transform; the attachment/scissor clips fragments.
+            const vx = f32[recWord + 1], vy = f32[recWord + 2];
+            const vw = f32[recWord + 3], vh = f32[recWord + 4];
             // §28af: raw near>far ⇒ Dolphin reverse-Z viewport for
             // this pass. Drives the per-pass compare-flip + depth
             // clear (set self._wgPassRevZ BEFORE the Dawn-required
@@ -11746,6 +11923,10 @@ function drainWebGpuCmdRing(source = "presentation") {
                                             colorWriteMask, (cflags & 2) !== 0,
                                             crgba, cdepth);
           if (!cpipe) break;
+          const previousPipeline = passHasPipe ? dtLastPipe : null;
+          const previousNeedsVertexBuffer = passNeedsVertexBuffer;
+          passHasPipe = false;
+          passNeedsVertexBuffer = false;
           try {
             // The clear triangle's depth goes through the viewport transform
             // like any other fragment: window z = minDepth + z * (maxDepth -
@@ -11780,8 +11961,22 @@ function drainWebGpuCmdRing(source = "presentation") {
             // draw until the game next changed its scissor.
             if (lastAppliedScissor) pass.setScissorRect(...lastAppliedScissor);
             else pass.setScissorRect(0, 0, passW, passH);
+            // The producer can elide an unchanged SET_PIPELINE after this
+            // utility clear. Restore the actual variant as well as viewport
+            // and scissor, so the next game draw remains valid and uses its
+            // own shader. Keep the optional consumer cache in agreement.
+            if (previousPipeline) {
+              pass.setPipeline(previousPipeline);
+              passHasPipe = true;
+              passNeedsVertexBuffer = previousNeedsVertexBuffer;
+              if (wgpuConsumerStateCacheEnabled) {
+                wgpuPassStateCache.recordPipelineApplied(previousPipeline);
+              }
+            } else if (wgpuConsumerStateCacheEnabled) {
+              wgpuPassStateCache.recordPipelineApplyFailed();
+            }
             self._wgClearRectN = (self._wgClearRectN || 0) + 1;
-            if (!vpDiagDone) {
+            if (vpDiagEnabled && !vpDiagDone) {
               const frac = Math.round((100 * cw * ch) / (passW * passH));
               // Ordering is what matters: as a loadOp the clear ran at pass
               // begin, but as a draw it lands wherever the game issued it. A
@@ -11795,14 +11990,12 @@ function drainWebGpuCmdRing(source = "presentation") {
               vpDiagClearRects.set(key, (vpDiagClearRects.get(key) || 0) + 1);
             }
           } catch (e) {
+            passHasPipe = false;
+            passNeedsVertexBuffer = false;
+            if (wgpuConsumerStateCacheEnabled) wgpuPassStateCache.recordPipelineApplyFailed();
             recordRendererError("validation", `clearrect: ${e?.message || e}`);
           }
-          // The clear replaced the bound pipeline, so the next game draw must
-          // re-issue its own. passHasPipe is the flag the draw path checks;
-          // leaving it set would run that draw with the clear pipeline.
-          passHasPipe = false;
-          passNeedsVertexBuffer = false;
-          self._wgCurPipe = 0;
+          if (!passHasPipe) self._wgCurPipe = 0;
           break;
         }
         case WGPU_CMD_OP_SET_SCISSOR:
@@ -11810,7 +12003,7 @@ function drainWebGpuCmdRing(source = "presentation") {
             self._wgLastSc = `${u32[recWord + 1]},${u32[recWord + 2]}` +
               `+${u32[recWord + 3]}x${u32[recWord + 4]}`;
           }
-          frameCapPush(`  SCISSOR  fb#${passFbId} ${u32[recWord + 1]},${u32[recWord + 2]}` +
+          if (frameCapActive()) frameCapPush(`  SCISSOR  fb#${passFbId} ${u32[recWord + 1]},${u32[recWord + 2]}` +
             `+${u32[recWord + 3]}x${u32[recWord + 4]}`);
           if (DIAG_EFB_TO_CANVAS && passFbId === 0) {
             self._wgBbScN = (self._wgBbScN || 0) + 1;
@@ -11860,8 +12053,8 @@ function drainWebGpuCmdRing(source = "presentation") {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
             }
-            frameCapPush(`  DRAW     fb#${passFbId}`);
-            if (!vpDiagDone) vpDiagVerts += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
+            if (frameCapActive()) frameCapPush(`  DRAW     fb#${passFbId}`);
+            if (vpDiagEnabled && !vpDiagDone) vpDiagVerts += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
             pass.draw(u32[recWord + 1], u32[recWord + 2], u32[recWord + 3], 0);
             dtraceAfterDraw();
             webGpuExecStats.draw++; pd.draw++;
@@ -11906,8 +12099,8 @@ function drainWebGpuCmdRing(source = "presentation") {
               self._wgVpSkipN = (self._wgVpSkipN || 0) + 1;
               break;
             }
-            frameCapPush(`  DRAW     fb#${passFbId}`);
-            if (!vpDiagDone) {
+            if (frameCapActive()) frameCapPush(`  DRAW     fb#${passFbId}`);
+            if (vpDiagEnabled && !vpDiagDone) {
               vpDiagIdx += u32[recWord + 1] * Math.max(1, u32[recWord + 2]);
               vpDiagNoteIndexedDraw(u32[recWord + 1], u32[recWord + 3], u32[recWord + 4]);
             }
@@ -12329,7 +12522,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           endPass("explicit", read);
           break;
         case WGPU_CMD_OP_SUBMIT_PRESENT:
-          frameCapPush("PRESENT");
+          if (frameCapActive()) frameCapPush("PRESENT");
           vpDiagPresent();
           if ((self._wgPresentCount || 0) % 600 === 0) {
             const miss = self._wgDummyMissing || 0;
@@ -12796,6 +12989,7 @@ function drainWebGpuCmdRing(source = "presentation") {
               wgpuPassStateCache.invalidateDestroyedResource(tag, resource);
             }
             m.delete(id);
+            if (tag === 3) webGpuObjects.bindGroupSamplingMasks.delete(id);
           }
           break;
         }
@@ -12807,7 +13001,7 @@ function drainWebGpuCmdRing(source = "presentation") {
           if (!s) wgpuReplayClassifier?.recordMissingResource({ kind: "blit-source", id: sourceId });
           if (!d) wgpuReplayClassifier?.recordMissingResource({ kind: "blit-destination", id: destinationId });
           if (s && d) {
-            if (!vpDiagDone) {
+            if (vpDiagEnabled && !vpDiagDone) {
               vpDiagBlitDst.set(destinationId, (vpDiagBlitDst.get(destinationId) || 0) + 1);
             }
             endPass("blit", read);
@@ -13207,7 +13401,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
   // stride and the Position attribute (ShaderAttrib::Position == 0) so a draw
   // can be checked against the bytes that were actually uploaded, rather than
   // assuming a leading float32x3.
-  vpDiagPipeVtx.set(pipelineId, {
+  if (vpDiagEnabled) vpDiagPipeVtx.set(pipelineId, {
     stride,
     fsId,
     vsId,
@@ -13346,7 +13540,7 @@ function replayCreatePipelineCfg(pipelineId, blobPtr, blobLen) {
 
 // Return (building+caching on first use) the pipeline variant whose
 // colour/depth attachment formats match the render pass it'll run in.
-function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
+function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ, samplingKey = "0/0") {
   // §28af: revZ is per-PASS (from the SET_VIEWPORT near>far that
   // precedes this draw). Default to the last-seen pass state so the
   // warm template build (revZ undefined) doesn't pin a wrong variant.
@@ -13370,11 +13564,13 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
                   REVZ_COMPARE_FLIP_ALL)
                    ? rzRelevant
                    : (rzRelevant && revZ)) ? 1 : 0;
-  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}`;
+  const key = `${pipelineId}|${colorFmt}|${depthFmt}|rz${keyRz}|s${samplingKey}`;
   const cached = webGpuObjects.pipeVar.get(key);
   if (cached !== undefined) return cached;
   if (!tpl) { webGpuObjects.pipeVar.set(key, null); return null; }
   const d = Object.assign({}, tpl.desc);
+  const [unfilterableMask, nonFilteringSamplerMask] = samplingKey.split("/").map(Number);
+  d.layout = getFixedLayouts(unfilterableMask, nonFilteringSamplerMask).pipelineLayout;
   d.fragment = { module: tpl.desc.fragment.module,
                  targets: [Object.assign({}, tpl.target, { format: colorFmt })] };
   if (depthFmt) {
@@ -13418,11 +13614,11 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
   // The vpdiag tally reports tpl.depthBase.depthCompare, which is the value
   // BEFORE the reverse-Z flip. Log what the descriptor actually carries, so
   // "flipped to greater-equal" is observed rather than assumed.
-  if (d.depthStencil && !self._wgCmpLogged) {
+  if (vpDiagEnabled && d.depthStencil && !self._wgCmpLogged) {
     self._wgCmpLogged = (self._wgCmpLogged || 0) + 1;
     if (self._wgCmpLogged <= 0) { /* unreachable, keeps shape */ }
   }
-  if (d.depthStencil) {
+  if (vpDiagEnabled && d.depthStencil) {
     const key = `final depthCompare=${d.depthStencil.depthCompare} ` +
       `write=${d.depthStencil.depthWriteEnabled}`;
     vpDiagFinalCmp.set(key, (vpDiagFinalCmp.get(key) || 0) + 1);
@@ -13431,7 +13627,7 @@ function resolvePipeline(pipelineId, colorFmt, depthFmt, dbg, revZ) {
   try {
     renderGpu.device.pushErrorScope("validation");
     pipe = renderGpu.device.createRenderPipeline(d);
-    if (pipe && d.depthStencil) {
+    if (DIAG_DEPTH_TRACE && pipe && d.depthStencil) {
       vpDiagPipeFinalDs.set(pipe, { cmp: d.depthStencil.depthCompare,
                                     write: !!d.depthStencil.depthWriteEnabled });
     }
@@ -13503,29 +13699,31 @@ function replayCreateShader(id, blobPtr, blobLen, stage) {
     // also what the constant-colour FS test bypassed, so it is consistent with
     // everything measured so far. Diagnostic only: removing it draws fragments
     // the game intended to throw away.
-    vpDiagShaderStage[stage] = (vpDiagShaderStage[stage] || 0) + 1;
-    if (stage === 2 && /discard/.test(wgsl)) {
-      if (++vpDiagShaderWithDiscard === 1) {
-        const i = wgsl.indexOf("discard");
-        console.log("[vpdiag] discard context: " +
-          JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
+    if (vpDiagEnabled) {
+      vpDiagShaderStage[stage] = (vpDiagShaderStage[stage] || 0) + 1;
+      if (stage === 2 && /discard/.test(wgsl)) {
+        if (++vpDiagShaderWithDiscard === 1) {
+          const i = wgsl.indexOf("discard");
+          console.log("[vpdiag] discard context: " +
+            JSON.stringify(wgsl.slice(Math.max(0, i - 160), i + 120)));
+        }
       }
-    }
-    // Keep vertex sources too: vertexColour0.a is computed here, and the
-    // constants feeding it measured correct.
-    if ((stage === 2 || stage === 0) && wgsl.length < 60000) vpDiagFsSource.set(id, wgsl);
-    if (stage === 2) {
-      const mb0 = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
-      if (mb0) vpDiagFsTexBinding.set(id, Number(mb0[1]));
-    }
-    if (stage === 2 && !self._vpDiagFsBindingsLogged) {
-      self._vpDiagFsBindingsLogged = true;
-      const calls = wgsl.match(/textureSample[A-Za-z]*\([^;]*?\);/g) || [];
-      console.log("[vpdiag] FS sample calls: " + JSON.stringify(calls.slice(0, 3)));
-      const mb = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
-      if (mb) vpDiagFsTexBinding.set(id, Number(mb[1]));
-      const decls = wgsl.match(/@group\([0-9]+\)\s*@binding\([0-9]+\)\s*var[^;]*;/g) || [];
-      console.log("[vpdiag] FS bindings: " + JSON.stringify(decls));
+      // Keep vertex sources too: vertexColour0.a is computed here, and the
+      // constants feeding it measured correct.
+      if ((stage === 2 || stage === 0) && wgsl.length < 60000) vpDiagFsSource.set(id, wgsl);
+      if (stage === 2) {
+        const mb0 = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
+        if (mb0) vpDiagFsTexBinding.set(id, Number(mb0[1]));
+      }
+      if (stage === 2 && !self._vpDiagFsBindingsLogged) {
+        self._vpDiagFsBindingsLogged = true;
+        const calls = wgsl.match(/textureSample[A-Za-z]*\([^;]*?\);/g) || [];
+        console.log("[vpdiag] FS sample calls: " + JSON.stringify(calls.slice(0, 3)));
+        const mb = /@group\(1\)\s*@binding\((\d+)\)\s*var[^;]*texture_2d_array/.exec(wgsl);
+        if (mb) vpDiagFsTexBinding.set(id, Number(mb[1]));
+        const decls = wgsl.match(/@group\([0-9]+\)\s*@binding\([0-9]+\)\s*var[^;]*;/g) || [];
+        console.log("[vpdiag] FS bindings: " + JSON.stringify(decls));
+      }
     }
     // Force the texture-array layer to 0. The translated sampling call is
     // textureSample(tex, samp, vec2<f32>(uv), i32(coord.z)), so the layer comes

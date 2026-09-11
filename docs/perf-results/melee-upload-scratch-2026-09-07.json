@@ -1,0 +1,667 @@
+{
+  "schema": "wasm-dolphin.replay-upload-scratch-benchmark.v1",
+  "generatedAt": "2026-09-08T05:17:00.453Z",
+  "runs": [
+    {
+      "arm": "A1",
+      "directory": ".omx/full-speed/dispatch-bench/results/scratch-clean-melee-A1",
+      "workerSha256": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+      "policyWorkerSha256": "3de3bb2afbed9e4f172150721d5eab8b582c396348066e104ad8e21b75eb7029",
+      "coreSha256": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+      "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+      "harnessSha256": "28d311040d959b34d1025309a27947b73e93cef16eab3abe7b0f565a9bdd82c6",
+      "statistics": {
+        "wallSeconds": 39.19345999997854,
+        "emulatedSeconds": 30.010043067901236,
+        "targetEmulatedSeconds": 30,
+        "overshootEmulatedSeconds": 0.010043067901236213,
+        "coreFrames": 1799,
+        "coreFps": 45.90051503493146,
+        "speedPercent": 76.5690068391963,
+        "submittedPresentationFps": 45.77294273077656,
+        "visualCountFps": 45.594341504959715
+      },
+      "audio": {
+        "underrunEvents": 0,
+        "overruns": 0,
+        "writtenFrames": 1881088,
+        "consumedFrames": 1881088,
+        "underrunFrames": 0,
+        "producerRefills": 2753,
+        "producerEmptyMixes": 0
+      },
+      "newCompiles": 1655,
+      "inputIsolation": {
+        "nativeUpdatesBefore": 0,
+        "nativeUpdatesAfter": 0,
+        "blocked": {
+          "events": 125
+        }
+      },
+      "jitStayedEnabled": true,
+      "gpuFencesCompleted": true,
+      "sceneReview": {
+        "accepted": true,
+        "scope": "Gameplay continuity and no new visible corruption; not full emulator fidelity",
+        "reason": "Root inspected both boundaries: same Great Bay battle, textured stage, Kirby/Link,4%/0% to13%/0%, timer approximately04:42 to04:12; small frame/camera differences recorded.",
+        "reviewedAt": "2026-09-08T05:17:00.44Z"
+      },
+      "affinityBefore": [
+        {
+          "id": 33524,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 72012,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 30448,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 77172,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ],
+      "affinityAfter": [
+        {
+          "id": 33524,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 72012,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 30448,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 77172,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "B1",
+      "directory": ".omx/full-speed/dispatch-bench/results/scratch-clean-melee-B1",
+      "workerSha256": "f2ff1fda27fde40b7d018303dfa1a9454e39b0619901663634aed3514ab68677",
+      "policyWorkerSha256": "a5b0f2b0a630e06433e2f69ccbb7dfc1e3ce93efb6e8ae31257fde34be26586b",
+      "coreSha256": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+      "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+      "harnessSha256": "28d311040d959b34d1025309a27947b73e93cef16eab3abe7b0f565a9bdd82c6",
+      "statistics": {
+        "wallSeconds": 36.7523900000453,
+        "emulatedSeconds": 30.010309991769546,
+        "targetEmulatedSeconds": 30,
+        "overshootEmulatedSeconds": 0.010309991769545945,
+        "coreFrames": 1798,
+        "coreFps": 48.921988474702836,
+        "speedPercent": 81.65539708229194,
+        "submittedPresentationFps": 48.78594290052402,
+        "visualCountFps": 48.541060867002145
+      },
+      "audio": {
+        "underrunEvents": 0,
+        "overruns": 0,
+        "writtenFrames": 1763968,
+        "consumedFrames": 1764096,
+        "underrunFrames": 0,
+        "producerRefills": 2511,
+        "producerEmptyMixes": 0
+      },
+      "newCompiles": 1659,
+      "inputIsolation": {
+        "nativeUpdatesBefore": 0,
+        "nativeUpdatesAfter": 0,
+        "blocked": {
+          "events": 3
+        }
+      },
+      "jitStayedEnabled": true,
+      "gpuFencesCompleted": true,
+      "sceneReview": {
+        "accepted": true,
+        "scope": "Gameplay continuity and no new visible corruption; not full emulator fidelity",
+        "reason": "Root inspected both boundaries: same Great Bay battle, textured stage, Kirby/Link,4%/0% to13%/0%, timer approximately04:42 to04:12; small frame/camera differences recorded.",
+        "reviewedAt": "2026-09-08T05:17:00.446Z"
+      },
+      "affinityBefore": [
+        {
+          "id": 94780,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 107880,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 119112,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 92784,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ],
+      "affinityAfter": [
+        {
+          "id": 94780,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 107880,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 119112,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 92784,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "B2",
+      "directory": ".omx/full-speed/dispatch-bench/results/scratch-clean-melee-B2",
+      "workerSha256": "f2ff1fda27fde40b7d018303dfa1a9454e39b0619901663634aed3514ab68677",
+      "policyWorkerSha256": "a5b0f2b0a630e06433e2f69ccbb7dfc1e3ce93efb6e8ae31257fde34be26586b",
+      "coreSha256": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+      "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+      "harnessSha256": "28d311040d959b34d1025309a27947b73e93cef16eab3abe7b0f565a9bdd82c6",
+      "statistics": {
+        "wallSeconds": 31.690415000021456,
+        "emulatedSeconds": 30.01063769547325,
+        "targetEmulatedSeconds": 30,
+        "overshootEmulatedSeconds": 0.010637695473249664,
+        "coreFrames": 1799,
+        "coreFps": 56.76795333853413,
+        "speedPercent": 94.69941525048799,
+        "submittedPresentationFps": 56.136847687188556,
+        "visualCountFps": 56.04218183948672
+      },
+      "audio": {
+        "underrunEvents": 0,
+        "overruns": 0,
+        "writtenFrames": 1521152,
+        "consumedFrames": 1520640,
+        "underrunFrames": 0,
+        "producerRefills": 3040,
+        "producerEmptyMixes": 0
+      },
+      "newCompiles": 1678,
+      "inputIsolation": {
+        "nativeUpdatesBefore": 0,
+        "nativeUpdatesAfter": 0,
+        "blocked": {
+          "events": 67
+        }
+      },
+      "jitStayedEnabled": true,
+      "gpuFencesCompleted": true,
+      "sceneReview": {
+        "accepted": true,
+        "scope": "Gameplay continuity and no new visible corruption; not full emulator fidelity",
+        "reason": "Root inspected both boundaries: same Great Bay battle, textured stage, Kirby/Link,4%/0% to13%/0%, timer approximately04:42 to04:12; small frame/camera differences recorded.",
+        "reviewedAt": "2026-09-08T05:17:00.449Z"
+      },
+      "affinityBefore": [
+        {
+          "id": 118156,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 116696,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 101276,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 26064,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ],
+      "affinityAfter": [
+        {
+          "id": 118156,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 116696,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 101276,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 26064,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "A2",
+      "directory": ".omx/full-speed/dispatch-bench/results/scratch-clean-melee-A2",
+      "workerSha256": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+      "policyWorkerSha256": "3de3bb2afbed9e4f172150721d5eab8b582c396348066e104ad8e21b75eb7029",
+      "coreSha256": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+      "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+      "harnessSha256": "28d311040d959b34d1025309a27947b73e93cef16eab3abe7b0f565a9bdd82c6",
+      "statistics": {
+        "wallSeconds": 36.38092500001192,
+        "emulatedSeconds": 30.013921193415637,
+        "targetEmulatedSeconds": 30,
+        "overshootEmulatedSeconds": 0.013921193415637134,
+        "coreFrames": 1799,
+        "coreFps": 49.44899009575514,
+        "speedPercent": 82.49906013496303,
+        "submittedPresentationFps": 49.0641730522084,
+        "visualCountFps": 49.00919918884459
+      },
+      "audio": {
+        "underrunEvents": 0,
+        "overruns": 0,
+        "writtenFrames": 1746304,
+        "consumedFrames": 1745792,
+        "underrunFrames": 0,
+        "producerRefills": 2521,
+        "producerEmptyMixes": 0
+      },
+      "newCompiles": 1665,
+      "inputIsolation": {
+        "nativeUpdatesBefore": 0,
+        "nativeUpdatesAfter": 0,
+        "blocked": {
+          "events": 3
+        }
+      },
+      "jitStayedEnabled": true,
+      "gpuFencesCompleted": true,
+      "sceneReview": {
+        "accepted": true,
+        "scope": "Gameplay continuity and no new visible corruption; not full emulator fidelity",
+        "reason": "Root inspected both boundaries: same Great Bay battle, textured stage, Kirby/Link,4%/0% to13%/0%, timer approximately04:42 to04:12; small frame/camera differences recorded.",
+        "reviewedAt": "2026-09-08T05:17:00.453Z"
+      },
+      "affinityBefore": [
+        {
+          "id": 33424,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 96456,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 115896,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 55308,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ],
+      "affinityAfter": [
+        {
+          "id": 33424,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 96456,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 115896,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 55308,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "baseline": "A1",
+      "candidate": "B1",
+      "baselineFps": 45.90051503493146,
+      "candidateFps": 48.921988474702836,
+      "gainPercent": 6.582656942894771
+    },
+    {
+      "baseline": "A2",
+      "candidate": "B2",
+      "baselineFps": 49.44899009575514,
+      "candidateFps": 56.76795333853413,
+      "gainPercent": 14.801036843434478
+    }
+  ],
+  "meanGainPercent": 10.844772260094814,
+  "method": "Uninstrumented fresh Chrome per arm; ABBA;20emulated seconds warmup,30emulated seconds timed; identical explicit0x5555 process affinity, audible worklet audio, no external input. Native core7479 unchanged.",
+  "excluded": {
+    "excluded": {
+      "directory": ".omx/full-speed/dispatch-bench/results/scratch-melee-A1",
+      "reason": "Possible overlap with a98ms VM test completion; exact timing unavailable. Runtime valid but excluded from performance comparison; rerun control after all agent execution has stopped."
+    }
+  },
+  "gpuByteProbe": {
+    "browser": "143.0.7499.4",
+    "workerSha256": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+    "helperSha256": "8aa4077f7d9ea66d3686f4209ff357b741877b8f944bdec7058a1d18e9cb25a4",
+    "valid": true,
+    "result": {
+      "adapter": {},
+      "variants": [
+        {
+          "variant": "baseline",
+          "totalBytes": 9582512,
+          "mismatches": 0,
+          "firstMismatch": null,
+          "sha256": "ada0dcdbc38ec1d39c34ca4404e3f02d5fe9d5d494d948f64ce9952813f5496f",
+          "observations": [
+            {
+              "bytes": 0,
+              "padded": 0,
+              "backingBytes": 0
+            },
+            {
+              "bytes": 1,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 2,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 3,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 4,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 63,
+              "padded": 64,
+              "backingBytes": 64
+            },
+            {
+              "bytes": 64,
+              "padded": 64,
+              "backingBytes": 64
+            },
+            {
+              "bytes": 65,
+              "padded": 68,
+              "backingBytes": 68
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 4112
+            },
+            {
+              "bytes": 1536,
+              "padded": 1536,
+              "backingBytes": 1536
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 4112
+            },
+            {
+              "bytes": 65535,
+              "padded": 65536,
+              "backingBytes": 65536
+            },
+            {
+              "bytes": 65536,
+              "padded": 65536,
+              "backingBytes": 65536
+            },
+            {
+              "bytes": 1048583,
+              "padded": 1048584,
+              "backingBytes": 1048584
+            },
+            {
+              "bytes": 4194304,
+              "padded": 4194304,
+              "backingBytes": 4194304
+            },
+            {
+              "bytes": 4194305,
+              "padded": 4194308,
+              "backingBytes": 4194308
+            },
+            {
+              "bytes": 3,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 4,
+              "padded": 4,
+              "backingBytes": 4
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 4112
+            }
+          ]
+        },
+        {
+          "variant": "scratch",
+          "totalBytes": 9582512,
+          "mismatches": 0,
+          "firstMismatch": null,
+          "sha256": "ada0dcdbc38ec1d39c34ca4404e3f02d5fe9d5d494d948f64ce9952813f5496f",
+          "observations": [
+            {
+              "bytes": 0,
+              "padded": 0,
+              "backingBytes": 0
+            },
+            {
+              "bytes": 1,
+              "padded": 4,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 2,
+              "padded": 4,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 3,
+              "padded": 4,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 4,
+              "padded": 4,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 63,
+              "padded": 64,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 64,
+              "padded": 64,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 65,
+              "padded": 68,
+              "backingBytes": 256
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 8192
+            },
+            {
+              "bytes": 1536,
+              "padded": 1536,
+              "backingBytes": 8192
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 8192
+            },
+            {
+              "bytes": 65535,
+              "padded": 65536,
+              "backingBytes": 65536
+            },
+            {
+              "bytes": 65536,
+              "padded": 65536,
+              "backingBytes": 65536
+            },
+            {
+              "bytes": 1048583,
+              "padded": 1048584,
+              "backingBytes": 2097152
+            },
+            {
+              "bytes": 4194304,
+              "padded": 4194304,
+              "backingBytes": 4194304
+            },
+            {
+              "bytes": 4194305,
+              "padded": 4194308,
+              "backingBytes": 4194308
+            },
+            {
+              "bytes": 3,
+              "padded": 4,
+              "backingBytes": 4194304
+            },
+            {
+              "bytes": 4,
+              "padded": 4,
+              "backingBytes": 4194304
+            },
+            {
+              "bytes": 4112,
+              "padded": 4112,
+              "backingBytes": 4194304
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "valid": true
+    }
+  },
+  "decision": "Exact tested scratch worker applied locally; native core unchanged. Positive paired Melee results, real GPU bytes, MKW scene and shipping checks passed.",
+  "limitations": [
+    "Two pairs in one Melee scene; gain magnitude varied and does not establish all-game speed.",
+    "Continuing compilation occurs during these windows.",
+    "GPU probe establishes byte snapshots, not a complete game-rendering proof.",
+    "The minimap is restored by a repaired fixture; general GPU save-state readback is still incomplete."
+  ],
+  "productionPromoted": true,
+  "verification": {
+    "abiRefreshed": true,
+    "failed": 0,
+    "shippingRegressions": 6,
+    "syntaxPassed": true,
+    "peerReview": "No blocking finding",
+    "skipped": 0,
+    "provenancePassed": true,
+    "fullTests": 922,
+    "nativeWasmUnchanged": true
+  },
+  "mkwSmoke": {
+    "statistics": {
+      "wallSeconds": 42.95903000003099,
+      "emulatedSeconds": 30.013060555555555,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.013060555555554743,
+      "coreFrames": 1798,
+      "coreFps": 41.85383142959007,
+      "speedPercent": 69.86438137810352,
+      "submittedPresentationFps": 41.71416347153805,
+      "visualCountFps": 41.644329492512036
+    },
+    "displacedOverlayVisible": false,
+    "runtimeValid": true,
+    "mapOutlineVisible": true,
+    "jitStayedEnabled": true,
+    "sceneAccepted": true,
+    "audio": {
+      "underrunEvents": 0,
+      "overruns": 0,
+      "writtenFrames": 2061568,
+      "consumedFrames": 2061568,
+      "underrunFrames": 0,
+      "producerRefills": 4280,
+      "producerEmptyMixes": 0
+    },
+    "pairedComparison": false,
+    "pulseMatched": true,
+    "inputIsolation": {
+      "nativeUpdatesBefore": 2,
+      "nativeUpdatesAfter": 2,
+      "blocked": {
+        "events": 8
+      }
+    },
+    "finalCapture": ".omx/full-speed/dispatch-bench/results-mkw-settled/scratch-mkw-smoke/final-raw.png"
+  }
+}

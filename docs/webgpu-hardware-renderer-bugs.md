@@ -13,6 +13,13 @@ VIDEO=wgpu node tools/boot-matrix.mjs --library "<disc library>" --duration 45
 
 ## Follow-up: mip chains and clear coverage/channels (2026-09-07)
 
+Sunshine's later intermittent white background is now traced to an empty
+ImGui uniform upload leaking into a GX draw:
+[uniform-source fix and evidence](sunshine-uniform-fix.md).
+
+The next pass fixes clear-cache exhaustion, per-slot samplers and actual depth
+sampling: [sampling follow-up](webgpu-sampling-follow-up.md).
+
 Three additional renderer defects are fixed:
 
 - **Mip uploads were rejected.** Native textures supplied each mip but

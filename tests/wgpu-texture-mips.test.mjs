@@ -88,7 +88,7 @@ test("sampled bind groups expose every mip and array layer of the created textur
   const bindGroups = new Map();
   const objects = {
     textures: new Map([[42, { tex, format: "rgba8unorm", layers: 3, view2dArray: null }]]),
-    bindGroups, samplers: new Map(), buffers: new Map(),
+    bindGroups, bindGroupSamplingMasks: new Map(), samplers: new Map(), buffers: new Map(),
   };
   const heap = new Uint32Array(16);
   const blobPtr = 4;
@@ -100,7 +100,8 @@ test("sampled bind groups expose every mip and array layer of the created textur
       webGpuObjects: objects, moduleInstance: { HEAPU8: new Uint8Array(heap.buffer) },
       getFixedLayouts: () => ({ l1: {}, dummyTexView: {}, dummySampler: {} }),
       FILTERABLE_TEX_FORMATS: new Set(["rgba8unorm"]),
-      wgpuReplayClassifier: null, vpDiagBgTexByBinding: new Map(),
+      UNFILTERABLE_TEX_FORMATS: new Set(),
+      wgpuReplayClassifier: null, vpDiagEnabled: false, vpDiagBgTexByBinding: new Map(),
       self: {}, console: { log() {} },
     }
   );

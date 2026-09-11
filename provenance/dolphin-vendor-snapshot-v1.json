@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "5ab4c03989f1942405c6a8fe83e8a151241f378f",
-    "changedPathCount": 110,
+    "resultTree": "f7486fd3c967e88fe89a00d5ad44a0bf95cdfb76",
+    "changedPathCount": 114,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -299,27 +299,63 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "3ec24a30162d97c99c2454af6af89d480d90c29d",
-        "resultBlob": "77ece626be4ee15b46cda739532b114b5036a486",
-        "size": 434711,
-        "sha256": "6cd435c6c1630d45a3a36d6a62edaf6cb8c07bd62902c998bca3526628bfb771"
+        "resultBlob": "3f06419a85945471eddb4b199eab2e9bcc80ecf8",
+        "size": 448161,
+        "sha256": "f8d156e2261bcb69ac59ca5f8e70676ff8b40abe8e3e90a4bb8e3ef7b4a27f71"
       },
       {
         "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h",
         "status": "M",
         "mode": "100644",
         "baseBlob": "dd940e89a2fe1ce7bc6a4a0038a4be8fa112e67e",
-        "resultBlob": "7f6cc3e46b14646f16b9b23454da1dde46ef7bad",
-        "size": 13437,
-        "sha256": "c863f3d981aa59cf0199848196d8cacdceebdacbe4f1f13d3fee07385bfc3006"
+        "resultBlob": "82a0e555a8c38d4dcb9c831fe1df83699db944e1",
+        "size": 14031,
+        "sha256": "91322834bb3b24fdf02aac52378f8e8f98d1e5a89c3f8d2a5b3ed6db1cfb9a87"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "3b4c4a0637fef2555e2628386fff370a9b31d348",
+        "resultBlob": "94bea0a9c116011bf4e0a2f72e89fe7a5bd18ec8",
+        "size": 1547,
+        "sha256": "7c8af6daa71d5dc19e482e84adc980c8b39e616f5e312e15b33d30508d956ace"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "5b34a9cfc947c15e49f9f33da93f7e263b94b61c",
+        "resultBlob": "f37b75cc6d4a6b392c56b27059527e4bb6670632",
+        "size": 1174,
+        "sha256": "72849bd2ca8bd9cda2800253520c34e94889103fb1ce23a6d6fc1e705c2804a2"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "fe2099d1c1124daf86329fcf05810b1924d9f2c4",
+        "size": 8550,
+        "sha256": "c93f02134a741e8c583e85d9134dbd535c57a54084aae5fb4b0000be9c84dd2c"
       },
       {
         "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp",
         "status": "M",
         "mode": "100644",
         "baseBlob": "665329729eb6b90d95aac910244fb60976d634b4",
-        "resultBlob": "c7651be21a912e4934d9c06e1b29bd533f87106b",
-        "size": 15250,
-        "sha256": "c37268a0d731ba2c6d324600dc4f17ff2b017b298c9c9fb3db103e6208172098"
+        "resultBlob": "0f199027be09aca895c712c0912c1161c6c6f7c7",
+        "size": 16605,
+        "sha256": "405b24f274412725de61ec1339cb6435218efe3cc00d97d7be596b670d5e54d5"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/WasmDeferredCompileQueue.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "ae423e835429dfb6cd3357f8c83260fe2d68bfa6",
+        "size": 2020,
+        "sha256": "479adaab31231cac5d3caf1e9e967098ed1195720d23b8bdb2047f1ef2121fb7"
       },
       {
         "path": "Source/Core/Core/PowerPC/JitCommon/JitCache.cpp",
@@ -641,18 +677,18 @@
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "6713529b9c9b10cbc16be868e67c0e9e75c3a76c",
-        "size": 108484,
-        "sha256": "c032aca0a17b8c83cdef50aaf69f445754a9429de1d39032ab9e57341b761705"
+        "resultBlob": "494ee0d0d3d6661bbba5758c279d3a8a6e5ce4c8",
+        "size": 109578,
+        "sha256": "36617a7f165a35c8c29ab6b5bdd14c7038b228746fca44bfa47027a321a66f7a"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUGfx.h",
         "status": "A",
         "mode": "100644",
         "baseBlob": null,
-        "resultBlob": "d80bf04c1585938e8f79cfdb49f99bc1dc24bc26",
-        "size": 15895,
-        "sha256": "175055cdb1e710b305281b34128e751cae97950703cd9f5717213c8ffd7fd3aa"
+        "resultBlob": "bf7cda7978f25cf7e6a7ded67cdc3bab43d115a0",
+        "size": 15991,
+        "sha256": "793f2bfcffd802f1fed8f3909ac875faa97e33cd2e41cb79cafb09468da752b8"
       },
       {
         "path": "Source/Core/VideoBackends/WebGPU/WebGPUShaderTranslator.cpp",
@@ -812,9 +848,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "5ce120e9ff58c164e3dfc5468d9df3680e07ee9a",
-        "resultBlob": "4ab0e256b5363bd9c7ff4e25c4f40bb50263d3ad",
-        "size": 89027,
-        "sha256": "9c155d2bc8f4b944b8f2c11ec31c216be470e4272769549962282c0f46149661"
+        "resultBlob": "da364dd8cf6d9b93e4739688dbb74f16ffa8e635",
+        "size": 90265,
+        "sha256": "1bb64ea6868542b58c2ab6e55afa59ea9ce4053bddc94fecb21ff3ed97235c68"
       },
       {
         "path": "Source/Core/VideoCommon/PostProcessing.cpp",
@@ -893,9 +929,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "3370f878adc20f96b53a30ccaee3e152893d3408",
-        "resultBlob": "4ca3cd3fe66773d7e1880d2e8f5913cb6cdbff99",
-        "size": 60783,
-        "sha256": "5fd27d59ce79abddbafb797c474ef2ae1b9ce6e8f34f57e05e282bf0d0040b00"
+        "resultBlob": "ba9d9f0f152594105eb61353506eb299df32fa10",
+        "size": 60741,
+        "sha256": "f4a5cd75772793d9ad1c11d9d83c9fd4918e5ac90f74382983db7b08c4bf0309"
       },
       {
         "path": "Source/Core/VideoCommon/UberShaderVertex.cpp",
@@ -1032,5 +1068,5 @@
       ]
     }
   ],
-  "contentSha256": "0905d94203d5131e798a457dee57a4ac1376c0475eab9412f9b741c472df138a"
+  "contentSha256": "0ccf808ba55332d3aea99fae5d231b62dca6af4766697bba5205a24b2452f8f9"
 }

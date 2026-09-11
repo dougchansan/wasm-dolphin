@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "abiVersion": 1,
-  "coreId": "sha256:38808e3affc23dfada3fe2d3492e6fa94980916a24c95e24d9cdcc0c6997619c",
+  "coreId": "sha256:e8a1c1bb9aec817bdf96f88f41c9681caa1b8001620a35e658deff7c7a9630a2",
   "upstreamCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
   "artifacts": [
     {
       "path": "cores/dolphin/dolphin-core-upstream.js",
       "hashMode": "lf-normalized",
       "size": 266770,
-      "sha256": "ebca612d65707437b07ce56cf5d945590397ffe19ae3ccd11ec1c65ace2ab50e"
+      "sha256": "b878fbb83899e403b29ee7a40d0c5528e9112bd6c2e189cd026592b4a79b027e"
     },
     {
       "path": "cores/dolphin/dolphin-core-upstream.wasm",
-      "size": 12947872,
-      "sha256": "38808e3affc23dfada3fe2d3492e6fa94980916a24c95e24d9cdcc0c6997619c"
+      "size": 12960637,
+      "sha256": "e8a1c1bb9aec817bdf96f88f41c9681caa1b8001620a35e658deff7c7a9630a2"
     }
   ],
   "contractSources": [
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 607387,
-      "sha256": "6986675e995bfa99601078ea0bafc6bd4a75aa74e439330faae8b5156e17adaa"
+      "size": 616817,
+      "sha256": "f2ff1fda27fde40b7d018303dfa1a9454e39b0619901663634aed3514ab68677"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -165,7 +165,7 @@
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
       "size": 5096,
-      "sha256": "c1a56bdea0dea02e556a9d04b880e7d6effa96ef788d70e314238ff29b39c6a9"
+      "sha256": "b948bdcd069114e7bc665bfbb66ec009f5ba9db92f4c446a9a1d8cbc07a8f1ae"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
@@ -322,6 +322,12 @@
       "hashMode": "lf-normalized",
       "size": 14307,
       "sha256": "a7f221188aaa9dc307dd9518488c60f8c4ccf52a5cecf5c4dffbc33c218cdb2e"
+    },
+    {
+      "path": "src/wgpu-sampler-state.js",
+      "hashMode": "lf-normalized",
+      "size": 1567,
+      "sha256": "0cfe8b0d6ae9dedb1cf76d46351137783506d5c3e6233a894c143e79987fccba"
     }
   ],
   "memoryContract": {

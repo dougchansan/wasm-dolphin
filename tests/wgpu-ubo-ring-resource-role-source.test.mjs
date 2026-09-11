@@ -25,7 +25,11 @@ test("producer tags only the WebGPU UBO ring with a stable resource role", async
     gfx,
     /PushCreateBuffer\(kUboRingSize, kUsageUniform,[\s\S]*BufferResourceRole::UboRing\)/
   );
-  assert.equal((gfx.match(/BufferResourceRole::UboRing/g) ?? []).length, 1);
+  const ringCreations = gfx.match(
+    /m_ubo_ring = m_cmd_stream\.PushCreateBuffer\(kUboRingSize, kUsageUniform,\s*BufferResourceRole::UboRing\)/g
+  ) ?? [];
+  assert.equal(ringCreations.length, 2, "GX and utility-first initialization both tag the ring");
+  assert.equal((gfx.match(/BufferResourceRole::UboRing/g) ?? []).length, ringCreations.length);
   assert.match(patch, /u3=BufferResourceRole/);
   assert.match(patch, /BufferResourceRole::UboRing/);
 });

@@ -51,6 +51,7 @@ for (const requiredPath of [
   "src/wgpu-pass-package-projection.js",
   "src/wgpu-resource-generation-tracker.js",
   "src/wgpu-renderer-runtime.js",
+  "src/wgpu-sampler-state.js",
   "src/wgpu-semantic-digest.js",
   "src/wgpu-semantic-parity-sink.js",
   "src/wgpu-semantic-runtime.js",

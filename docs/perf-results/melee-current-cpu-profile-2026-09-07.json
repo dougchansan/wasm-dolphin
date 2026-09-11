@@ -1,0 +1,773 @@
+{
+  "schema": "wasm-dolphin.current-profile-summary.v1",
+  "generatedAt": "2026-09-08T04:59:07.278Z",
+  "productionCoreSha256": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+  "profileCoreSha256": "c4f03dad2de17a1f31220eb8bb6a5aa6965fdaf09f746fa079be74fe003c9cc0",
+  "symbolMapSha256": "1c2701011d5d7216b9d450aca7109bde9a6d9f4a7545147914da6fed43d3f9d3",
+  "workerSha256": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+  "analysisSha256": "2a171f9a6a1210b234585771701d952edf6f7ef5dfcd88b1b459f5381fec3d6d",
+  "scene": "Melee, Great Bay battle; both fenced raw screenshots reviewed",
+  "capture": {
+    "warmupEmulatedSeconds": 60,
+    "nominalProfileWallSeconds": 30,
+    "samplingIntervalMicroseconds": 1000,
+    "targets": 18,
+    "steadyState": false,
+    "newCompiles": 479,
+    "nativeInputUpdates": [
+      0,
+      0
+    ],
+    "gpuFencesCompleted": true
+  },
+  "units": "Each target percentage is its own non-idle V8 sample residence, including named waits; not CPU utilization.",
+  "targets": [
+    {
+      "role": "page / UI JavaScript",
+      "metrics": {
+        "sampled_interval_us": {
+          "ms": 30430.157,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 100
+        },
+        "idle_or_program_us": {
+          "ms": 28773.611,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 94.556
+        },
+        "no_recorded_jit_us": {
+          "ms": 1656.546,
+          "percent_of_non_idle_target_samples": 100,
+          "percent_of_all_target_samples": 5.444
+        },
+        "js_or_builtin_self_us": {
+          "ms": 1656.546,
+          "percent_of_non_idle_target_samples": 100,
+          "percent_of_all_target_samples": 5.444
+        },
+        "gc_self_us": {
+          "ms": 99.979,
+          "percent_of_non_idle_target_samples": 6.035,
+          "percent_of_all_target_samples": 0.329
+        },
+        "named_wait_self_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": 0,
+          "percent_of_all_target_samples": 0
+        }
+      },
+      "native": [],
+      "javascript": [
+        {
+          "name": "loop",
+          "self": {
+            "ms": 412.128,
+            "percent_of_non_idle_target_samples": 24.879,
+            "percent_of_all_target_samples": 1.354
+          }
+        },
+        {
+          "name": "updateScreenHud",
+          "self": {
+            "ms": 332.166,
+            "percent_of_non_idle_target_samples": 20.052,
+            "percent_of_all_target_samples": 1.092
+          }
+        },
+        {
+          "name": "poll",
+          "self": {
+            "ms": 232.908,
+            "percent_of_non_idle_target_samples": 14.06,
+            "percent_of_all_target_samples": 0.765
+          }
+        },
+        {
+          "name": "formatMetricNumber",
+          "self": {
+            "ms": 142.412,
+            "percent_of_non_idle_target_samples": 8.597,
+            "percent_of_all_target_samples": 0.468
+          }
+        },
+        {
+          "name": "(garbage collector)",
+          "self": {
+            "ms": 99.979,
+            "percent_of_non_idle_target_samples": 6.035,
+            "percent_of_all_target_samples": 0.329
+          }
+        },
+        {
+          "name": "requestAnimationFrame",
+          "self": {
+            "ms": 71.985,
+            "percent_of_non_idle_target_samples": 4.345,
+            "percent_of_all_target_samples": 0.237
+          }
+        },
+        {
+          "name": "setTransportGlyph",
+          "self": {
+            "ms": 62.356,
+            "percent_of_non_idle_target_samples": 3.764,
+            "percent_of_all_target_samples": 0.205
+          }
+        },
+        {
+          "name": "setAttribute",
+          "self": {
+            "ms": 51.19,
+            "percent_of_non_idle_target_samples": 3.09,
+            "percent_of_all_target_samples": 0.168
+          }
+        }
+      ]
+    },
+    {
+      "role": "native GPU emulation / FIFO worker",
+      "metrics": {
+        "sampled_interval_us": {
+          "ms": 30428.664,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 100
+        },
+        "no_recorded_jit_us": {
+          "ms": 30428.664,
+          "percent_of_non_idle_target_samples": 100,
+          "percent_of_all_target_samples": 100
+        },
+        "core_wasm_self_us": {
+          "ms": 30064.086,
+          "percent_of_non_idle_target_samples": 98.802,
+          "percent_of_all_target_samples": 98.802
+        },
+        "named_wait_self_us": {
+          "ms": 11564.723,
+          "percent_of_non_idle_target_samples": 38.006,
+          "percent_of_all_target_samples": 38.006
+        },
+        "named_wait_stack_us": {
+          "ms": 11570.73,
+          "percent_of_non_idle_target_samples": 38.026,
+          "percent_of_all_target_samples": 38.026
+        },
+        "v8_bridge_self_us": {
+          "ms": 280.689,
+          "percent_of_non_idle_target_samples": 0.922,
+          "percent_of_all_target_samples": 0.922
+        },
+        "js_or_builtin_self_us": {
+          "ms": 83.889,
+          "percent_of_non_idle_target_samples": 0.276,
+          "percent_of_all_target_samples": 0.276
+        },
+        "gc_self_us": {
+          "ms": 1.527,
+          "percent_of_non_idle_target_samples": 0.005,
+          "percent_of_all_target_samples": 0.005
+        },
+        "idle_or_program_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 0
+        },
+        "replay_stack_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": 0,
+          "percent_of_all_target_samples": 0
+        }
+      },
+      "native": [
+        {
+          "name": "_do_futex_wait",
+          "self": {
+            "ms": 11558.651,
+            "percent_of_non_idle_target_samples": 37.986,
+            "percent_of_all_target_samples": 37.986
+          }
+        },
+        {
+          "name": "CommandProcessor::CommandProcessorManager::SetCPStatusFromGPU()",
+          "self": {
+            "ms": 7445.293,
+            "percent_of_non_idle_target_samples": 24.468,
+            "percent_of_all_target_samples": 24.468
+          }
+        },
+        {
+          "name": "void Core::DolphinWebThread::Start<Core::GetInitializedVideoGuard(Core::System&, WindowSystemInfo const&)::$_1>(Core::GetInitializedVideoGuard(Core::System&, WindowSystemInfo const&)::$_1&&, bool)::'lambda'(void*)::__invoke(void*)",
+          "self": {
+            "ms": 5804.751,
+            "percent_of_non_idle_target_samples": 19.077,
+            "percent_of_all_target_samples": 19.077
+          }
+        },
+        {
+          "name": "VertexManagerBase::Flush()",
+          "self": {
+            "ms": 749.675,
+            "percent_of_non_idle_target_samples": 2.464,
+            "percent_of_all_target_samples": 2.464
+          }
+        },
+        {
+          "name": "AsyncRequests::PullEvents()",
+          "self": {
+            "ms": 566.472,
+            "percent_of_non_idle_target_samples": 1.862,
+            "percent_of_all_target_samples": 1.862
+          }
+        },
+        {
+          "name": "FramebufferManager::RefreshPeekCache()",
+          "self": {
+            "ms": 554.582,
+            "percent_of_non_idle_target_samples": 1.823,
+            "percent_of_all_target_samples": 1.823
+          }
+        },
+        {
+          "name": "WebGPU::WebGPUGfx::PrepareDrawResources()",
+          "self": {
+            "ms": 509.561,
+            "percent_of_non_idle_target_samples": 1.675,
+            "percent_of_all_target_samples": 1.675
+          }
+        },
+        {
+          "name": "Common::GetMurmurHash3(unsigned char const*, unsigned int, unsigned int)",
+          "self": {
+            "ms": 418.522,
+            "percent_of_non_idle_target_samples": 1.375,
+            "percent_of_all_target_samples": 1.375
+          }
+        }
+      ],
+      "javascript": [
+        {
+          "name": "_emscripten_get_now",
+          "self": {
+            "ms": 45.574,
+            "percent_of_non_idle_target_samples": 0.15,
+            "percent_of_all_target_samples": 0.15
+          }
+        },
+        {
+          "name": "_clock_time_get",
+          "self": {
+            "ms": 15.284,
+            "percent_of_non_idle_target_samples": 0.05,
+            "percent_of_all_target_samples": 0.05
+          }
+        },
+        {
+          "name": "wasm-to-js",
+          "self": {
+            "ms": 6.788,
+            "percent_of_non_idle_target_samples": 0.022,
+            "percent_of_all_target_samples": 0.022
+          }
+        },
+        {
+          "name": "now",
+          "self": {
+            "ms": 5.685,
+            "percent_of_non_idle_target_samples": 0.019,
+            "percent_of_all_target_samples": 0.019
+          }
+        },
+        {
+          "name": "_emscripten_date_now",
+          "self": {
+            "ms": 4.516,
+            "percent_of_non_idle_target_samples": 0.015,
+            "percent_of_all_target_samples": 0.015
+          }
+        },
+        {
+          "name": "(garbage collector)",
+          "self": {
+            "ms": 1.527,
+            "percent_of_non_idle_target_samples": 0.005,
+            "percent_of_all_target_samples": 0.005
+          }
+        },
+        {
+          "name": "bigintToI53Checked",
+          "self": {
+            "ms": 1.523,
+            "percent_of_non_idle_target_samples": 0.005,
+            "percent_of_all_target_samples": 0.005
+          }
+        },
+        {
+          "name": "proxyToMainThread",
+          "self": {
+            "ms": 1.503,
+            "percent_of_non_idle_target_samples": 0.005,
+            "percent_of_all_target_samples": 0.005
+          }
+        }
+      ]
+    },
+    {
+      "role": "WebGPU replay JavaScript / discio",
+      "metrics": {
+        "sampled_interval_us": {
+          "ms": 30429.157,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 100
+        },
+        "idle_or_program_us": {
+          "ms": 16401.989,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 53.902
+        },
+        "no_recorded_jit_us": {
+          "ms": 14027.168,
+          "percent_of_non_idle_target_samples": 100,
+          "percent_of_all_target_samples": 46.098
+        },
+        "core_wasm_self_us": {
+          "ms": 1092.018,
+          "percent_of_non_idle_target_samples": 7.785,
+          "percent_of_all_target_samples": 3.589
+        },
+        "js_or_builtin_self_us": {
+          "ms": 12901.866,
+          "percent_of_non_idle_target_samples": 91.978,
+          "percent_of_all_target_samples": 42.4
+        },
+        "replay_stack_us": {
+          "ms": 7455.582,
+          "percent_of_non_idle_target_samples": 53.151,
+          "percent_of_all_target_samples": 24.501
+        },
+        "gc_self_us": {
+          "ms": 4469.197,
+          "percent_of_non_idle_target_samples": 31.861,
+          "percent_of_all_target_samples": 14.687
+        },
+        "v8_bridge_self_us": {
+          "ms": 33.284,
+          "percent_of_non_idle_target_samples": 0.237,
+          "percent_of_all_target_samples": 0.109
+        },
+        "named_wait_self_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": 0,
+          "percent_of_all_target_samples": 0
+        }
+      },
+      "native": [
+        {
+          "name": "Mixer::MixerFifo::Mix(short*, unsigned long)",
+          "self": {
+            "ms": 1029.695,
+            "percent_of_non_idle_target_samples": 7.341,
+            "percent_of_all_target_samples": 3.384
+          }
+        },
+        {
+          "name": "MixAudio",
+          "self": {
+            "ms": 16.363,
+            "percent_of_non_idle_target_samples": 0.117,
+            "percent_of_all_target_samples": 0.054
+          }
+        },
+        {
+          "name": "expm1",
+          "self": {
+            "ms": 12.109,
+            "percent_of_non_idle_target_samples": 0.086,
+            "percent_of_all_target_samples": 0.04
+          }
+        },
+        {
+          "name": "AudioBufferFrames",
+          "self": {
+            "ms": 10.317,
+            "percent_of_non_idle_target_samples": 0.074,
+            "percent_of_all_target_samples": 0.034
+          }
+        },
+        {
+          "name": "round",
+          "self": {
+            "ms": 4.617,
+            "percent_of_non_idle_target_samples": 0.033,
+            "percent_of_all_target_samples": 0.015
+          }
+        },
+        {
+          "name": "emscripten_builtin_malloc",
+          "self": {
+            "ms": 3.228,
+            "percent_of_non_idle_target_samples": 0.023,
+            "percent_of_all_target_samples": 0.011
+          }
+        },
+        {
+          "name": "std::__2::basic_ostream<char, std::__2::char_traits<char>>& std::__2::__put_character_sequence[abi:nn210108]<char, std::__2::char_traits<char>>(std::__2::basic_ostream<char, std::__2::char_traits<char>>&, char const*, unsigned long)",
+          "self": {
+            "ms": 2.99,
+            "percent_of_non_idle_target_samples": 0.021,
+            "percent_of_all_target_samples": 0.01
+          }
+        },
+        {
+          "name": "bool Config::Get<bool>(Config::Info<bool> const&)",
+          "self": {
+            "ms": 2.606,
+            "percent_of_non_idle_target_samples": 0.019,
+            "percent_of_all_target_samples": 0.009
+          }
+        }
+      ],
+      "javascript": [
+        {
+          "name": "(garbage collector)",
+          "self": {
+            "ms": 4469.197,
+            "percent_of_non_idle_target_samples": 31.861,
+            "percent_of_all_target_samples": 14.687
+          }
+        },
+        {
+          "name": "drainWebGpuCmdRing",
+          "self": {
+            "ms": 2462.901,
+            "percent_of_non_idle_target_samples": 17.558,
+            "percent_of_all_target_samples": 8.094
+          }
+        },
+        {
+          "name": "writeBuffer",
+          "self": {
+            "ms": 1650.362,
+            "percent_of_non_idle_target_samples": 11.765,
+            "percent_of_all_target_samples": 5.424
+          }
+        },
+        {
+          "name": "copyWgpuUploadPayload",
+          "self": {
+            "ms": 1417.301,
+            "percent_of_non_idle_target_samples": 10.104,
+            "percent_of_all_target_samples": 4.658
+          }
+        },
+        {
+          "name": "pump",
+          "self": {
+            "ms": 333.802,
+            "percent_of_non_idle_target_samples": 2.38,
+            "percent_of_all_target_samples": 1.097
+          }
+        },
+        {
+          "name": "replayCreateBindGroup",
+          "self": {
+            "ms": 296.365,
+            "percent_of_non_idle_target_samples": 2.113,
+            "percent_of_all_target_samples": 0.974
+          }
+        },
+        {
+          "name": "createBindGroup",
+          "self": {
+            "ms": 278.918,
+            "percent_of_non_idle_target_samples": 1.988,
+            "percent_of_all_target_samples": 0.917
+          }
+        },
+        {
+          "name": "releaseWgpuUploadPayload",
+          "self": {
+            "ms": 251.392,
+            "percent_of_non_idle_target_samples": 1.792,
+            "percent_of_all_target_samples": 0.826
+          }
+        }
+      ]
+    },
+    {
+      "role": "guest CPU execution worker",
+      "metrics": {
+        "sampled_interval_us": {
+          "ms": 30429.411,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 100
+        },
+        "no_recorded_jit_us": {
+          "ms": 15171.904,
+          "percent_of_non_idle_target_samples": 49.859,
+          "percent_of_all_target_samples": 49.859
+        },
+        "core_wasm_self_us": {
+          "ms": 19357.365,
+          "percent_of_non_idle_target_samples": 63.614,
+          "percent_of_all_target_samples": 63.614
+        },
+        "named_wait_self_us": {
+          "ms": 550.931,
+          "percent_of_non_idle_target_samples": 1.811,
+          "percent_of_all_target_samples": 1.811
+        },
+        "named_wait_stack_us": {
+          "ms": 555.481,
+          "percent_of_non_idle_target_samples": 1.825,
+          "percent_of_all_target_samples": 1.825
+        },
+        "observed_jit_us": {
+          "ms": 14377.115,
+          "percent_of_non_idle_target_samples": 47.247,
+          "percent_of_all_target_samples": 47.247
+        },
+        "RunWasmBlock_inclusive_us": {
+          "ms": 12897.473,
+          "percent_of_non_idle_target_samples": 42.385,
+          "percent_of_all_target_samples": 42.385
+        },
+        "established_block_body_self_us": {
+          "ms": 9959.502,
+          "percent_of_non_idle_target_samples": 32.73,
+          "percent_of_all_target_samples": 32.73
+        },
+        "other_wasm_self_us": {
+          "ms": 10839.894,
+          "percent_of_non_idle_target_samples": 35.623,
+          "percent_of_all_target_samples": 35.623
+        },
+        "js_or_builtin_self_us": {
+          "ms": 232.152,
+          "percent_of_non_idle_target_samples": 0.763,
+          "percent_of_all_target_samples": 0.763
+        },
+        "unproved_noncore_module_us": {
+          "ms": 880.392,
+          "percent_of_non_idle_target_samples": 2.893,
+          "percent_of_all_target_samples": 2.893
+        },
+        "RunWasmBlock_self_us": {
+          "ms": 2672.341,
+          "percent_of_non_idle_target_samples": 8.782,
+          "percent_of_all_target_samples": 8.782
+        },
+        "native_helper_beneath_known_block_us": {
+          "ms": 1652.761,
+          "percent_of_non_idle_target_samples": 5.431,
+          "percent_of_all_target_samples": 5.431
+        },
+        "gc_self_us": {
+          "ms": 7.562,
+          "percent_of_non_idle_target_samples": 0.025,
+          "percent_of_all_target_samples": 0.025
+        },
+        "idle_or_program_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": null,
+          "percent_of_all_target_samples": 0
+        },
+        "replay_stack_us": {
+          "ms": 0,
+          "percent_of_non_idle_target_samples": 0,
+          "percent_of_all_target_samples": 0
+        }
+      },
+      "native": [
+        {
+          "name": "CachedInterpreter::ExecuteOneBlock(bool)",
+          "self": {
+            "ms": 4656.892,
+            "percent_of_non_idle_target_samples": 15.304,
+            "percent_of_all_target_samples": 15.304
+          }
+        },
+        {
+          "name": "JitBaseBlockCache::Dispatch()",
+          "self": {
+            "ms": 4269.091,
+            "percent_of_non_idle_target_samples": 14.029,
+            "percent_of_all_target_samples": 14.029
+          }
+        },
+        {
+          "name": "CachedInterpreter::RunWasmBlock(PowerPC::PowerPCState&, CachedInterpreter::WasmBlockOperands const&)",
+          "self": {
+            "ms": 2672.341,
+            "percent_of_non_idle_target_samples": 8.782,
+            "percent_of_all_target_samples": 8.782
+          }
+        },
+        {
+          "name": "DolphinWeb_OnXfb",
+          "self": {
+            "ms": 1651.318,
+            "percent_of_non_idle_target_samples": 5.427,
+            "percent_of_all_target_samples": 5.427
+          }
+        },
+        {
+          "name": "CachedInterpreter::FastInteger(PowerPC::PowerPCState&, CachedInterpreter::FastInstructionOperands const&)",
+          "self": {
+            "ms": 1336.284,
+            "percent_of_non_idle_target_samples": 4.391,
+            "percent_of_all_target_samples": 4.391
+          }
+        },
+        {
+          "name": "TryFastRamWordLoadStore(Core::System&, PowerPC::PowerPCState&, UGeckoInstruction)",
+          "self": {
+            "ms": 721.43,
+            "percent_of_non_idle_target_samples": 2.371,
+            "percent_of_all_target_samples": 2.371
+          }
+        },
+        {
+          "name": "JitBaseBlockCache::GetBlockFromStartAddress(unsigned int, CPUEmuFeatureFlags)",
+          "self": {
+            "ms": 671.928,
+            "percent_of_non_idle_target_samples": 2.208,
+            "percent_of_all_target_samples": 2.208
+          }
+        },
+        {
+          "name": "GPFifo::GPFifoManager::UpdateGatherPipe()",
+          "self": {
+            "ms": 614.234,
+            "percent_of_non_idle_target_samples": 2.019,
+            "percent_of_all_target_samples": 2.019
+          }
+        }
+      ],
+      "javascript": [
+        {
+          "name": "Module",
+          "self": {
+            "ms": 155.294,
+            "percent_of_non_idle_target_samples": 0.51,
+            "percent_of_all_target_samples": 0.51
+          }
+        },
+        {
+          "name": "_emscripten_get_now",
+          "self": {
+            "ms": 32.257,
+            "percent_of_non_idle_target_samples": 0.106,
+            "percent_of_all_target_samples": 0.106
+          }
+        },
+        {
+          "name": "Instance",
+          "self": {
+            "ms": 10.58,
+            "percent_of_non_idle_target_samples": 0.035,
+            "percent_of_all_target_samples": 0.035
+          }
+        },
+        {
+          "name": "(garbage collector)",
+          "self": {
+            "ms": 7.562,
+            "percent_of_non_idle_target_samples": 0.025,
+            "percent_of_all_target_samples": 0.025
+          }
+        },
+        {
+          "name": "DolphinWeb_CachedInterpreterCompileWasmBlock",
+          "self": {
+            "ms": 6.715,
+            "percent_of_non_idle_target_samples": 0.022,
+            "percent_of_all_target_samples": 0.022
+          }
+        },
+        {
+          "name": "2744774",
+          "self": {
+            "ms": 5.643,
+            "percent_of_non_idle_target_samples": 0.019,
+            "percent_of_all_target_samples": 0.019
+          }
+        },
+        {
+          "name": "now",
+          "self": {
+            "ms": 4.445,
+            "percent_of_non_idle_target_samples": 0.015,
+            "percent_of_all_target_samples": 0.015
+          }
+        },
+        {
+          "name": "_clock_time_get",
+          "self": {
+            "ms": 2.788,
+            "percent_of_non_idle_target_samples": 0.009,
+            "percent_of_all_target_samples": 0.009
+          }
+        }
+      ]
+    }
+  ],
+  "processCpu": {
+    "interval_ms": 30603,
+    "known_process_cpu_seconds": 160.371,
+    "mean_cpu_core_equivalents": 5.24,
+    "processes": [
+      {
+        "id": 102264,
+        "type": "renderer",
+        "cpu_seconds": 131.205
+      },
+      {
+        "id": 90104,
+        "type": "GPU",
+        "cpu_seconds": 27.048
+      },
+      {
+        "id": 110148,
+        "type": "browser",
+        "cpu_seconds": 1.947
+      },
+      {
+        "id": 90488,
+        "type": "audio.mojom.AudioService",
+        "cpu_seconds": 0.16
+      },
+      {
+        "id": 97208,
+        "type": "network.mojom.NetworkService",
+        "cpu_seconds": 0.01
+      },
+      {
+        "id": 94432,
+        "type": "storage.mojom.StorageService",
+        "cpu_seconds": 0.001
+      },
+      {
+        "id": 41056,
+        "type": "renderer",
+        "cpu_seconds": 0
+      }
+    ],
+    "new_or_reset_processes": [],
+    "disappeared_processes": [],
+    "interpretation": "OS-reported process CPU deltas; includes all listed process threads. GPU-process CPU is not GPU hardware execution time. Do not add parked profile sample residence."
+  },
+  "interpretation": "Probe reusable immediate queue-upload storage to reduce allocation cost. Keep block dispatch frequency as a separate CPU optimization target; no performance gain established by this capture.",
+  "caveats": [
+    "These conclusions use only this completed profile and its verified core/map pair.",
+    "Target sample weights are residence times, not process CPU utilization; named futex waits are separate.",
+    "Source-level function names do not expose costs of inlined callees.",
+    "ExecuteOneBlock self-time is shared control for native and compiled callbacks, not wholly interpreter fallback or JIT work.",
+    "Only non-core modules observed beneath the exactly named RunWasmBlock wrapper receive established JIT association; others stay unproved.",
+    "Missing or inlined ancestors cannot be reconstructed from V8 call trees.",
+    "No instruction/cycle coverage or optimization ceiling is inferred from sample shares.",
+    "A completed GPU fence proves completion, not GPU hardware execution duration.",
+    "The symbol-map relink changed function ordering and executable sections. Its map cannot name production functions by index.",
+    "Profiler instrumentation was enabled; this capture is not an ordinary FPS benchmark.",
+    "Production defaults unchanged; full-speed gameplay across all games remains unverified."
+  ]
+}
