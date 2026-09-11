@@ -284,3 +284,69 @@ numbers, they are just SwiftShader ones.
 
 Both are needed, and `--expect-adapter nvidia` should be passed on every run so
 a silent fallback is discarded rather than averaged in.
+
+## Second pass: what actually binds, measured with a sampling profiler
+
+The phase timers above cost about four points to run, which means they
+distort what they measure and can only rank what someone thought to
+instrument. A V8 sampling profile needs neither. Two findings came out of it,
+and between them they overturn most of this report.
+
+### The benchmark was measuring the emulator plus a debug dump
+
+`vpDiagNoteUpload` and `vpDiagNotePsUpload`, left over from the PR #19
+black-3D-models hunt, built string keys out of float arrays -- sixteen
+`toFixed(3)` values joined -- on **every** uniform upload, several hundred
+times a frame. They ran unconditionally for the first 6000 presents, about
+five minutes on the hardware path. Every run in this document was measured
+with them on.
+
+Twelve pairs on the RTX 3090 rig, dump on versus off:
+
+| | median frames/60 s | min | max | CV |
+| --- | ---: | ---: | ---: | ---: |
+| dump on | 1377.5 | 614.1 | 1432.9 | 19.1% |
+| dump off | 1428.0 | 1141.7 | 1474.2 | **6.6%** |
+
+Median difference **+4.6%**, eleven of twelve pairs positive, sign test
+**p = 0.0032**.
+
+The throughput is the smaller half of it. The dump nearly **tripled**
+run-to-run variance, and its bad runs are collapses rather than slowdowns --
+614 frames against a 1428 median. That is the "8.4% control spread" and the
+"settling transient" this report spent so long characterising and working
+around: a large part of the instability being measured was in the product,
+not the rig.
+
+`perf-ab` still reports NOT RESOLVED, because its rule requires every pair to
+agree in sign and one pair came in at -0.8%. With eleven of twelve positive
+that rule is the wrong test; the sign test is the right one. The resolution
+figure is also inflated by two one-sided outliers (+49%, +86%), which is what
+a heavy tail does to a spread-based estimate.
+
+### The GPU thread is not rendering, it is spinning
+
+With `PROFILING_FUNCS=1` actually wired up (it passed a `-D` nothing read, so
+it had always silently produced `wasm-function[N]`), the video thread reads:
+
+| | share of the video thread |
+| --- | ---: |
+| `CommandProcessor::CommandProcessorManager::SetCPStatusFromGPU()` | **35.0%** |
+| the video thread's own loop body | 23.9% |
+| `_do_futex_wait` | 15.3% |
+| `AsyncRequests::PullEvents()` | 2.6% |
+| `VertexManagerBase::Flush()` | 2.9% |
+| `VertexLoaderManager::RunVertices` | 2.5% |
+| `WebGPUGfx::PrepareDrawResources()` | 0.6% |
+
+About **three quarters of that thread is command-processor status and waiting,
+and under nine percent is rendering**. The WebGPU producer work this report
+spent its length attacking is 0.6%.
+
+That is why the dirty-range upload changed nothing, and why none of the knobs
+moved: upload volume was never the constraint. It also fits the 526,054
+`FifoTailFlush` calls per frame dismissed earlier as "the dual-core idle poll"
+-- that poll is the cost, not an artefact of the timer.
+
+**The next candidate is `SetCPStatusFromGPU` call frequency**, not anything in
+the upload path.
