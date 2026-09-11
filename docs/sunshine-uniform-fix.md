@@ -64,3 +64,30 @@ Local evidence is under `.omx/sunshine-fix/`: `firstdraw-source-kind/`,
 `cold-boot-1/`, `cold-boot-2/`, `verification-summary.json`, and
 `all-tests-final.log`. The saved state and game-derived captures remain
 local and are excluded from the source patches.
+
+## Re-validated after the rebase onto main (2026-09-11)
+
+The work above was written against a prototype branch and sat uncommitted
+until it was salvaged and rebased. The core it names no longer exists, so the
+claim was re-tested from scratch rather than carried over.
+
+Same ROM, same input script, same machine, 150 s, hardware WebGPU:
+
+| core | file-select background | distinct sampled frames | validation errors |
+| --- | --- | ---: | ---: |
+| `650308c2` (main) | **white** | 71 / 151 | 0 |
+| `286e7287` (this branch) | beach, Mario, A/B/C boxes, OPTIONS sign | **149 / 151** | 0 |
+
+Reaching the failure needs menu input. With `INPUT_SCRIPT=none` both cores
+render the attract-mode background correctly and the bug does not appear --
+an earlier check that stopped there would have cleared a core that is in fact
+broken, which is worth knowing before trusting any future Sunshine result.
+
+Regressions: Mario Kart Wii from the deterministic race state renders its full
+3D scene, and Melee reaches character select with every portrait drawn; both
+report zero validation errors. Throughput on Mario Kart Wii is unchanged --
+eight pairs, median +0.35%, five of eight positive, sign p = 0.73 -- so the
+per-texture samplers cost nothing measurable.
+
+This also corrects `a41b1de`, which retracted a claim about this background
+and recorded it as unexplained.
