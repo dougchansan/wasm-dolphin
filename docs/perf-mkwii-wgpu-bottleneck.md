@@ -350,3 +350,46 @@ moved: upload volume was never the constraint. It also fits the 526,054
 
 **The next candidate is `SetCPStatusFromGPU` call frequency**, not anything in
 the upload path.
+
+## Memoising SetCPStatusFromGPU does not work either
+
+The obvious move on a function that is 35% of a thread and recomputes the same
+answer half a million times a frame is to skip the recomputation. Every input
+the body reads was captured and compared against the previous evaluation, with
+the read pointer and breakpoint address only entering the comparison when
+breakpoints are enabled, so the skip is exact rather than approximate.
+
+Measured by swapping the two cores between paired runs -- the change is in the
+core binary and no runtime flag selects it, so the arms are the shipped
+artifacts. Eight pairs a side, backend guarded, warmups discarded:
+
+| rig | A median | B median | median delta | positive | two-tailed sign |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Radeon RX 9070 XT | 2105.7 | 2068.9 | **-2.90%** | 3/8 | p = 0.73 |
+| RTX 3090 | 1452.2 | 1464.0 | **+0.69%** | 7/8 | p = 0.07 |
+
+Nothing on one rig, slightly negative on the other, marginal at best on the
+second. It was reverted.
+
+The reason is that the memo attacks the wrong half of the cost. It replaces
+about fifteen relaxed atomic loads and two stores with about fourteen relaxed
+atomic loads and a comparison; the per-call cost barely moves and **the call
+count does not move at all**. At roughly seventeen million calls a second the
+cost is the frequency, not redundant work inside. Anything that helps here has
+to change how often the FIFO drain loop calls it -- which means touching
+watermark-interrupt timing, a real correctness risk, for a ceiling that is
+still only that 35%.
+
+### A confound worth recording
+
+A single run of the memoised core read 66% game speed against 47% for a run of
+the previous one, which looked like a large win and was not one: the 47% run
+predated gating the viewport dump and the 66% run followed it. The whole
+difference was the dump. Two changes had landed between those runs and only
+the paired A/B, which holds one of them fixed, separated them.
+
+The same trap is visible in the numbers above. The A arm here is the core this
+report measured at 1790 frames/60s, and it now reads about 2106 on the same
+rig -- the dump again, not the core. The scoring windows differ, so treat that
+as indicative rather than a measurement, but the direction matches the paired
+result.
