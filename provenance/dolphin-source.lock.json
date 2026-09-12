@@ -25,7 +25,7 @@
       "commit": "01e0577914a75a2569c846778c2f93aa8e6feddd"
     }
   },
-  "patchSeriesSha256": "c557601c2a65175455ae9cca8942ceef77ca2edaaf76963323c6bf5b4a0317c8",
+  "patchSeriesSha256": "8e3a1b6101a233488aaedd1dbfc912dda4312423ea7ae44bf8d1df9bf8056d0f",
   "patches": [
     {
       "order": 1,
@@ -525,6 +525,22 @@
     },
     {
       "order": 63,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0066-jit-retry-deferred-blocks-and-apply-policy.patch",
+      "size": 10123,
+      "sha256": "0971fe63c3948cd195c3a4d8d9717a392b727513ce6a0e9bab2557e323eabb90"
+    },
+    {
+      "order": 64,
+      "cwd": ".",
+      "hashMode": "lf-normalized",
+      "path": "patches/dolphin-wasm/snapshot/0067-cached-interpreter-static-exit-links.patch",
+      "size": 36793,
+      "sha256": "725bf2fd833181a60b0041bf110d1b5907fd0a414a6f1f2cda515d64bc0effac"
+    },
+    {
+      "order": 65,
       "cwd": "Externals/SFML/SFML",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0001-sfml-emscripten-config.patch",
@@ -532,7 +548,7 @@
       "sha256": "f82197a21fe982ad83f6ee7bbf5a03839b1cebd4d64da3eab11263842bf61d89"
     },
     {
-      "order": 64,
+      "order": 66,
       "cwd": "Externals/xxhash/xxHash",
       "hashMode": "lf-normalized",
       "path": "patches/dolphin-wasm/submodules/0002-xxhash-wasm-simd-scalar.patch",

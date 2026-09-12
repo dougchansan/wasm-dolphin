@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "0e68600dfc6dc2a2949f2f7b57c480e0fabb0356",
-    "changedPathCount": 109,
+    "resultTree": "dd6f5548aa13de585ec9988130f98aa9d0ce1982",
+    "changedPathCount": 113,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -299,27 +299,63 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "3ec24a30162d97c99c2454af6af89d480d90c29d",
-        "resultBlob": "6fcbd84dcdf232859f17dd7a83a5e0f91d251f81",
-        "size": 429738,
-        "sha256": "aaac596958677413a8ddc605393b89c944a3949e61f1b957a9d624da58947334"
+        "resultBlob": "be158643a9ea59db3bdfb8fa4f391006463d6c31",
+        "size": 443188,
+        "sha256": "1ecd1d239434e73e4eaf8949043b0445585c98a824efa980edc326e2b3354b78"
       },
       {
         "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h",
         "status": "M",
         "mode": "100644",
         "baseBlob": "dd940e89a2fe1ce7bc6a4a0038a4be8fa112e67e",
-        "resultBlob": "38cf2bcafddf9b81f7a5df7c6addd0ef2d631c14",
-        "size": 13207,
-        "sha256": "6439b2875a2b2ee3ef1731efe7ab024175a63757f7c76cd76ac3396a122181da"
+        "resultBlob": "3b7577ab6b9f9d87d611320d3030cd55c22a35da",
+        "size": 13801,
+        "sha256": "45ecb8392edd94c516950c03a276a364117334709439eb4db52e54a741fd4635"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "3b4c4a0637fef2555e2628386fff370a9b31d348",
+        "resultBlob": "94bea0a9c116011bf4e0a2f72e89fe7a5bd18ec8",
+        "size": 1547,
+        "sha256": "7c8af6daa71d5dc19e482e84adc980c8b39e616f5e312e15b33d30508d956ace"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "5b34a9cfc947c15e49f9f33da93f7e263b94b61c",
+        "resultBlob": "f37b75cc6d4a6b392c56b27059527e4bb6670632",
+        "size": 1174,
+        "sha256": "72849bd2ca8bd9cda2800253520c34e94889103fb1ce23a6d6fc1e705c2804a2"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "fe2099d1c1124daf86329fcf05810b1924d9f2c4",
+        "size": 8550,
+        "sha256": "c93f02134a741e8c583e85d9134dbd535c57a54084aae5fb4b0000be9c84dd2c"
       },
       {
         "path": "Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp",
         "status": "M",
         "mode": "100644",
         "baseBlob": "665329729eb6b90d95aac910244fb60976d634b4",
-        "resultBlob": "f3c6af7b18a3eac239ad910d1bdd5acdae2f25f8",
-        "size": 14827,
-        "sha256": "9268cfd8e4602e42823ca8f38cea910b405a7b4a4e9050e85b9d3650b4b31cc2"
+        "resultBlob": "2185ae96d9517aee5ca191433e140312dd1bcb02",
+        "size": 16182,
+        "sha256": "8122d046d12e71bee89a238311addcd133c1b3db91290c7af502b2dca748c673"
+      },
+      {
+        "path": "Source/Core/Core/PowerPC/CachedInterpreter/WasmDeferredCompileQueue.h",
+        "status": "A",
+        "mode": "100644",
+        "baseBlob": null,
+        "resultBlob": "ae423e835429dfb6cd3357f8c83260fe2d68bfa6",
+        "size": 2020,
+        "sha256": "479adaab31231cac5d3caf1e9e967098ed1195720d23b8bdb2047f1ef2121fb7"
       },
       {
         "path": "Source/Core/Core/PowerPC/JitCommon/JitCache.cpp",
@@ -1023,5 +1059,5 @@
       ]
     }
   ],
-  "contentSha256": "694a93d1cb155a9cb08438cf17cec4826808117a75e5b9f55d53d4f15116016d"
+  "contentSha256": "40fd280c77363ec774d077f92880cfc334dfc38c36129455cafb15258ee53878"
 }

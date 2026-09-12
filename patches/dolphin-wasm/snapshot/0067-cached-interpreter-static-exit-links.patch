@@ -1,0 +1,1132 @@
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.cpp
+@@ -53,6 +53,13 @@
+ #include "Core/PowerPC/PowerPC.h"
+ #include "Core/System.h"
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++namespace
++{
++StaticExitLinks::Stats s_static_link_stats;
++}  // namespace
++#endif
++#line 56
+ #ifndef DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH
+ #define DOLPHIN_WEB_DIRECT_WASM_BLOCK_DISPATCH 0
+ #endif
+@@ -7754,6 +7761,10 @@
+ 
+ void CachedInterpreter::Init()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  s_static_link_stats.Init();
++#endif
++#line 7757
+   RefreshConfig();
+ 
+   AllocCodeSpace(CODE_SIZE);
+@@ -7770,17 +7781,29 @@
+ 
+ void CachedInterpreter::Shutdown()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  m_block_cache.AdvanceStaticLinkEpoch();
++#endif
++#line 7773
+ #ifdef __EMSCRIPTEN__
+   s_deferred_wasm_queues.erase(this);
+   if (s_wasm_policy_owner == this)
+     s_wasm_policy_owner = nullptr;
+ #endif
+   m_block_cache.Shutdown();
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  s_static_link_stats.Publish();
++#endif
++#line 7779
+ }
+ 
+ void CachedInterpreter::ExecuteOneBlock([[maybe_unused]] bool allow_redispatch)
+ {
+   const u8* normal_entry = m_block_cache.Dispatch();
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  s_static_link_stats.InitialDispatch(normal_entry == nullptr);
++#endif
++#line 7784
+   if (!normal_entry)
+   {
+     Jit(m_ppc_state.pc);
+@@ -7822,8 +7845,19 @@
+ #ifdef __EMSCRIPTEN__
+   DOLPHIN_WEB_HOT_COUNT(++s_wasm_redispatch_entry_count);
+ #endif
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const bool static_links_enabled = StaticExitLinksEnabled();
++  StaticExitLinks::Scope static_link_scope(
++      &m_block_cache, &ppc_state, static_links_enabled);
++#endif
++#line 7825
+   for (;;)
+   {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    static_link_scope.BeginBlock(m_block_cache.StaticLinkEpoch(),
++                                static_cast<u32>(ppc_state.feature_flags));
++#endif
++#line 7827
+   while (true)
+   {
+     const auto callback = *reinterpret_cast<const AnyCallback*>(normal_entry);
+@@ -8051,9 +8085,28 @@
+     if (redispatch_enabled && m_ppc_state.downcount > 0 &&
+         *redispatch_state_ptr == CPU::State::Running)
+     {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++      const auto static_link_result = static_link_scope.Resolve(
++          &m_block_cache, &ppc_state, m_block_cache.StaticLinkEpoch(),
++          static_cast<u32>(ppc_state.feature_flags), ppc_state.pc);
++      const u8* const next =
++          static_link_result.entry ? static_link_result.entry : m_block_cache.Dispatch();
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++      s_static_link_stats.Record(static_link_result.decision);
++      if (!static_link_result.entry)
++        s_static_link_stats.FallbackDispatch(next == nullptr);
++#endif
++#else
++#line 8054
+       const u8* const next = m_block_cache.Dispatch();
++#endif
++#line 8055
+       if (!next)
+       {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++        static_link_scope.Close();
++#endif
++#line 8057
+         Jit(m_ppc_state.pc);
+         return;
+       }
+@@ -8064,6 +8117,10 @@
+ #endif
+     break;
+   }
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  static_link_scope.Close();
++#endif
++#line 8067
+ #ifdef __EMSCRIPTEN__
+   if (profile_block)
+   {
+@@ -8129,6 +8186,10 @@
+     {
+       ExecuteOneBlock();
+     } while (m_ppc_state.downcount > 0 && *state_ptr == CPU::State::Running);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++    s_static_link_stats.Slice();
++#endif
++#line 8132
+     // §28cn slice timing close-out. compile_us already accumulated by
+     // DolphinWeb_RecordModuleUs into s_wasm_compile_us_this_slice (just
+     // before the §28ce reset above zeros it for next slice — but we read
+@@ -8174,6 +8235,10 @@
+       }
+     }
+   }
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  s_static_link_stats.Publish();
++#endif
++#line 8177
+ }
+ 
+ void CachedInterpreter::SingleStep()
+@@ -8184,6 +8249,10 @@
+   ApplyRequestedWasmPolicy(*this);
+ #endif
+   ExecuteOneBlock(false);  // §28bt: never chain blocks under the debugger step
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  s_static_link_stats.Publish();
++#endif
++#line 8187
+ }
+ 
+ s32 CachedInterpreter::StartProfiledBlock(PowerPC::PowerPCState& ppc_state,
+@@ -8197,12 +8266,20 @@
+ s32 CachedInterpreter::EndBlock(PowerPC::PowerPCState& ppc_state,
+                                 const EndBlockOperands<profiled>& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto* const completed_static_links = &operands.links;
++#endif
++#line 8200
+   ppc_state.pc = ppc_state.npc;
+   ppc_state.downcount -= operands.downcount;
+   UpdatePerformanceMonitorIfNeeded(operands.downcount, operands.num_load_stores,
+                                    operands.num_fp_inst, ppc_state);
+   if constexpr (profiled)
+     JitBlock::ProfileData::EndProfiling(operands.profile_data, operands.downcount);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Publish(&ppc_state, completed_static_links);
++#endif
++#line 8206
+   return 0;
+ }
+ 
+@@ -8472,8 +8549,22 @@
+     return false;
+   }
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  auto static_links = StaticExitLinks::Fallthrough(MELEE_IDLE_POLL_LOOP_PC);
++  StaticExitLinks::Add(static_links, MELEE_IDLE_POLL_LOOP_END_PC);
++  auto* const emitted = reinterpret_cast<MeleeIdlePollLoopOperands*>(
++      GetWritableCodePtr() + sizeof(AnyCallback));
++  Write(FastMeleeIdlePollLoop,
++        {power_pc, MELEE_IDLE_POLL_LOOP_PC, MELEE_IDLE_POLL_LOOP_END_PC, cycles, loadstores,
++         static_links});
++  if (!HasWriteFailed())
++    RegisterStaticExitLinks(&emitted->links);
++#else
++#line 8475
+   Write(FastMeleeIdlePollLoop,
+         {power_pc, MELEE_IDLE_POLL_LOOP_PC, MELEE_IDLE_POLL_LOOP_END_PC, cycles, loadstores});
++#endif
++#line 8477
+   return true;
+ }
+ 
+@@ -8545,8 +8636,21 @@
+       ++fp_inst;
+   }
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  auto static_links = StaticExitLinks::Fallthrough(loop_start);
++  StaticExitLinks::Add(static_links, loop_end + sizeof(u32));
++  auto* const emitted = reinterpret_cast<MeleeTitleLoopOperands*>(
++      GetWritableCodePtr() + sizeof(AnyCallback));
++  Write(FastMeleeTitleLoop, {power_pc, loop_start, loop_end + sizeof(u32), cycles, loadstores,
++                             fp_inst, static_links});
++  if (!HasWriteFailed())
++    RegisterStaticExitLinks(&emitted->links);
++#else
++#line 8548
+   Write(FastMeleeTitleLoop, {power_pc, loop_start, loop_end + sizeof(u32), cycles, loadstores,
+                              fp_inst});
++#endif
++#line 8550
+   return true;
+ }
+ 
+@@ -9972,8 +10076,19 @@
+ s32 CachedInterpreter::FastMeleeIdlePollLoop(PowerPC::PowerPCState& ppc_state,
+                                              const MeleeIdlePollLoopOperands& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto* const completed_static_links = &operands.links;
++#endif
++#line 9975
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto& [power_pc, current_pc, next_pc, instruction_cycles_per_iteration,
++               instruction_loadstores_per_iteration, static_links] = operands;
++#else
++#line 9975
+   const auto& [power_pc, current_pc, next_pc, instruction_cycles_per_iteration,
+                instruction_loadstores_per_iteration] = operands;
++#endif
++#line 9977
+   (void)power_pc;
+   constexpr s32 fallback_size = sizeof(AnyCallback) + sizeof(operands);
+ 
+@@ -10089,14 +10204,29 @@
+     ++s_fast_melee_idle_poll_loop_exits;
+   if (guard_failed)
+     ++s_fast_melee_idle_poll_loop_fallbacks;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Publish(&ppc_state, completed_static_links);
++#endif
++#line 10092
+   return 0;
+ }
+ 
+ s32 CachedInterpreter::FastMeleeTitleLoop(PowerPC::PowerPCState& ppc_state,
+                                           const MeleeTitleLoopOperands& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto* const completed_static_links = &operands.links;
++#endif
++#line 10098
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto& [power_pc, current_pc, next_pc, cycle_count_per_iteration,
++               loadstores_per_iteration, fp_inst_per_iteration, static_links] = operands;
++#else
++#line 10098
+   const auto& [power_pc, current_pc, next_pc, cycle_count_per_iteration,
+                loadstores_per_iteration, fp_inst_per_iteration] = operands;
++#endif
++#line 10100
+   (void)power_pc;
+   constexpr s32 fallback_size = sizeof(AnyCallback) + sizeof(operands);
+ 
+@@ -10358,6 +10488,10 @@
+   ++s_fast_melee_title_loop_blocks;
+   s_fast_melee_title_loop_iterations =
+       SaturatingAddU32(s_fast_melee_title_loop_iterations, iterations);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Publish(&ppc_state, completed_static_links);
++#endif
++#line 10361
+   return 0;
+ }
+ 
+@@ -10617,6 +10751,10 @@
+ DOLPHIN_WEB_DIRECT_WASM_BLOCK_INLINE s32 CachedInterpreter::RunWasmBlock(
+     PowerPC::PowerPCState& ppc_state, const WasmBlockOperands& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto* const completed_static_links = &operands.links;
++#endif
++#line 10620
+   using WasmBlockFunction = int (*)(int);
+ 
+   ++s_wasm_block_run_count;
+@@ -10631,6 +10769,10 @@
+     ppc_state.downcount -= operands.downcount;
+     UpdatePerformanceMonitorIfNeeded(operands.downcount, operands.num_load_stores,
+                                      operands.num_fp_inst, ppc_state);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    StaticExitLinks::Publish(&ppc_state, completed_static_links);
++#endif
++#line 10634
+     return 0;
+   }
+   return sizeof(AnyCallback) + sizeof(operands);
+@@ -11078,9 +11220,34 @@
+   // or ends in a branch) — never the partial non-fused tail below.
+   const bool fuse_end_block =
+       did_merge || compiled_entire_block || compiled_block_ends_with_branch;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Descriptor static_links;
++  if (fuse_end_block)
++  {
++    if (write_npc)
++      static_links = StaticExitLinks::Fallthrough(block_next_pc);
++    else
++    {
++      const auto terminal = std::find_if(ops.rbegin(), ops.rend(),
++                                         [](const auto& op) { return !op.skip; });
++      if (terminal != ops.rend() && terminal->canEndBlock)
++        static_links = StaticExitLinks::Branch(terminal->inst.hex, terminal->address);
++    }
++  }
++  auto* const emitted = reinterpret_cast<WasmBlockOperands*>(
++      GetWritableCodePtr() + sizeof(AnyCallback));
++  Write(RunWasmBlock,
++        {handle, block_next_pc, eff_downcount, eff_loadstores, eff_fpinst,
++         static_cast<s32>(fuse_end_block ? 1 : 0), static_links});
++  if (!HasWriteFailed())
++    RegisterStaticExitLinks(&emitted->links);
++#else
++#line 11081
+   Write(RunWasmBlock,
+         {handle, block_next_pc, eff_downcount, eff_loadstores, eff_fpinst,
+          static_cast<s32>(fuse_end_block ? 1 : 0)});
++#endif
++#line 11084
+ 
+   if (fuse_end_block)
+     return true;
+@@ -11088,6 +11255,10 @@
+   auto& interpreter = m_system.GetInterpreter();
+   for (u32 i = prefix_count; i < code_block.m_num_instructions; i++)
+   {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    const u32 static_link_op_index = i;
++#endif
++#line 11091
+     PPCAnalyst::CodeOp& op = m_code_buffer[i];
+     js.op = &op;
+ 
+@@ -11142,14 +11313,30 @@
+ 
+       if (op.branchIsIdleLoop)
+         Write(CheckIdle, {m_system.GetCoreTiming(), js.blockStart});
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++      if (op.canEndBlock)
++        WriteEndBlock(i == static_link_op_index ?
++                          StaticExitLinks::Branch(op.inst.hex, op.address) :
++                          StaticExitLinks::Descriptor{});
++#else
++#line 11145
+       if (op.canEndBlock)
+         WriteEndBlock();
++#endif
++#line 11147
+     }
+   }
+   if (code_block.m_broken)
+   {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    Write(WriteBrokenBlockNPC, {nextPC});
++    WriteEndBlock(StaticExitLinks::Fallthrough(nextPC));
++#else
++#line 11151
+     Write(WriteBrokenBlockNPC, {nextPC});
+     WriteEndBlock();
++#endif
++#line 11153
+   }
+   return true;
+ }
+@@ -11277,6 +11464,13 @@
+ 
+ extern "C" const char* GetPpcWasmHelperStats()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  static StaticExitLinks::Stats::Snapshot static_link_snapshot;
++  static u64 static_link_last_sequence = ~u64{0};
++  if (const auto published = s_static_link_stats.Read())
++    static_link_snapshot = *published;
++#endif
++#line 11280
+   static std::string stats;
+   static int last_refresh_policy = -1;
+   const int applied_policy = s_applied_wasm_policy.load(std::memory_order_acquire);
+@@ -11293,6 +11487,19 @@
+   const u64 fallback_dispatch_total =
+       fallback_dispatch.hit + fallback_dispatch.empty_miss + fallback_dispatch.collision_miss;
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  if (!stats.empty() && applied_policy == last_refresh_policy &&
++      s_wasm_block_run_count - last_refresh_block_run_count < STATS_REFRESH_BLOCK_RUNS &&
++      s_wasm_block_attempt_count == last_refresh_block_attempt_count &&
++      s_wasm_block_compile_count == last_refresh_block_compile_count &&
++      s_wasm_direct_tier_reject_count == last_refresh_direct_tier_reject_count &&
++      s_wasm_block_too_short_count == last_refresh_too_short_count &&
++      s_fast_dcbx_loop_blocks == last_refresh_dcbx_loop_blocks &&
++      s_fast_melee_idle_poll_loop_blocks == last_refresh_idle_poll_loop_blocks &&
++      fallback_dispatch_total == last_refresh_fallback_dispatch_total &&
++      static_link_snapshot.sequence == static_link_last_sequence)
++#else
++#line 11296
+   if (!stats.empty() && applied_policy == last_refresh_policy &&
+       s_wasm_block_run_count - last_refresh_block_run_count < STATS_REFRESH_BLOCK_RUNS &&
+       s_wasm_block_attempt_count == last_refresh_block_attempt_count &&
+@@ -11302,6 +11509,8 @@
+       s_fast_dcbx_loop_blocks == last_refresh_dcbx_loop_blocks &&
+       s_fast_melee_idle_poll_loop_blocks == last_refresh_idle_poll_loop_blocks &&
+       fallback_dispatch_total == last_refresh_fallback_dispatch_total)
++#endif
++#line 11305
+   {
+     return stats.c_str();
+   }
+@@ -11314,6 +11523,10 @@
+   last_refresh_dcbx_loop_blocks = s_fast_dcbx_loop_blocks;
+   last_refresh_idle_poll_loop_blocks = s_fast_melee_idle_poll_loop_blocks;
+   last_refresh_fallback_dispatch_total = fallback_dispatch_total;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  static_link_last_sequence = static_link_snapshot.sequence;
++#endif
++#line 11317
+ 
+   std::vector<std::pair<u32, u32>> hot_keys;
+   hot_keys.reserve(16);
+@@ -11776,6 +11989,10 @@
+         << std::hex << s_wasm_helper_branch_sample_pcs[key] << "/"
+         << s_wasm_helper_branch_sample_insts[key] << std::dec;
+   }
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++  StaticExitLinks::Stats::Format(out, static_link_snapshot);
++#endif
++#line 11779
+   stats = out.str();
+   return stats.c_str();
+ }
+@@ -12244,6 +12461,51 @@
+   return true;
+ }
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++bool CachedInterpreter::StaticExitLinksEnabled() const
++{
++  return !SConfig::GetInstance().bJITNoBlockLinking && !IsDebuggingEnabled() &&
++         !IsBranchWatchEnabled() && !IsProfilingEnabled();
++}
++
++void CachedInterpreter::RegisterStaticExitLinks(StaticExitLinks::Descriptor* links)
++{
++  if (HasWriteFailed() || !StaticExitLinksEnabled())
++    return;
++  for (u32 i = 0; i < links->count && i < links->cells.size(); ++i)
++  {
++    auto& cell = links->cells[i];
++    JitBlock::LinkData link{};
++    link.exitPtrs = reinterpret_cast<u8*>(&cell);
++    link.exitAddress = cell.pc;
++    link.linkStatus = false;
++    link.call = cell.call != 0;
++    js.curBlock->linkData.push_back(link);
++  }
++}
++
++void CachedInterpreter::WriteEndBlock(StaticExitLinks::Descriptor links)
++{
++  if (IsProfilingEnabled())
++  {
++    auto* const emitted = reinterpret_cast<EndBlockOperands<true>*>(
++        GetWritableCodePtr() + sizeof(AnyCallback));
++    Write(EndBlock<true>, {{js.downcountAmount, js.numLoadStoreInst, js.numFloatingPointInst, links},
++                           js.curBlock->profile_data.get()});
++    if (!HasWriteFailed())
++      RegisterStaticExitLinks(&emitted->links);
++  }
++  else
++  {
++    auto* const emitted = reinterpret_cast<EndBlockOperands<false>*>(
++        GetWritableCodePtr() + sizeof(AnyCallback));
++    Write(EndBlock<false>, {js.downcountAmount, js.numLoadStoreInst, js.numFloatingPointInst, links});
++    if (!HasWriteFailed())
++      RegisterStaticExitLinks(&emitted->links);
++  }
++}
++#else
++#line 12247
+ void CachedInterpreter::WriteEndBlock()
+ {
+   if (IsProfilingEnabled())
+@@ -12257,6 +12519,8 @@
+   }
+ }
+ 
++#endif
++#line 12260
+ bool CachedInterpreter::SetEmitterStateToFreeCodeRegion()
+ {
+   const auto free = m_free_ranges.by_size_begin();
+@@ -12278,6 +12542,10 @@
+ 
+ void CachedInterpreter::ResetFreeMemoryRanges()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  m_block_cache.AdvanceStaticLinkEpoch();
++#endif
++#line 12281
+   m_free_ranges.clear();
+   m_free_ranges.insert(region, region + region_size);
+ }
+@@ -12326,7 +12594,14 @@
+       if (b->near_begin != b->near_end)
+         m_free_ranges.erase(b->near_begin, b->near_end);
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++      m_block_cache.FinalizeBlock(*b, jo.enableBlocklink || StaticExitLinksEnabled(),
++                                  code_block, m_code_buffer);
++#else
++#line 12329
+       m_block_cache.FinalizeBlock(*b, jo.enableBlocklink, code_block, m_code_buffer);
++#endif
++#line 12330
+ 
+ #ifdef JIT_LOG_GENERATED_CODE
+       LogGeneratedCode();
+@@ -12334,6 +12609,10 @@
+ 
+       return;
+     }
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    b->linkData.clear();
++#endif
++#line 12337
+   }
+ 
+   if (clear_cache_and_retry_on_failure)
+@@ -12367,15 +12646,26 @@
+ #ifdef __EMSCRIPTEN__
+   if (auto deferred = s_deferred_wasm_queues.find(this); deferred != s_deferred_wasm_queues.end())
+     deferred->second.Recompiled(em_address, static_cast<u32>(m_ppc_state.feature_flags));
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  if (TryWriteWasmBlock(nextPC))
++    return !HasWriteFailed();
++#else
++#line 12370
+   if (TryWriteWasmBlock(nextPC))
+     return true;
+ #endif
++#line 12372
++#endif
+ 
+   if (IsProfilingEnabled())
+     Write(StartProfiledBlock, {js.curBlock->profile_data.get()});
+ 
+   for (u32 i = 0; i < code_block.m_num_instructions; i++)
+   {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    const u32 static_link_op_index = i;
++#endif
++#line 12379
+     PPCAnalyst::CodeOp& op = m_code_buffer[i];
+     js.op = &op;
+ 
+@@ -12431,14 +12721,30 @@
+ 
+       if (op.branchIsIdleLoop)
+         Write(CheckIdle, {m_system.GetCoreTiming(), js.blockStart});
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++      if (op.canEndBlock)
++        WriteEndBlock(i == static_link_op_index ?
++                          StaticExitLinks::Branch(op.inst.hex, op.address) :
++                          StaticExitLinks::Descriptor{});
++#else
++#line 12434
+       if (op.canEndBlock)
+         WriteEndBlock();
++#endif
++#line 12436
+     }
+   }
+   if (code_block.m_broken)
+   {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++    Write(WriteBrokenBlockNPC, {nextPC});
++    WriteEndBlock(StaticExitLinks::Fallthrough(nextPC));
++#else
++#line 12440
+     Write(WriteBrokenBlockNPC, {nextPC});
+     WriteEndBlock();
++#endif
++#line 12442
+   }
+ 
+   if (HasWriteFailed())
+@@ -12474,6 +12780,10 @@
+ 
+ void CachedInterpreter::ClearCache()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  m_block_cache.AdvanceStaticLinkEpoch();
++#endif
++#line 12477
+ #ifdef __EMSCRIPTEN__
+   s_deferred_wasm_queues.erase(this);
+ #endif
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter.h
+@@ -61,7 +61,15 @@
+   void ExecuteOneBlock(bool allow_redispatch = true);
+ 
+   bool HandleFunctionHooking(u32 address);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  void WriteEndBlock(StaticExitLinks::Descriptor links = {});
++  void RegisterStaticExitLinks(StaticExitLinks::Descriptor* links);
++  bool StaticExitLinksEnabled() const;
++#else
++#line 64
+   void WriteEndBlock();
++#endif
++#line 65
+ 
+   // Finds a free memory region and sets the code emitter to point at that region.
+   // Returns false if no free memory region can be found.
+@@ -221,6 +229,10 @@
+   u32 num_load_stores;
+   u32 num_fp_inst;
+   u32 : 32;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Descriptor links{};
++#endif
++#line 224
+ };
+ 
+ template <>
+@@ -264,6 +276,10 @@
+   u32 next_pc;
+   u32 instruction_cycles_per_iteration;
+   u32 instruction_loadstores_per_iteration;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Descriptor links{};
++#endif
++#line 267
+ };
+ 
+ struct CachedInterpreter::MeleeTitleLoopOperands
+@@ -274,6 +290,10 @@
+   u32 cycle_count_per_iteration;
+   u32 loadstores_per_iteration;
+   u32 fp_inst_per_iteration;
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Descriptor links{};
++#endif
++#line 277
+ };
+ 
+ struct CachedInterpreter::OsInterruptFunctionOperands
+@@ -330,5 +350,9 @@
+   u32 num_load_stores;
+   u32 num_fp_inst;
+   s32 end_block;
+-};
+-#endif
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::Descriptor links{};
++#endif
++#line 333
++};
++#endif
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.cpp
+@@ -12,12 +12,20 @@
+ 
+ void CachedInterpreterBlockCache::Init()
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  AdvanceStaticLinkEpoch();
++#endif
++#line 15
+   JitBaseBlockCache::Init();
+   ClearRangesToFree();
+ }
+ 
+ void CachedInterpreterBlockCache::DestroyBlock(JitBlock& block)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  AdvanceStaticLinkEpoch();
++#endif
++#line 21
+   JitBaseBlockCache::DestroyBlock(block);
+ 
+   if (block.near_begin != block.near_end)
+@@ -32,6 +40,11 @@
+ void CachedInterpreterBlockCache::WriteLinkBlock(const JitBlock::LinkData& source,
+                                                  const JitBlock* dest)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  StaticExitLinks::WriteEntry(reinterpret_cast<StaticExitLinks::Cell*>(source.exitPtrs),
++                              dest ? dest->normalEntry : nullptr);
++#endif
++#line 35
+ }
+ 
+ void CachedInterpreterBlockCache::WriteDestroyBlock(const JitBlock& block)
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterBlockCache.h
+@@ -8,6 +8,8 @@
+ 
+ #include "Common/CommonTypes.h"
+ #include "Core/PowerPC/JitCommon/JitCache.h"
++#include "Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h"
++#line 11
+ 
+ class JitBase;
+ 
+@@ -21,6 +23,12 @@
+   void DestroyBlock(JitBlock& block) override;
+ 
+   void ClearRangesToFree();
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++
++  u64 StaticLinkEpoch() const { return m_static_link_epoch; }
++  void AdvanceStaticLinkEpoch() { StaticExitLinks::AdvanceEpoch(m_static_link_epoch); }
++#endif
++#line 24
+ 
+   const std::vector<std::pair<u8*, u8*>>& GetRangesToFree() const
+   {
+@@ -31,5 +39,9 @@
+   void WriteLinkBlock(const JitBlock::LinkData& source, const JitBlock* dest) override;
+   void WriteDestroyBlock(const JitBlock& block) override;
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  u64 m_static_link_epoch = 1;
++#endif
++#line 34
+   std::vector<std::pair<u8*, u8*>> m_ranges_to_free_on_next_codegen;
+ };
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
+--- a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
+@@ -12,6 +12,23 @@
+ 
+ #include "Core/HLE/HLE.h"
+ 
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++
++namespace
++{
++void DisassembleStaticExitLinks(std::ostream& stream, const StaticExitLinks::Descriptor& links)
++{
++  fmt::println(stream, "  static exits={}", links.count);
++  for (u32 i = 0; i < links.count && i < links.cells.size(); ++i)
++  {
++    const auto& cell = links.cells[i];
++    fmt::println(stream, "    pc=0x{:08x}, linked={}, call={}", cell.pc,
++                 cell.entry != nullptr, cell.call != 0);
++  }
++}
++}  // namespace
++#endif
++#line 15
+ s32 CachedInterpreterEmitter::PoisonCallback(std::ostream& stream, const void* operands)
+ {
+   stream << "PoisonCallback()\n";
+@@ -30,6 +47,10 @@
+ {
+   fmt::println(stream, "EndBlock<profiled={}>(downcount={}, num_load_stores={}, num_fp_inst={})",
+                profiled, operands.downcount, operands.num_load_stores, operands.num_fp_inst);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  DisassembleStaticExitLinks(stream, operands.links);
++#endif
++#line 33
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -167,26 +188,48 @@
+ s32 CachedInterpreter::FastMeleeIdlePollLoop(std::ostream& stream,
+                                              const MeleeIdlePollLoopOperands& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto& [power_pc, current_pc, next_pc, instruction_cycles_per_iteration,
++               instruction_loadstores_per_iteration, static_links] = operands;
++#else
++#line 170
+   const auto& [power_pc, current_pc, next_pc, instruction_cycles_per_iteration,
+                instruction_loadstores_per_iteration] = operands;
++#endif
++#line 172
+   fmt::println(stream,
+                "FastMeleeIdlePollLoop(current_pc=0x{:08x}, next_pc=0x{:08x}, "
+                "instruction_cycles={}, instruction_loadstores={})",
+                current_pc, next_pc, instruction_cycles_per_iteration,
+                instruction_loadstores_per_iteration);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  DisassembleStaticExitLinks(stream, operands.links);
++#endif
++#line 177
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+ s32 CachedInterpreter::FastMeleeTitleLoop(std::ostream& stream,
+                                           const MeleeTitleLoopOperands& operands)
+ {
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  const auto& [power_pc, current_pc, next_pc, cycle_count_per_iteration,
++               loadstores_per_iteration, fp_inst_per_iteration, static_links] = operands;
++#else
++#line 183
+   const auto& [power_pc, current_pc, next_pc, cycle_count_per_iteration,
+                loadstores_per_iteration, fp_inst_per_iteration] = operands;
++#endif
++#line 185
+   fmt::println(stream,
+                "FastMeleeTitleLoop(current_pc=0x{:08x}, next_pc=0x{:08x}, cycles={}, "
+                "loadstores={}, fp={})",
+                current_pc, next_pc, cycle_count_per_iteration, loadstores_per_iteration,
+                fp_inst_per_iteration);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  DisassembleStaticExitLinks(stream, operands.links);
++#endif
++#line 190
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ 
+@@ -280,6 +323,10 @@
+ {
+   fmt::println(stream, "RunWasmBlock(handle={}, next_pc=0x{:08x})", operands.handle,
+                operands.next_pc);
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++  DisassembleStaticExitLinks(stream, operands.links);
++#endif
++#line 283
+   return sizeof(AnyCallback) + sizeof(operands);
+ }
+ #endif
+diff --git a/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h
+new file mode 100644
+--- /dev/null
++++ b/Source/Core/Core/PowerPC/CachedInterpreter/CachedInterpreterLink.h
+@@ -0,0 +1,285 @@
++#pragma once
++
++#ifndef DOLPHIN_WEB_STATIC_EXIT_LINKS
++#ifdef __EMSCRIPTEN__
++#define DOLPHIN_WEB_STATIC_EXIT_LINKS 1
++#else
++#define DOLPHIN_WEB_STATIC_EXIT_LINKS 0
++#endif
++#endif
++#line 6
++#ifndef DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++#define DOLPHIN_WEB_STATIC_EXIT_LINK_STATS 0
++#endif
++
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS
++#include <array>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++#include <type_traits>
++
++namespace StaticExitLinks
++{
++using U32 = std::uint32_t;
++using U64 = std::uint64_t;
++using Entry = const std::uint8_t*;
++
++struct Cell
++{
++  U32 pc = 0;
++  U32 call = 0;
++  Entry entry = nullptr;
++};
++struct Descriptor
++{
++  U32 count = 0;
++  std::array<Cell, 2> cells{};
++};
++static_assert(std::is_trivially_copyable_v<Descriptor> &&
++              std::is_trivially_destructible_v<Descriptor>);
++static_assert(alignof(Descriptor) <= alignof(void*) && sizeof(Descriptor) % alignof(void*) == 0);
++
++inline void Add(Descriptor& descriptor, U32 pc, bool call = false)
++{
++  for (U32 i = 0; i < descriptor.count; ++i)
++  {
++    if (descriptor.cells[i].pc == pc)
++    {
++      descriptor.cells[i].call |= call ? 1u : 0u;
++      return;
++    }
++  }
++  if (descriptor.count < descriptor.cells.size())
++    descriptor.cells[descriptor.count++] = {pc, call ? 1u : 0u, nullptr};
++}
++
++inline Descriptor Fallthrough(U32 pc)
++{
++  Descriptor descriptor;
++  Add(descriptor, pc);
++  return descriptor;
++}
++
++// Decode only architectural immediate exits. Analyst-inferred LR destinations
++// must not become direct targets. Unsigned arithmetic gives 32-bit wrapping.
++inline Descriptor Branch(U32 instruction, U32 pc)
++{
++  Descriptor descriptor;
++  const U32 opcode = instruction >> 26;
++  const bool call = (instruction & 1u) != 0;
++  const bool absolute = (instruction & 2u) != 0;
++  if (opcode == 18)
++  {
++    const U32 displacement = ((instruction & 0x03fffffcu) ^ 0x02000000u) - 0x02000000u;
++    Add(descriptor, absolute ? displacement : pc + displacement, call);
++    // Existing inline-call helpers may complete at the call site's continuation.
++    if (call)
++      Add(descriptor, pc + 4);
++  }
++  else if (opcode == 16)
++  {
++    const U32 displacement = ((instruction & 0xfffcu) ^ 0x8000u) - 0x8000u;
++    Add(descriptor, absolute ? displacement : pc + displacement, call);
++    // Including an impossible branch fallthrough is harmless: completed-PC
++    // equality remains mandatory, and it also covers an inline bcl completion.
++    Add(descriptor, pc + 4);
++  }
++  else if (opcode == 19)
++  {
++    const U32 subopcode = (instruction >> 1) & 1023u;
++    const U32 bo = (instruction >> 21) & 31u;
++    const bool conditional = (bo & 0x14u) != 0x14u;
++    const bool valid_indirect = subopcode == 16 || (subopcode == 528 && (bo & 4u));
++    if (conditional && valid_indirect)
++      Add(descriptor, pc + 4);
++  }
++  return descriptor;
++}
++
++// Zero is permanently invalid. A wrap cannot revalidate an old observation.
++inline void AdvanceEpoch(U64& epoch)
++{
++  if (epoch != 0)
++    ++epoch;
++}
++
++// LinkData::exitPtrs identifies this cell in mutable callback storage.
++// Only its entry field changes; the callback, payload shape and PCs do not.
++inline void WriteEntry(Cell* cell, Entry entry)
++{
++  std::memcpy(&cell->entry, &entry, sizeof(entry));
++}
++
++enum class Decision : U32
++{
++  Linked, NoCompletion, OwnerMismatch, EpochMismatch, FeatureMismatch,
++  Disabled, NoTarget, Unlinked, Count
++};
++struct Result
++{
++  Entry entry = nullptr;
++  Decision decision = Decision::NoCompletion;
++};
++struct Context
++{
++  const void* owner = nullptr;
++  const void* state = nullptr;
++  U64 epoch = 0;
++  U32 features = 0;
++  bool enabled = false;
++  const Descriptor* completed = nullptr;
++};
++inline thread_local Context* active_context = nullptr;
++
++class Scope
++{
++public:
++  Scope(const void* owner, const void* state, bool enabled = true)
++      : m_context{owner, state, 0, 0, enabled, nullptr}, m_previous(active_context)
++  {
++    active_context = &m_context;
++  }
++  Scope(const void* owner, const void* state, U64 epoch, U32 features, bool enabled = true)
++      : Scope(owner, state, enabled)
++  {
++    BeginBlock(epoch, features);
++  }
++  Scope(const Scope&) = delete;
++  Scope(Scope&&) = delete;
++  ~Scope() { Close(); }
++
++  // Begin a new actual block; never refresh the source epoch after a callback.
++  // This does not reinstall TLS or reopen a closed Scope.
++  void BeginBlock(U64 epoch, U32 features)
++  {
++    m_context.completed = nullptr;
++    m_context.epoch = epoch;
++    m_context.features = features;
++  }
++
++  void Close()
++  {
++    if (!m_closed)
++    {
++      active_context = m_previous;
++      m_closed = true;
++    }
++  }
++
++  Result Resolve(const void* owner, const void* state, U64 epoch, U32 features, U32 pc) const
++  {
++    if (m_closed || !m_context.completed)
++      return {nullptr, Decision::NoCompletion};
++    if (m_context.owner != owner || m_context.state != state)
++      return {nullptr, Decision::OwnerMismatch};
++    // These checks must remain before any access through completed. It may be
++    // poisoned/reused memory after nested invalidation of the source block.
++    if (epoch == 0 || epoch != m_context.epoch)
++      return {nullptr, Decision::EpochMismatch};
++    if (!m_context.enabled)
++      return {nullptr, Decision::Disabled};
++    if (features != m_context.features)
++      return {nullptr, Decision::FeatureMismatch};
++    const Descriptor& descriptor = *m_context.completed;
++    for (U32 i = 0; i < descriptor.count && i < descriptor.cells.size(); ++i)
++    {
++      const Cell& cell = descriptor.cells[i];
++      if (cell.pc == pc)
++        return {cell.entry, cell.entry ? Decision::Linked : Decision::Unlinked};
++    }
++    return {nullptr, Decision::NoTarget};
++  }
++
++private:
++  Context m_context;
++  Context* m_previous;
++  bool m_closed = false;
++};
++
++inline void Publish(const void* state, const Descriptor* descriptor)
++{
++  if (active_context && active_context->state == state)
++    active_context->completed = descriptor;
++}
++}  // namespace StaticExitLinks
++#endif
++
++#if DOLPHIN_WEB_STATIC_EXIT_LINKS && DOLPHIN_WEB_STATIC_EXIT_LINK_STATS
++#include <atomic>
++#include <optional>
++#include <ostream>
++
++namespace StaticExitLinks
++{
++class Stats
++{
++public:
++  static constexpr std::size_t Decisions = static_cast<std::size_t>(Decision::Count);
++  static constexpr std::size_t Initial = Decisions, InitialMiss = Decisions + 1,
++                               Fallback = Decisions + 2, FallbackMiss = Decisions + 3,
++                               Count = Decisions + 4;
++  struct Snapshot
++  {
++    U64 sequence = 0, owner = 0, slices = 0;
++    std::array<U64, Count> counts{};
++  };
++
++  void Init()
++  {
++    ++m_owner;
++    m_slices = 0;
++    m_counts = {};
++    Publish();
++  }
++  void Record(Decision decision) { ++m_counts[static_cast<std::size_t>(decision)]; }
++  void InitialDispatch(bool miss) { ++m_counts[Initial]; m_counts[InitialMiss] += miss; }
++  void FallbackDispatch(bool miss) { ++m_counts[Fallback]; m_counts[FallbackMiss] += miss; }
++  void Slice() { if ((++m_slices & 63u) == 0) Publish(); }
++  void Publish()
++  {
++    // CPU-owned live counters; all shared payload/sequence operations are SC.
++    m_sequence.fetch_add(1);
++    for (std::size_t i = 0; i < Count; ++i)
++      m_published[i].store(m_counts[i]);
++    m_published[Count].store(m_owner);
++    m_published[Count + 1].store(m_slices);
++    m_sequence.fetch_add(1);
++  }
++  std::optional<Snapshot> Read() const
++  {
++    for (int attempt = 0; attempt < 8; ++attempt)
++    {
++      Snapshot snapshot;
++      snapshot.sequence = m_sequence.load();
++      if (snapshot.sequence & 1)
++        continue;
++      for (std::size_t i = 0; i < Count; ++i)
++        snapshot.counts[i] = m_published[i].load();
++      snapshot.owner = m_published[Count].load();
++      snapshot.slices = m_published[Count + 1].load();
++      if (snapshot.sequence == m_sequence.load())
++        return snapshot;
++    }
++    return std::nullopt;
++  }
++  static void Format(std::ostream& out, const Snapshot& snapshot)
++  {
++    static constexpr std::array<const char*, Count> names = {
++        "linked", "noCompletion", "ownerMismatch", "epochMismatch", "featureMismatch",
++        "disabled", "noTarget", "unlinked", "initial", "initialMiss", "fallback", "fallbackMiss"};
++    out << " staticlinks:v1 seq:" << snapshot.sequence << " owner:" << snapshot.owner
++        << " slices:" << snapshot.slices;
++    for (std::size_t i = 0; i < Count; ++i)
++      out << ' ' << names[i] << ':' << snapshot.counts[i];
++    out << " staticlinks:end";
++  }
++
++private:
++  U64 m_owner = 0, m_slices = 0;
++  std::array<U64, Count> m_counts{};
++  std::array<std::atomic<U64>, Count + 2> m_published{};
++  std::atomic<U64> m_sequence{0};
++};
++}  // namespace StaticExitLinks
++#endif

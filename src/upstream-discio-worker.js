@@ -407,6 +407,8 @@ let ppcWasmJitPreEngageCoreFps = 0;
 let ppcWasmJitCoreSampleFrame = -1;
 let ppcWasmJitCoreSampleTime = 0;
 let ppcWasmJitCoreFpsRolling = 0;
+let ppcWasmJitCorePaused = false;
+let ppcWasmJitTimingSuspensions = 0;
 function sampleCoreFpsRolling(coreFrame) {
   const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const cf = coreFrame >>> 0;
@@ -1041,7 +1043,14 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
-      const loaded = Boolean(api?.loadState(payload.slot | 0));
+      let loaded = false;
+      ppcWasmJitTimingSuspensions += 1;
+      try {
+        loaded = Boolean(api?.loadState(payload.slot | 0));
+      } finally {
+        resetPpcWasmJitTiming(loaded);
+        ppcWasmJitTimingSuspensions -= 1;
+      }
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
@@ -1064,17 +1073,28 @@ async function handleMessage(type, payload) {
       }
       const paused = Boolean(payload.paused);
       const transitionAtMs = performance.now();
-      api.setCorePaused(paused ? 1 : 0);
-      if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
-      const observedAtMs = performance.now();
-      return {
-        paused: api?.getCoreStateName?.() === "Paused",
-        requestedPaused: paused,
-        coreStateName: api?.getCoreStateName?.() ?? "",
-        transitionAtMs,
-        observedAtMs,
-        ...framePayload(),
-      };
+      ppcWasmJitTimingSuspensions += 1;
+      resetPpcWasmJitTiming();
+      try {
+        if (api.setCorePaused(paused ? 1 : 0)) {
+          ppcWasmJitCorePaused = paused;
+        }
+        if (paused) await new Promise((resolve) => setTimeout(resolve, 100));
+        const observedAtMs = performance.now();
+        const coreStateName = api?.getCoreStateName?.() ?? "";
+        if (coreStateName) ppcWasmJitCorePaused = coreStateName === "Paused";
+        return {
+          paused: coreStateName === "Paused",
+          requestedPaused: paused,
+          coreStateName,
+          transitionAtMs,
+          observedAtMs,
+          ...framePayload(),
+        };
+      } finally {
+        resetPpcWasmJitTiming();
+        ppcWasmJitTimingSuspensions -= 1;
+      }
     }
     case "validationReadCoreProgress": {
       const loadedCheckpoint = readLastLoadedCheckpoint();
@@ -1241,11 +1261,18 @@ async function handleMessage(type, payload) {
       api?.setWebGpuUboPackEnabled?.(webGpuUboPackMode());
       api?.setWebGpuGeometryPackEnabled?.(wgpuGeometryPackEnabled ? 1 : 0);
       api?.setWebGpuGeometryRangeEnabled?.(wgpuGeometryRangeEnabled ? 1 : 0);
-      const rc = api.loadStateFile(path) | 0;
-      // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
-      // step the core) — wait real wall-clock time so the restore
-      // actually takes effect before we sample/screenshot.
-      await new Promise((r) => setTimeout(r, 1200));
+      let rc = 0;
+      ppcWasmJitTimingSuspensions += 1;
+      try {
+        rc = api.loadStateFile(path) | 0;
+        // LoadAs runs on the autonomous CPU pthread (RunFrame doesn't
+        // step the core) — wait real wall-clock time so the restore
+        // actually takes effect before we sample/screenshot.
+        await new Promise((r) => setTimeout(r, 1200));
+      } finally {
+        resetPpcWasmJitTiming(rc === 1);
+        ppcWasmJitTimingSuspensions -= 1;
+      }
       api?.setWebGpuUploadArenaMiB?.(wgpuUploadArenaMiB, collectMetrics ? 1 : 0);
       api?.setWebGpuProducerProfileEnabled?.(wgpuProducerProfileRequested ? 1 : 0);
       api?.setWebGpuDrawProfileEnabled?.(wgpuDrawProfileRequested ? 1 : 0);
@@ -2042,6 +2069,9 @@ async function loadCore({
   ppcWasmJitDisabledForSession = false;
   ppcWasmJitCooldownUntilFrame = 0;
   ppcWasmJitEnabledAtFrame = 0;
+  ppcWasmJitCorePaused = false;
+  ppcWasmJitTimingSuspensions = 0;
+  resetPpcWasmJitTiming(true);
   ppcWasmJitTier = requestedPpcWasmJitTier === "mixed" ? "mixed" : "guarded";
   ppcWasmJitWarmupFrames = normalizePpcWasmJitWarmupFrames(requestedPpcWasmJitWarmupFrames);
   console.log(`[s28-jittier] worker init: requested=${JSON.stringify(requestedPpcWasmJitTier)} ` +
@@ -3491,7 +3521,25 @@ function runPresentationLoop() {
   }
 }
 
+function resetPpcWasmJitTiming(invalidateBaseline = false) {
+  // Intentional pauses and loads are not emulation stalls. Keep JIT mode,
+  // cooldown, presentation resources, and lifetime metrics unchanged.
+  ppcWasmJitCoreSampleFrame = -1;
+  ppcWasmJitCoreSampleTime = 0;
+  ppcWasmJitCoreFpsRolling = 0;
+  ppcWasmJitFuseLastFrame = -1;
+  ppcWasmJitFuseLastTime = 0;
+  presentationMaxIntervalMs = 0;
+  maxIntervalSincePresentationFps = 0;
+  lastPresentedAt = performance.now();
+  if (invalidateBaseline) {
+    ppcWasmJitPreEngageFps = 0;
+    ppcWasmJitPreEngageCoreFps = 0;
+  }
+}
+
 function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
+  if (ppcWasmJitCorePaused || ppcWasmJitTimingSuspensions > 0) return;
   // Keep a pre-engage core-fps estimate warm. This runs every tick while the
   // JIT is still off, which is the only window in which an honest "before"
   // baseline can be taken.
@@ -3558,6 +3606,7 @@ function maybeEnablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
 }
 
 function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
+  if (ppcWasmJitCorePaused || ppcWasmJitTimingSuspensions > 0) return;
   if (!ppcWasmJitActive || ppcWasmJitForce || !api?.setPpcWasmJitEnabled) {
     return;
   }
@@ -3650,7 +3699,7 @@ function maybeDisablePpcWasmJit(coreFrame = api?.getFrame?.() ?? 0) {
   ppcWasmJitCooldownUntilFrame = (coreFrame >>> 0) + WASM_JIT_DEGRADED_COOLDOWN_FRAMES;
   postStatus(
     `Experimental WASM JIT temporarily off ` +
-      `(fps:${presentationFps} baseline:${baseline} ` +
+      `(fps:${presentationFps} baseline:${ppcWasmJitPreEngageCoreFps} ` +
       `${catastrophic ? "catastrophic" : "regressed"}; cooldown ` +
       `${WASM_JIT_DEGRADED_COOLDOWN_FRAMES} frames)`
   );

@@ -295,8 +295,11 @@ test("committed Dolphin provenance and ABI manifests verify", () => {
   assert.equal(Object.keys(result.externalRepositories).length, 2);
   // Tracks the patch series: 110 before the investigation diagnostics were
   // stripped out of 0059, which left TextureCacheBase.cpp untouched by any
-  // patch. Update deliberately when the series changes what it modifies.
-  assert.equal(result.vendorSnapshot.rootPaths, 109);
+  // patch, then 109. The cached-interpreter JIT patches added four paths no
+  // earlier patch touched -- CachedInterpreterBlockCache.cpp/.h,
+  // CachedInterpreterLink.h and WasmDeferredCompileQueue.h -- taking it to
+  // 113. Update deliberately when the series changes what it modifies.
+  assert.equal(result.vendorSnapshot.rootPaths, 113);
   assert.equal(result.vendorSnapshot.submodulePaths, 2);
   assert.equal(result.core.abiVersion, 1);
   assert.equal(result.core.memoryContract.jsGlue.initialPages, 24576);
