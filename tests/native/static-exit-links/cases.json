@@ -1,0 +1,66 @@
+{
+  "header": [
+    "BeginBlock clears stale completion while preserving TLS and current owner",
+    "BeginBlock drops a protected stale descriptor before the new block starts",
+    "nested lean blocks restore parent completion and BeginBlock cannot reopen closed scope",
+    "descriptor deduplicates cells and retains call qualification",
+    "immediate b and bl decode signed AA and wrapping targets",
+    "bc and bcl include only immediate and fallthrough candidates",
+    "LR and CTR taken destinations are never inferred as static targets",
+    "cell writes modify only target entry bytes",
+    "matching completed descriptor resolves with all mismatch fallbacks",
+    "epoch and identity guards precede protected descriptor dereference",
+    "epoch wrap fails closed permanently",
+    "nested contexts isolate publishers and restore after close/unwind",
+    "execution context is thread-local even with identical PPC state address"
+  ],
+  "cache": [
+    "cache epoch is nonzero and advances at initialization",
+    "actual base linking supports both compilation orders and feature variants",
+    "actual emitter registers stable deduplicated cells and honors policy",
+    "actual target erase clears incoming cells and relinks same PC/address replacement",
+    "actual source erase rejects saved descriptor before same-storage reuse",
+    "ClearSafe uses actual base Clear virtual destroy and unlinks all cells",
+    "actual physical invalidation removes overlapping sources and targets",
+    "failed emitter write does not register pointers into incomplete storage",
+    "actual full ClearCache invalidates empty storage and clears deferred pending state",
+    "0065 actual deferred replacement reaches base erase unlink before reclamation",
+    "both actual EndBlock record variants preserve accounting and disassembly sizes"
+  ],
+  "callbacks": [
+    "differential direct b/bl signed absolute wrapping self and inline continuation",
+    "differential bc/bcl covers every BO taken/fallthrough CTR CR and LR effect",
+    "differential LR/CTR branches preserve dynamic taken destinations and conditional fallthrough",
+    "early FPU rejection at eligible PC cannot publish an exit",
+    "actual RunWasmBlock normal halt and prefix preserve state and publication",
+    "fused full partial merged and skipped-tail emission registers exact actual terminal",
+    "failed fused emission never registers an incomplete operand descriptor"
+  ],
+  "helpers": [
+    "actual terminal callbacks tolerate direct invocation without execution context",
+    "actual inline call branch preserves LR accounting and selects callee or completed continuation",
+    "actual idle helper normal loop exit partial-work and fallback match baseline",
+    "actual title helper loop exit downcount and rejection preserve state RAM accounting",
+    "failed specialized helper emission publishes no link records"
+  ],
+  "gates": [
+    "consecutive early FPU and WASM halts cannot reuse the preceding completed descriptor",
+    "each chained BeginBlock captures fresh epoch and feature key with stable TLS identity",
+    "nested lean execution restores parent TLS before child miss or profiler callbacks",
+    "callback unwind closes lean scope and cannot leak completion into later execution",
+    "actual outer loop uses linked next entry without changing PPC accounting",
+    "actual SingleStep preserves timing advance and never redispatches",
+    "original disabled profiler downcount and CPU-state gates retain short circuit",
+    "debug branchwatch profiling and no-link settings retain ordinary fallback",
+    "actual miss path closes source scope before Jit",
+    "source and target invalidation during actual terminal accounting cannot consume stale cells",
+    "actual callback loop stops at early FPU failure without borrowing later terminal",
+    "generic and direct-WASM callback dispatch both publish only normal terminal completion"
+  ],
+  "stats": [
+    "actual diagnostic decision and dispatch partitions preserve exact counts",
+    "64-slice cadence forced publication and reset work without a new event",
+    "actual getter sequence cache refreshes on new publication and owner reset",
+    "concurrent SC snapshots preserve owner and complete event tuples"
+  ]
+}
