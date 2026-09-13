@@ -1,0 +1,65 @@
+{
+  "game": "Mario Kart Wii",
+  "scope": "one matched pair in an unpaused race with stationary player; not a sustained-driving test",
+  "rows": [
+    {
+      "arm": "A1",
+      "coreId": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "wallSeconds": 82.70356999999285,
+      "emulatedSeconds": 30.013083371742113,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.013083371742112604,
+      "coreFrames": 1799,
+      "coreFps": 21.752386263376,
+      "speedPercent": 36.28994899705624,
+      "submittedPresentationFps": 21.704020757509685,
+      "visualCountFps": 21.691929381043103,
+      "jitStayedEnabled": true,
+      "inputHeldFrames": [
+        3,
+        3
+      ],
+      "audioUnderrunEvents": 11,
+      "audioUnderrunFrames": 1408,
+      "sceneReview": {
+        "accepted": true,
+        "reviewer": "root",
+        "reason": "Unpaused race at30.786 seconds; track/kart/HUD and repaired course outline visible. No pause menu. Player position near curb; three-frame A pulse matched exactly."
+      }
+    },
+    {
+      "arm": "B1",
+      "coreId": "091ad7710dcbb965d203416b00cfec58ec00040e80e89ddacf8cc2d21fa0be36",
+      "wallSeconds": 77.53347499996424,
+      "emulatedSeconds": 30.012933781893004,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.012933781893003982,
+      "coreFrames": 1799,
+      "coreFps": 23.202881078151467,
+      "speedPercent": 38.709646100483496,
+      "submittedPresentationFps": 23.202881078151467,
+      "visualCountFps": 23.16418811359646,
+      "jitStayedEnabled": true,
+      "inputHeldFrames": [
+        3,
+        3
+      ],
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "sceneReview": {
+        "accepted": true,
+        "reviewer": "root",
+        "reason": "Unpaused race; same curb/kart viewpoint and repaired course outline as control, clock30.899s versus30.786s. Exact three-frame A pulse. No pause overlay."
+      }
+    }
+  ],
+  "pairedGainPercent": 6.6682100860705695,
+  "worker": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+  "decision": "Screening observation only; no repeatable global gain established and default remains0.",
+  "limits": [
+    "One pair only; normal scheduling can vary.",
+    "Control had11audio underrun events (1408frames); candidate0 does not establish a causal audio improvement.",
+    "Earlier paused-menu measurements in results/mkw-A1 andmkw-B1 are excluded.",
+    "Repairedmap fixture used; generalGPU save-state readback still incomplete."
+  ]
+}

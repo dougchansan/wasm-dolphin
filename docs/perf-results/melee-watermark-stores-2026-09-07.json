@@ -1,0 +1,217 @@
+{
+  "schema": "wasm-dolphin.watermark-store-melee.v1",
+  "rows": [
+    {
+      "arm": "A1",
+      "coreId": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "wallSeconds": 40.82150999999046,
+      "emulatedSeconds": 30.009356318930042,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.009356318930041851,
+      "coreFrames": 1798,
+      "coreFps": 44.045406453617716,
+      "speedPercent": 73.51358712339905,
+      "submittedPresentationFps": 43.87392823049462,
+      "visualCountFps": 43.726946896389116,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "jitStayedEnabled": true,
+      "inputUpdates": [
+        0,
+        0
+      ],
+      "affinityBefore": [
+        {
+          "id": 105244,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 99948,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 95992,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 96904,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "B1",
+      "coreId": "53d47d7e59aabfef267fbd1d01308e01165a36d5943e4d402f4d43e182fe5f1c",
+      "wallSeconds": 39.30476999998093,
+      "emulatedSeconds": 30.01107874074074,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.011078740740739335,
+      "coreFrames": 1798,
+      "coreFps": 45.745083866433326,
+      "speedPercent": 76.35480055157505,
+      "submittedPresentationFps": 45.745083866433326,
+      "visualCountFps": 45.56698843425033,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "jitStayedEnabled": true,
+      "inputUpdates": [
+        0,
+        0
+      ],
+      "affinityBefore": [
+        {
+          "id": 81992,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 96868,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 82552,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 56256,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "B2",
+      "coreId": "53d47d7e59aabfef267fbd1d01308e01165a36d5943e4d402f4d43e182fe5f1c",
+      "wallSeconds": 41.11203999996185,
+      "emulatedSeconds": 30.009401086419754,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.009401086419753568,
+      "coreFrames": 1798,
+      "coreFps": 43.73414697985477,
+      "speedPercent": 72.99419120639014,
+      "submittedPresentationFps": 43.53955678194663,
+      "visualCountFps": 43.32064280929997,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "jitStayedEnabled": true,
+      "inputUpdates": [
+        0,
+        0
+      ],
+      "affinityBefore": [
+        {
+          "id": 61292,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 105428,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 28960,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 102820,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    },
+    {
+      "arm": "A2",
+      "coreId": "7479b6c803ff1d19e4c03b3654c69e4fe95a6a4367b411ba11769c65730b112c",
+      "wallSeconds": 41.176900000035765,
+      "emulatedSeconds": 30.01164494650206,
+      "targetEmulatedSeconds": 30,
+      "overshootEmulatedSeconds": 0.011644946502059383,
+      "coreFrames": 1798,
+      "coreFps": 43.66525891940477,
+      "speedPercent": 72.88466335852381,
+      "submittedPresentationFps": 43.640973458381744,
+      "visualCountFps": 43.54383161428963,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "jitStayedEnabled": true,
+      "inputUpdates": [
+        0,
+        0
+      ],
+      "affinityBefore": [
+        {
+          "id": 72076,
+          "mask": "0x5555",
+          "type": "browser"
+        },
+        {
+          "id": 42892,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 114972,
+          "mask": "0x5555",
+          "type": "renderer"
+        },
+        {
+          "id": 102028,
+          "mask": "0x5555",
+          "type": "GPU"
+        }
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "baseline": "A1",
+      "candidate": "B1",
+      "fpsGainPercent": 3.8589209401562963
+    },
+    {
+      "baseline": "A2",
+      "candidate": "B2",
+      "fpsGainPercent": 0.157764003133809
+    }
+  ],
+  "meanControlFps": 43.85533268651125,
+  "meanCandidateFps": 44.739615423144045,
+  "ratioOfMeansGainPercent": 2.0163630793861964,
+  "decision": "Retain experimental; small gain not convincing enough for production default.",
+  "conditions": {
+    "worker": "624c4f619038a2d6d0d364be65db56ed1cd7a2bba0be4c239ac032d6db8b7a10",
+    "warmupEmulatedSeconds": 20,
+    "measureEmulatedSeconds": 30,
+    "affinityBothArms": "0x5555, verified on benchmark child processes only",
+    "clock": 1,
+    "speedSetting": 1,
+    "metrics": false,
+    "audio": "audible worklet",
+    "jit": "guarded, continuously enabled",
+    "input": "isolated neutral Melee battle"
+  },
+  "validation": {
+    "sourceAndGateControlWasmExact": true,
+    "changedFinalWasmBodies": 1,
+    "changedBodyBytes": 28,
+    "nativeBehaviorCases": 262144,
+    "publicationQueueEventsEachVariant": 200000,
+    "fifoRecordsEachVariant": 200000,
+    "gpuFencesPassed": true,
+    "sceneReview": "All before/final images inspected by root"
+  },
+  "limits": [
+    "Two pairs, one scene and machine; compilation continues during timing.",
+    "Native publication tests do not prove every C++ weak-memory execution or all emulator integration.",
+    "No all-games, full-speed or general default-scheduling performance claim."
+  ],
+  "evidence": ".omx/full-speed/watermark-experiment and .omx/full-speed/dispatch-bench/results/watermark-melee-*"
+}
