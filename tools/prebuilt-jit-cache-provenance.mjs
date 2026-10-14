@@ -50,7 +50,7 @@ export function describePrebuiltJitCache(blob) {
   for (const entry of decoded.entries) {
     const expectedKey = `${JIT_CACHE_ENTRY_KEY_SCHEMA}:${sha256(entry.bytes)}`;
     if (entry.hash !== expectedKey) {
-      throw new Error(`Candidate prebuilt entry key mismatch: ${entry.hash || "missing"}`);
+      throw new Error(`Prebuilt JIT entry key mismatch: ${entry.hash || "missing"}`);
     }
   }
   return {
@@ -115,4 +115,30 @@ export async function writeCandidatePrebuiltCache({ root, outPath, blob }) {
   await writeFileAtomic(location.outPath, blob);
   await writeFileAtomic(location.manifestPath, `${JSON.stringify(updatedManifest, null, 2)}\n`);
   return { path: location.outPath, ...evidence };
+}
+
+// A cache is optional in clean checkouts, but an existing local cache must be
+// usable by this core. Otherwise a stale artifact silently disables prewarming.
+export async function verifyLocalPrebuiltJitCache(root) {
+  const directory = path.join(root, "cores/dolphin");
+  let blob;
+  try {
+    blob = await readFile(path.join(directory, "prebuilt-jit-cache.bin"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  const evidence = describePrebuiltJitCache(blob);
+  if (evidence.entryCount === 0) {
+    throw new Error("Local prebuilt JIT cache has no entries");
+  }
+  const expectedFingerprint = canonicalCoreFingerprint(
+    sha256(await readFile(path.join(directory, "dolphin-core-upstream.wasm")))
+  );
+  if (evidence.fingerprint !== expectedFingerprint) {
+    throw new Error(
+      `Local prebuilt JIT cache fingerprint mismatch: expected ${expectedFingerprint}, got ${evidence.fingerprint || "missing"}`
+    );
+  }
+  return evidence;
 }
