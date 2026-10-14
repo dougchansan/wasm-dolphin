@@ -966,6 +966,13 @@ function wireKeyboard() {
     keyboardPressed.delete(button);
     syncInput("Keyboard");
   });
+
+  window.addEventListener("blur", () => {
+    if (keyboardPressed.size) {
+      keyboardPressed.clear();
+      syncInput(gamepadPressed.size ? "Gamepad" : touchPressed.size ? "Touch" : "Keyboard");
+    }
+  });
 }
 
 function wireTouchControls() {

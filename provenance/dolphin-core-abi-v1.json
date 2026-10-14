@@ -44,8 +44,8 @@
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 48697,
-      "sha256": "0a6c2ffeda21cf0966b37292c39848848198127b83e059c61bb4d03d9e9e6cfc"
+      "size": 48908,
+      "sha256": "e004156d625d52e36ead5ae2106dbdb234864695c59068445a45436124bc6670"
     },
     {
       "path": "src/audio.js",
