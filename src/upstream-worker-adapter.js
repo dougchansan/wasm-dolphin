@@ -59,6 +59,7 @@ export class UpstreamWorkerAdapter {
     softwareTevHotCaseMode = 0,
     xfbFastPaths = 0,
     correctTimeDrift = false,
+    syncOnSkipIdle = false,
     coreLog = false,
     efbDiag = false,
     jitVerbose = false,
@@ -154,6 +155,7 @@ export class UpstreamWorkerAdapter {
     this.softwareTevHotCaseMode = (Number(softwareTevHotCaseMode) || 0) & 3;
     this.xfbFastPaths = (Number(xfbFastPaths) || 0) & 3;
     this.correctTimeDrift = Boolean(correctTimeDrift);
+    this.syncOnSkipIdle = Boolean(syncOnSkipIdle);
     this.coreLog = Boolean(coreLog);
     this.efbDiag = Boolean(efbDiag);
     this.jitVerbose = Boolean(jitVerbose);
@@ -355,6 +357,7 @@ export class UpstreamWorkerAdapter {
       softwareTevHotCaseMode: this.softwareTevHotCaseMode,
       xfbFastPaths: this.xfbFastPaths,
       correctTimeDrift: this.correctTimeDrift,
+      syncOnSkipIdle: this.syncOnSkipIdle,
       coreLog: this.coreLog,
       efbDiag: this.efbDiag,
       jitVerbose: this.jitVerbose,
@@ -511,6 +514,19 @@ export class UpstreamWorkerAdapter {
       return;
     }
     this.post("setInputMask", { mask: mask >>> 0 });
+  }
+
+  // Real Wii Remotes (WebHID): op is "attach", "detach" or "report".
+  wiimoteHid(op, slot, bytes = null) {
+    if (!this.loaded) return false;
+    const payload = { op, slot };
+    const transfer = [];
+    if (bytes) {
+      payload.bytes = bytes.buffer;
+      transfer.push(bytes.buffer);
+    }
+    this.post("wiimoteHid", payload, transfer);
+    return true;
   }
 
   setInputState(state) {
@@ -887,6 +903,10 @@ export class UpstreamWorkerAdapter {
       this.workerCausalTelemetry = message.causalTelemetry;
       this.refreshCausalTelemetry();
     }
+    if (message?.type === "wiimoteHidWrite") {
+      this.onWiimoteHidWrite?.(message.slot, message.bytes);
+      return;
+    }
     if (message?.type === "status") {
       this.onStatus(message.message);
       return;
@@ -944,6 +964,7 @@ export class UpstreamWorkerAdapter {
     }
     this.width = response.width || this.width;
     this.height = response.height || this.height;
+    if (typeof response.wiiRemote === "boolean") this.wiiRemoteSupported = response.wiiRemote;
     if (Number.isFinite(response.coreTicks)) {
       this.coreTicks = response.coreTicks;
     }

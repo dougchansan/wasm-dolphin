@@ -20,8 +20,8 @@
     {
       "path": "core/upstream/dolphin_web_discio.cpp",
       "hashMode": "lf-normalized",
-      "size": 45448,
-      "sha256": "2815c46b414ff4b67a58cd55d714e1b41f9b38984023e5a0dca29a71d2a4206b"
+      "size": 45741,
+      "sha256": "d43c9275f3a729109020cd60525ba2fb0cb9f9e3b7cb7b96ed3489d9193076b6"
     },
     {
       "path": "core/upstream/dolphin_web_raster_profile.h",
@@ -38,14 +38,14 @@
     {
       "path": "core/upstream/dolphin_web_core.cpp",
       "hashMode": "lf-normalized",
-      "size": 44803,
-      "sha256": "0b7220487717ebed29695b031e8779c218771926e12ffe0c102675aba7ad803f"
+      "size": 45258,
+      "sha256": "c245c73e3c3ba8ff16f360b8b8fb17a1c8d3c5e97d7588393aa17285eb5538f7"
     },
     {
       "path": "src/app.js",
       "hashMode": "lf-normalized",
-      "size": 48697,
-      "sha256": "0a6c2ffeda21cf0966b37292c39848848198127b83e059c61bb4d03d9e9e6cfc"
+      "size": 55806,
+      "sha256": "673d770ee48c328b4ae7415c3485ee42ebd3672e1839bd91e61e59d8d12ecab9"
     },
     {
       "path": "src/audio.js",
@@ -80,8 +80,8 @@
     {
       "path": "src/core-host.js",
       "hashMode": "lf-normalized",
-      "size": 65547,
-      "sha256": "9b40c4f53484b1cc0ba8a87d52de9d14be357cbf41e887fb9984bb9beeb3ef72"
+      "size": 66646,
+      "sha256": "c139755f9b4bfb90eae398ae400271894df33aa769541ae4eeae27766144b344"
     },
     {
       "path": "src/diagnostic-log-filter.js",
@@ -134,8 +134,8 @@
     {
       "path": "src/upstream-discio-worker.js",
       "hashMode": "lf-normalized",
-      "size": 617538,
-      "sha256": "681a26e5aebedf3eb054c5ca8ec5a8b66445b15873c155e30e0b62ad3e0626a0"
+      "size": 619980,
+      "sha256": "ee5c7a2fdfaadd4d90c091709fb93754d85fbba54b27234c48e279299b685a1a"
     },
     {
       "path": "src/wgpu-renderer-worker-probe.js",
@@ -158,14 +158,14 @@
     {
       "path": "src/upstream-worker-adapter.js",
       "hashMode": "lf-normalized",
-      "size": 41656,
-      "sha256": "de15d26f0586ad7864472fdea784d934d63f2790993967780cccf2a7ae638aa4"
+      "size": 42369,
+      "sha256": "a676883a871e8cec4ba0839f23f1701d2e93b2e85020f3c21a6e93d29491e45c"
     },
     {
       "path": "src/upstream-worker-protocol.js",
       "hashMode": "lf-normalized",
-      "size": 5096,
-      "sha256": "bedcdd1912ba1d19a6d75b785ed4cc689dfb502cd2c9754366cb14cbe6999f4b"
+      "size": 5112,
+      "sha256": "ebae996e03fbbd892b9868e79c84dbbcdc4efc4d649688f65506f24dafc50fdb"
     },
     {
       "path": "src/wgpu-pass-state-cache.js",
@@ -322,6 +322,24 @@
       "hashMode": "lf-normalized",
       "size": 14307,
       "sha256": "a7f221188aaa9dc307dd9518488c60f8c4ccf52a5cecf5c4dffbc33c218cdb2e"
+    },
+    {
+      "path": "core/upstream/dolphin_web_wiimote.h",
+      "hashMode": "lf-normalized",
+      "size": 22335,
+      "sha256": "f0aa5af4ee1052fcef99cfb54f9759e5e92a6204a36b60d6fd0f400b2b115701"
+    },
+    {
+      "path": "src/wii-input.js",
+      "hashMode": "lf-normalized",
+      "size": 11103,
+      "sha256": "84d2f0eb811814ac8f6eb1017946c78c6d37f592585ca33aeb3bb127e4e949b7"
+    },
+    {
+      "path": "src/wiimote-hid.js",
+      "hashMode": "lf-normalized",
+      "size": 6717,
+      "sha256": "3f160ad015b1b7acc3d2c637cb377e12bada93afb472a01247286e3c873cf5d8"
     }
   ],
   "memoryContract": {
@@ -350,7 +368,12 @@
     }
   },
   "memoryContractStatus": "consistent",
-  "sourceOnlyExportsPendingRebuild": [],
+  "sourceOnlyExportsPendingRebuild": [
+    "_WebHidAttach",
+    "_WebHidPopWrite",
+    "_WebHidPushReport",
+    "_WebHidWriteBuffer"
+  ],
   "moduleExports": [
     "_AcknowledgeWebGpuOwnershipTraceCapture",
     "_AudioBuffer",
@@ -531,7 +554,8 @@
       "validationFinalizeWgpuReplay",
       "validationReadCoreProgress",
       "validationReadJitCacheReadiness",
-      "validationSetCorePaused"
+      "validationSetCorePaused",
+      "wiimoteHid"
     ],
     "notificationFields": {
       "detachedOglFrame": [

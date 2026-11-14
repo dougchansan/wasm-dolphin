@@ -15,6 +15,15 @@ import {
   updatePressedSet
 } from "./input.js";
 import {
+  WII_HELP,
+  WII_LAYOUTS,
+  WiiPointer,
+  buildWiiInputState,
+  readWiiGamepad,
+  resolveWiiKey
+} from "./wii-input.js";
+import { WiimoteHidBridge, webHidSupported } from "./wiimote-hid.js";
+import {
   buildPlayablePresetHref,
   buildSettingsHref,
   describeSettings,
@@ -132,6 +141,16 @@ let gamepadPressed = new Set();
 let gamepadInputState = null;
 let lastGamepadInput = null;
 let combinedPressed = new Set();
+// Wii Remote state. wiiLayout is null unless a Wii disc is mounted on a core
+// with Wii Remote input.
+let wiiLayout = null;
+let wiiGameId = null;
+const wiiKeyboardPressed = new Set();
+const wiiMousePressed = new Set();
+let wiiGamepad = null;
+let wiiGamepadSignature = "";
+const wiiPointer = new WiiPointer();
+let wiimoteHid = null;
 let lastFrameInfo = null;
 let lastCausalTelemetry = null;
 let lastCausalTelemetryCapturedAt = -1;
@@ -249,6 +268,7 @@ wireAspectSelect();
 wireScreenFit();
 wireFileMounting();
 wireTransport();
+setupWiiControls();
 wireKeyboard();
 wireTouchControls();
 wireGamepadPolling();
@@ -875,6 +895,7 @@ async function mountFile(file) {
     }
     host.setAudioMuted(audio.muted);
     syncGameInfo(game);
+    updateWiiControls(game);
     host.start();
   } catch (error) {
     setStatus(error.message, "error");
@@ -944,6 +965,16 @@ function wireKeyboard() {
       return;
     }
 
+    if (wiiActive()) {
+      if (event.target?.closest?.("select, input, textarea")) return;
+      const wiiButton = resolveWiiKey(wiiLayout, event.code);
+      if (!wiiButton) return;
+      event.preventDefault();
+      wiiKeyboardPressed.add(wiiButton);
+      syncInput("Keyboard");
+      return;
+    }
+
     const button = resolveKeyboardButton(event.code);
     if (!button) {
       return;
@@ -957,6 +988,15 @@ function wireKeyboard() {
   });
 
   document.addEventListener("keyup", (event) => {
+    if (wiiActive()) {
+      const wiiButton = resolveWiiKey(wiiLayout, event.code);
+      if (!wiiButton) return;
+      event.preventDefault();
+      wiiKeyboardPressed.delete(wiiButton);
+      syncInput("Keyboard");
+      return;
+    }
+
     const button = resolveKeyboardButton(event.code);
     if (!button) {
       return;
@@ -1081,6 +1121,11 @@ function wireGamepadPolling() {
       }
     }
 
+    if (wiiActive()) {
+      pollWiiGamepad(firstPad);
+      return;
+    }
+
     const nextGamepadInput = firstPad ? readGamepadInput(firstPad) : null;
     if (!legacyGamepadPoll && gamepadInputsEqual(lastGamepadInput, nextGamepadInput)) {
       return;
@@ -1101,6 +1146,19 @@ function wireGamepadPolling() {
 }
 
 function syncInput(source) {
+  if (wiiActive()) {
+    const pressed = mergePressedSets(wiiKeyboardPressed, wiiMousePressed, wiiGamepad?.pressed ?? []);
+    host.setInputState(buildWiiInputState({
+      layout: wiiLayout,
+      pressed,
+      stick: wiiGamepad?.stick,
+      rstick: wiiGamepad?.rstick,
+      triggers: wiiGamepad?.triggers,
+      pointer: wiiPointer
+    }));
+    elements.inputSource.textContent = `${source} · ${WII_LAYOUTS[wiiLayout].label}`;
+    return;
+  }
   combinedPressed = mergePressedSets(keyboardPressed, touchPressed, gamepadPressed);
   host.setInputState(inputStateFromPressed(combinedPressed, gamepadInputState));
   elements.inputSource.textContent = source;
@@ -1239,4 +1297,148 @@ function writeU32BE(bytes, offset, value) {
   bytes[offset + 1] = (value >>> 16) & 0xff;
   bytes[offset + 2] = (value >>> 8) & 0xff;
   bytes[offset + 3] = value & 0xff;
+}
+
+
+// ---------------------------------------------------------------------------
+// Wii Remote (docs/wii-remote.md)
+// ---------------------------------------------------------------------------
+
+function wiiActive() {
+  return wiiLayout !== null && wiiLayout !== "gamecube";
+}
+
+function wiiLayoutKey() {
+  return `wasm-dolphin.wii-layout:${wiiGameId || "default"}`;
+}
+
+function setWiiLayout(layout) {
+  if (!WII_LAYOUTS[layout]) layout = "nunchuk";
+  wiiLayout = layout;
+  wiiKeyboardPressed.clear();
+  wiiMousePressed.clear();
+  wiiGamepad = null;
+  wiiGamepadSignature = "";
+  try { localStorage.setItem(wiiLayoutKey(), layout); } catch {}
+  document.querySelector("#wiiHelp").textContent = WII_HELP[layout];
+  const select = document.querySelector("#wiiLayout");
+  if (select.value !== layout) select.value = layout;
+  // In "gamecube" this sends a plain pad snapshot, which plugs the GameCube
+  // pad back in.
+  syncInput("Keyboard");
+}
+
+// Shows the controls for a mounted Wii disc on a core that supports them, and
+// turns them off again for GameCube discs.
+function updateWiiControls(game) {
+  const section = document.querySelector("#wiiControls");
+  const isWii = /^Wii/.test(game?.platform || "");
+  if (!isWii || !host.wiiRemoteSupported) {
+    section.hidden = true;
+    if (wiiLayout !== null) {
+      wiiLayout = null;
+      syncInput("Keyboard");
+    }
+    return;
+  }
+  section.hidden = false;
+  wiiGameId = game.gameId || null;
+  let saved = null;
+  try { saved = localStorage.getItem(wiiLayoutKey()); } catch {}
+  setWiiLayout(saved || "nunchuk");
+  wiimoteHid?.syncCore();
+}
+
+function setupWiiControls() {
+  const select = document.querySelector("#wiiLayout");
+  if (!select) return;
+  for (const [value, config] of Object.entries(WII_LAYOUTS)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = config.label;
+    select.append(option);
+  }
+  select.addEventListener("change", () => {
+    setWiiLayout(select.value);
+    select.blur();
+  });
+
+  // Mouse: the IR pointer follows the cursor over the screen; left click is
+  // A, right click is B, middle click is Home.
+  const viewport = document.querySelector(".screen-viewport") || elements.screen;
+  const pointerLayout = () => wiiActive() && WII_LAYOUTS[wiiLayout].pointer;
+  viewport.addEventListener("pointermove", (event) => {
+    if (!pointerLayout() || event.pointerType === "touch") return;
+    wiiPointer.setFromElement(viewport, event.clientX, event.clientY);
+    syncInput("Mouse");
+  });
+  viewport.addEventListener("pointerleave", () => {
+    if (!wiiActive()) return;
+    wiiPointer.hideIfMouse();
+    wiiMousePressed.clear();
+    syncInput("Mouse");
+  });
+  const clickButtons = { 0: "A", 2: "B", 1: "HOME" };
+  viewport.addEventListener("pointerdown", (event) => {
+    if (!wiiActive() || wiiLayout === "classic" || wiiLayout === "sideways") return;
+    const button = clickButtons[event.button];
+    if (!button) return;
+    event.preventDefault();
+    wiiMousePressed.add(button);
+    syncInput("Mouse");
+  });
+  document.addEventListener("pointerup", (event) => {
+    const button = clickButtons[event.button];
+    if (!button || !wiiMousePressed.has(button)) return;
+    wiiMousePressed.delete(button);
+    syncInput("Mouse");
+  });
+  viewport.addEventListener("contextmenu", (event) => {
+    if (wiiActive()) event.preventDefault();
+  });
+
+  // Real Wii Remotes: DolphinBar (mode 4) or Bluetooth-paired, via WebHID.
+  const connect = document.querySelector("#wiiConnect");
+  const realStatus = document.querySelector("#wiiReal");
+  const describeReal = (summary) => {
+    if (!summary.supported) {
+      connect.disabled = true;
+      realStatus.textContent = "Real Wii Remotes need a browser with WebHID (Chrome, Edge).";
+    } else if (summary.remotes) {
+      realStatus.textContent =
+        `${summary.remotes} real Wii Remote${summary.remotes > 1 ? "s" : ""} connected (${summary.names.join(", ")}). ` +
+        "Player 1 now uses the real remote; unplug it to go back to the controls above.";
+    } else if (summary.interfaces) {
+      realStatus.textContent =
+        "DolphinBar found, waiting for a remote: press 1+2 on the remote (DolphinBar in mode 4).";
+    } else {
+      realStatus.textContent =
+        "Mayflash DolphinBar in mode 4, or a remote paired over Bluetooth. " +
+        "(DolphinBar modes 1–2 act as a mouse and work with the pointer layouts.)";
+    }
+  };
+  wiimoteHid = new WiimoteHidBridge(host, describeReal);
+  window.__wiimoteHid = wiimoteHid;
+  describeReal(wiimoteHid.summary());
+  connect.addEventListener("click", () => {
+    wiimoteHid.request().catch((error) => setStatus(`Wii Remote: ${error.message}`, "error"));
+  });
+  if (webHidSupported()) wiimoteHid.restore().catch(() => {});
+}
+
+function pollWiiGamepad(pad) {
+  const next = pad ? readWiiGamepad(pad, wiiLayout) : null;
+  let moved = false;
+  if (next && (wiiLayout === "nunchuk" || wiiLayout === "remote")) {
+    moved = wiiPointer.stepStick(next.rstick, next.pressed.has("RECENTER"));
+    next.rstick = { x: 0, y: 0 };
+  }
+  const signature = next
+    ? `${[...next.pressed].sort().join(",")}|${next.stick.x.toFixed(3)},${next.stick.y.toFixed(3)}|` +
+      `${next.rstick.x.toFixed(3)},${next.rstick.y.toFixed(3)}|${next.triggers.l},${next.triggers.r}`
+    : "";
+  if (!moved && signature === wiiGamepadSignature) return;
+  wiiGamepadSignature = signature;
+  wiiGamepad = next;
+  syncInput("Gamepad");
 }

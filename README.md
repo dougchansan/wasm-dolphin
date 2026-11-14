@@ -157,7 +157,7 @@ link. See [rendering modes](docs/rendering-modes.md) and
 |------|-------|
 | Melee boot + gameplay (software hybrid) | ✅ Playable when locally validated; speed is scene/machine dependent |
 | Broader GameCube library | ✅ Boots widely; per-game renderer defaults from two 45-disc sweeps |
-| Wii discs | ⚠️ Boot and run on the software path; no Wii Remote input yet |
+| Wii discs | ⚠️ Boot and run on the software path; Wii Remote input (emulated + real via WebHID) in source, [pending a core rebuild](docs/wii-remote.md) |
 | PPC→WASM JIT with GPR register cache | ⚠️ Default-on; old `addzex` failures are fixed, benefit remains scene-dependent |
 | Presentation smoothness (pacing, fast raster) | ✅ Tunable; software rasterizer caps unique-frame rate |
 | Audio | ✅ Worker-fed/tuned audio buffering |
@@ -207,7 +207,10 @@ scene-, cache-, browser-, and machine-dependent.
 | D-pad | Arrow keys |
 | Main stick | `W`, `A`, `S`, `D` |
 
-Standard browser gamepads are also polled. Wii Remote input is not implemented.
+Standard browser gamepads are also polled. Wii discs get Wii Remote controls
+(keyboard, mouse pointer, gamepad, or real remotes through a DolphinBar or
+Bluetooth via WebHID) on a core built with them; see
+[Wii Remote input](docs/wii-remote.md).
 
 ---
 
@@ -448,9 +451,10 @@ tests/                   Node unit tests
 - **The WebGPU hardware renderer is GPU- and title-dependent** — verify on your
   target GPU before relying on it; it renders black or misplaces viewports on
   some combinations.
-- **Wii support is partial.** Discs boot and run on the software path, but there
-  is no Wii Remote input yet, and the hardware path misplaces in-race viewports
-  in the titles that were checked.
+- **Wii support is partial.** Discs boot and run on the software path. Wii
+  Remote input is in source but needs a core rebuild
+  ([docs/wii-remote.md](docs/wii-remote.md)), and the hardware path misplaces
+  in-race viewports in the titles that were checked.
 - In-browser structural limits (no fastmem trap and no SIMD emission in the
   dynamic PPC JIT) bound how close the JIT can get to native speed.
 

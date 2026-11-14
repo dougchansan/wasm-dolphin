@@ -927,6 +927,7 @@ async function handleMessage(type, payload) {
         softwareTevHotCaseMode: payload.softwareTevHotCaseMode,
         xfbFastPaths: payload.xfbFastPaths,
         correctTimeDrift: payload.correctTimeDrift,
+        syncOnSkipIdle: payload.syncOnSkipIdle,
         coreLog: payload.coreLog,
         efbDiag: payload.efbDiag,
         jitVerbose: payload.jitVerbose,
@@ -977,6 +978,9 @@ async function handleMessage(type, payload) {
     case "setInputMask":
       inputMask = payload.mask >>> 0;
       api?.setInputMask(inputMask);
+      return {};
+    case "wiimoteHid":
+      handleWiimoteHid(payload);
       return {};
     case "setInputState":
       applyInputStateSnapshot({
@@ -1449,6 +1453,7 @@ async function loadCore({
   softwareTevHotCaseMode: requestedSoftwareTevHotCaseMode = 0,
   xfbFastPaths = 0,
   correctTimeDrift = false,
+  syncOnSkipIdle = false,
   coreLog = false,
   efbDiag = false,
   jitVerbose = false,
@@ -1911,6 +1916,9 @@ async function loadCore({
     // Read by dolphin_web_core.cpp at CoreInit. Both are opt-in and default
     // false, so the shipping page load is unchanged.
     dolphinCorrectTimeDrift: Boolean(correctTimeDrift),
+    // Dolphin's SyncOnSkipIdle (stock default on; off here for speed unless
+    // ?syncidle=1). See core-host.js requestedSyncOnSkipIdle.
+    dolphinSyncOnSkipIdle: Boolean(syncOnSkipIdle),
     dolphinCoreLog: Boolean(coreLog),
     // Ranks the instructions that block JIT compilation (?jitverbose=1).
     dolphinWebVerbosePpcJit: Boolean(jitVerbose),
@@ -2178,6 +2186,15 @@ function bindApi(module) {
     typeof module[`_${name}`] === "function" ? cwrap(name, returnType, argTypes) : null;
 
   return {
+    // Real Wii Remotes over WebHID (core/upstream/dolphin_web_wiimote.h).
+    webHidAttach: optionalCwrap("WebHidAttach", null, ["number", "number"]),
+    webHidPush:
+      typeof module._WebHidPushReport === "function"
+        ? (slot, bytes) =>
+            ccall("WebHidPushReport", null, ["number", "array", "number"], [slot, bytes, bytes.length])
+        : null,
+    webHidPopWrite: optionalCwrap("WebHidPopWrite", "number", ["number"]),
+    webHidWriteBuffer: optionalCwrap("WebHidWriteBuffer", "number", []),
     mountDisc: (path) => ccall("MountDisc", "number", ["string"], [path]),
     coreInit: optionalCwrap("CoreInit", "number", []),
     setVideoBackend:
@@ -2735,6 +2752,8 @@ function metadataPayload() {
     title: api?.getGameTitle() ?? "",
     makerId: api?.getMakerId() ?? "",
     platform: api?.getPlatform() ?? "",
+    // The core carries Wii Remote input (dolphin_web_wiimote.h).
+    wiiRemote: Boolean(api?.webHidAttach),
     region: api?.getRegion() ?? "",
     discNumber: api?.getDiscNumber() ?? -1,
     apploaderDate: api?.getApploaderDate() ?? "",
@@ -5388,6 +5407,47 @@ function readLastLoadedCheckpoint() {
     }
   }
   return { generation: 0, ticks: null, ppcPc: null };
+}
+
+// --- Real Wii Remotes over WebHID ------------------------------------------
+// The page owns the HID devices; reports come in as "wiimoteHid" messages
+// and the core's queued writes go back out as "wiimoteHidWrite".
+const wiimoteHidAttached = new Set();
+let wiimoteHidPump = null;
+
+function handleWiimoteHid({ op, slot, bytes } = {}) {
+  slot |= 0;
+  if (op === "report") {
+    if (wiimoteHidAttached.has(slot) && bytes) api?.webHidPush?.(slot, new Uint8Array(bytes));
+    return;
+  }
+  if (!api?.webHidAttach) {
+    postStatus("This Dolphin core has no WebHID Wii Remote support.");
+    return;
+  }
+  const attached = op === "attach";
+  if (attached) wiimoteHidAttached.add(slot);
+  else wiimoteHidAttached.delete(slot);
+  api.webHidAttach(slot, attached ? 1 : 0);
+  if (wiimoteHidAttached.size && !wiimoteHidPump) {
+    wiimoteHidPump = setInterval(pumpWiimoteHidWrites, 4);
+  } else if (!wiimoteHidAttached.size && wiimoteHidPump) {
+    clearInterval(wiimoteHidPump);
+    wiimoteHidPump = null;
+  }
+}
+
+function pumpWiimoteHidWrites() {
+  if (!api?.webHidPopWrite || !moduleInstance?.HEAPU8) return;
+  const pointer = api.webHidWriteBuffer();
+  for (const slot of wiimoteHidAttached) {
+    for (let i = 0; i < 32; i += 1) {
+      const length = api.webHidPopWrite(slot);
+      if (length <= 0) break;
+      const bytes = moduleInstance.HEAPU8.slice(pointer, pointer + length);
+      self.postMessage({ type: "wiimoteHidWrite", slot, bytes }, [bytes.buffer]);
+    }
+  }
 }
 
 function postStatus(message) {
