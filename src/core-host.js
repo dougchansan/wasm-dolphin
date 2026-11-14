@@ -101,6 +101,7 @@ export class EmulatorHost {
     this.softwareTevHotCaseMode = requestedSoftwareTevHotCaseMode(window.location.search);
     this.xfbFastPaths = requestedXfbFastPaths(window.location.search);
     this.correctTimeDrift = requestedCorrectTimeDrift();
+    this.syncOnSkipIdle = requestedSyncOnSkipIdle();
     this.coreLog = requestedCoreLog();
     this.efbDiag = requestedEfbDiag();
     this.jitVerbose = new URLSearchParams(window.location.search).get("jitverbose") === "1";
@@ -385,6 +386,7 @@ export class EmulatorHost {
             softwareTevHotCaseMode: this.softwareTevHotCaseMode,
             xfbFastPaths: this.xfbFastPaths,
             correctTimeDrift: this.correctTimeDrift,
+            syncOnSkipIdle: this.syncOnSkipIdle,
             coreLog: this.coreLog,
             efbDiag: this.efbDiag,
             jitVerbose: this.jitVerbose,
@@ -633,6 +635,22 @@ export class EmulatorHost {
   setPressedButtons(pressedButtons) {
     this.buttonMask = buttonMaskFromPressed(pressedButtons);
     this.adapter.setInputMask(this.buttonMask);
+  }
+
+  // True once a core with Wii Remote input has loaded.
+  get wiiRemoteSupported() {
+    return Boolean(this.adapter?.wiiRemoteSupported);
+  }
+
+  wiimoteHid(op, slot, bytes) {
+    // The adapter can be rebuilt on restart; keep the write handler on it.
+    if (this.adapter && this._onWiimoteHidWrite) this.adapter.onWiimoteHidWrite = this._onWiimoteHidWrite;
+    return this.adapter?.wiimoteHid?.(op, slot, bytes) ?? false;
+  }
+
+  set onWiimoteHidWrite(handler) {
+    this._onWiimoteHidWrite = handler;
+    if (this.adapter) this.adapter.onWiimoteHidWrite = handler;
   }
 
   setInputState(inputState) {
@@ -1372,6 +1390,14 @@ function requestedEfbDiag() {
   // "1" blits the EFB to the canvas; "2" blits the XFB entry last presented.
   const raw = new URLSearchParams(window.location.search).get("efbdiag");
   return raw === "2" ? 2 : (raw === "1" ? 1 : false);
+}
+
+// ?syncidle=1 turns on Dolphin's SyncOnSkipIdle (stock Dolphin's default; this
+// project turns it off for speed). Off by default: it cost ~80% of game speed
+// in Wii Sports. It was tried against the Wii Sports + Resort hand-off crash,
+// which turned out to be the WASM JIT instead (docs/wii-remote.md).
+function requestedSyncOnSkipIdle() {
+  return new URLSearchParams(window.location.search).get("syncidle") === "1";
 }
 
 function requestedCorrectTimeDrift() {

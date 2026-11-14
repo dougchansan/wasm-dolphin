@@ -1198,3 +1198,32 @@ body.panel-hidden .workspace {
 .crt-set:fullscreen .crt-footer {
   display: none;
 }
+
+/* Wii Remote controls (docs/wii-remote.md) */
+.wii-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.wii-controls[hidden] { display: none; }
+.wii-controls select,
+.wii-controls button {
+  margin-left: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--button);
+  color: var(--text);
+  font: inherit;
+}
+.wii-controls button:hover { background: var(--button-hover); }
+.wii-controls button:disabled { opacity: 0.5; }
+.wii-real { color: var(--muted); font-size: 0.85em; }
+.wii-help { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 0.84em; }

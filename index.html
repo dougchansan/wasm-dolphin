@@ -28,6 +28,17 @@
         </div>
       </header>
 
+      <!-- Wii Remote controls: shown while a Wii disc is mounted on a core
+           with Wii Remote input. See docs/wii-remote.md. -->
+      <section class="wii-controls" id="wiiControls" aria-label="Wii Remote" hidden>
+        <label>Controller
+          <select id="wiiLayout"></select>
+        </label>
+        <button type="button" id="wiiConnect">Use real Wii Remotes</button>
+        <span class="wii-real" id="wiiReal"></span>
+        <p class="wii-help" id="wiiHelp"></p>
+      </section>
+
       <main class="workspace">
         <section class="play-area" aria-label="Emulator">
           <div class="crt-set" id="dropZone">
