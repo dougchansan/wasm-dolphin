@@ -62,6 +62,9 @@ for (const requiredPath of [
   "src/wgpu-upload-run-projection.js",
   "src/wgpu-ownership-trace.js",
   "src/wgpu-visual-cadence.js",
+  "core/upstream/dolphin_web_wiimote.h",
+  "src/wii-input.js",
+  "src/wiimote-hid.js",
 ]) {
   if (!contractSourceDeclarations.some((source) => source.path === requiredPath)) {
     contractSourceDeclarations.push({

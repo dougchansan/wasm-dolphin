@@ -74,6 +74,9 @@ constexpr std::uint32_t INPUT_C_STICK_UP = 1u << 16;
 constexpr std::uint32_t INPUT_C_STICK_DOWN = 1u << 17;
 constexpr std::uint32_t INPUT_C_STICK_LEFT = 1u << 18;
 constexpr std::uint32_t INPUT_C_STICK_RIGHT = 1u << 19;
+// Set by the browser while a Wii Remote is in use: the snapshot then drives
+// Wii Remote 1 (see dolphin_web_wiimote.h) and the GameCube pad is unplugged.
+constexpr std::uint32_t WEB_WII_MODE = 1u << 31;
 
 struct RootEntry
 {
@@ -1097,6 +1100,11 @@ int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status)
   }
 
   *status = {};
+  if (input.mask & WEB_WII_MODE)
+  {
+    status->isConnected = false;
+    return 1;
+  }
   status->isConnected = true;
   status->stickX = input.stick_x;
   status->stickY = input.stick_y;

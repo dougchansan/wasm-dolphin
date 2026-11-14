@@ -61,6 +61,7 @@ extern "C" void NotifyWebGpuOwnershipTraceLoadRequested();
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <pthread.h>
+#include "dolphin_web_wiimote.h"
 
 // §27d: defined in VideoCommon/Fifo.cpp — the after-load callback (CPU
 // pthread) stores a sentinel; the GPU-thread gate reads it back.
@@ -613,7 +614,12 @@ void EnsureRuntime()
   Config::SetBase(Config::MAIN_PRECISION_FRAME_TIMING, false);
   Config::SetBase(Config::MAIN_RUSH_FRAME_PRESENTATION, true);
   Config::SetBase(Config::MAIN_SMOOTH_EARLY_PRESENTATION, true);
-  Config::SetBase(Config::MAIN_SYNC_ON_SKIP_IDLE, false);
+  // Off by default for speed, as before; ?syncidle=1 sets
+  // Module['dolphinSyncOnSkipIdle'] to restore stock Dolphin's default.
+  const bool sync_on_skip_idle =
+      EM_ASM_INT({ return (typeof Module !== 'undefined' &&
+                           Module['dolphinSyncOnSkipIdle']) ? 1 : 0; }) != 0;
+  Config::SetBase(Config::MAIN_SYNC_ON_SKIP_IDLE, sync_on_skip_idle);
   Config::SetBase(Config::MAIN_ACCURATE_FMADDS, false);
   Config::SetBase(Config::MAIN_ENABLE_CHEATS, false);
   Config::SetBase(Config::MAIN_OSD_MESSAGES, false);
@@ -646,6 +652,8 @@ void EnsureRuntime()
   Pad::Initialize();
   Pad::InitializeGBA();
   Keyboard::Initialize();
+  // Wii Remote 1, driven by the browser device; see dolphin_web_wiimote.h.
+  DolphinWebWii::Initialize();
 
   // §27 savestate-load backend resync. Probe evidence: after
   // State::Load the WebGPU command-ring producer (the dual-core GPU

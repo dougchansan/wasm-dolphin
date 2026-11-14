@@ -3,8 +3,8 @@
   "normalization": "git-blob-lf",
   "root": {
     "baseCommit": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
-    "resultTree": "dd6f5548aa13de585ec9988130f98aa9d0ce1982",
-    "changedPathCount": 113,
+    "resultTree": "b03f664340d100ab373f4c5f58240be539006f19",
+    "changedPathCount": 114,
     "records": [
       {
         "path": "CMakeLists.txt",
@@ -164,9 +164,9 @@
         "status": "M",
         "mode": "100644",
         "baseBlob": "e411239d1774c945782e599ee48c375db65ee5c6",
-        "resultBlob": "1bde8d4e7b5823fd48b77d87edc49b0c670702df",
-        "size": 31117,
-        "sha256": "84cfdcc87f60d37919ca6de427cd679c1c3d1de369a5fc5ee3039f5629743a07"
+        "resultBlob": "d7d3ea8d843d357214feeb1ef58120d2bd568bf2",
+        "size": 31192,
+        "sha256": "4c220fd5e7ccc88903587c4112d6e4a2e42c841a6d2a187b87653b25c01b790e"
       },
       {
         "path": "Source/Core/Core/Core.cpp",
@@ -275,6 +275,15 @@
         "resultBlob": "2fa67037f14895d8976ee454e0d19deed4baea29",
         "size": 43120,
         "sha256": "9827badf3f1a2aea477b747d0ea70c19e0756822a40f8333143dad9794b8f061"
+      },
+      {
+        "path": "Source/Core/Core/HW/WiimoteReal/WiimoteReal.cpp",
+        "status": "M",
+        "mode": "100644",
+        "baseBlob": "79129b3a92ba9e26b7a4256247de613010205a5a",
+        "resultBlob": "5cc5dd236023726a23ddf049d105aeb6e1482dd6",
+        "size": 29777,
+        "sha256": "7e0cc15486630f9f482b0a82253787065e7816d0fca41f69a55fe78fae97f3dd"
       },
       {
         "path": "Source/Core/Core/IOS/Network/Socket.h",
@@ -1059,5 +1068,5 @@
       ]
     }
   ],
-  "contentSha256": "40fd280c77363ec774d077f92880cfc334dfc38c36129455cafb15258ee53878"
+  "contentSha256": "31f38c3015190971442acaf1d4c8fd43a79b5add28118bb1f0a723c3367c1a29"
 }
