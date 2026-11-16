@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import {
   fileRecord,
   inspectMemoryContract,
+  inspectCoreRuntimeContract,
+  inspectRuntimeMethods,
   inspectWorkerProtocol,
   loadSourceLock,
   publicModuleExports,
@@ -21,6 +23,8 @@ const artifacts = previous.artifacts.map((artifact) => ({
 }));
 const wasm = artifacts.find((artifact) => artifact.path.endsWith(".wasm"));
 if (!wasm) throw new Error("Core ABI manifest has no WASM artifact");
+const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
+const runtimeContract = inspectCoreRuntimeContract(glue);
 const protocolPath = resolve(root, "src/upstream-worker-protocol.js");
 const coreHashPattern = /(DEFAULT_UPSTREAM_CORE_SHA256\s*=\s*")[0-9a-f]{64}(";)/;
 const protocolSource = readFileSync(protocolPath, "utf8");
@@ -74,10 +78,9 @@ const contractSources = contractSourceDeclarations.map((source) => ({
   ...fileRecord(source.path, root, source.hashMode ?? "raw"),
   ...(source.hashMode ? { hashMode: source.hashMode } : {}),
 }));
-const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
 const moduleExports = publicModuleExports(glue);
 const memoryContract = inspectMemoryContract(root);
-const runtimeMethods = inspectRuntimeMethods(lock, glue);
+const runtimeMethods = inspectRuntimeMethods(root, glue);
 const manifest = {
   ...previous,
   coreId: `sha256:${wasm.sha256}`,
@@ -94,6 +97,7 @@ const manifest = {
   ].filter((name) => !moduleExports.includes(name)),
   moduleExports,
   runtimeMethods,
+  runtimeContract,
   workerProtocol: inspectWorkerProtocol(root),
 };
 
@@ -111,25 +115,6 @@ console.log(JSON.stringify({
   runtimeMethods,
   memoryContractStatus: manifest.memoryContractStatus,
 }, null, 2));
-
-function inspectRuntimeMethods(sourceLock, glueSource) {
-  const activePatchText = sourceLock.patches
-    .filter((entry) => entry.cwd === ".")
-    .map((entry) => readFileSync(resolve(root, entry.path), "utf8"))
-    .join("\n");
-  const methods = new Set();
-  for (const list of activePatchText.matchAll(/-sEXPORTED_RUNTIME_METHODS=\[([^\]]+)\]/g)) {
-    for (const method of list[1].matchAll(/'([^']+)'/g)) methods.add(method[1]);
-  }
-  if (methods.size === 0) throw new Error("Active patch series declares no runtime methods");
-  const result = [...methods].sort();
-  for (const method of result) {
-    if (!glueSource.includes(`Module["${method}"]=${method}`)) {
-      throw new Error(`Generated core does not expose runtime method ${method}`);
-    }
-  }
-  return result;
-}
 
 function memoryContractStatus(contract) {
   const pages = [

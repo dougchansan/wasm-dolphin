@@ -19,6 +19,12 @@ export const REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS = Object.freeze([
   "_GetWebGpuOwnershipTracePtr",
   "_GetWebGpuOwnershipTraceCapacity",
 ]);
+// These requirements belong to the browser host, not the patch export list.
+// Regenerating an ABI manifest must never bless a core that cannot mount a disc.
+export const REQUIRED_CORE_RUNTIME_METHODS = Object.freeze([
+  "FS", "HEAPU8", "PThread", "UTF8ToString", "ccall", "cwrap",
+]);
+export const REQUIRED_CORE_FILESYSTEMS = Object.freeze(["WORKERFS"]);
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -957,7 +963,50 @@ export function inspectMemoryContract(root = process.cwd()) {
   };
 }
 
-function inspectRuntimeMethods(root, glueSource) {
+export function inspectCoreRuntimeContract(glueSource) {
+  const exported = new Set();
+  // Match an actual assignment to the named runtime binding, allowing the
+  // whitespace and property spellings used by Emscripten's generated glue.
+  for (const match of glueSource.matchAll(
+    /\bModule(?:\[\s*["']([A-Za-z0-9_]+)["']\s*\]|\.([A-Za-z0-9_]+))\s*=\s*([A-Za-z0-9_]+)\b/g
+  )) {
+    if ((match[1] ?? match[2]) === match[3]) exported.add(match[3]);
+  }
+  for (const method of REQUIRED_CORE_RUNTIME_METHODS) {
+    invariant(exported.has(method), `Generated core does not expose required runtime method ${method}`);
+  }
+
+  const registered = new Set();
+  for (const match of glueSource.matchAll(/\bFS\.filesystems\s*=\s*\{([^{}]*)\}/g)) {
+    for (const entry of match[1].split(",")) {
+      const property = entry.trim().match(/^(?:([A-Za-z0-9_]+)|["']([A-Za-z0-9_]+)["'])(?:\s*:\s*([A-Za-z0-9_]+))?$/);
+      if (property && (!property[3] || property[3] === (property[1] ?? property[2]))) {
+        registered.add(property[1] ?? property[2]);
+      }
+    }
+  }
+  for (const match of glueSource.matchAll(
+    /\bFS\.filesystems(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])\s*=\s*([A-Za-z0-9_]+)\b/g
+  )) {
+    if ((match[1] ?? match[2]) === match[3]) registered.add(match[3]);
+  }
+  const filesystems = REQUIRED_CORE_FILESYSTEMS.map((name) => {
+    const via = [
+      ...(registered.has(name) ? ["FS.filesystems"] : []),
+      ...(exported.has(name) ? ["Module"] : []),
+    ];
+    invariant(via.length > 0, `Generated core does not expose required filesystem ${name}`);
+    return { name, via };
+  });
+  return {
+    requiredRuntimeMethods: [...REQUIRED_CORE_RUNTIME_METHODS],
+    filesystemRegistry: [...registered].sort(),
+    filesystems,
+  };
+}
+
+export function inspectRuntimeMethods(root, glueSource) {
+  inspectCoreRuntimeContract(glueSource);
   const lock = loadSourceLock(root);
   const activePatchText = lock.patches
     .filter((entry) => entry.cwd === ".")
@@ -1049,6 +1098,13 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
   }
 
   const glue = readFileSync(resolve(root, "cores/dolphin/dolphin-core-upstream.js"), "utf8");
+  const runtimeContract = inspectCoreRuntimeContract(glue);
+  // Legacy ABI manifests did not record the registry. They still have to meet
+  // the frozen host requirements; newly generated manifests record it too.
+  if (manifest.runtimeContract !== undefined) {
+    invariant(JSON.stringify(manifest.runtimeContract) === JSON.stringify(runtimeContract),
+      "Generated core runtime/filesystem contract does not match ABI v1");
+  }
   const actualExports = publicModuleExports(glue);
   invariant(
     JSON.stringify(actualExports) === JSON.stringify(manifest.moduleExports),
@@ -1107,6 +1163,7 @@ export function verifyCoreAbiManifest(root = process.cwd(), manifestPath = CORE_
     coreId: manifest.coreId,
     exports: actualExports.length,
     runtimeMethods: actualRuntimeMethods,
+    runtimeContract,
     workerProtocol: actualWorkerProtocol,
     memoryContract: actualMemory
   };

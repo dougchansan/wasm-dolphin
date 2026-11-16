@@ -390,6 +390,7 @@ test("ABI verification rejects mutations to every declared contract", () => {
   const mutations = [
     [(manifest) => { manifest.upstreamCommit = "0".repeat(40); }, /upstream commit/],
     [(manifest) => { manifest.runtimeMethods.pop(); }, /runtime methods/],
+    [(manifest) => { manifest.runtimeContract.filesystemRegistry.push("WORKERFS"); }, /runtime\/filesystem contract/],
     [(manifest) => { manifest.workerProtocol.requestTypes.pop(); }, /Worker protocol fields/],
     [(manifest) => { manifest.memoryContractStatus = "mismatch"; }, /memory-contract status/],
     [

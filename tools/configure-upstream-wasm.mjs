@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { sha256File, verifyWasmToolchain } from "./wasm-toolchain.mjs";
+import { selectCargoStaticLibrary } from "./cargo-staticlib.mjs";
 
 const root = process.cwd();
 const sourceDir = resolve(root, "vendor/dolphin");
@@ -11,8 +12,6 @@ const sharedSourceDir = dirname(bridgeSource);
 const coreSource = resolve(root, "core/upstream/dolphin_web_core.cpp");
 const outputDir = resolve(process.env.DOLPHIN_WASM_OUTPUT_DIR ?? resolve(root, "cores/dolphin"));
 const nagaDir = resolve(root, "tools/naga-spirv-wgsl");
-const nagaLibrary = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/naga_spirv_wgsl.a");
-const nagaLibraryAlternate = resolve(nagaDir, "target/wasm32-unknown-emscripten/release/libnaga_spirv_wgsl.a");
 const jitCachePreJs = resolve(root, "tools/jit-cache-prejs.js");
 const wasmMemoryPages = 24576;
 const fastBranchInline = String(
@@ -62,8 +61,11 @@ function run(command, args, options = {}) {
   });
 
   if (result.error || result.status !== 0) {
+    if (result.stdout) console.error(result.stdout);
+    if (result.error) console.error(result.error.message);
     process.exit(result.status || 1);
   }
+  return result;
 }
 
 if (!existsSync(resolve(sourceDir, "CMakeLists.txt"))) {
@@ -84,15 +86,17 @@ const nagaEnvironment = {
 };
 
 console.log("Building the pinned Naga SPIR-V to WGSL bridge");
-run(cargo, ["build", "--locked", "--release", "--target", toolchain.lock.rust.target], {
+const nagaBuild = run(cargo, ["build", "--locked", "--release", "--target", toolchain.lock.rust.target,
+  "--message-format=json-render-diagnostics"], {
   cwd: nagaDir,
-  env: nagaEnvironment
+  env: nagaEnvironment,
+  stdio: ["ignore", "pipe", "inherit"],
+  maxBuffer: 16 * 1024 * 1024,
 });
-const resolvedNagaLibrary = existsSync(nagaLibrary) ? nagaLibrary : nagaLibraryAlternate;
-if (!existsSync(resolvedNagaLibrary)) {
-  console.error(`Pinned Naga build did not produce ${nagaLibrary} or ${nagaLibraryAlternate}`);
-  process.exit(1);
-}
+const nagaArtifact = selectCargoStaticLibrary(nagaBuild.stdout, {
+  manifestPath: resolve(nagaDir, "Cargo.toml"), targetName: "naga_spirv_wgsl",
+});
+const resolvedNagaLibrary = nagaArtifact.path;
 
 // CMake runs hundreds of feature probes. Keep the original global production
 // flags so subprojects that replace their Release flags still retain LTO, but
@@ -200,6 +204,8 @@ writeFileSync(resolve(buildDir, "wasm-dolphin-configure.json"), `${JSON.stringif
   coreSource,
   nagaLibrary: resolvedNagaLibrary,
   nagaLibrarySha256: sha256File(resolvedNagaLibrary),
+  nagaArtifact,
+  toolchainObserved: toolchain.observed,
   jitCachePreJs,
   wasmMemoryPages,
   fastBranchInline,
