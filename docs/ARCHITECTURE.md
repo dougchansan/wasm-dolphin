@@ -87,8 +87,9 @@ presenter failed to show it".
 
 ## Provenance and the build
 
-The core binary is reproducible from committed inputs, and the tooling fails
-closed rather than warning:
+The repository records the core's committed source and artifact identities.
+The tooling rejects mismatches in those recorded contracts; this is not a
+hermetic description of every input to the compiler:
 
 - `provenance/dolphin-source.lock.json` — pinned upstream commit
   (`e22551e`), 53 ordered patches, external repositories.
@@ -129,13 +130,34 @@ Traps worth knowing before losing an hour to them:
 
 ### The toolchain lock does not capture everything
 
-The core committed before this checkpoint recorded the same emscripten 5.0.7,
-compiler commit and emsdk commit as a fresh build here, yet contained
-`FS.filesystems={MEMFS,NODEFS,WORKERFS}` where a fresh build produces `{MEMFS}`.
-It was built against a different Emscripten than the one it records. The naga
-staticlib hash differs the same way, under a byte-identical toolchain record and
-a build that is otherwise bit-reproducible on this machine. Treat the toolchain
-lock as necessary but not sufficient.
+Historical build records copied toolchain declarations from the lock. Their
+identical `toolchain` blocks therefore establish only that the declaration was
+unchanged, not that the installed SDK was identical. The observed filesystem
+registry and Naga archive differed between builds, and the historical record
+cannot establish why. Those records are preserved without invented observations.
+
+New configure/build runs record selected executable paths, file hashes, version
+output, the observed emsdk HEAD, and the Python selected by the Emscripten
+launcher. The build record receives the verification result from the build
+driver, rather than reloading the lock as if it were an observation. Configure
+and build observations are recorded separately. Naga's linked archive is the
+one identified by Cargo's `compiler-artifact` message, including a valid
+up-to-date result; an older archive with another filename cannot win by existing.
+
+The host's minimum runtime methods and reachable WORKERFS are frozen in the
+verifier independently of patch declarations. Both registry-based WORKERFS and
+the current Module export are accepted. ABI updates and candidate packaging
+check these requirements before accepting a new artifact. The ABI manifest
+records the observed filesystem registry, without requiring the old registry
+layout when the Module fallback works.
+
+Build comparison reports configuration differences, including the Naga archive,
+compile flags, CMake arguments/cache, and configure-time observations. It reports
+byte equality separately as `artifactParity`. A legacy record without observed
+tools cannot report `reproducible: true`. This remains a comparison of recorded
+inputs and outputs, not proof that the build is hermetic: SDK JS/linker sources,
+mutable sysroot caches, Rust source/configuration, and environment influences
+are not exhaustively captured. See [build provenance](repro-build.md#build-provenance-and-its-limits).
 
 ## Test harnesses
 

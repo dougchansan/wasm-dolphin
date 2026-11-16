@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadWasmToolchainLock, sha256File, sha256NormalizedTextFile } from "./wasm-toolchain.mjs";
+import { sha256File, sha256NormalizedTextFile } from "./wasm-toolchain.mjs";
 import {
   fileRecord,
+  inspectCoreRuntimeContract,
   publicModuleExports,
   REQUIRED_WGPU_OWNERSHIP_TRACE_EXPORTS,
 } from "./dolphin-provenance.mjs";
@@ -119,11 +120,54 @@ export function unexpectedDirtyPaths(status) {
   return dirtyPathsFromStatus(status).filter((path) => !CANONICAL_BUILD_OUTPUTS.has(path));
 }
 
-export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_BUILD_INFO_PATH } = {}) {
+export function buildToolchainRecord(verification) {
+  if (verification?.observed?.schemaVersion !== 1 || !verification.observed.tools?.emcc ||
+      !verification.lock || !verification.hashes?.lock || !verification.hashes?.cargoLock) {
+    throw new Error("Core build evidence requires the observed result of verifyWasmToolchain()");
+  }
+  const toolchain = verification.lock;
+  return {
+    lockSha256: verification.hashes.lock,
+    emscriptenVersion: toolchain.emscripten.version,
+    emscriptenCompilerCommit: toolchain.emscripten.compilerCommit,
+    emsdkCommit: toolchain.emscripten.emsdkCommit,
+    cmakeVersion: toolchain.cmake.version,
+    ninjaVersion: toolchain.ninja.version,
+    rustcVersion: toolchain.rust.rustcVersion,
+    rustcCommit: toolchain.rust.rustcCommit,
+    cargoVersion: toolchain.rust.cargoVersion,
+    nagaDependencyVersion: toolchain.naga.dependencyVersion,
+    cargoLockSha256: verification.hashes.cargoLock,
+    observed: verification.observed,
+  };
+}
+
+export function verifyConfiguredNagaLibrary(configure) {
+  const recovery = "Rerun npm run configure:upstream, then rebuild the core.";
+  if (typeof configure?.nagaLibrary !== "string" || !isAbsolute(configure.nagaLibrary) ||
+      !/^[0-9a-f]{64}$/.test(configure.nagaLibrarySha256 ?? "")) {
+    throw new Error(`Configure record lacks the selected Naga archive path/hash. ${recovery}`);
+  }
+  let actualSha256;
+  try {
+    actualSha256 = sha256File(configure.nagaLibrary);
+  } catch (error) {
+    throw new Error(`Cannot read configured Naga archive ${configure.nagaLibrary}. ${recovery}`, { cause: error });
+  }
+  if (actualSha256 !== configure.nagaLibrarySha256) {
+    throw new Error(`Configured Naga archive changed after configuration: expected ` +
+      `${configure.nagaLibrarySha256}, got ${actualSha256}. ${recovery}`);
+  }
+  return { path: configure.nagaLibrary, sha256: actualSha256 };
+}
+
+export function writeCoreBuildInfo({ buildDir, toolchain, outputPath = process.env.DOLPHIN_BUILD_INFO_PATH } = {}) {
+  const toolchainRecord = buildToolchainRecord(toolchain);
   const absoluteBuildDir = resolve(buildDir ?? process.env.DOLPHIN_WASM_BUILD_DIR ?? resolve(root, "build/dolphin-wasm"));
   const configurePath = resolve(absoluteBuildDir, "wasm-dolphin-configure.json");
   if (!existsSync(configurePath)) throw new Error(`Missing configure record ${configurePath}`);
   const configure = JSON.parse(readFileSync(configurePath, "utf8"));
+  const nagaLibrary = verifyConfiguredNagaLibrary(configure);
   const jsPath = resolve(configure.outputDir, "dolphin-core-upstream.js");
   const wasmPath = resolve(configure.outputDir, "dolphin-core-upstream.wasm");
   if (!existsSync(jsPath) || !existsSync(wasmPath)) throw new Error("Core build did not produce both JS and WASM artifacts");
@@ -134,7 +178,11 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
   const cargoLockPath = resolve(root, "tools/naga-spirv-wgsl/Cargo.lock");
   const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
   const vendorSnapshot = JSON.parse(readFileSync(vendorSnapshotPath, "utf8"));
-  const toolchain = loadWasmToolchainLock();
+  if (sha256File(toolchainLockPath) !== toolchainRecord.lockSha256 ||
+      sha256NormalizedTextFile(cargoLockPath) !== toolchainRecord.cargoLockSha256) {
+    throw new Error("Toolchain or Cargo lock changed after verification");
+  }
+  const runtimeContract = inspectCoreRuntimeContract(readFileSync(jsPath, "utf8"));
   const wasm = fileInfo(wasmPath);
   const localInputs = [
     "core/upstream/dolphin_web_core.cpp",
@@ -185,23 +233,13 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
       localInputsSha256,
       localInputs
     },
-    toolchain: {
-      lockSha256: sha256File(toolchainLockPath),
-      emscriptenVersion: toolchain.emscripten.version,
-      emscriptenCompilerCommit: toolchain.emscripten.compilerCommit,
-      emsdkCommit: toolchain.emscripten.emsdkCommit,
-      cmakeVersion: toolchain.cmake.version,
-      ninjaVersion: toolchain.ninja.version,
-      rustcVersion: toolchain.rust.rustcVersion,
-      rustcCommit: toolchain.rust.rustcCommit,
-      cargoVersion: toolchain.rust.cargoVersion,
-      nagaDependencyVersion: toolchain.naga.dependencyVersion,
-      cargoLockSha256: sha256NormalizedTextFile(cargoLockPath)
-    },
+    toolchain: toolchainRecord,
     configure: {
       buildDir: configure.buildDir,
       outputDir: configure.outputDir,
-      nagaLibrarySha256: configure.nagaLibrarySha256,
+      nagaLibrarySha256: nagaLibrary.sha256,
+      nagaArtifact: configure.nagaArtifact ?? null,
+      toolchainObserved: configure.toolchainObserved ?? null,
       wasmMemoryPages: configure.wasmMemoryPages,
       fastBranchInline: configure.fastBranchInline,
       fallbackMapDiagnostics: configure.fallbackMapDiagnostics,
@@ -211,6 +249,7 @@ export function writeCoreBuildInfo({ buildDir, outputPath = process.env.DOLPHIN_
       cmakeArgs: configure.cmakeArgs,
       cmakeCacheSha256: sha256File(resolve(absoluteBuildDir, "CMakeCache.txt"))
     },
+    runtimeContract,
     artifacts: {
       js: fileInfo(jsPath, "lf-normalized"),
       wasm,
@@ -236,6 +275,11 @@ export function packageCoreCandidate(buildInfoPath) {
   if (normalizedTextHash(js.path) !== js.sha256 || sha256File(wasm.path) !== wasm.sha256 || wasm.sha256 !== hash) {
     throw new Error("Core artifacts changed after build evidence was written");
   }
+  const candidateAbi = buildCandidateAbiManifest({
+    template: JSON.parse(readFileSync(resolve(root, "provenance/dolphin-core-abi-v1.json"), "utf8")),
+    jsPath: js.path,
+    wasmPath: wasm.path,
+  });
 
   const destination = resolve(root, `build/core-candidates/${hash}`);
   mkdirSync(destination, { recursive: true });
@@ -252,11 +296,6 @@ export function packageCoreCandidate(buildInfoPath) {
     const target = resolve(destination, basename(relativePath));
     copyFileSync(source, target);
   }
-  const candidateAbi = buildCandidateAbiManifest({
-    template: JSON.parse(readFileSync(resolve(root, "provenance/dolphin-core-abi-v1.json"), "utf8")),
-    jsPath: js.path,
-    wasmPath: wasm.path,
-  });
   writeFileSync(
     resolve(destination, "dolphin-core-abi-v1.json"),
     `${JSON.stringify(candidateAbi, null, 2)}\n`
@@ -287,7 +326,9 @@ export function buildCandidateAbiManifest({ template, jsPath, wasmPath }) {
   const js = fileInfo(resolve(jsPath), "lf-normalized");
   js.size = Buffer.byteLength(readFileSync(resolve(jsPath), "utf8").replace(/\r\n/g, "\n"));
   const wasm = fileInfo(resolve(wasmPath));
-  const moduleExports = publicModuleExports(readFileSync(resolve(jsPath), "utf8"));
+  const glue = readFileSync(resolve(jsPath), "utf8");
+  const runtimeContract = inspectCoreRuntimeContract(glue);
+  const moduleExports = publicModuleExports(glue);
   const logicalArtifact = (artifact, suffix, info) => ({
     ...artifact,
     path: artifact?.path || `cores/dolphin/${suffix}`,
@@ -317,5 +358,6 @@ export function buildCandidateAbiManifest({ template, jsPath, wasmPath }) {
       ]),
     ].filter((name) => !moduleExports.includes(name)),
     moduleExports,
+    runtimeContract,
   };
 }

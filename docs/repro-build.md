@@ -6,9 +6,10 @@ Emscripten/Ninja build, and writes the browser core into `cores/dolphin/`.
 
 ## Toolchain record
 
-The committed `provenance/wasm-toolchain.lock.json` pins the exact local
-toolchain used for the research core. `npm run verify:toolchain` rejects a
-version or executable hash mismatch before configuration.
+The committed `provenance/wasm-toolchain.lock.json` declares the selected
+versions and executable hashes for the research toolchain. `npm run
+verify:toolchain` rejects a mismatch before configuration. It does not identify
+every mutable SDK file or environmental input; see the provenance limits below.
 
 | Component | Version/revision |
 | --- | --- |
@@ -118,6 +119,62 @@ and 2,451,983-byte data section (SHA-256
 `aa01b9bc6d7892a16d3d8d692248e7646b6401232eba4d853fa4b1503ae91484`).
 The current parity and gameplay evidence are summarized in the
 [software-raster phase package](perf-results/melee-software-raster-phases-2026-07-10.md).
+
+## Build provenance and its limits
+
+The artifact tables and two-build example above describe the historical
+validation checkpoint. Current artifact identity comes from the committed ABI
+manifest and current measurements, not from reusing that checkpoint's numbers.
+
+Future builds retain the declared toolchain fields and add `toolchain.observed`.
+This contains the selected tool paths and hashes, observed version output,
+emsdk HEAD, and the Python selected by the Emscripten launcher. Configure-time
+observations are also retained under `configure.toolchainObserved`, since Cargo
+and CMake configuration may precede the core build. The build driver passes its
+verification result directly to the record writer; a lock-only object cannot
+be used to stamp a new build record.
+
+Cargo is run with JSON artifact messages. The Naga archive passed to CMake is
+the single static library reported for this crate and invocation, even when
+Cargo reports it as already up to date. A stale archive with an older filename
+is never selected as a fallback. Missing or ambiguous artifact messages stop
+configuration.
+
+Before recording build evidence, the writer rereads that selected archive and
+rejects a missing path, missing file, or changed hash with instructions to
+reconfigure and rebuild; it cannot stamp a stale configure-time archive hash.
+
+`verify:provenance`, `update:core-abi`, and candidate packaging enforce the host's
+fixed runtime requirements independently of the patch export list. WORKERFS
+must be reachable through `FS.filesystems.WORKERFS` or `Module.WORKERFS`, and
+the required runtime methods must be exported. Regenerating the manifest cannot
+remove these requirements. New ABI manifests record the observed filesystem
+registry and reachability; legacy manifests without that field still receive
+the same mandatory checks.
+
+`compare:core-builds` reports separate declared and observed toolchain equality,
+per-field configuration comparisons, and `artifactParity` for exact JS/WASM
+output equality. `reproducible` additionally requires recorded observations at
+configure and build time and matching recorded inputs, including the Naga hash,
+compile flags, CMake arguments, and CMake cache hash. Configuration/output paths
+and Cargo's fresh-build bookkeeping are reported as informational; embedded
+paths in CMake arguments/cache may still make this strict comparison fail even
+when output bytes match. Inspect the field differences and `artifactParity` in
+that case. A `false` result does not by itself mean the artifacts differ.
+
+The existing core build record predates observed toolchain capture and is kept
+unchanged. Comparing that legacy record can establish artifact equality, but
+it cannot establish observed-toolchain parity or return `reproducible: true`.
+Reconfigure before producing a new qualification record so both stages have
+observations. No historical observation is inferred from today's installation.
+
+These checks do not make the build hermetic. Emscripten's JS libraries/linker
+drivers, mutable sysroot archives, Rust source, ancestor Cargo configuration,
+and environment overrides are not exhaustively fingerprinted. In particular,
+an emsdk Git commit identifies the SDK installer checkout, not all files it
+installed. The WORKERFS output contract detects the observed mount regression;
+the additional evidence improves attribution without claiming to reconstruct
+the unknown cause of the old SDK/Naga divergence.
 
 ## Known local assumptions
 

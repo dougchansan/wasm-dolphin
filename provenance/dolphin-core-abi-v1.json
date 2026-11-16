@@ -550,5 +550,26 @@
     "Two independent builds matched the baked JS, WASM, code, and data identities; gameplay validation remains machine- and scene-specific.",
     "Legacy patches 0001-0009 are research history and are deliberately excluded from the active source lock.",
     "The true hardware WebGPU renderer remains experimental and GPU-dependent despite fixed-battle validation on one AMD GPU."
-  ]
+  ],
+  "runtimeContract": {
+    "requiredRuntimeMethods": [
+      "FS",
+      "HEAPU8",
+      "PThread",
+      "UTF8ToString",
+      "ccall",
+      "cwrap"
+    ],
+    "filesystemRegistry": [
+      "MEMFS"
+    ],
+    "filesystems": [
+      {
+        "name": "WORKERFS",
+        "via": [
+          "Module"
+        ]
+      }
+    ]
+  }
 }

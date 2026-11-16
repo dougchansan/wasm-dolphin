@@ -41,6 +41,14 @@ function pathCandidate(command) {
   return where.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
 }
 
+export function resolveEmscriptenPython(configured = process.env.EMSDK_PYTHON, findOnPath = pathCandidate) {
+  const command = configured || "python";
+  const selected = existsSync(command) ? command : findOnPath(command);
+  invariant(selected && existsSync(selected),
+    `Could not observe the Python used by the Emscripten launcher: ${command}`);
+  return resolve(selected);
+}
+
 function resolveTool(label, envName, candidates, expectedSha256, pathCommand = null) {
   const attempted = [];
   const values = [process.env[envName], ...candidates.map(expandCandidate), pathCommand && pathCandidate(pathCommand)]
@@ -81,6 +89,22 @@ export function loadWasmToolchainLock() {
   return JSON.parse(readFileSync(lockPath, "utf8"));
 }
 
+// Observation is separate from the declared lock. In particular, emcc.bat is
+// only a launcher and an emsdk Git commit does not identify its ignored SDK.
+export function observeWasmToolchain({ paths, versions, emsdkRoot, emsdkHead }) {
+  return {
+    schemaVersion: 1,
+    platform: `${process.platform}-${process.arch}`,
+    runner: { path: process.execPath, sha256: sha256File(process.execPath), version: process.version },
+    tools: Object.fromEntries(Object.entries(paths).map(([name, path]) => [name, {
+      path: resolve(path),
+      sha256: sha256File(path),
+      ...(versions[name] === undefined ? {} : { version: versions[name] }),
+    }])),
+    emsdk: { path: resolve(emsdkRoot), commit: emsdkHead },
+  };
+}
+
 export function verifyWasmToolchain() {
   const lock = loadWasmToolchainLock();
   invariant(lock.schemaVersion === 1, `Unsupported toolchain lock schema ${lock.schemaVersion}`);
@@ -95,16 +119,22 @@ export function verifyWasmToolchain() {
   const cargo = resolveTool("cargo", "CARGO", lock.rust.cargoCandidates, lock.rust.cargoSha256);
   const rustup = resolveTool("rustup", "RUSTUP", lock.rust.rustupCandidates, lock.rust.rustupSha256);
 
-  requireText("Node", runVersion(node, ["--version"]), `v${lock.node.version}`);
+  const versions = { node: runVersion(node, ["--version"]) };
+  requireText("Node", versions.node, `v${lock.node.version}`);
   const emccVersion = runVersion(emcc, ["--version"]);
+  versions.emcc = emccVersion;
   requireText("Emscripten", emccVersion, lock.emscripten.version);
   requireText("Emscripten compiler", emccVersion, lock.emscripten.compilerCommit);
-  requireText("CMake", runVersion(cmake, ["--version"]), lock.cmake.version);
-  requireText("Ninja", runVersion(ninja, ["--version"]), lock.ninja.version);
+  versions.cmake = runVersion(cmake, ["--version"]);
+  versions.ninja = runVersion(ninja, ["--version"]);
+  requireText("CMake", versions.cmake, lock.cmake.version);
+  requireText("Ninja", versions.ninja, lock.ninja.version);
   const rustcVersion = runVersion(rustc, ["--version", "--verbose"]);
+  versions.rustc = rustcVersion;
   requireText("rustc", rustcVersion, lock.rust.rustcVersion);
   requireText("rustc", rustcVersion, lock.rust.rustcCommit);
   const cargoVersion = runVersion(cargo, ["--version", "--verbose"]);
+  versions.cargo = cargoVersion;
   requireText("cargo", cargoVersion, lock.rust.cargoVersion);
   requireText("cargo", cargoVersion, lock.rust.cargoCommit);
 
@@ -114,6 +144,12 @@ export function verifyWasmToolchain() {
   const clangxx = resolve(emsdkRoot, "upstream/bin/clang++.exe");
   invariant(existsSync(clangxx), `Emscripten clang++ is missing at ${clangxx}`);
   invariant(sha256File(clangxx) === lock.emscripten.clangxxSha256, "Emscripten clang++ hash mismatch");
+
+  // Match the Python selection in Emscripten's Windows launcher. It is an
+  // observed input, not an additional locked requirement.
+  const python = resolveEmscriptenPython();
+  versions.python = runVersion(python, ["--version"]);
+  const paths = { node, emcc, emcmake, cmake, ninja, rustc, cargo, rustup, clangxx, python };
 
   if (lock.rust.rustSrcRequired) {
     const installed = runVersion(rustup, ["component", "list", "--toolchain", lock.rust.toolchain, "--installed"]);
@@ -140,7 +176,8 @@ export function verifyWasmToolchain() {
 
   return {
     lock,
-    paths: { node, emcc, emcmake, cmake, ninja, rustc, cargo, rustup, clangxx },
+    paths,
+    observed: observeWasmToolchain({ paths, versions, emsdkRoot, emsdkHead }),
     hashes: {
       lock: sha256File(lockPath),
       cargoLock: sha256NormalizedTextFile(cargoLock)
