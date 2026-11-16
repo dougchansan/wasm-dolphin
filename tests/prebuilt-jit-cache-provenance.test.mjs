@@ -13,7 +13,10 @@ import {
   canonicalCoreFingerprint,
   canonicalWasmBlockKey,
 } from "../src/jit-cache-identity.js";
-import { writeCandidatePrebuiltCache } from "../tools/prebuilt-jit-cache-provenance.mjs";
+import {
+  verifyLocalPrebuiltJitCache,
+  writeCandidatePrebuiltCache,
+} from "../tools/prebuilt-jit-cache-provenance.mjs";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -121,6 +124,51 @@ test("candidate prebuilt evidence rejects a canonical-looking key for the wrong 
       /entry key mismatch/
     );
     await assert.rejects(readFile(value.outPath), /ENOENT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local prebuilt JIT cache is optional, but existing cache must match the core", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dolphin-local-prebuilt-"));
+  try {
+    const directory = path.join(root, "cores", "dolphin");
+    await mkdir(directory, { recursive: true });
+    const corePath = path.join(directory, "dolphin-core-upstream.wasm");
+    const cachePath = path.join(directory, "prebuilt-jit-cache.bin");
+    assert.equal(await verifyLocalPrebuiltJitCache(root), null);
+
+    const wasm = Buffer.from("test core");
+    await writeFile(corePath, wasm);
+    const block = Uint8Array.from([0, 97, 115, 109]);
+    const key = await canonicalWasmBlockKey(block);
+    const createCache = (fingerprint) => encodePrebuiltCache({
+      fingerprint,
+      entryKeySchema: JIT_CACHE_ENTRY_KEY_SCHEMA,
+      entries: new Map([[key, block]]),
+    });
+    const valid = createCache(canonicalCoreFingerprint(sha256(wasm)));
+    await writeFile(cachePath, valid);
+    assert.equal((await verifyLocalPrebuiltJitCache(root)).entryCount, 1);
+
+    const legacy = Uint8Array.from(valid);
+    new DataView(legacy.buffer).setUint32(8, 1, true);
+    await writeFile(cachePath, legacy);
+    await assert.rejects(verifyLocalPrebuiltJitCache(root), /unsupported version 1/);
+
+    await writeFile(cachePath, createCache(canonicalCoreFingerprint("f".repeat(64))));
+    await assert.rejects(verifyLocalPrebuiltJitCache(root), /fingerprint mismatch/);
+
+    await writeFile(cachePath, encodePrebuiltCache({
+      fingerprint: canonicalCoreFingerprint(sha256(wasm)),
+      entryKeySchema: JIT_CACHE_ENTRY_KEY_SCHEMA,
+      entries: new Map(),
+    }));
+    await assert.rejects(verifyLocalPrebuiltJitCache(root), /no entries/);
+
+    await writeFile(cachePath, valid);
+    await writeFile(corePath, Buffer.from("changed core"));
+    await assert.rejects(verifyLocalPrebuiltJitCache(root), /fingerprint mismatch/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
