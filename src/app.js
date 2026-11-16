@@ -467,8 +467,12 @@ function wireSettings() {
 }
 
 function wireDiagnostics() {
-  const debugOpen = localStorage.getItem(DEBUG_PREF_KEY) === "1";
-  const osdVisible = localStorage.getItem(OSD_PREF_KEY) !== "0";
+  let debugOpen = false;
+  let osdVisible = true;
+  try {
+    debugOpen = localStorage.getItem(DEBUG_PREF_KEY) === "1";
+    osdVisible = localStorage.getItem(OSD_PREF_KEY) !== "0";
+  } catch {}
 
   setDebugOpen(debugOpen);
   setOverlayVisible(osdVisible);
@@ -527,7 +531,7 @@ function setDebugOpen(open) {
   elements.debugToggle.setAttribute("aria-expanded", String(open));
   elements.debugToggle.classList.toggle("active", open);
   elements.debugToggle.textContent = open ? "DBG on" : "DBG";
-  localStorage.setItem(DEBUG_PREF_KEY, open ? "1" : "0");
+  try { localStorage.setItem(DEBUG_PREF_KEY, open ? "1" : "0"); } catch {}
   if (open && lastFrameInfo) {
     updateDebugMetrics(lastFrameInfo);
   }
@@ -587,7 +591,7 @@ function setOverlayVisible(visible) {
   elements.overlayToggle.setAttribute("aria-pressed", String(visible));
   elements.overlayToggle.classList.toggle("active", visible);
   elements.overlayToggle.textContent = visible ? "FPS on" : "FPS";
-  localStorage.setItem(OSD_PREF_KEY, visible ? "1" : "0");
+  try { localStorage.setItem(OSD_PREF_KEY, visible ? "1" : "0"); } catch {}
 }
 
 
