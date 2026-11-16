@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const shouldOpen = args.includes("--open");
 const portArgument = args.find((argument) => /^\d+$/.test(argument));
-const root = resolve(process.cwd());
+const root = realpathSync(process.cwd());
 const preferredPort = Number(process.env.PORT || portArgument || 8080);
 const host = process.env.HOST || "127.0.0.1";
 
@@ -23,21 +23,18 @@ const mimeTypes = new Map([
 ]);
 
 function resolveRequestPath(url) {
-  const parsed = new URL(url, "http://localhost");
-  const pathname = decodeURIComponent(parsed.pathname);
-  const normalized = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  const candidate = resolve(join(root, normalized));
-
-  if (!candidate.startsWith(root)) {
-    return null;
-  }
-
   try {
-    const stats = statSync(candidate);
-    if (stats.isDirectory()) {
-      return join(candidate, "index.html");
-    }
-    return candidate;
+    const rawPath = decodeURIComponent(url.split(/[?#]/, 1)[0]);
+    if (rawPath.split(/[/\\]/).some((part) => part.startsWith("."))) return null;
+    const pathname = decodeURIComponent(new URL(url, "http://localhost").pathname);
+
+    let candidate = realpathSync(join(root, pathname));
+    if (statSync(candidate).isDirectory()) candidate = realpathSync(join(candidate, "index.html"));
+
+    const pathFromRoot = relative(root, candidate);
+    if (isAbsolute(pathFromRoot) || pathFromRoot.split(sep).some((part) => part.startsWith(".")))
+      return null;
+    return statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
