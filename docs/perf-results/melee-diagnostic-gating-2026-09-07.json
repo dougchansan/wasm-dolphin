@@ -1,0 +1,298 @@
+{
+  "schema": "wasm-dolphin.melee-diagnostic-gating-abba.v1",
+  "generatedAt": "2026-09-07T20:09:22.764Z",
+  "coreSha256": "1b99a62abb8c74b9f3cd215b1feca69bac1901b5045ac69e8837238d85d35a13",
+  "workerHashes": {
+    "A": "fd4e7274d40e4d6fda491ce3f268fbb08da9cc3e6eb451a8b472c9362e85cf57",
+    "B": "9eba675ef3c9765bb26b30dda4ed7ef9941bc506d1103403144b44ae60f881e3"
+  },
+  "harnessSha256": "534afcb623377a708cfdaf623ccbadd28fbce733bacf4c0c8bd9a0207422de42",
+  "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+  "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor          ",
+    "logicalCpus": 32,
+    "ramBytes": 134876049408,
+    "platform": "win32",
+    "release": "10.0.26200"
+  },
+  "browserVersion": "143.0.7499.4",
+  "configuration": {
+    "url": "http://127.0.0.1:8081/?core=upstream&video=wgpu&presenter=webgpu&cpu=dual&speed=1&wasmjit=1&jittier=guarded&jitwarmup=60&pacing=tick&present=full&queue=4&oc=1&metrics=0&wgpudeepdiag=0&corelog=0&mainprof=0&wgpuvisual=1&audiotransport=worklet",
+    "order": [
+      "A1",
+      "B1",
+      "B2",
+      "A2"
+    ],
+    "warmEmulatedSeconds": 20,
+    "measureEmulatedSeconds": 30,
+    "boundaryTolerancePercent": 0.25,
+    "profile": "fresh ephemeral headed Chrome for each arm",
+    "audio": "unmuted AudioWorklet",
+    "cpuPlacement": "OS default",
+    "sourceServing": "isolated browser response route; exact frozen baseline/candidate bytes"
+  },
+  "results": [
+    {
+      "arm": "A1",
+      "coreFps": 26.009291345833095,
+      "speedPercent": 43.39286399183425,
+      "sampledDistinctFps": 25.90808787756137,
+      "wallSeconds": 69.16759000003339,
+      "emulatedSeconds": 30.01379825514403,
+      "coreFrames": 1799,
+      "warmEmulatedSeconds": 20.00508270781893,
+      "jitCompiles": 733,
+      "draws": 941057,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "startupAudioUnderrunEvents": 866,
+      "audioFramesConsumed": 3320192,
+      "visualReadbackBusyDrops": 3,
+      "visualReadbackErrors": 0,
+      "gpuErrors": 0,
+      "fenceCompleted": true,
+      "replayBacklog": 0,
+      "vpDiagnosticLines": 20595,
+      "beforeImage": ".omx/melee-diag-gate/abba-A1/run-1/before-raw.png",
+      "finalImage": ".omx/melee-diag-gate/abba-A1/run-1/final-raw.png",
+      "artifacts": [
+        {
+          "path": ".omx/melee-diag-gate/abba-A1/run-1/run.json",
+          "sha256": "ea232b9ca30384f24cd8b6bceddddca0e268b3000a98549857e0b7111b8f5584"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A1/run-1/console.log",
+          "sha256": "cac8756b2f6945c3f62deb6923f6726c21aa0efdc652cb963bdc9d769ceb3971"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A1/run-1/before-raw.png",
+          "sha256": "948a7480c92501b90ab1926386ce7019efa1089e057f5581df4bcb14dbd10db0"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A1/run-1/final-raw.png",
+          "sha256": "eb5e6ad6fe3d646377411baac90e2b51654317d07568526f61486d5a91b6b382"
+        }
+      ]
+    },
+    {
+      "arm": "B1",
+      "coreFps": 26.20691364033963,
+      "speedPercent": 43.742433353789636,
+      "sampledDistinctFps": 26.061157724653643,
+      "wallSeconds": 68.60785000002384,
+      "emulatedSeconds": 30.010743061728395,
+      "coreFrames": 1798,
+      "warmEmulatedSeconds": 20.00628779218107,
+      "jitCompiles": 997,
+      "draws": 943747,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "startupAudioUnderrunEvents": 783,
+      "audioFramesConsumed": 3293312,
+      "visualReadbackBusyDrops": 4,
+      "visualReadbackErrors": 0,
+      "gpuErrors": 0,
+      "fenceCompleted": true,
+      "replayBacklog": 0,
+      "vpDiagnosticLines": 0,
+      "beforeImage": ".omx/melee-diag-gate/abba-B1/run-1/before-raw.png",
+      "finalImage": ".omx/melee-diag-gate/abba-B1/run-1/final-raw.png",
+      "artifacts": [
+        {
+          "path": ".omx/melee-diag-gate/abba-B1/run-1/run.json",
+          "sha256": "205050061d6921a0302a42b55c1a88d2f88c7fcaf6d8ca0879781a451805cf84"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B1/run-1/console.log",
+          "sha256": "60b8b1ebd923471dee5738913429d61397e5e0d3c84c0f7b6f0b49685c33ce11"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B1/run-1/before-raw.png",
+          "sha256": "0d92faefdcc07b8dfd0f42e4bdfd82e7a191ebc900b4a11f04af6367e6375bb6"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B1/run-1/final-raw.png",
+          "sha256": "e1624ffeb9bf31e9c918ac4bbb6d10df5c3108aad6ef96af6efe9d48615e8529"
+        }
+      ]
+    },
+    {
+      "arm": "B2",
+      "coreFps": 25.289216419455425,
+      "speedPercent": 42.18895402565808,
+      "sampledDistinctFps": 25.17675742481638,
+      "wallSeconds": 71.13704000002146,
+      "emulatedSeconds": 30.011973100823045,
+      "coreFrames": 1799,
+      "warmEmulatedSeconds": 20.004743131687242,
+      "jitCompiles": 1009,
+      "draws": 946314,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "startupAudioUnderrunEvents": 915,
+      "audioFramesConsumed": 3414784,
+      "visualReadbackBusyDrops": 3,
+      "visualReadbackErrors": 0,
+      "gpuErrors": 0,
+      "fenceCompleted": true,
+      "replayBacklog": 0,
+      "vpDiagnosticLines": 0,
+      "beforeImage": ".omx/melee-diag-gate/abba-B2/run-1/before-raw.png",
+      "finalImage": ".omx/melee-diag-gate/abba-B2/run-1/final-raw.png",
+      "artifacts": [
+        {
+          "path": ".omx/melee-diag-gate/abba-B2/run-1/run.json",
+          "sha256": "ce6adf2b015c17c00bd75ed09205565634c0adafddc00a1d926142acafc8b83b"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B2/run-1/console.log",
+          "sha256": "546dc9455ce70fbe264e20e4dec11f13eb381836472b97e1e61d395768f56812"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B2/run-1/before-raw.png",
+          "sha256": "e3a93f9c47f5ad052236735888fd619311f4d73c40aa18617e57935d47fac4f1"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-B2/run-1/final-raw.png",
+          "sha256": "de43ca29182e725524fb4e72df6aa248b16700c1d5ae8979453d82749f016d03"
+        }
+      ]
+    },
+    {
+      "arm": "A2",
+      "coreFps": 25.97414222885951,
+      "speedPercent": 43.33182444194603,
+      "sampledDistinctFps": 25.887513627762704,
+      "wallSeconds": 69.26118999999761,
+      "emulatedSeconds": 30.012137257201648,
+      "coreFrames": 1799,
+      "warmEmulatedSeconds": 20.006126230452676,
+      "jitCompiles": 1001,
+      "draws": 941582,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "startupAudioUnderrunEvents": 907,
+      "audioFramesConsumed": 3324544,
+      "visualReadbackBusyDrops": 3,
+      "visualReadbackErrors": 0,
+      "gpuErrors": 0,
+      "fenceCompleted": true,
+      "replayBacklog": 0,
+      "vpDiagnosticLines": 20561,
+      "beforeImage": ".omx/melee-diag-gate/abba-A2/run-1/before-raw.png",
+      "finalImage": ".omx/melee-diag-gate/abba-A2/run-1/final-raw.png",
+      "artifacts": [
+        {
+          "path": ".omx/melee-diag-gate/abba-A2/run-1/run.json",
+          "sha256": "fd5ae8bc646c71a57429477d011b6718f82647df189ac59362dfa7d6a9b19aa3"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A2/run-1/console.log",
+          "sha256": "7bb84ff7d80cbaf5b569fa07598d394332e247978f203151e31efe5c74b550b0"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A2/run-1/before-raw.png",
+          "sha256": "ae8d9347bb02c0748af5bf44c46f3365fc5efc9a5b6f863fbb1b46c2602d342e"
+        },
+        {
+          "path": ".omx/melee-diag-gate/abba-A2/run-1/final-raw.png",
+          "sha256": "ddb8e0871dcefd053979e59008df9664cab96be16b34dc4f97d9982971ad6f74"
+        }
+      ]
+    }
+  ],
+  "before": {
+    "wallSeconds": 138.428780000031,
+    "coreFps": 25.991704904133332,
+    "speedPercent": 43.36232358063998,
+    "sampledDistinctFps": 25.897793796919956
+  },
+  "after": {
+    "wallSeconds": 139.7448900000453,
+    "coreFps": 25.73976050214669,
+    "speedPercent": 42.95163577182105,
+    "sampledDistinctFps": 25.610954361185154
+  },
+  "speedChangePercent": -0.9471074769671461,
+  "pairs": [
+    {
+      "before": "A1",
+      "after": "B1",
+      "speedChangePercent": 0.805591818095186
+    },
+    {
+      "before": "A2",
+      "after": "B2",
+      "speedChangePercent": -2.637485107092874
+    }
+  ],
+  "interpretation": "No repeatable throughput improvement: paired speed differences have opposite signs; retained as opt-in diagnostic behavior, not a 60 FPS optimization.",
+  "limitations": [
+    "Two balanced pairs on one machine, one fixed battle.",
+    "JIT compilation continues during measurement.",
+    "Visual counters use latest cached frame telemetry and 96x72 hash sampling.",
+    "GPU readback busy drops are sampling losses, not dropped rendered frames.",
+    "No GPU execution-time or physical display-latency claim.",
+    "Only optional diagnostic work was changed; native core and runtime optimization flags stayed constant."
+  ],
+  "regressions": [
+    {
+      "game": "sunshine",
+      "complete": true,
+      "core": "1b99a62abb8c74b9f3cd215b1feca69bac1901b5045ac69e8837238d85d35a13",
+      "worker": "9eba675ef3c9765bb26b30dda4ed7ef9941bc506d1103403144b44ae60f881e3",
+      "backend": "WebGPU-Real",
+      "errors": 0,
+      "gpuErrors": 0,
+      "finalFrame": 3496,
+      "finalImage": ".omx/melee-diag-gate/sunshine-regression/final-raw.png"
+    },
+    {
+      "game": "mkw",
+      "complete": true,
+      "core": "1b99a62abb8c74b9f3cd215b1feca69bac1901b5045ac69e8837238d85d35a13",
+      "worker": "9eba675ef3c9765bb26b30dda4ed7ef9941bc506d1103403144b44ae60f881e3",
+      "backend": "WebGPU-Real",
+      "errors": 0,
+      "gpuErrors": 0,
+      "finalFrame": 2145,
+      "finalImage": ".omx/melee-diag-gate/mkw-regression/final-raw.png"
+    }
+  ],
+  "validation": {
+    "syntax": "npm run check passed",
+    "fullSuite": {
+      "total": 886,
+      "initialPassed": 883,
+      "initialFailed": 3,
+      "initialFailures": "Stale worker size/hash in ABI source manifest; refreshed with npm run update:core-abi"
+    },
+    "affectedProvenanceRerun": {
+      "tests": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "provenance": "npm run verify:provenance passed",
+    "focusedGateAndRendererTests": {
+      "tests": 36,
+      "passed": 36
+    },
+    "review": "No remaining correctness findings",
+    "visual": "Melee A/B and Sunshine/MKW saved-scene checks pass",
+    "workerUnchangedSinceBenchmarks": true
+  }
+}

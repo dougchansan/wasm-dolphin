@@ -1,0 +1,157 @@
+{
+  "schema": "wasm-dolphin.melee-current-build-benchmark.v1",
+  "generatedAt": "2026-09-07T19:23:51.054Z",
+  "config": {
+    "rom": "F:/Games/Library/GameCube/Super Smash Bros. Melee (USA) (En,Ja) (Rev 2).nkit.iso",
+    "save": "__battle.sav",
+    "warmupSeconds": 45,
+    "measureSeconds": 60,
+    "repeats": 2,
+    "firstRun": 2,
+    "audio": "audible",
+    "browser": "chrome",
+    "headed": true,
+    "affinity": "unchanged; operating-system default",
+    "profile": "fresh ephemeral browser per repeat"
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor          ",
+    "logicalCpus": 32,
+    "ramBytes": 134876049408,
+    "platform": "win32",
+    "release": "10.0.26200"
+  },
+  "gpu": {
+    "vendor": "amd",
+    "architecture": "rdna-4",
+    "installedMatchingController": "AMD Radeon RX 9070 XT",
+    "driverVersion": "32.0.31041.1004"
+  },
+  "browserVersion": "143.0.7499.4",
+  "coreSha256": "1b99a62abb8c74b9f3cd215b1feca69bac1901b5045ac69e8837238d85d35a13",
+  "workerSha256": "fd4e7274d40e4d6fda491ce3f268fbb08da9cc3e6eb451a8b472c9362e85cf57",
+  "harnessSha256": "d2b23e7ea1b7945525ec8b35c28eda9532841a7fd3808e005ae25c0146b6e7cf",
+  "romSha256": "1018b65a58ca654056be1611a43e753de5dd5f842ce5266581b29c6a12ce7c67",
+  "saveSha256": "620879e2ed3c35248deba9fb2f7b2a39f91f5374d2f6a98d2a2455cb55e156d1",
+  "url": "http://127.0.0.1:8081/?core=upstream&video=wgpu&presenter=webgpu&cpu=dual&speed=1&wasmjit=1&jittier=guarded&jitwarmup=60&pacing=tick&present=full&queue=4&oc=1&metrics=0&wgpudeepdiag=0&corelog=0&mainprof=0&wgpuvisual=1&audiotransport=worklet",
+  "results": [
+    {
+      "index": 2,
+      "wallSeconds": 60.56259499996901,
+      "emulatedSeconds": 26.025897479423868,
+      "coreFrames": 1560,
+      "coreFps": 25.758473526453056,
+      "speedPercent": 42.97355071961033,
+      "submittedPresentationFps": 25.626378790419967,
+      "sampledDistinctFps": 25.543819580399283,
+      "hudP95CadenceFpsMean": 19.333333333333332,
+      "visualSamplesCompleted": 1547,
+      "visualSamplesChanged": 1547,
+      "visualReadbackBusyDrops": 5,
+      "visualReadbackEncodeErrors": 0,
+      "visualReadbackMapErrors": 0,
+      "newJitCompiles": 873,
+      "jitBlockRuns": 33684069,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "audioFramesConsumed": 2907392,
+      "audioContextSeconds": 60.57066666666667,
+      "startupAudioUnderrunEvents": 930,
+      "gpuErrors": 0,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "gpuFenceCompleted": true,
+      "replayBacklogAfterFence": 0,
+      "finalScreenshot": ".omx/melee-benchmark-20260907/run-2/final-raw.png",
+      "artifacts": [
+        {
+          "file": ".omx/melee-benchmark-20260907/run-2/run.json",
+          "sha256": "63b2e6a1e694ff3627e37e52da7638243f70406e0b1b6627f2f92e88e17b93df"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-2/before-raw.png",
+          "sha256": "29820eb5f8807a57e3349259653ac6a4bec082e23b1e28e57d0180ebfbe4afd8"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-2/final-raw.png",
+          "sha256": "d302ba336e926c6f6244471e46634452ca2480862e6a8ed5b6e5ca597254ffe9"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-2/console.log",
+          "sha256": "4af31b701cb2fae3ebeb8f17c02d11238267a68cbff8caade05637869ec6bf68"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "wallSeconds": 60.623430000007154,
+      "emulatedSeconds": 27.740688621399176,
+      "coreFrames": 1662,
+      "coreFps": 27.415142957100972,
+      "speedPercent": 45.75902191841653,
+      "submittedPresentationFps": 27.481124047250436,
+      "sampledDistinctFps": 27.431638229638338,
+      "hudP95CadenceFpsMean": 21.05,
+      "visualSamplesCompleted": 1663,
+      "visualSamplesChanged": 1663,
+      "visualReadbackBusyDrops": 3,
+      "visualReadbackEncodeErrors": 0,
+      "visualReadbackMapErrors": 0,
+      "newJitCompiles": 854,
+      "jitBlockRuns": 35649277,
+      "audioUnderrunEvents": 0,
+      "audioUnderrunFrames": 0,
+      "audioFramesConsumed": 2910208,
+      "audioContextSeconds": 60.629333333333335,
+      "startupAudioUnderrunEvents": 903,
+      "gpuErrors": 0,
+      "missingPipelineDraws": 0,
+      "missingBindGroupDraws": 0,
+      "guardSkippedDraws": 0,
+      "gpuFenceCompleted": true,
+      "replayBacklogAfterFence": 0,
+      "finalScreenshot": ".omx/melee-benchmark-20260907/run-3/final-raw.png",
+      "artifacts": [
+        {
+          "file": ".omx/melee-benchmark-20260907/run-3/run.json",
+          "sha256": "635de0a4317b51dcb5d14c50d2b317184889ea16ee410d18d53c067e687ef6de"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-3/before-raw.png",
+          "sha256": "76b12148586358b5de8d6b24083512d5c8a791dc8775f3747489c2fe295e7de1"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-3/final-raw.png",
+          "sha256": "ff2e9a155606c035800ab5262376693cbd4892a1e2c24f0d9e630d6a623697fe"
+        },
+        {
+          "file": ".omx/melee-benchmark-20260907/run-3/console.log",
+          "sha256": "80d3c17459a037ed5667f67c5c082b00cbae8befb98c5966c782ded6bf40299b"
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "wallSeconds": 121.18602499997615,
+    "coreFps": 26.58722406317588,
+    "speedPercent": 44.36698546786532,
+    "sampledDistinctFps": 26.488202744504836
+  },
+  "limitations": [
+    "Two 60-second wall-time samples after 45-second settling; compilation continued.",
+    "Fresh browser per repeat; no CPU affinity or battle-trained persistent JIT cache tuning.",
+    "Visual/presentation endpoints come from latest frame telemetry and may lag fresh core endpoints by a few frames.",
+    "Visual cadence counts 96x72 GPU readback hash changes; readback busy drops are sampling losses.",
+    "HUD presentation FPS uses a p95 interval cap and is not submission throughput.",
+    "Only the saved Kirby-versus-Link battle on the waterfront stage was measured.",
+    "Pilot run 1 excluded for a harness assertion typo (quiescent versus quiesced); actual pilot fence succeeded.",
+    "No controlled comparison against the older tuned build; these results do not isolate a performance regression."
+  ],
+  "validation": {
+    "provenanceVerified": true,
+    "sourceAndCoreUnchangedDuringBenchmark": true,
+    "visualInspection": "pass: both final images show Kirby, Link, stage geometry, water, textures, timer and HUD; battle timer/damage/positions advance from before images",
+    "rawArtifactsIgnored": true
+  }
+}
